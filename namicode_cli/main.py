@@ -220,6 +220,15 @@ def parse_args():
         default=False,
         help="Continue last session (optionally specify session ID)",
     )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"{settings.version} (NamiCode)",
+        help="Show the version number and exit",
+    )
+    parser.add_argument(
+        "-h", "--help", action="help", help="Show this help message and exit"
+    )
 
     return parser.parse_args()
 
@@ -419,7 +428,9 @@ async def simple_cli(
             manager = ProcessManager.get_instance()
             stopped_count = await manager.stop_all()
             if stopped_count > 0:
-                console.print(f"[dim]Stopped {stopped_count} managed process(es).[/dim]")
+                console.print(
+                    f"[dim]Stopped {stopped_count} managed process(es).[/dim]"
+                )
         except Exception as e:
             console.print(f"[dim]Could not stop processes: {e}[/dim]")
 
@@ -539,6 +550,7 @@ async def simple_cli(
             console.print(f"[bold cyan]@{agent_name}:[/bold cyan]")
             console.print()
             from rich.markdown import Markdown
+
             console.print(Markdown(result))
             console.print()
             continue
@@ -626,7 +638,9 @@ async def _run_agent_session(
     )
 
     # Extract model name for context window calculation
-    model_name = getattr(model, "model_name", None) or getattr(model, "model", "unknown")
+    model_name = getattr(model, "model_name", None) or getattr(
+        model, "model", "unknown"
+    )
 
     await simple_cli(
         agent,
@@ -813,7 +827,9 @@ def _execute_paths_command(args) -> None:
 
         console.print()
         console.print("[yellow]⚠ This will clear ALL approved paths.[/yellow]")
-        console.print("[dim]You'll need to re-approve paths when you next run nami.[/dim]")
+        console.print(
+            "[dim]You'll need to re-approve paths when you next run nami.[/dim]"
+        )
         console.print()
 
         confirm = prompt("Are you sure? (yes/no): ").strip().lower()
@@ -831,7 +847,9 @@ def _execute_paths_command(args) -> None:
             console.print()
     else:
         console.print()
-        console.print("[yellow]Please specify a subcommand: list, revoke, or clear[/yellow]")
+        console.print(
+            "[yellow]Please specify a subcommand: list, revoke, or clear[/yellow]"
+        )
         console.print()
         console.print("[bold]Usage:[/bold]", style=COLORS["primary"])
         console.print("  nami paths list         List all approved paths")

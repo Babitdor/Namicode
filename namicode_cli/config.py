@@ -173,6 +173,8 @@ class Settings:
     # Project information
     project_root: Path | None
 
+    version: str = "1.0.0"
+
     @classmethod
     def from_environment(cls, *, start_path: Path | None = None) -> "Settings":
         """Create settings by detecting the current environment.
@@ -461,9 +463,7 @@ def create_model() -> BaseChatModel:
         provider = saved_model_config["provider"]
         model_name = saved_model_config["model"]
 
-        console.print(
-            f"[dim]Using saved configuration: {provider}/{model_name}[/dim]"
-        )
+        console.print(f"[dim]Using saved configuration: {provider}/{model_name}[/dim]")
 
         # Create model directly based on saved config
         if provider == "ollama":

@@ -490,6 +490,58 @@ class StreamingOutputRenderer:
         return self._truncated
 
 
+def show_help() -> None:
+    """Display comprehensive help information for Nami CLI."""
+    console.print()
+    console.print("[bold]Nami Code Assistant CLI[/bold]", style=COLORS["primary"])
+    console.print()
+    console.print("[bold]CLI Commands:[/bold]", style=COLORS["primary"])
+    console.print()
+
+    cli_commands = [
+        ("init [--scope] [--style]", "Initialize project or global configuration"),
+        ("list", "List all available agents"),
+        ("reset --agent <name>", "Reset an agent to default state"),
+        ("help", "Show this help information"),
+        ("skills [list|create]", "Manage skills - create or list custom capabilities"),
+        ("mcp [list|install|remove]", "Manage MCP (Model Context Protocol) servers"),
+        ("paths [list|revoke|clear]", "Manage approved file system paths"),
+        ("migrate [--check]", "Migrate from old to new directory structure"),
+    ]
+
+    for cmd, desc in cli_commands:
+        console.print(f"  [cyan]{cmd:<40}[/cyan] {desc}")
+
+    console.print()
+    console.print("[bold]Interactive Commands (use /command):[/bold]", style=COLORS["primary"])
+    console.print()
+
+    for cmd, desc in COMMANDS.items():
+        console.print(f"  [cyan]/{cmd:<20}[/cyan] {desc}")
+
+    console.print()
+    console.print("[bold]CLI Options:[/bold]", style=COLORS["primary"])
+    console.print()
+    console.print("  [cyan]--agent <name>[/cyan]       Agent identifier (default: nami-agent)")
+    console.print("  [cyan]--auto-approve[/cyan]       Auto-approve tool usage without prompting")
+    console.print("  [cyan]--sandbox <type>[/cyan]     Sandbox type (none, modal, daytona, runloop, docker)")
+    console.print("  [cyan]--sandbox-id <id>[/cyan]    Reuse existing sandbox")
+    console.print("  [cyan]--sandbox-setup <path>[/cyan] Setup script to run in sandbox")
+    console.print("  [cyan]--no-splash[/cyan]          Disable startup splash screen")
+    console.print("  [cyan]-c, --continue[/cyan]       Continue last session")
+    console.print("  [cyan]--version[/cyan]            Show version number")
+    console.print("  [cyan]-h, --help[/cyan]           Show help message and exit")
+    console.print()
+    console.print("[bold]Examples:[/bold]", style=COLORS["primary"])
+    console.print()
+    console.print("  nami                              Start interactive mode")
+    console.print("  nami --agent my-agent             Use custom agent")
+    console.print("  nami init                         Initialize project config")
+    console.print("  nami list                         List available agents")
+    console.print("  nami skills list                  List all skills")
+    console.print()
+
+
 def render_todo_list(todos: list[dict]) -> None:
     """Render todo list as a rich Panel with checkboxes."""
     if not todos:
