@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import sys
 
 from langchain.agents.middleware.human_in_the_loop import (
     ActionRequest,
@@ -12,13 +11,13 @@ from langchain.agents.middleware.human_in_the_loop import (
     HITLResponse,
     RejectDecision,
 )
+import sys
 from langchain_core.messages import HumanMessage, ToolMessage
 from langgraph.types import Command, Interrupt
 from pydantic import TypeAdapter, ValidationError
 from rich import box
 from rich.markdown import Markdown
 from rich.panel import Panel
-
 from namicode_cli.config import COLORS, console
 from namicode_cli.errors import ErrorHandler
 from namicode_cli.file_ops import FileOpTracker, build_approval_preview
@@ -39,7 +38,14 @@ def prompt_for_tool_approval(
     action_request: ActionRequest,
     assistant_id: str | None,
 ) -> Decision | dict:
-    """Prompt user to approve/reject a tool action with arrow key navigation.
+    """Prompt user to approve/reject a tool action with interactive menu.
+
+    Uses a cross-platform prompt_toolkit-based menu with arrow key navigation
+    that works consistently on Windows, Linux, and Mac.
+
+    Args:
+        action_request: The action request containing tool name, args, and description.
+        assistant_id: Optional assistant ID for context.
 
     Returns:
         Decision (ApproveDecision or RejectDecision) OR
@@ -62,7 +68,7 @@ def prompt_for_tool_approval(
     # Display action info first
     console.print(
         Panel(
-            "[bold yellow]⚠️  Tool Action Requires Approval[/bold yellow]\n\n"
+            "[bold yellow]Tool Action Requires Approval[/bold yellow]\n\n"
             + "\n".join(body_lines),
             border_style="yellow",
             box=box.ROUNDED,
@@ -82,10 +88,10 @@ def prompt_for_tool_approval(
         import tty
 
         fd = sys.stdin.fileno()
-        old_settings = termios.tcgetattr(fd) # type: ignore
+        old_settings = termios.tcgetattr(fd)  # type: ignore
 
         try:
-            tty.setraw(fd) # type: ignore
+            tty.setraw(fd)  # type: ignore
             # Hide cursor during menu interaction
             sys.stdout.write("\033[?25l")
             sys.stdout.flush()
@@ -160,7 +166,7 @@ def prompt_for_tool_approval(
             # Show cursor again
             sys.stdout.write("\033[?25h")
             sys.stdout.flush()
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings) # type: ignore
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)  # type: ignore
 
     except (ImportError, AttributeError, Exception):
         # Fallback for non-Unix systems (ImportError when termios/tty not available)
@@ -237,7 +243,7 @@ async def execute_task(
     current_todos = None  # Track current todo list state
 
     status = console.status(
-        f"[bold {COLORS['thinking']}]Agent is thinking...", spinner="dots"
+        f"[bold {COLORS['thinking']}]Nami is thinking...", spinner="dots"
     )
     status.start()
     spinner_active = True
@@ -386,7 +392,7 @@ async def execute_task(
                         # Reset spinner message after tool completes
                         if spinner_active:
                             status.update(
-                                f"[bold {COLORS['thinking']}]Agent is thinking..."
+                                f"[bold {COLORS['thinking']}]Nami is thinking..."
                             )
 
                         if tool_name == "shell" and tool_status != "success":

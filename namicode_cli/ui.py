@@ -148,7 +148,9 @@ def format_tool_display(tool_name: str, tool_args: dict) -> str:
 
     # Fallback: generic formatting for unknown tools
     # Show all arguments in key=value format
-    args_str = ", ".join(f"{k}={truncate_value(str(v), 50)}" for k, v in tool_args.items())
+    args_str = ", ".join(
+        f"{k}={truncate_value(str(v), 50)}" for k, v in tool_args.items()
+    )
     return f"{tool_name}({args_str})"
 
 
@@ -264,7 +266,9 @@ class TokenTracker:
         if self.last_output and self.last_output >= 1000:
             console.print(f"  Generated: {self.last_output:,} tokens", style="dim")
         if self.current_context:
-            console.print(f"  Current context: {self.current_context:,} tokens", style="dim")
+            console.print(
+                f"  Current context: {self.current_context:,} tokens", style="dim"
+            )
 
     def display_session(self) -> None:
         """Display current context size."""
@@ -288,10 +292,13 @@ class TokenTracker:
         if has_conversation:
             tools_and_conversation = self.current_context - self.baseline_context
             console.print(
-                f"  Tools + conversation: {tools_and_conversation:,} tokens", style=COLORS["dim"]
+                f"  Tools + conversation: {tools_and_conversation:,} tokens",
+                style=COLORS["dim"],
             )
 
-        console.print(f"  Total: {self.current_context:,} tokens", style="bold " + COLORS["dim"])
+        console.print(
+            f"  Total: {self.current_context:,} tokens", style="bold " + COLORS["dim"]
+        )
         console.print()
 
     def display_context(self) -> None:
@@ -313,22 +320,22 @@ class TokenTracker:
         console.print("[bold]Context Window Usage[/bold]", style=COLORS["primary"])
         console.print()
 
-        # Determine progress bar color based on usage
+        # Determine progress bar color based on usage (red theme)
         usage_pct = breakdown.usage_percentage
         if usage_pct < CONTEXT_WARNING_THRESHOLD * 100:
-            bar_color = "green"
+            bar_color = COLORS["success"]  # Green for low usage
         elif usage_pct < CONTEXT_CRITICAL_THRESHOLD * 100:
-            bar_color = "yellow"
+            bar_color = COLORS["warning"]  # Orange for medium usage
         else:
-            bar_color = "red"
+            bar_color = COLORS["error"]  # Red for high usage
 
-        # Create visual progress bar
-        bar_width = 40
+        # Create visual progress bar with modern design
+        bar_width = 50
         filled = int(bar_width * usage_pct / 100)
         empty = bar_width - filled
-        bar = f"[{bar_color}]{'█' * filled}[/{bar_color}][dim]{'░' * empty}[/dim]"
+        bar = f"[{bar_color}]{'━' * filled}[/{bar_color}][dim]{'─' * empty}[/dim]"
 
-        console.print(f"  {bar} {usage_pct:.1f}%")
+        console.print(f"  {bar} [bold {bar_color}]{usage_pct:.1f}%[/bold {bar_color}]")
         console.print()
 
         # Token breakdown table
@@ -492,11 +499,29 @@ class StreamingOutputRenderer:
 
 def show_help() -> None:
     """Display comprehensive help information for Nami CLI."""
+    from rich.table import Table
+
     console.print()
-    console.print("[bold]Nami Code Assistant CLI[/bold]", style=COLORS["primary"])
+    console.print(
+        "╔═══════════════════════════════════════╗", style=f"bold {COLORS['primary']}"
+    )
+    console.print(
+        "║   🔥 NAMI CODE ASSISTANT CLI 🔥      ║", style=f"bold {COLORS['primary']}"
+    )
+    console.print(
+        "╚═══════════════════════════════════════╝", style=f"bold {COLORS['primary']}"
+    )
     console.print()
-    console.print("[bold]CLI Commands:[/bold]", style=COLORS["primary"])
+
+    # CLI Commands Table
+    console.print(
+        f"[bold {COLORS['primary']}]⚡ CLI Commands[/bold {COLORS['primary']}]"
+    )
     console.print()
+
+    cli_table = Table(show_header=False, box=None, padding=(0, 2))
+    cli_table.add_column("Command", style=f"bold {COLORS['secondary']}")
+    cli_table.add_column("Description", style=COLORS["dim"])
 
     cli_commands = [
         ("init [--scope] [--style]", "Initialize project or global configuration"),
@@ -510,35 +535,73 @@ def show_help() -> None:
     ]
 
     for cmd, desc in cli_commands:
-        console.print(f"  [cyan]{cmd:<40}[/cyan] {desc}")
+        cli_table.add_row(f"  {cmd}", desc)
 
+    console.print(cli_table)
     console.print()
-    console.print("[bold]Interactive Commands (use /command):[/bold]", style=COLORS["primary"])
+
+    # Interactive Commands Table
+    console.print(
+        f"[bold {COLORS['primary']}]💬 Interactive Commands (use /command)[/bold {COLORS['primary']}]"
+    )
     console.print()
+
+    int_table = Table(show_header=False, box=None, padding=(0, 2))
+    int_table.add_column("Command", style=f"bold {COLORS['secondary']}")
+    int_table.add_column("Description", style=COLORS["dim"])
 
     for cmd, desc in COMMANDS.items():
-        console.print(f"  [cyan]/{cmd:<20}[/cyan] {desc}")
+        int_table.add_row(f"  /{cmd}", desc)
 
+    console.print(int_table)
     console.print()
-    console.print("[bold]CLI Options:[/bold]", style=COLORS["primary"])
+
+    # CLI Options
+    console.print(
+        f"[bold {COLORS['primary']}]⚙️  CLI Options[/bold {COLORS['primary']}]"
+    )
     console.print()
-    console.print("  [cyan]--agent <name>[/cyan]       Agent identifier (default: nami-agent)")
-    console.print("  [cyan]--auto-approve[/cyan]       Auto-approve tool usage without prompting")
-    console.print("  [cyan]--sandbox <type>[/cyan]     Sandbox type (none, modal, daytona, runloop, docker)")
-    console.print("  [cyan]--sandbox-id <id>[/cyan]    Reuse existing sandbox")
-    console.print("  [cyan]--sandbox-setup <path>[/cyan] Setup script to run in sandbox")
-    console.print("  [cyan]--no-splash[/cyan]          Disable startup splash screen")
-    console.print("  [cyan]-c, --continue[/cyan]       Continue last session")
-    console.print("  [cyan]--version[/cyan]            Show version number")
-    console.print("  [cyan]-h, --help[/cyan]           Show help message and exit")
+
+    opt_table = Table(show_header=False, box=None, padding=(0, 2))
+    opt_table.add_column("Option", style=f"bold {COLORS['secondary']}")
+    opt_table.add_column("Description", style=COLORS["dim"])
+
+    options = [
+        ("--agent <name>", "Agent identifier (default: nami-agent)"),
+        ("--auto-approve", "Auto-approve tool usage without prompting"),
+        ("--sandbox <type>", "Sandbox type (none, modal, daytona, runloop, docker)"),
+        ("--sandbox-id <id>", "Reuse existing sandbox"),
+        ("--sandbox-setup <path>", "Setup script to run in sandbox"),
+        ("--no-splash", "Disable startup splash screen"),
+        ("-c, --continue", "Continue last session"),
+        ("--version", "Show version number"),
+        ("-h, --help", "Show help message and exit"),
+    ]
+
+    for opt, desc in options:
+        opt_table.add_row(f"  {opt}", desc)
+
+    console.print(opt_table)
     console.print()
-    console.print("[bold]Examples:[/bold]", style=COLORS["primary"])
+
+    # Examples
+    console.print(f"[bold {COLORS['primary']}]📚 Examples[/bold {COLORS['primary']}]")
     console.print()
-    console.print("  nami                              Start interactive mode")
-    console.print("  nami --agent my-agent             Use custom agent")
-    console.print("  nami init                         Initialize project config")
-    console.print("  nami list                         List available agents")
-    console.print("  nami skills list                  List all skills")
+    console.print(
+        f"  [dim]$[/dim] [bold {COLORS['accent']}]nami[/bold {COLORS['accent']}]                              Start interactive mode"
+    )
+    console.print(
+        f"  [dim]$[/dim] [bold {COLORS['accent']}]nami --agent my-agent[/bold {COLORS['accent']}]             Use custom agent"
+    )
+    console.print(
+        f"  [dim]$[/dim] [bold {COLORS['accent']}]nami init[/bold {COLORS['accent']}]                         Initialize project config"
+    )
+    console.print(
+        f"  [dim]$[/dim] [bold {COLORS['accent']}]nami list[/bold {COLORS['accent']}]                         List available agents"
+    )
+    console.print(
+        f"  [dim]$[/dim] [bold {COLORS['accent']}]nami skills list[/bold {COLORS['accent']}]                  List all skills"
+    )
     console.print()
 
 
@@ -553,22 +616,22 @@ def render_todo_list(todos: list[dict]) -> None:
         content = todo.get("content", "")
 
         if status == "completed":
-            icon = "☑"
-            style = "green"
+            icon = "✓"
+            style = COLORS["success"]
         elif status == "in_progress":
-            icon = "⏳"
-            style = "yellow"
+            icon = "►"
+            style = COLORS["primary"]
         else:  # pending
-            icon = "☐"
-            style = "dim"
+            icon = "○"
+            style = COLORS["dim"]
 
         lines.append(f"[{style}]{icon} {content}[/{style}]")
 
     panel = Panel(
         "\n".join(lines),
-        title="[bold]Task List[/bold]",
-        border_style="cyan",
-        box=box.ROUNDED,
+        title=f"[bold {COLORS['primary']}]📋 Task List[/bold {COLORS['primary']}]",
+        border_style=COLORS["accent"],
+        box=box.DOUBLE,
         padding=(0, 1),
     )
     console.print(panel)
@@ -674,7 +737,9 @@ def _wrap_diff_line(
 
     if len(code) <= available_width:
         if line_num is not None:
-            return [f"[dim]{line_num:>{width}}[/dim] [{color}]{marker}  {code}[/{color}]"]
+            return [
+                f"[dim]{line_num:>{width}}[/dim] [{color}]{marker}  {code}[/{color}]"
+            ]
         return [f"{' ' * width} [{color}]{marker}  {code}[/{color}]"]
 
     lines = []
@@ -705,7 +770,9 @@ def _wrap_diff_line(
                 remaining = remaining[available_width:]
 
         if first and line_num is not None:
-            lines.append(f"[dim]{line_num:>{width}}[/dim] [{color}]{marker}  {chunk}[/{color}]")
+            lines.append(
+                f"[dim]{line_num:>{width}}[/dim] [{color}]{marker}  {chunk}[/{color}]"
+            )
             first = False
         else:
             lines.append(f"{' ' * width} [{color}]{marker}  {chunk}[/{color}]")
@@ -758,17 +825,23 @@ def format_diff_rich(diff_lines: list[str]) -> str:
             old_num, new_num = int(m.group(1)), int(m.group(2))
         elif line.startswith("-"):
             formatted_lines.extend(
-                _wrap_diff_line(line[1:], "-", deletion_color, old_num, width, term_width)
+                _wrap_diff_line(
+                    line[1:], "-", deletion_color, old_num, width, term_width
+                )
             )
             old_num += 1
         elif line.startswith("+"):
             formatted_lines.extend(
-                _wrap_diff_line(line[1:], "+", addition_color, new_num, width, term_width)
+                _wrap_diff_line(
+                    line[1:], "+", addition_color, new_num, width, term_width
+                )
             )
             new_num += 1
         elif line.startswith(" "):
             formatted_lines.extend(
-                _wrap_diff_line(line[1:], " ", context_color, old_num, width, term_width)
+                _wrap_diff_line(
+                    line[1:], " ", context_color, old_num, width, term_width
+                )
             )
             old_num += 1
             new_num += 1
@@ -785,7 +858,9 @@ def render_diff_block(diff: str, title: str) -> None:
 
         # Print with a simple header
         console.print()
-        console.print(f"[bold {COLORS['primary']}]═══ {title} ═══[/bold {COLORS['primary']}]")
+        console.print(
+            f"[bold {COLORS['primary']}]═══ {title} ═══[/bold {COLORS['primary']}]"
+        )
         console.print(formatted_diff)
         console.print()
     except (ValueError, AttributeError, IndexError, OSError):
@@ -813,23 +888,31 @@ def show_interactive_help() -> None:
         style=COLORS["dim"],
     )
     console.print(
-        "  Ctrl+E          Open in external editor (nano by default)", style=COLORS["dim"]
+        "  Ctrl+E          Open in external editor (nano by default)",
+        style=COLORS["dim"],
     )
     console.print("  Ctrl+T          Toggle auto-approve mode", style=COLORS["dim"])
     console.print("  Arrow keys      Navigate input", style=COLORS["dim"])
-    console.print("  Ctrl+C          Cancel input or interrupt agent mid-work", style=COLORS["dim"])
+    console.print(
+        "  Ctrl+C          Cancel input or interrupt agent mid-work",
+        style=COLORS["dim"],
+    )
     console.print()
     console.print("[bold]Special Features:[/bold]", style=COLORS["primary"])
     console.print(
-        "  @filename       Type @ to auto-complete files and inject content", style=COLORS["dim"]
+        "  @filename       Type @ to auto-complete files and inject content",
+        style=COLORS["dim"],
     )
-    console.print("  /command        Type / to see available commands", style=COLORS["dim"])
+    console.print(
+        "  /command        Type / to see available commands", style=COLORS["dim"]
+    )
     console.print(
         "  !command        Type ! to run bash commands (e.g., !ls, !git status)",
         style=COLORS["dim"],
     )
     console.print(
-        "                  Completions appear automatically as you type", style=COLORS["dim"]
+        "                  Completions appear automatically as you type",
+        style=COLORS["dim"],
     )
     console.print()
     console.print("[bold]Auto-Approve Mode:[/bold]", style=COLORS["primary"])
@@ -839,7 +922,8 @@ def show_interactive_help() -> None:
         style=COLORS["dim"],
     )
     console.print(
-        "  When enabled, tool actions execute without confirmation prompts", style=COLORS["dim"]
+        "  When enabled, tool actions execute without confirmation prompts",
+        style=COLORS["dim"],
     )
     console.print()
 
@@ -851,9 +935,15 @@ def show_help() -> None:
     console.print()
 
     console.print("[bold]Usage:[/bold]", style=COLORS["primary"])
-    console.print("  nami [OPTIONS]                           Start interactive session")
-    console.print("  nami list                                List all available agents")
-    console.print("  nami reset --agent AGENT                 Reset agent to default prompt")
+    console.print(
+        "  nami [OPTIONS]                           Start interactive session"
+    )
+    console.print(
+        "  nami list                                List all available agents"
+    )
+    console.print(
+        "  nami reset --agent AGENT                 Reset agent to default prompt"
+    )
     console.print(
         "  nami reset --agent AGENT --target SOURCE Reset agent to copy of another agent"
     )
@@ -862,16 +952,21 @@ def show_help() -> None:
 
     console.print("[bold]Options:[/bold]", style=COLORS["primary"])
     console.print("  --agent NAME                  Agent identifier (default: agent)")
-    console.print("  --auto-approve                Auto-approve tool usage without prompting")
+    console.print(
+        "  --auto-approve                Auto-approve tool usage without prompting"
+    )
     console.print(
         "  --sandbox TYPE                Remote sandbox for execution (modal, runloop, daytona)"
     )
-    console.print("  --sandbox-id ID               Reuse existing sandbox (skips creation/cleanup)")
+    console.print(
+        "  --sandbox-id ID               Reuse existing sandbox (skips creation/cleanup)"
+    )
     console.print()
 
     console.print("[bold]Examples:[/bold]", style=COLORS["primary"])
     console.print(
-        "  nami                              # Start with default agent", style=COLORS["dim"]
+        "  nami                              # Start with default agent",
+        style=COLORS["dim"],
     )
     console.print(
         "  nami --agent mybot                # Start with agent named 'mybot'",
@@ -897,7 +992,8 @@ def show_help() -> None:
         "  nami list                         # List all agents", style=COLORS["dim"]
     )
     console.print(
-        "  nami reset --agent mybot          # Reset mybot to default", style=COLORS["dim"]
+        "  nami reset --agent mybot          # Reset mybot to default",
+        style=COLORS["dim"],
     )
     console.print(
         "  nami reset --agent mybot --target other # Reset mybot to copy of 'other' agent",
@@ -907,16 +1003,23 @@ def show_help() -> None:
 
     console.print("[bold]Long-term Memory:[/bold]", style=COLORS["primary"])
     console.print(
-        "  By default, long-term memory is ENABLED using agent name 'nami-agent'.", style=COLORS["dim"]
+        "  By default, long-term memory is ENABLED using agent name 'nami-agent'.",
+        style=COLORS["dim"],
     )
     console.print("  Memory includes:", style=COLORS["dim"])
-    console.print("  - Persistent agent.md file with your instructions", style=COLORS["dim"])
-    console.print("  - /memories/ folder for storing context across sessions", style=COLORS["dim"])
+    console.print(
+        "  - Persistent agent.md file with your instructions", style=COLORS["dim"]
+    )
+    console.print(
+        "  - /memories/ folder for storing context across sessions", style=COLORS["dim"]
+    )
     console.print()
 
     console.print("[bold]Agent Storage:[/bold]", style=COLORS["primary"])
     console.print("  Agents are stored in: ~/.nami/AGENT_NAME/", style=COLORS["dim"])
-    console.print("  Each agent has an agent.md file containing its prompt", style=COLORS["dim"])
+    console.print(
+        "  Each agent has an agent.md file containing its prompt", style=COLORS["dim"]
+    )
     console.print()
 
     console.print("[bold]Interactive Features:[/bold]", style=COLORS["primary"])
@@ -929,24 +1032,44 @@ def show_help() -> None:
     console.print("  Ctrl+T          Toggle auto-approve mode", style=COLORS["dim"])
     console.print("  Arrow keys      Navigate input", style=COLORS["dim"])
     console.print(
-        "  @filename       Type @ to auto-complete files and inject content", style=COLORS["dim"]
+        "  @filename       Type @ to auto-complete files and inject content",
+        style=COLORS["dim"],
     )
     console.print(
-        "  /command        Type / to see available commands (auto-completes)", style=COLORS["dim"]
+        "  /command        Type / to see available commands (auto-completes)",
+        style=COLORS["dim"],
     )
     console.print()
 
     console.print("[bold]Interactive Commands:[/bold]", style=COLORS["primary"])
-    console.print("  /help           Show available commands and features", style=COLORS["dim"])
-    console.print("  /clear          Clear screen and reset conversation", style=COLORS["dim"])
-    console.print("  /tokens         Show token usage for current session", style=COLORS["dim"])
-    console.print("  /context        Show detailed context window usage", style=COLORS["dim"])
-    console.print("  /compact        Summarize conversation to free context", style=COLORS["dim"])
-    console.print("  /init           Explore codebase and create NAMI.MD file", style=COLORS["dim"])
-    console.print("  /sessions       List and manage saved sessions", style=COLORS["dim"])
-    console.print("  /save           Manually save current session", style=COLORS["dim"])
+    console.print(
+        "  /help           Show available commands and features", style=COLORS["dim"]
+    )
+    console.print(
+        "  /clear          Clear screen and reset conversation", style=COLORS["dim"]
+    )
+    console.print(
+        "  /tokens         Show token usage for current session", style=COLORS["dim"]
+    )
+    console.print(
+        "  /context        Show detailed context window usage", style=COLORS["dim"]
+    )
+    console.print(
+        "  /compact        Summarize conversation to free context", style=COLORS["dim"]
+    )
+    console.print(
+        "  /init           Explore codebase and create NAMI.MD file",
+        style=COLORS["dim"],
+    )
+    console.print(
+        "  /sessions       List and manage saved sessions", style=COLORS["dim"]
+    )
+    console.print(
+        "  /save           Manually save current session", style=COLORS["dim"]
+    )
     console.print("  /quit, /exit    Exit the session", style=COLORS["dim"])
     console.print(
-        "  quit, exit, q   Exit the session (just type and press Enter)", style=COLORS["dim"]
+        "  quit, exit, q   Exit the session (just type and press Enter)",
+        style=COLORS["dim"],
     )
     console.print()

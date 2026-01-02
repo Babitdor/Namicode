@@ -15,6 +15,7 @@ from langchain.agents.middleware.types import (
     ModelRequest,
     ModelResponse,
 )
+
 # from langgraph.runtime import Runtime
 
 from namicode_cli.config import Settings
@@ -27,7 +28,7 @@ class AgentMemoryState(AgentState):
     """Personal preferences from ~/.nami/{agent}/ (applies everywhere)."""
 
     project_memory: NotRequired[str]
-    """Project-specific context (loaded from project root)."""
+    """Project-specific context (combined from all found memory files)."""
 
 
 class AgentMemoryStateUpdate(TypedDict):
@@ -37,7 +38,7 @@ class AgentMemoryStateUpdate(TypedDict):
     """Personal preferences from ~/.nami/{agent}/ (applies everywhere)."""
 
     project_memory: NotRequired[str]
-    """Project-specific context (loaded from project root)."""
+    """Project-specific context (combined from all found memory files)."""
 
 
 # Long-term Memory Documentation
@@ -46,7 +47,7 @@ class AgentMemoryStateUpdate(TypedDict):
 # - Multiple files are combined hierarchically: enterprise → project → user
 # - Both [project-root]/CLAUDE.md and [project-root]/.claude/CLAUDE.md are loaded if both exist
 # - Files higher in hierarchy load first, providing foundation for more specific memories
-# We will follow that pattern for deepagents-cli
+# We follow that pattern for Nami CLI
 LONGTERM_MEMORY_SYSTEM_PROMPT = """
 
 ## Long-term Memory
@@ -58,11 +59,13 @@ Your long-term memory is stored in files on the filesystem and persists across s
 
 Your system prompt is loaded from TWO sources at startup:
 1. **User agent.md**: `{agent_dir_absolute}/agent.md` - Your personal preferences across all projects
-2. **Project NAMI.md**: Loaded from project root if available - Project-specific instructions
+2. **Project memory**: Combined from all found memory files in the project root
 
-Project-specific NAMI.md is loaded from these locations (both combined if both exist):
-- `[project-root]/.nami/NAMI.md` (preferred)
-- `[project-root]/NAMI.md` (fallback, but also included if both exist)
+Project-specific memory is loaded and combined from these locations (all existing files are merged):
+- `[project-root]/.claude/CLAUDE.md` (Claude Code primary)
+- `[project-root]/CLAUDE.md` (Claude Code fallback)
+- `[project-root]/.nami/NAMI.md` (Nami primary)
+- `[project-root]/NAMI.md` (Nami fallback - created by /init command)
 
 **When to CHECK/READ memories (CRITICAL - do this FIRST):**
 - **At the start of ANY new session**: Check both user and project memories
@@ -110,7 +113,7 @@ When writing or updating agent memory, decide whether each fact, configuration, 
 - "Always use type hints in Python"
 - "Prefer functional programming patterns"
 
-### Project Agent File: `{project_deepagents_dir}/agent.md`
+### Project Memory File: `{project_deepagents_dir}/NAMI.md` or `CLAUDE.md`
 → Describes **how this specific project works** and **how the agent should behave here only.**
 
 **Store here:**
@@ -125,21 +128,6 @@ When writing or updating agent memory, decide whether each fact, configuration, 
 - "This project uses FastAPI with SQLAlchemy"
 - "Tests go in tests/ directory mirroring src/ structure"
 - "All API changes require updating OpenAPI spec"
-
-### Project Memory Files: `{project_deepagents_dir}/*.md`
-→ Use for **project-specific reference information** and structured notes.
-
-**Store here:**
-- API design documentation
-- Architecture decisions and rationale
-- Deployment procedures
-- Common debugging patterns
-- Onboarding information
-
-**Examples:**
-- `{project_deepagents_dir}/api-design.md` - REST API patterns used
-- `{project_deepagents_dir}/architecture.md` - System architecture overview
-- `{project_deepagents_dir}/deployment.md` - How to deploy this project
 
 ### File Operations:
 
@@ -159,7 +147,7 @@ write_file '{project_deepagents_dir}/NAMI.md' ...  # Create project memory file
 ```
 
 **Important**:
-- Project memory files are stored in `.nami/` inside the project root
+- Project memory files are stored in `.nami/` or `.claude/` inside the project root
 - Always use absolute paths for file operations
 - Check project memories BEFORE user when answering project-specific questions"""
 
@@ -176,9 +164,11 @@ DEFAULT_MEMORY_SNIPPET = """<user_memory>
 class AgentMemoryMiddleware(AgentMiddleware):
     """Middleware for loading agent-specific long-term memory.
 
-    This middleware loads the agent's long-term memory from a file (agent.md)
-    and injects it into the system prompt. The memory is loaded once at the
-    start of the conversation and stored in state.
+    This middleware loads the agent's long-term memory from files (CLAUDE.md,
+    NAMI.md) and injects them into the system prompt. Memory is loaded once
+    at the start of the conversation and stored in state.
+
+    Supports loading from multiple project memory files and combining them.
     """
 
     state_schema = AgentMemoryState
@@ -212,6 +202,9 @@ class AgentMemoryMiddleware(AgentMiddleware):
 
         self.system_prompt_template = system_prompt_template or DEFAULT_MEMORY_SNIPPET
 
+        # Track which project memory files were loaded (for display in prompt)
+        self.loaded_project_memory_sources: list[str] = []
+
     def before_agent(
         self,
         state: AgentMemoryState,
@@ -219,7 +212,8 @@ class AgentMemoryMiddleware(AgentMiddleware):
     ) -> AgentMemoryStateUpdate:
         """Load agent memory from file before agent execution.
 
-        Loads both user agent.md and project-specific NAMI.md if available.
+        Loads both user agent.md and project-specific memory files if available.
+        Project memory is combined from multiple sources (CLAUDE.md, NAMI.md).
         Only loads if not already present in state.
 
         Dynamically checks for file existence on every call to catch user updates.
@@ -240,12 +234,29 @@ class AgentMemoryMiddleware(AgentMiddleware):
                 with contextlib.suppress(OSError, UnicodeDecodeError):
                     result["user_memory"] = user_path.read_text()
 
-        # Load project memory if not already in state
+        # Load project memory from ALL available sources if not already in state
         if "project_memory" not in state:
-            project_path = self.settings.get_project_agent_md_path()
-            if project_path and project_path.exists():
+            project_paths = self.settings.get_project_agent_md_paths()
+            combined_memories: list[str] = []
+            self.loaded_project_memory_sources = []
+
+            for path in project_paths:
                 with contextlib.suppress(OSError, UnicodeDecodeError):
-                    result["project_memory"] = project_path.read_text()
+                    content = path.read_text()
+                    if content.strip():
+                        # Add header showing the source file
+                        relative_path = (
+                            path.relative_to(self.project_root)
+                            if self.project_root
+                            else path.name
+                        )
+                        combined_memories.append(
+                            f"<!-- Source: {relative_path} -->\n{content}"
+                        )
+                        self.loaded_project_memory_sources.append(str(relative_path))
+
+            if combined_memories:
+                result["project_memory"] = "\n\n---\n\n".join(combined_memories)
 
         return result
 
@@ -264,24 +275,38 @@ class AgentMemoryMiddleware(AgentMiddleware):
         project_memory = state.get("project_memory")
         base_system_prompt = request.system_prompt
 
-        # Build project memory info for documentation
-        if self.project_root and project_memory:
-            project_memory_info = f"`{self.project_root}` (detected)"
+        # Build project memory info for documentation based on actually loaded files
+        if self.project_root and self.loaded_project_memory_sources:
+            sources_list = ", ".join(self.loaded_project_memory_sources)
+            project_memory_info = f"`{self.project_root}` (loaded: {sources_list})"
         elif self.project_root:
-            project_memory_info = f"`{self.project_root}` (no NAMI.md found)"
+            project_memory_info = (
+                f"`{self.project_root}` (no CLAUDE.md or NAMI.md found)"
+            )
         else:
             project_memory_info = "None (not in a git project)"
 
-        # Build project deepagents directory path
+        # Build project deepagents directory path (.claude or .nami)
         if self.project_root:
-            project_deepagents_dir = str(self.project_root / ".nami")
+            if (self.project_root / ".claude").exists():
+                project_deepagents_dir = str(self.project_root / ".claude")
+            elif (self.project_root / ".nami").exists():
+                project_deepagents_dir = str(self.project_root / ".nami")
+            else:
+                project_deepagents_dir = "[project-root]/(.claude or .nami not found)"
         else:
-            project_deepagents_dir = "[project-root]/.nami (not in a project)"
+            project_deepagents_dir = (
+                "[project-root]/(.claude or .nami not in a project)"
+            )
 
         # Format memory section with both memories
         memory_section = self.system_prompt_template.format(
             user_memory=user_memory if user_memory else "(No user agent.md)",
-            project_memory=project_memory if project_memory else "(No project NAMI.md)",
+            project_memory=(
+                project_memory
+                if project_memory
+                else "(No project CLAUDE.md or NAMI.md)"
+            ),
         )
 
         system_prompt = memory_section

@@ -13,24 +13,31 @@ from rich.console import Console
 
 dotenv.load_dotenv()
 
-# Color scheme
+# Color scheme - Red & White Theme
 COLORS = {
-    "primary": "#10b981",
-    "dim": "#6b7280",
-    "user": "#ffffff",
-    "agent": "#10b981",
-    "thinking": "#34d399",
-    "tool": "#fbbf24",
+    "primary": "#ef4444",  # Bright red (primary actions, headings)
+    "secondary": "#dc2626",  # Deep red (highlights, important text)
+    "accent": "#fca5a5",  # Light red (accents, borders)
+    "dim": "#9ca3af",  # Gray (secondary text)
+    "user": "#ffffff",  # White (user messages)
+    "agent": "#ef4444",  # Bright red (agent messages)
+    "thinking": "#f87171",  # Medium red (thinking/processing)
+    "tool": "#dc2626",  # Deep red (tool calls)
+    "success": "#10b981",  # Green (success states)
+    "warning": "#f59e0b",  # Orange (warnings)
+    "error": "#dc2626",  # Deep red (errors)
 }
 
-# ASCII art banner
+# ASCII art banner - Sleek red design
 DEEP_AGENTS_ASCII = """
-    ███╗   ██╗ █████╗ ███╗   ███╗██╗     ██████╗ ██████╗ ██████╗ ███████╗
-    ████╗  ██║██╔══██╗████╗ ████║██║    ██╔════╝██╔═══██╗██╔══██╗██╔════╝
-    ██╔██╗ ██║███████║██╔████╔██║██║    ██║     ██║   ██║██║  ██║█████╗  
-    ██║╚██╗██║██╔══██║██║╚██╔╝██║██║    ██║     ██║   ██║██║  ██║██╔══╝  
-    ██║ ╚████║██║  ██║██║ ╚═╝ ██║██║    ╚██████╗╚██████╔╝██████╔╝███████╗
-    ╚═╝  ╚═══╝╚═╝  ╚═╝╚═╝     ╚═╝╚═╝     ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝
+                                                                     
+       ███╗   ██╗ █████╗ ███╗   ███╗██╗     ██████╗ ██████╗ ██████╗ ███████╗   
+       ████╗  ██║██╔══██╗████╗ ████║██║    ██╔════╝██╔═══██╗██╔══██╗██╔════╝   
+       ██╔██╗ ██║███████║██╔████╔██║██║    ██║     ██║   ██║██║  ██║█████╗     
+       ██║╚██╗██║██╔══██║██║╚██╔╝██║██║    ██║     ██║   ██║██║  ██║██╔══╝     
+       ██║ ╚████║██║  ██║██║ ╚═╝ ██║██║    ╚██████╗╚██████╔╝██████╔╝███████╗   
+       ╚═╝  ╚═══╝╚═╝  ╚═╝╚═╝     ╚═╝╚═╝     ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝   
+
 """
 
 # Interactive commands
@@ -96,14 +103,13 @@ def _find_project_root(start_path: Path | None = None) -> Path | None:
 
 
 def _find_project_agent_md(project_root: Path) -> list[Path]:
-    """Find project-specific agent.md, CLAUDE.md, and NAMI.md file(s).
+    """Find project-specific CLAUDE.md and NAMI.md file(s).
 
     Checks multiple locations and returns ALL that exist (in priority order):
     1. project_root/.claude/CLAUDE.md (Claude Code primary)
-    2. project_root/.nami/agent.md (DeepAgents primary)
-    3. project_root/CLAUDE.md (Claude Code fallback)
+    2. project_root/CLAUDE.md (Claude Code fallback)
+    3. project_root/.nami/NAMI.md (Nami primary)
     4. project_root/NAMI.md (Nami fallback - created by /init command)
-    5. project_root/agent.md (DeepAgents fallback)
 
     All files found will be loaded and combined hierarchically.
 
@@ -111,7 +117,7 @@ def _find_project_agent_md(project_root: Path) -> list[Path]:
         project_root: Path to the project root directory.
 
     Returns:
-        List of paths to project config files (may contain 0-5 paths).
+        List of paths to project config files (may contain 0-4 paths).
     """
     paths = []
 
@@ -125,15 +131,15 @@ def _find_project_agent_md(project_root: Path) -> list[Path]:
     if root_claude_md.exists():
         paths.append(root_claude_md)
 
-    # Priority 3: NAMI.md in root (created by /init command)
+    # Priority 3: .nami/NAMI.md (Nami primary)
+    nami_dir_md = project_root / ".nami" / "NAMI.md"
+    if nami_dir_md.exists():
+        paths.append(nami_dir_md)
+
+    # Priority 4: NAMI.md in root (created by /init command)
     root_nami_md = project_root / "NAMI.md"
     if root_nami_md.exists():
         paths.append(root_nami_md)
-
-    # Priority 4: agent.md in root (DeepAgents fallback)
-    root_agent_md = project_root / "agent.md"
-    if root_agent_md.exists():
-        paths.append(root_agent_md)
 
     return paths
 
@@ -265,7 +271,9 @@ class Settings:
         return self.get_agents_root_dir() / agent_name / "agent.md"
 
     def get_project_agent_md_path(self) -> Path | None:
-        """Get project-level agent.md path.
+        """Get project-level agent.md path (legacy single-file method).
+
+        DEPRECATED: Use get_project_agent_md_paths() for full multi-file support.
 
         Returns path regardless of whether the file exists.
 
@@ -275,6 +283,25 @@ class Settings:
         if not self.project_root:
             return None
         return self.project_root / ".nami" / "agent.md"
+
+    def get_project_agent_md_paths(self) -> list[Path]:
+        """Get all project-level memory file paths (CLAUDE.md, NAMI.md).
+
+        Finds all existing memory files and returns them in priority order.
+        All found files will be loaded and combined hierarchically.
+
+        Search locations (in order):
+        1. {project_root}/.claude/CLAUDE.md (Claude Code primary)
+        2. {project_root}/CLAUDE.md (Claude Code fallback)
+        3. {project_root}/.nami/NAMI.md (Nami primary)
+        4. {project_root}/NAMI.md (Nami fallback - created by /init command)
+
+        Returns:
+            List of existing paths (may be empty if not in a project or no files found)
+        """
+        if not self.project_root:
+            return []
+        return _find_project_agent_md(self.project_root)
 
     @staticmethod
     def _is_valid_agent_name(agent_name: str) -> bool:

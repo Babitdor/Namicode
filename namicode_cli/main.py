@@ -319,9 +319,12 @@ async def simple_cli(
         )
         console.print()
 
+    console.print()
     console.print(
-        "... Ready to code! What would you like to build?", style=COLORS["agent"]
+        f"[bold {COLORS['primary']}]│[/bold {COLORS['primary']}]  [bold white]Ready to Code, Boss? What can I build for you?[/bold white]  [bold {COLORS['primary']}]│[/bold {COLORS['primary']}]"
     )
+
+    console.print()
 
     if sandbox_type:
         working_dir = get_default_working_dir(sandbox_type)
