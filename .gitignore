@@ -97,3 +97,7 @@ dmypy.json
 # Temporary files
 *.tmp
 *.temp
+
+
+# NAMI CODE
+NAMI.md
