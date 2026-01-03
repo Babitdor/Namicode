@@ -113,7 +113,7 @@ my-project/
 The `agent.md` file provides persistent memory loaded at every session start:
 
 - **Global** (`~/.nami/agents/default/agent.md`): Your personality, style, and universal preferences
-- **Project** (`.nami/agent.md`): Project-specific context, conventions, and architecture
+- **Project** (`.nami/NAMI.md`): Project-specific context, conventions, and architecture
 
 The agent automatically updates these files when you describe preferences or give feedback.
 
