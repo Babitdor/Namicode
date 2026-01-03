@@ -27,6 +27,7 @@ The execution flow:
 
 import asyncio
 import json
+import sys
 
 from langchain.agents.middleware.human_in_the_loop import (
     ActionRequest,
@@ -36,13 +37,13 @@ from langchain.agents.middleware.human_in_the_loop import (
     HITLResponse,
     RejectDecision,
 )
-import sys
 from langchain_core.messages import HumanMessage, ToolMessage
 from langgraph.types import Command, Interrupt
 from pydantic import TypeAdapter, ValidationError
 from rich import box
 from rich.markdown import Markdown
 from rich.panel import Panel
+
 from namicode_cli.config import COLORS, console
 from namicode_cli.errors import ErrorHandler
 from namicode_cli.file_ops import FileOpTracker, build_approval_preview
@@ -261,6 +262,10 @@ async def execute_task(
         "configurable": {"thread_id": session_state.thread_id},
         "metadata": {"assistant_id": assistant_id} if assistant_id else {},
     }
+
+    # Track user message for /context command
+    if token_tracker:
+        token_tracker.increment_user_messages()
 
     has_responded = False
     captured_input_tokens = 0
@@ -763,3 +768,9 @@ async def execute_task(
         # Track token usage (display only via /tokens command)
         if token_tracker and (captured_input_tokens or captured_output_tokens):
             token_tracker.add(captured_input_tokens, captured_output_tokens)
+        # Track assistant response and tool calls for /context command
+        if token_tracker:
+            token_tracker.increment_assistant_messages()
+            # Track tool calls (count of unique tool call IDs displayed)
+            if displayed_tool_ids:
+                token_tracker.increment_tool_calls(len(displayed_tool_ids))

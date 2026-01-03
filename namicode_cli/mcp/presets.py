@@ -8,7 +8,6 @@ from typing import Any
 
 from namicode_cli.mcp.config import MCPServerConfig
 
-
 # Pre-defined MCP server presets
 MCP_PRESETS: dict[str, dict[str, Any]] = {
     "filesystem": {
@@ -30,17 +29,24 @@ MCP_PRESETS: dict[str, dict[str, Any]] = {
     },
     "github": {
         "name": "GitHub MCP",
-        "description": "Interact with GitHub repositories, issues, and PRs",
-        "package": "@modelcontextprotocol/server-github",
+        "description": "Interact with GitHub repositories, issues, and PRs (official)",
+        "package": "github-mcp-server",
         "config": {
             "transport": "stdio",
-            "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-github"],
-            "env": {"GITHUB_TOKEN": "{github_token}"},
+            "command": "docker",
+            "args": [
+                "run",
+                "-i",
+                "--rm",
+                "-e",
+                "GITHUB_PERSONAL_ACCESS_TOKEN",
+                "ghcr.io/github/github-mcp-server",
+            ],
+            "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "{github_token}"},
         },
         "setup_prompt": "Enter your GitHub personal access token:",
         "setup_key": "github_token",
-        "env_mapping": {"github_token": "GITHUB_TOKEN"},
+        "env_mapping": {"github_token": "GITHUB_PERSONAL_ACCESS_TOKEN"},
     },
     "brave-search": {
         "name": "Brave Search MCP",
@@ -69,12 +75,12 @@ MCP_PRESETS: dict[str, dict[str, Any]] = {
     },
     "postgres": {
         "name": "PostgreSQL MCP",
-        "description": "Query and interact with PostgreSQL databases",
-        "package": "@modelcontextprotocol/server-postgres",
+        "description": "Query and interact with PostgreSQL databases (patched fork)",
+        "package": "@zeddotdev/postgres-context-server",
         "config": {
             "transport": "stdio",
             "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-postgres"],
+            "args": ["-y", "@zeddotdev/postgres-context-server"],
             "env": {"POSTGRES_CONNECTION_STRING": "{connection_string}"},
         },
         "setup_prompt": "Enter PostgreSQL connection string (postgresql://user:pass@host:port/db):",
@@ -105,14 +111,17 @@ MCP_PRESETS: dict[str, dict[str, Any]] = {
     },
     "google-drive": {
         "name": "Google Drive MCP",
-        "description": "Access and manage Google Drive files",
+        "description": "Access and manage Google Drive files (requires OAuth setup)",
         "package": "@modelcontextprotocol/server-gdrive",
         "config": {
             "transport": "stdio",
             "command": "npx",
             "args": ["-y", "@modelcontextprotocol/server-gdrive"],
-            "env": {},
+            "env": {"GDRIVE_CREDENTIALS_PATH": "{credentials_path}"},
         },
+        "setup_prompt": "Enter path to Google Drive credentials JSON file:",
+        "setup_key": "credentials_path",
+        "env_mapping": {"credentials_path": "GDRIVE_CREDENTIALS_PATH"},
     },
     "playwright": {
         "name": "Playwright MCP",
@@ -175,51 +184,39 @@ MCP_PRESETS: dict[str, dict[str, Any]] = {
         "setup_prompt": "Enter SQLite database path:",
         "setup_key": "db_path",
     },
-    "semgrep": {
-        "name": "Semgrep MCP",
-        "description": "Code analysis and security scanning",
-        "package": "@modelcontextprotocol/server-semgrep",
+    "stripe": {
+        "name": "Stripe MCP",
+        "description": "Interact with Stripe payments API (official)",
+        "package": "@stripe/mcp",
         "config": {
             "transport": "stdio",
             "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-semgrep"],
+            "args": ["-y", "@stripe/mcp", "--tools=all", "--api-key={stripe_key}"],
+            "env": {},
+        },
+        "setup_prompt": "Enter Stripe secret API key:",
+        "setup_key": "stripe_key",
+    },
+    "sequential-thinking": {
+        "name": "Sequential Thinking MCP",
+        "description": "Dynamic and reflective problem-solving through thought sequences",
+        "package": "@modelcontextprotocol/server-sequential-thinking",
+        "config": {
+            "transport": "stdio",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
             "env": {},
         },
     },
-    "stripe": {
-        "name": "Stripe MCP",
-        "description": "Interact with Stripe payments API",
-        "package": "@modelcontextprotocol/server-stripe",
+    "everything": {
+        "name": "Everything MCP",
+        "description": "Reference/test server with prompts, resources, and tools",
+        "package": "@modelcontextprotocol/server-everything",
         "config": {
             "transport": "stdio",
             "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-stripe"],
-            "env": {"STRIPE_API_KEY": "{stripe_key}"},
-        },
-        "setup_prompt": "Enter Stripe API key:",
-        "setup_key": "stripe_key",
-        "env_mapping": {"stripe_key": "STRIPE_API_KEY"},
-    },
-    "aws": {
-        "name": "AWS MCP",
-        "description": "Manage AWS resources and services",
-        "package": "@modelcontextprotocol/server-aws",
-        "config": {
-            "transport": "stdio",
-            "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-aws"],
-            "env": {
-                "AWS_ACCESS_KEY_ID": "{aws_key}",
-                "AWS_SECRET_ACCESS_KEY": "{aws_secret}",
-            },
-        },
-        "setup_prompt": "Enter AWS Access Key ID:",
-        "setup_key": "aws_key",
-        "setup_secondary_prompt": "Enter AWS Secret Access Key:",
-        "setup_secondary_key": "aws_secret",
-        "env_mapping": {
-            "aws_key": "AWS_ACCESS_KEY_ID",
-            "aws_secret": "AWS_SECRET_ACCESS_KEY",
+            "args": ["-y", "@modelcontextprotocol/server-everything"],
+            "env": {},
         },
     },
     "serena": {
@@ -284,13 +281,13 @@ def create_config_from_preset(
     user_inputs = user_inputs or {}
 
     # Replace placeholders in args
-    if "args" in config and config["args"]:
+    if config.get("args"):
         config["args"] = [
             arg.format(**user_inputs) if "{" in arg else arg for arg in config["args"]
         ]
 
     # Replace placeholders in env
-    if "env" in config and config["env"]:
+    if config.get("env"):
         env_mapping = preset.get("env_mapping", {})
         new_env = {}
         for env_key, env_value in config["env"].items():

@@ -35,6 +35,7 @@ dependencies = [
     "transformers>=4.57.3",
     "mcp>=1.0.0",
     "docker>=7.0.0",
+    "langchain-mcp-adapters>=0.1.0",
 ]
 
 setup(

@@ -2,6 +2,9 @@
 
 This middleware loads MCP server configurations, discovers their tools,
 and makes them available to the agent as callable functions.
+
+Uses langchain-mcp-adapters for robust MCP client management with
+persistent connections.
 """
 
 import asyncio
@@ -15,18 +18,18 @@ from langchain.agents.middleware.types import (
     ModelRequest,
     ModelResponse,
 )
-from langchain_core.tools import StructuredTool
+from langchain_core.tools import BaseTool
 from langgraph.runtime import Runtime
 
 from namicode_cli.config import console
-from namicode_cli.mcp.client import MCPClient
+from namicode_cli.mcp.client import MultiServerMCPClient, create_mcp_client
 from namicode_cli.mcp.config import MCPConfig
 
 
 class MCPState(AgentState):
     """State for the MCP middleware."""
 
-    mcp_tools: NotRequired[list[dict[str, Any]]] # type: ignore
+    mcp_tools: NotRequired[list[dict[str, Any]]]  # type: ignore[misc]
     """List of MCP tools metadata (name, description, server)."""
 
 
@@ -91,7 +94,7 @@ class MCPMiddleware(AgentMiddleware):
 
     This middleware:
     - Loads MCP server configurations from ~/.nami/mcp.json
-    - Discovers tools from configured MCP servers
+    - Discovers tools from configured MCP servers using langchain-mcp-adapters
     - Registers MCP tools with the agent
     - Handles tool calls by routing them to the appropriate MCP server
 
@@ -112,14 +115,12 @@ class MCPMiddleware(AgentMiddleware):
                        Defaults to ~/.nami/mcp.json
         """
         self.mcp_config = MCPConfig(config_path)
-        self.clients: dict[str, MCPClient] = {}
+        self._client: MultiServerMCPClient | None = None
         self._tools_cache: list[dict[str, Any]] = []
+        self.tools: list[BaseTool] = []
 
         # Discover tools synchronously at init time
         self._discover_tools_sync()
-
-        # Create and register tools with the middleware
-        self.tools = self._create_mcp_tools()
 
     def _discover_tools_sync(self) -> None:
         """Discover tools from all configured MCP servers synchronously.
@@ -136,48 +137,68 @@ class MCPMiddleware(AgentMiddleware):
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                # If we're already in an async context, create a new loop
+                # If we're already in an async context, create a new loop in a thread
                 import concurrent.futures
+
                 with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(asyncio.run, self._discover_tools_async(servers))
-                    future.result(timeout=60)  # 60 second timeout
+                    future = executor.submit(asyncio.run, self._discover_tools_async())
+                    future.result(timeout=120)  # 120 second timeout
             else:
-                loop.run_until_complete(self._discover_tools_async(servers))
+                loop.run_until_complete(self._discover_tools_async())
         except RuntimeError:
             # No event loop exists, create one
-            asyncio.run(self._discover_tools_async(servers))
+            asyncio.run(self._discover_tools_async())
 
-    async def _discover_tools_async(self, servers: dict[str, Any]) -> None:
-        """Async implementation of tool discovery.
+    async def _discover_tools_async(self) -> None:
+        """Async implementation of tool discovery using MultiServerMCPClient."""
+        try:
+            # Create the MCP client
+            self._client = create_mcp_client(self.mcp_config)
 
-        Args:
-            servers: Dictionary of server name to MCPServerConfig
-        """
-        for name, config in servers.items():
-            try:
-                client = MCPClient(name, config)
-                self.clients[name] = client
+            # Get tools from all configured servers
+            mcp_tools = await self._client.get_tools()
 
-                # Discover tools from this server
-                tools = await client.list_tools()
+            if not mcp_tools:
+                return
 
-                for tool in tools:
-                    self._tools_cache.append({
-                        "name": tool["name"],
-                        "description": tool["description"],
-                        "server": name,
-                        "inputSchema": tool["inputSchema"],
-                    })
+            # Store tools for the agent
+            self.tools = list(mcp_tools)
 
-                console.print(
-                    f"[dim]MCP: Connected to '{name}' ({len(tools)} tools)[/dim]"
-                )
+            # Build tools metadata cache for system prompt
+            servers = self.mcp_config.list_servers()
+            for tool in mcp_tools:
+                # Extract server name from tool name (format: server__toolname)
+                tool_name = tool.name
+                server_name = None
 
-            except Exception as e:
-                console.print(
-                    f"[yellow]Warning: Failed to connect to MCP server '{name}': {e}[/yellow]"
-                )
-                continue
+                # Try to match tool to a server
+                for name in servers:
+                    if tool_name.startswith(f"{name}__"):
+                        server_name = name
+                        break
+
+                if server_name is None:
+                    # Fallback: use first part before __ as server name
+                    parts = tool_name.split("__", 1)
+                    server_name = parts[0] if len(parts) > 1 else "unknown"
+
+                self._tools_cache.append({
+                    "name": tool_name,
+                    "description": tool.description or "",
+                    "server": server_name,
+                })
+
+            # Count tools per server for status message
+            server_counts: dict[str, int] = {}
+            for tool_meta in self._tools_cache:
+                server = tool_meta["server"]
+                server_counts[server] = server_counts.get(server, 0) + 1
+
+            for server, count in server_counts.items():
+                console.print(f"[dim]MCP: Connected ({count} tools)[/dim]")
+
+        except Exception as e:
+            console.print(f"[yellow]Warning: Failed to initialize MCP client: {e}[/yellow]")
 
     async def on_session_start(
         self,
@@ -230,9 +251,7 @@ class MCPMiddleware(AgentMiddleware):
             if server_tools:
                 lines.append(f"  Tools ({len(server_tools)}):")
                 for tool in server_tools:
-                    lines.append(
-                        f"    - {tool['name']}: {tool['description']}"
-                    )
+                    lines.append(f"    - {tool['name']}: {tool['description']}")
             else:
                 lines.append("  (No tools available)")
 
@@ -313,71 +332,6 @@ class MCPMiddleware(AgentMiddleware):
             system_prompt = mcp_section
 
         return await handler(request.override(system_prompt=system_prompt))
-
-    def _create_mcp_tool_caller(
-        self, server_name: str, tool_name: str
-    ) -> Callable[..., Any]:
-        """Create a callable function for an MCP tool.
-
-        This factory method properly captures server_name and tool_name
-        in a closure, avoiding the closure-in-loop bug.
-
-        Args:
-            server_name: Name of the MCP server
-            tool_name: Name of the tool on that server
-
-        Returns:
-            Async callable that invokes the MCP tool
-        """
-
-        async def call_mcp_tool(**kwargs: Any) -> Any:
-            """Call an MCP tool.
-
-            Args:
-                **kwargs: Tool arguments
-
-            Returns:
-                Tool execution result
-            """
-            client = self.clients.get(server_name)
-            if not client:
-                msg = f"MCP server '{server_name}' not found"
-                raise ValueError(msg)
-
-            result = await client.call_tool(tool_name, arguments=kwargs)
-            return result
-
-        return call_mcp_tool
-
-    def _create_mcp_tools(self) -> list[StructuredTool]:
-        """Create LangChain tools from MCP tools metadata.
-
-        Called at __init__ time to populate self.tools.
-
-        Returns:
-            List of StructuredTool instances that wrap MCP tool calls
-        """
-        tools = []
-
-        for tool_meta in self._tools_cache:
-            server_name = tool_meta["server"]
-            tool_name = tool_meta["name"]
-
-            # Use factory method to properly capture server_name and tool_name
-            call_mcp_tool = self._create_mcp_tool_caller(server_name, tool_name)
-
-            # Create StructuredTool with async coroutine support
-            structured_tool = StructuredTool.from_function(
-                func=call_mcp_tool,
-                coroutine=call_mcp_tool,  # Properly register as async
-                name=f"{server_name}__{tool_name}",
-                description=tool_meta["description"],
-                args_schema=tool_meta.get("inputSchema"),
-            )
-
-            tools.append(structured_tool)
-
-        return tools
 
 
 __all__ = ["MCPMiddleware"]
