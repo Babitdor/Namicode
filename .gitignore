@@ -9,6 +9,7 @@ __pycache__/
 # Distribution / packaging
 .Python
 build/
+docs/
 develop-eggs/
 dist/
 downloads/
@@ -70,6 +71,8 @@ venv.bak/
 
 # Claude Code local settings
 .claude/
+.serena
+.ruff_cache
 CLAUDE.md
 
 # macOS

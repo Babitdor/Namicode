@@ -10,9 +10,9 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from .config import COLORS, DEEP_AGENTS_ASCII, Settings, console
+from .config import COLORS, DEEP_AGENTS_ASCII, Settings, TOOL_ICONS, console
 from .execution import execute_task
-from .ui import TokenTracker, show_interactive_help
+from .ui import TokenTracker, format_tool_display, show_interactive_help
 from .mcp.config import MCPConfig, MCPServerConfig
 from .mcp import presets as mcp_presets
 from .model_manager import ModelManager, MODEL_PRESETS, get_ollama_models
@@ -1925,14 +1925,15 @@ Guidelines:
             middleware=subagent_middleware,
         )
 
-        # Track pending text from subagent - all display is handled by outer execution
-        # The subagent's tool calls and responses appear in main execution's stream
+        # Stream the subagent execution following Streaming.md patterns
+        # Display tool calls as they happen, accumulate AI text silently,
+        # display final response as one block
         pending_text = ""
+        tool_call_buffers: dict[str | int, dict] = {}
+        displayed_tools: set[str] = set()  # Track tools already displayed to avoid duplicates
 
         config = {"configurable": {"thread_id": f"subagent-{agent_name}"}}
 
-        # Stream the subagent execution - content appears in main agent's stream
-        # We only accumulate the final response text here
         try:
             async for chunk in subagent.astream(
                 {"messages": [HumanMessage(content=query)]},
@@ -1941,46 +1942,158 @@ Guidelines:
                 config=config,
             ):
                 # With subgraphs=True and dual-mode, chunks are (namespace, stream_mode, data)
-                if isinstance(chunk, tuple) and len(chunk) == 3:
-                    _namespace, current_stream_mode, data = chunk
+                if isinstance(chunk, tuple) and len(chunk) != 3:
+                    continue
 
-                    # Only process MESSAGES stream for text accumulation
-                    # Skip UPDATES stream - todos and progress shown by outer execution
-                    if current_stream_mode != "messages":
+                _namespace, current_stream_mode, data = chunk
+
+                # Handle UPDATES stream for tool results and final AI responses
+                if current_stream_mode == "updates":
+                    if not isinstance(data, dict):
                         continue
 
-                    # Messages stream returns (message, metadata) tuples
-                    if not isinstance(data, tuple) or len(data) != 2:
-                        continue
-
-                    message, _metadata = data
-
-                    # Skip tool messages - their results appear in outer execution
-                    if hasattr(message, "name") and hasattr(message, "status"):
-                        if getattr(message, "status") == "ok":
+                    # Process each node update
+                    for node_name, node_data in data.items():
+                        if not isinstance(node_data, dict):
                             continue
 
-                    # Accumulate text content from AIMessage
-                    if hasattr(message, "content"):
-                        content = message.content
-                        if isinstance(content, str) and content:
-                            pending_text += content
-                        elif isinstance(content, list):
-                            for item in content:
-                                if isinstance(item, dict) and item.get("type") == "text":
-                                    text = item.get("text", "")
-                                    if text:
-                                        pending_text += text
-                                elif isinstance(item, str) and item:
-                                    pending_text += item
+                        if "messages" in node_data:
+                            messages = node_data["messages"]
+                            if not messages or not isinstance(messages, list):
+                                continue
 
-                    # Also check content_blocks for text
-                    if hasattr(message, "content_blocks") and message.content_blocks:
-                        for block in message.content_blocks:
-                            if block.get("type") == "text":
-                                text = block.get("text", "")
-                                if text:
-                                    pending_text += text
+                            last_msg = messages[-1]
+
+                            # Check if this is a ToolMessage with result
+                            if hasattr(last_msg, "status"):
+                                tool_name = getattr(last_msg, "name", "")
+                                tool_status = getattr(last_msg, "status", "")
+                                tool_id = getattr(last_msg, "tool_call_id", "")
+                                if tool_status == "ok" and tool_name:
+                                    # Tool completed - look up the call in our buffer to get args
+                                    display_args = {}
+                                    for buf_key, buf in tool_call_buffers.items():
+                                        buf_name = buf.get("name")
+                                        buf_id = buf.get("id")
+                                        if buf_name == tool_name or buf_id == tool_id:
+                                            buf_args = buf.get("args")
+                                            if isinstance(buf_args, dict):
+                                                display_args = buf_args
+                                            break
+
+                                    # Display tool with args
+                                    icon = TOOL_ICONS.get(tool_name, TOOL_ICONS["default"])
+                                    display_str = format_tool_display(tool_name, display_args)
+                                    console.print(
+                                        f"  {icon} {display_str}",
+                                        style=f"dim {COLORS['tool']}",
+                                        markup=False,
+                                    )
+                                    displayed_tools.add(tool_name)
+
+                            # Check if this is final AI response (no tool_calls)
+                            elif hasattr(last_msg, "tool_calls") and not last_msg.tool_calls:
+                                msg_text = getattr(last_msg, "text", "") or getattr(last_msg, "content", "")
+                                if msg_text:
+                                    pending_text = msg_text
+
+                    continue
+
+                # Handle MESSAGES stream for incremental updates
+                if current_stream_mode != "messages":
+                    continue
+
+                # Messages stream returns (message, metadata) tuples
+                if not isinstance(data, tuple) or len(data) != 2:
+                    continue
+
+                message, _metadata = data
+
+                # Handle tool messages (results)
+                if hasattr(message, "status") and getattr(message, "status", "") == "ok":
+                    continue  # Already handled in updates stream
+
+                # Process content_blocks for tool calls and text
+                if hasattr(message, "content_blocks") and message.content_blocks:
+                    for block in message.content_blocks:
+                        block_type = block.get("type", "")
+
+                        # Accumulate text blocks silently
+                        if block_type == "text":
+                            text = block.get("text", "")
+                            if text:
+                                pending_text += text
+
+                        # Handle tool call chunks - accumulate and display when complete
+                        elif block_type in ("tool_call_chunk", "tool_call"):
+                            chunk_name = block.get("name")
+                            chunk_args = block.get("args", {})
+                            chunk_id = block.get("id")
+                            chunk_index = block.get("index")
+
+                            buffer_key = chunk_index if chunk_index is not None else (
+                                chunk_id if chunk_id is not None else len(tool_call_buffers)
+                            )
+
+                            buffer = tool_call_buffers.setdefault(
+                                buffer_key,
+                                {"name": None, "id": None, "args": None, "args_parts": [], "displayed": False}
+                            )
+
+                            if chunk_name:
+                                buffer["name"] = chunk_name
+                            if chunk_id:
+                                buffer["id"] = chunk_id
+
+                            if isinstance(chunk_args, dict):
+                                # Merge args - new dict values update existing
+                                existing_args = buffer.get("args", {})
+                                if existing_args is None:
+                                    existing_args = {}
+                                existing_args.update(chunk_args)
+                                buffer["args"] = existing_args
+                                buffer["args_parts"] = []
+                            elif isinstance(chunk_args, str) and chunk_args:
+                                parts = buffer.setdefault("args_parts", [])
+                                if not parts or chunk_args != parts[-1]:
+                                    parts.append(chunk_args)
+                                buffer["args"] = "".join(parts)
+                            elif chunk_args is not None:
+                                buffer["args"] = chunk_args
+
+                            buffer_name = buffer.get("name")
+                            if buffer_name is None:
+                                continue
+
+                            # Skip if already displayed (to avoid duplicates)
+                            if buffer.get("displayed"):
+                                continue
+
+                            # Check if we have complete args to display
+                            parsed_args = buffer.get("args")
+                            if isinstance(parsed_args, str):
+                                if not parsed_args:
+                                    continue
+                                try:
+                                    parsed_args = json.loads(parsed_args)
+                                except json.JSONDecodeError:
+                                    continue
+                            elif parsed_args is None:
+                                continue
+
+                            if not isinstance(parsed_args, dict):
+                                parsed_args = {"value": parsed_args}
+
+                            # Mark as displayed and show tool call
+                            buffer["displayed"] = True
+                            icon = TOOL_ICONS.get(buffer_name, TOOL_ICONS["default"])
+                            display_str = format_tool_display(buffer_name, parsed_args)
+                            console.print(
+                                f"  {icon} {display_str}",
+                                style=f"dim {COLORS['tool']}",
+                                markup=False,
+                            )
+                            displayed_tools.add(buffer_name)
 
         except Exception as stream_error:
             # Fall back to ainvoke on streaming error
@@ -1998,17 +2111,10 @@ Guidelines:
                 return str(final_message)
             return "No response from subagent."
 
-        # Return accumulated text with display
+        # Return accumulated text - main.py displays the result
+        # This is a silent operation - invoke_subagent only accumulates
         if pending_text:
-            text = pending_text.strip()
-            if text:
-                console.print("●", style=COLORS["agent"], markup=False, end=" ")
-                try:
-                    from rich.markdown import Markdown
-                    console.print(Markdown(text), style=COLORS["agent"])
-                except Exception:
-                    console.print(text, style=COLORS["agent"])
-            return text
+            return pending_text.strip()
 
         # Fallback to ainvoke if streaming did not capture response
         result = await subagent.ainvoke(

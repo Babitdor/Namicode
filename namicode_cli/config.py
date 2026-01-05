@@ -91,6 +91,28 @@ COMMANDS = {
 # Maximum argument length for display
 MAX_ARG_LENGTH = 150
 
+# Tool icons for display in tool calls
+TOOL_ICONS = {
+    "read_file": "📄",
+    "write_file": "✍️",
+    "edit_file": "📝",
+    "shell": "💻",
+    "ls": "📁",
+    "glob": "🔍",
+    "grep": "🔎",
+    "web_search": "🌐",
+    "http_request": "📡",
+    "fetch_url": "🌍",
+    "task": "🤖",
+    "write_todos": "📋",
+    "mcp": "🔌",
+    "run_tests": "🧪",
+    "start_dev_server": "🚀",
+    "stop_dev_server": "🛑",
+    "list_servers": "📋",
+    "default": "🔧",
+}
+
 # Agent configuration
 config = {"recursion_limit": 1000}
 

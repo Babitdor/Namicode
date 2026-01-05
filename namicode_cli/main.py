@@ -579,8 +579,8 @@ async def simple_cli(
             )
             console.print()
 
-            # invoke_subagent handles display internally via streaming
-            await invoke_subagent(
+            # invoke_subagent runs silently and returns the response
+            response = await invoke_subagent(
                 agent_name=agent_name,
                 query=query,
                 main_agent=agent,
@@ -588,6 +588,12 @@ async def simple_cli(
                 session_state=session_state,
                 backend=backend,
             )
+
+            # Display the subagent response
+            if response:
+                from rich.markdown import Markdown
+                console.print("●", style=COLORS["agent"], markup=False, end=" ")
+                console.print(Markdown(response), style=COLORS["agent"])
 
             console.print()
             continue
