@@ -83,6 +83,7 @@ COMMANDS = {
     "save": "Manually save current session (auto-saved on exit)",
     "servers": "List and manage running dev servers",
     "tests": "Run project tests (e.g., /tests or /tests pytest -v)",
+    "trace": "Manage LangSmith tracing (status, enable, disable, projects)",
     "kill": "Kill a running process by PID or name (e.g., /kill 1234)",
     "exit": "Exit the CLI",
 }
@@ -216,12 +217,18 @@ class Settings:
     anthropic_api_key: str | None
     google_api_key: str | None
     tavily_api_key: str | None
+    langsmith_api_key: str | None
 
     # Ollama configuration
     ollama_host: str | None
 
     # Project information
     project_root: Path | None
+
+    # LangSmith configuration
+    langsmith_project: str = "Nami-Code"
+    langsmith_workspace_id: str | None = None
+    langsmith_tracing_enabled: bool = False
 
     version: str = "1.0.0"
 
@@ -240,6 +247,7 @@ class Settings:
         anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
         google_key = os.environ.get("GOOGLE_API_KEY")
         tavily_key = os.environ.get("TAVILY_API_KEY")
+        langsmith_key = os.environ.get("LANGSMITH_API_KEY")
 
         # Detect Ollama host configuration
         ollama_host = os.environ.get("OLLAMA_HOST")
@@ -247,13 +255,22 @@ class Settings:
         # Detect project
         project_root = _find_project_root(start_path)
 
+        # LangSmith configuration
+        langsmith_enabled = os.environ.get("LANGSMITH_TRACING", "").lower() == "true"
+        langsmith_project = os.environ.get("LANGSMITH_PROJECT", "Nami-Code")
+        langsmith_workspace = os.environ.get("LANGSMITH_WORKSPACE_ID")
+
         return cls(
             openai_api_key=openai_key,
             anthropic_api_key=anthropic_key,
             google_api_key=google_key,
             tavily_api_key=tavily_key,
+            langsmith_api_key=langsmith_key,
             ollama_host=ollama_host,
             project_root=project_root,
+            langsmith_project=langsmith_project,
+            langsmith_workspace_id=langsmith_workspace,
+            langsmith_tracing_enabled=langsmith_enabled,
         )
 
     @property
@@ -275,6 +292,11 @@ class Settings:
     def has_tavily(self) -> bool:
         """Check if Tavily API key is configured."""
         return self.tavily_api_key is not None
+
+    @property
+    def has_langsmith(self) -> bool:
+        """Check if LangSmith is configured and enabled."""
+        return self.langsmith_api_key is not None and self.langsmith_tracing_enabled
 
     @property
     def has_project(self) -> bool:

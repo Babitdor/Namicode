@@ -1930,7 +1930,9 @@ Guidelines:
         # display final response as one block
         pending_text = ""
         tool_call_buffers: dict[str | int, dict] = {}
-        displayed_tools: set[str] = set()  # Track tools already displayed to avoid duplicates
+        displayed_tools: set[str] = (
+            set()
+        )  # Track tools already displayed to avoid duplicates
 
         config = {"configurable": {"thread_id": f"subagent-{agent_name}"}}
 
@@ -1982,8 +1984,12 @@ Guidelines:
                                             break
 
                                     # Display tool with args
-                                    icon = TOOL_ICONS.get(tool_name, TOOL_ICONS["default"])
-                                    display_str = format_tool_display(tool_name, display_args)
+                                    icon = TOOL_ICONS.get(
+                                        tool_name, TOOL_ICONS["default"]
+                                    )
+                                    display_str = format_tool_display(
+                                        tool_name, display_args
+                                    )
                                     console.print(
                                         f"  {icon} {display_str}",
                                         style=f"dim {COLORS['tool']}",
@@ -1992,8 +1998,13 @@ Guidelines:
                                     displayed_tools.add(tool_name)
 
                             # Check if this is final AI response (no tool_calls)
-                            elif hasattr(last_msg, "tool_calls") and not last_msg.tool_calls:
-                                msg_text = getattr(last_msg, "text", "") or getattr(last_msg, "content", "")
+                            elif (
+                                hasattr(last_msg, "tool_calls")
+                                and not last_msg.tool_calls
+                            ):
+                                msg_text = getattr(last_msg, "text", "") or getattr(
+                                    last_msg, "content", ""
+                                )
                                 if msg_text:
                                     pending_text = msg_text
 
@@ -2010,7 +2021,10 @@ Guidelines:
                 message, _metadata = data
 
                 # Handle tool messages (results)
-                if hasattr(message, "status") and getattr(message, "status", "") == "ok":
+                if (
+                    hasattr(message, "status")
+                    and getattr(message, "status", "") == "ok"
+                ):
                     continue  # Already handled in updates stream
 
                 # Process content_blocks for tool calls and text
@@ -2031,13 +2045,25 @@ Guidelines:
                             chunk_id = block.get("id")
                             chunk_index = block.get("index")
 
-                            buffer_key = chunk_index if chunk_index is not None else (
-                                chunk_id if chunk_id is not None else len(tool_call_buffers)
+                            buffer_key = (
+                                chunk_index
+                                if chunk_index is not None
+                                else (
+                                    chunk_id
+                                    if chunk_id is not None
+                                    else len(tool_call_buffers)
+                                )
                             )
 
                             buffer = tool_call_buffers.setdefault(
                                 buffer_key,
-                                {"name": None, "id": None, "args": None, "args_parts": [], "displayed": False}
+                                {
+                                    "name": None,
+                                    "id": None,
+                                    "args": None,
+                                    "args_parts": [],
+                                    "displayed": False,
+                                },
                             )
 
                             if chunk_name:
@@ -2651,9 +2677,257 @@ async def handle_command(
             console.print()
         return True
 
+    if cmd == "trace":
+        # Manage LangSmith tracing
+        try:
+            return await _handle_trace_command(cmd_args)
+        except Exception as e:
+            console.print(f"[red]Error running /trace command: {e}[/red]")
+            import traceback
+
+            console.print(f"[dim]{traceback.format_exc()}[/dim]")
+            console.print()
+        return True
+
     console.print()
     console.print(f"[yellow]Unknown command: /{cmd}[/yellow]")
     console.print("[dim]Type /help for available commands.[/dim]")
+    console.print()
+    return True
+
+
+async def _handle_trace_command(cmd_args: list[str]) -> bool:
+    """Handle /trace command for LangSmith tracing management.
+
+    Args:
+        cmd_args: Command arguments (e.g., ["status"], ["enable"], ["projects"])
+
+    Returns:
+        True (always handled)
+    """
+    from .tracing import (
+        configure_tracing,
+        get_tracing_status,
+        is_tracing_enabled,
+        get_tracing_config,
+        list_projects,
+        get_traces,
+    )
+    from .config import settings
+
+    console.print()
+
+    # Parse subcommand
+    subcmd = cmd_args[0].lower() if cmd_args else "status"
+
+    if subcmd == "status":
+        # Show current tracing status
+        status = get_tracing_status()
+
+        header = Text()
+        header.append("📊 ", style="bold")
+        header.append("LangSmith Tracing Status", style=f"bold {COLORS['primary']}")
+
+        if status["available"]:
+            if status["configured"]:
+                config = get_tracing_config()
+                console.print(
+                    Panel(
+                        f"✅ LangSmith tracing is [bold]ENABLED[/bold]\n\n"
+                        f"Project: {config.project_name}\n"
+                        f"Workspace: {config.workspace_id or '[dim]default[/dim]'}\n"
+                        f"\n[dim]View traces at:[/dim]\n"
+                        f"[link=https://smith.langchain.com]https://smith.langchain.com[/link]",
+                        title=header,
+                        border_style=COLORS["primary"],
+                        padding=(1, 2),
+                    )
+                )
+            else:
+                console.print(
+                    Panel(
+                        Text(
+                            "⚠️  LangSmith tracing is [bold]NOT CONFIGURED[/bold]\n\n"
+                            "To enable tracing:\n"
+                            "1. Set LANGSMITH_API_KEY environment variable\n"
+                            "2. Set LANGSMITH_TRACING=true\n"
+                            f"3. Optionally set LANGSMITH_PROJECT for custom project name",
+                            style="dim",
+                        ),
+                        title=header,
+                        border_style=COLORS["warning"],
+                        padding=(1, 2),
+                    )
+                )
+        else:
+            console.print(
+                Panel(
+                    Text(
+                        "❌ LangSmith library is not installed.\n\n"
+                        "Install with: pip install langsmith",
+                        style="dim",
+                    ),
+                    title=header,
+                    border_style=COLORS["error"],
+                    padding=(1, 2),
+                )
+            )
+
+    elif subcmd in ("enable", "on"):
+        # Enable tracing
+        api_key = cmd_args[1] if len(cmd_args) > 1 else None
+        project_name = None
+        for i, arg in enumerate(cmd_args):
+            if arg == "--project" and i + 1 < len(cmd_args):
+                project_name = cmd_args[i + 1]
+                break
+
+        config = configure_tracing(
+            api_key=api_key,
+            project_name=project_name,
+            enable=True,
+        )
+
+        if config.is_configured():
+            console.print(
+                f"✅ [bold]LangSmith tracing enabled[/bold]",
+                style=COLORS["success"],
+            )
+            console.print(f"   Project: {config.project_name}")
+            console.print(
+                f"   [dim]Configure LANGSMITH_API_KEY in .env for persistent settings[/dim]"
+            )
+        else:
+            console.print(
+                "❌ [bold]Failed to enable tracing[/bold]",
+                style=COLORS["error"],
+            )
+            console.print("   LANGSMITH_API_KEY is required to enable tracing.")
+
+    elif subcmd in ("disable", "off"):
+        # Disable tracing
+        import os
+
+        os.environ["LANGSMITH_TRACING"] = "false"
+        console.print(
+            "✅ [bold]LangSmith tracing disabled[/bold]", style=COLORS["success"]
+        )
+        console.print(
+            "   [dim]This only affects the current session. "
+            "Remove or set LANGSMITH_TRACING=false in .env for persistent effect.[/dim]"
+        )
+
+    elif subcmd == "projects":
+        # List tracing projects
+        projects = list_projects()
+
+        header = Text()
+        header.append("📁 ", style="bold")
+        header.append("LangSmith Projects", style=f"bold {COLORS['primary']}")
+
+        if projects:
+            from rich.table import Table
+
+            table = Table(show_header=True, header_style="bold")
+            table.add_column("Project")
+            table.add_column("URL")
+
+            for p in projects[:20]:  # Limit to 20
+                table.add_row(p["name"], p["url"])
+
+            console.print(Panel(table, title=header, border_style=COLORS["primary"]))
+        else:
+            console.print(
+                Panel(
+                    Text("No projects found or tracing not configured.", style="dim"),
+                    title=header,
+                    border_style=COLORS["dim"],
+                )
+            )
+
+    elif subcmd in ("traces", "recent"):
+        # Show recent traces
+        limit = 10
+        for i, arg in enumerate(cmd_args):
+            if arg in ("-n", "--limit") and i + 1 < len(cmd_args):
+                try:
+                    limit = int(cmd_args[i + 1])
+                except ValueError:
+                    pass
+
+        traces = get_traces(limit=limit)
+
+        header = Text()
+        header.append("🧵 ", style="bold")
+        header.append(
+            f"Recent Traces (last {limit})", style=f"bold {COLORS['primary']}"
+        )
+
+        if traces:
+            from rich.table import Table
+
+            table = Table(show_header=True, header_style="bold")
+            table.add_column("Name")
+            table.add_column("Created")
+            table.add_column("Inputs", width=40)
+
+            for t in traces[:10]:
+                created = t.get("created_at", "unknown")[:19] or "unknown"
+                inputs = str(t.get("inputs", {}))[:40]
+                table.add_row(t["name"], created, inputs)
+
+            console.print(Panel(table, title=header, border_style=COLORS["primary"]))
+        else:
+            console.print(
+                Panel(
+                    Text(
+                        "No traces found. Make a request with tracing enabled first.",
+                        style="dim",
+                    ),
+                    title=header,
+                    border_style=COLORS["dim"],
+                )
+            )
+
+    elif subcmd in ("-h", "--help", "help"):
+        # Show help for trace command
+        header = Text()
+        header.append("🔧 ", style="bold")
+        header.append("/trace Command Help", style=f"bold {COLORS['primary']}")
+
+        console.print(
+            Panel(
+                Text(
+                    "/trace - Manage LangSmith tracing for debugging and observability\n\n"
+                    "[bold]Subcommands:[/bold]\n"
+                    "  status      Show current tracing configuration\n"
+                    "  enable      Enable tracing (optionally with API key and project name)\n"
+                    "              Usage: /trace enable [API_KEY] [--project PROJECT_NAME]\n"
+                    "  disable     Disable tracing for current session\n"
+                    "  projects    List all projects in LangSmith\n"
+                    "  traces      Show recent traces\n"
+                    "              Usage: /trace traces [--limit N]\n"
+                    "  help        Show this help message\n\n"
+                    "[bold]Environment Variables:[/bold]\n"
+                    "  LANGSMITH_TRACING     Set to 'true' to enable tracing\n"
+                    "  LANGSMITH_API_KEY     Your LangSmith API key\n"
+                    "  LANGSMITH_PROJECT     Project name (default: 'Nami-Code')\n"
+                    "  LANGSMITH_WORKSPACE_ID Workspace ID for multi-tenant setups\n\n"
+                    "[bold]Links:[/bold]\n"
+                    "  📊 LangSmith Dashboard: https://smith.langchain.com\n"
+                    "  📚 Docs: https://docs.smith.langchain.com",
+                    style="dim",
+                ),
+                title=header,
+                border_style=COLORS["primary"],
+                padding=(1, 2),
+            )
+        )
+
+    else:
+        console.print(f"[yellow]Unknown trace subcommand: {subcmd}[/yellow]")
+        console.print("[dim]Use /trace help for available commands.[/dim]")
+
     console.print()
     return True
 

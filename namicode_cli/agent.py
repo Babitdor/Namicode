@@ -54,6 +54,12 @@ from namicode_cli.integrations.sandbox_factory import get_default_working_dir
 from namicode_cli.shell import ShellMiddleware
 from namicode_cli.skills import SkillsMiddleware
 from namicode_cli.mcp import MCPMiddleware
+from namicode_cli.tracing import (
+    configure_tracing,
+    is_tracing_enabled,
+    get_tracing_config,
+    wrap_openai_client,
+)
 
 
 def list_agents() -> None:
@@ -484,6 +490,38 @@ def create_agent_with_config(
     Returns:
         2-tuple of (graph, backend)
     """
+    # Setup tracing if LangSmith is configured
+    tracing_enabled = False
+    if is_tracing_enabled():
+        tracing_enabled = True
+        tracing_config = get_tracing_config()
+        console.print(
+            f"[dim]LangSmith tracing enabled: {tracing_config.project_name}[/dim]"
+        )
+    else:
+        # Try to auto-configure from environment
+        from namicode_cli.tracing import auto_configure
+
+        config_result = auto_configure()
+        if config_result.is_configured():
+            tracing_enabled = True
+            console.print(
+                f"[dim]LangSmith tracing enabled: {config_result.project_name}[/dim]"
+            )
+
+    # Wrap model for OpenAI tracing if enabled and model is a ChatOpenAI instance
+    wrapped_model = model
+    if tracing_enabled and hasattr(model, "_model"):  # Check if it's a LangChain model
+        try:
+            from langchain_openai import ChatOpenAI
+
+            if isinstance(model, ChatOpenAI):
+                from namicode_cli.tracing import wrap_openai_client as _wrap_openai
+
+                wrapped_model = _wrap_openai(model)
+        except ImportError:
+            pass
+
     # Setup agent directory for persistent memory (same for both local and remote modes)
     agent_dir = settings.ensure_agent_dir(assistant_id)
     agent_md = agent_dir / "agent.md"
@@ -553,7 +591,7 @@ def create_agent_with_config(
     interrupt_on = _add_interrupt_on()
 
     agent = create_deep_agent(
-        model=model,
+        model=wrapped_model,
         system_prompt=system_prompt,
         tools=tools,
         checkpointer=InMemorySaver(),
