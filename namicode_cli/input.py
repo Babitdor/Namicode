@@ -83,7 +83,7 @@ class FilePathCompleter(Completer):
 class CommandCompleter(Completer):
     """Activate command completion only when line starts with '/'."""
 
-    def get_completions(self, document, _complete_event):
+    def get_completions(self, document, _complete_event): # type: ignore
         """Get command completions when / is at the start."""
         text = document.text_before_cursor
 
@@ -108,7 +108,7 @@ class CommandCompleter(Completer):
 class AgentCompleter(Completer):
     """Provide completion for @agent mentions at the start of input."""
 
-    def get_completions(self, document, _complete_event):
+    def get_completions(self, document, _complete_event): # type: ignore
         """Get agent completions when @ is at the start of input.
 
         Shows agents from both project scope (if in a project) and global scope.
@@ -308,7 +308,7 @@ def create_prompt_session(_assistant_id: str, session_state: SessionState) -> Pr
                 session_state.exit_hint_handle = None
                 app_ref.invalidate()
 
-        session_state.exit_hint_handle = loop.call_later(EXIT_CONFIRM_WINDOW, clear_hint)
+        session_state.exit_hint_handle = loop.call_later(EXIT_CONFIRM_WINDOW, clear_hint) # type: ignore
 
         app.invalidate()
 

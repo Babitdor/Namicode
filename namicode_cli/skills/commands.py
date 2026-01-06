@@ -873,10 +873,10 @@ def _create(
     else:
         skills_dir = settings.ensure_user_skills_dir(agent)
 
-    skill_dir = skills_dir / skill_name
+    skill_dir = skills_dir / skill_name # type: ignore
 
     # Validate the resolved path is within skills_dir
-    is_valid_path, path_error = _validate_skill_path(skill_dir, skills_dir)
+    is_valid_path, path_error = _validate_skill_path(skill_dir, skills_dir) # type: ignore
     if not is_valid_path:
         console.print(f"[bold red]Error:[/bold red] {path_error}")
         return

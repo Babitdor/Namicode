@@ -5,7 +5,7 @@
 import os
 import re
 from collections.abc import Awaitable, Callable, Sequence
-from typing import Annotated, Any, Literal, NotRequired, cast
+from typing import Annotated, Any, Literal, NotRequired, cast, Sequence
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
@@ -21,8 +21,7 @@ from langgraph.types import Command
 from typing_extensions import TypedDict
 
 from nami_deepagents.backends import StateBackend
-
-# Re-export type here for backwards compatibility
+from pathlib import Path, PureWindowsPath
 from nami_deepagents.backends.protocol import BACKEND_TYPES as BACKEND_TYPES
 from nami_deepagents.backends.protocol import (
     BackendProtocol,
@@ -140,20 +139,25 @@ def _validate_path(
     """
     # In virtual mode, apply strict path traversal checks
     if virtual_mode and (".." in path or path.startswith("~")):
-        msg = f"Path traversal not allowed: {path}"
-        raise ValueError(msg)
+        raise ValueError(f"Path traversal not allowed: {path}")
 
     # Reject Windows absolute paths only in virtual mode
     # This maintains consistency in virtual filesystem paths
     if virtual_mode and re.match(r"^[a-zA-Z]:", path):
-        msg = f"Windows absolute paths are not supported: {path}. Please use virtual paths starting with / (e.g., /workspace/file.txt)"
-        raise ValueError(msg)
+        raise ValueError(
+            f"Windows absolute paths are not supported: {path}. Please use virtual paths starting with / (e.g., /workspace/file.txt)"
+        )
 
-    normalized = os.path.normpath(path)
-    normalized = normalized.replace("\\", "/")
+    # Use PureWindowsPath for accurate Windows parsing when not in virtual mode.
+    if virtual_mode:
+        path_obj = Path(path)
+    else:
+        path_obj = PureWindowsPath(path)
 
-    # In virtual mode, ensure path starts with /
-    # In non-virtual mode, preserve absolute paths as-is
+    # Convert to string and normalize slashes for consistent internal handling
+    normalized = str(path_obj).replace("\\", "/")
+
+    # Add leading slash for relative paths in virtual mode
     if (
         virtual_mode
         and not normalized.startswith("/")
@@ -161,13 +165,42 @@ def _validate_path(
     ):
         normalized = f"/{normalized}"
 
-    if allowed_prefixes is not None and not any(
-        normalized.startswith(prefix) for prefix in allowed_prefixes
-    ):
-        msg = f"Path must start with one of {allowed_prefixes}: {path}"
-        raise ValueError(msg)
+    # This is the key security addition.
+    if not virtual_mode:
+        try:
+            # Resolve the path to its absolute, canonical form, following symlinks.
+            resolved_path_obj = Path(normalized).resolve()
+        except RuntimeError as e:
+            # Handle infinite symlink loops or other resolution errors.
+            raise ValueError(
+                f"Path cannot be resolved safely: {normalized}. Error: {e}"
+            )
 
-    return normalized
+        # Convert back to string with forward slashes for consistency.
+        resolved_path = str(resolved_path_obj).replace("\\", "/")
+
+        # --- Check Against Allowed Prefixes (After Resolution) ---
+        if allowed_prefixes is not None:
+            # Also resolve each allowed prefix to ensure a fair comparison.
+            resolved_allowed_prefixes = [
+                str(Path(p).resolve()).replace("\\", "/") for p in allowed_prefixes
+            ]
+            if not any(
+                resolved_path.startswith(prefix) for prefix in resolved_allowed_prefixes
+            ):
+                raise ValueError(
+                    f"Resolved path must start with one of {resolved_allowed_prefixes}: {resolved_path} (from original: {path})"
+                )
+        # Return the secure, resolved path.
+        return resolved_path
+    else:
+        # For virtual mode, security relies on the earlier string checks and prefix validation.
+        if allowed_prefixes is not None and not any(
+            normalized.startswith(prefix) for prefix in allowed_prefixes
+        ):
+            raise ValueError(f"Path must start with one of {allowed_prefixes}: {path}")
+
+        return normalized
 
 
 class FilesystemState(AgentState):

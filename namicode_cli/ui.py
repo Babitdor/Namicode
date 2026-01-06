@@ -42,6 +42,8 @@ from rich.markup import escape
 from rich.panel import Panel
 from rich.text import Text
 
+from namicode_cli.context_manager import ContextBreakdown
+
 from .config import COLORS, COMMANDS, DEEP_AGENTS_ASCII, MAX_ARG_LENGTH, console
 from .file_ops import FileOperationRecord
 
@@ -270,7 +272,7 @@ class TokenTracker:
         """Increment tool call count."""
         self.tool_call_count += count
 
-    def get_breakdown(self) -> "ContextBreakdown":
+    def get_breakdown(self) -> ContextBreakdown:
         """Get detailed context breakdown.
 
         Returns:
@@ -526,114 +528,6 @@ class StreamingOutputRenderer:
     def was_truncated(self) -> bool:
         """Check if output was truncated."""
         return self._truncated
-
-
-def show_help() -> None:
-    """Display comprehensive help information for Nami CLI."""
-    from rich.table import Table
-
-    console.print()
-    console.print(
-        "╔═══════════════════════════════════════╗", style=f"bold {COLORS['primary']}"
-    )
-    console.print(
-        "║   🔥 NAMI CODE ASSISTANT CLI 🔥      ║", style=f"bold {COLORS['primary']}"
-    )
-    console.print(
-        "╚═══════════════════════════════════════╝", style=f"bold {COLORS['primary']}"
-    )
-    console.print()
-
-    # CLI Commands Table
-    console.print(
-        f"[bold {COLORS['primary']}]⚡ CLI Commands[/bold {COLORS['primary']}]"
-    )
-    console.print()
-
-    cli_table = Table(show_header=False, box=None, padding=(0, 2))
-    cli_table.add_column("Command", style=f"bold {COLORS['secondary']}")
-    cli_table.add_column("Description", style=COLORS["dim"])
-
-    cli_commands = [
-        ("init [--scope] [--style]", "Initialize project or global configuration"),
-        ("list", "List all available agents"),
-        ("reset --agent <name>", "Reset an agent to default state"),
-        ("help", "Show this help information"),
-        ("skills [list|create]", "Manage skills - create or list custom capabilities"),
-        ("mcp [list|install|remove]", "Manage MCP (Model Context Protocol) servers"),
-        ("paths [list|revoke|clear]", "Manage approved file system paths"),
-        ("migrate [--check]", "Migrate from old to new directory structure"),
-    ]
-
-    for cmd, desc in cli_commands:
-        cli_table.add_row(f"  {cmd}", desc)
-
-    console.print(cli_table)
-    console.print()
-
-    # Interactive Commands Table
-    console.print(
-        f"[bold {COLORS['primary']}]💬 Interactive Commands (use /command)[/bold {COLORS['primary']}]"
-    )
-    console.print()
-
-    int_table = Table(show_header=False, box=None, padding=(0, 2))
-    int_table.add_column("Command", style=f"bold {COLORS['secondary']}")
-    int_table.add_column("Description", style=COLORS["dim"])
-
-    for cmd, desc in COMMANDS.items():
-        int_table.add_row(f"  /{cmd}", desc)
-
-    console.print(int_table)
-    console.print()
-
-    # CLI Options
-    console.print(
-        f"[bold {COLORS['primary']}]⚙️  CLI Options[/bold {COLORS['primary']}]"
-    )
-    console.print()
-
-    opt_table = Table(show_header=False, box=None, padding=(0, 2))
-    opt_table.add_column("Option", style=f"bold {COLORS['secondary']}")
-    opt_table.add_column("Description", style=COLORS["dim"])
-
-    options = [
-        ("--agent <name>", "Agent identifier (default: nami-agent)"),
-        ("--auto-approve", "Auto-approve tool usage without prompting"),
-        ("--sandbox <type>", "Sandbox type (none, modal, daytona, runloop, docker)"),
-        ("--sandbox-id <id>", "Reuse existing sandbox"),
-        ("--sandbox-setup <path>", "Setup script to run in sandbox"),
-        ("--no-splash", "Disable startup splash screen"),
-        ("-c, --continue", "Continue last session"),
-        ("--version", "Show version number"),
-        ("-h, --help", "Show help message and exit"),
-    ]
-
-    for opt, desc in options:
-        opt_table.add_row(f"  {opt}", desc)
-
-    console.print(opt_table)
-    console.print()
-
-    # Examples
-    console.print(f"[bold {COLORS['primary']}]📚 Examples[/bold {COLORS['primary']}]")
-    console.print()
-    console.print(
-        f"  [dim]$[/dim] [bold {COLORS['accent']}]nami[/bold {COLORS['accent']}]                              Start interactive mode"
-    )
-    console.print(
-        f"  [dim]$[/dim] [bold {COLORS['accent']}]nami --agent my-agent[/bold {COLORS['accent']}]             Use custom agent"
-    )
-    console.print(
-        f"  [dim]$[/dim] [bold {COLORS['accent']}]nami init[/bold {COLORS['accent']}]                         Initialize project config"
-    )
-    console.print(
-        f"  [dim]$[/dim] [bold {COLORS['accent']}]nami list[/bold {COLORS['accent']}]                         List available agents"
-    )
-    console.print(
-        f"  [dim]$[/dim] [bold {COLORS['accent']}]nami skills list[/bold {COLORS['accent']}]                  List all skills"
-    )
-    console.print()
 
 
 def render_todo_list(todos: list[dict]) -> None:

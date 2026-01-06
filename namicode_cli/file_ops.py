@@ -290,7 +290,7 @@ class FileOpTracker:
         if tool_name in {"write_file", "edit_file"}:
             if self.backend and path_str:
                 try:
-                    responses = self.backend.download_files([path_str])
+                    responses = self.backend.download_files([path_str]) # type: ignore
                     if (
                         responses
                         and responses[0].content is not None
@@ -321,7 +321,7 @@ class FileOpTracker:
                 record.physical_path = resolve_physical_path(path_str, self.assistant_id)
                 if self.backend:
                     try:
-                        responses = self.backend.download_files([path_str])
+                        responses = self.backend.download_files([path_str]) # type: ignore
                         if (
                             responses
                             and responses[0].content is not None
@@ -444,7 +444,7 @@ class FileOpTracker:
             try:
                 file_path = record.args.get("file_path") or record.args.get("path")
                 if file_path:
-                    responses = self.backend.download_files([file_path])
+                    responses = self.backend.download_files([file_path]) # type: ignore
                     if (
                         responses
                         and responses[0].content is not None

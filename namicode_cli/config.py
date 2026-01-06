@@ -130,6 +130,32 @@ else:
     console = Console(highlight=False)
 
 
+def find_project_skills(project_root: Path) -> list[Path]:
+    """Find project-specific skills directories.
+
+    Checks for skills in both .claude/ and .nami/ directories.
+
+    Args:
+        project_root: Path to the project root directory.
+
+    Returns:
+        List of skills directory paths that exist.
+    """
+    skills_dirs = []
+
+    # Check .claude/skills/
+    claude_skills = project_root / ".claude" / "skills"
+    if claude_skills.exists() and claude_skills.is_dir():
+        skills_dirs.append(claude_skills)
+
+    # Check .nami/skills/
+    deepagents_skills = project_root / ".nami" / "skills"
+    if deepagents_skills.exists() and deepagents_skills.is_dir():
+        skills_dirs.append(deepagents_skills)
+
+    return skills_dirs
+
+
 def _find_project_root(start_path: Path | None = None) -> Path | None:
     """Find the project root by looking for .git directory.
 
@@ -555,8 +581,6 @@ class Settings:
         """
         if not self.project_root:
             return []
-
-        from namicode_cli.project_utils import find_project_skills
 
         return find_project_skills(self.project_root)
 

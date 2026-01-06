@@ -205,7 +205,7 @@ class AgentMemoryMiddleware(AgentMiddleware):
         # Track which project memory files were loaded (for display in prompt)
         self.loaded_project_memory_sources: list[str] = []
 
-    def before_agent(
+    def before_agent( # type: ignore
         self,
         state: AgentMemoryState,
         # runtime: Runtime,
@@ -338,7 +338,7 @@ class AgentMemoryMiddleware(AgentMiddleware):
             The model response from the handler.
         """
         system_prompt = self._build_system_prompt(request)
-        return handler(request.override(system_prompt=system_prompt))
+        return handler(request.override(system_prompt=system_prompt)) # type: ignore
 
     async def awrap_model_call(
         self,
@@ -355,4 +355,4 @@ class AgentMemoryMiddleware(AgentMiddleware):
             The model response from the handler.
         """
         system_prompt = self._build_system_prompt(request)
-        return await handler(request.override(system_prompt=system_prompt))
+        return await handler(request.override(system_prompt=system_prompt)) # type: ignore

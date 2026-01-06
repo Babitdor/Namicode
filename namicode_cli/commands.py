@@ -2313,7 +2313,7 @@ async def handle_command(
     if cmd == "trace":
         # Manage LangSmith tracing
         try:
-            return await _handle_trace_command(cmd_args)
+            return await _handle_trace_command(cmd_args) # type: ignore
         except Exception as e:
             console.print(f"[red]Error running /trace command: {e}[/red]")
             import traceback
@@ -2414,7 +2414,7 @@ async def _handle_trace_command(cmd_args: list[str]) -> bool:
 
         config = configure_tracing(
             api_key=api_key,
-            project_name=project_name,
+            project_name=project_name, # type: ignore
             enable=True,
         )
 

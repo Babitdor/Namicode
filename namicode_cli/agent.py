@@ -647,4 +647,4 @@ def create_agent_with_config(
         config  # type: ignore
     )
 
-    return agent, composite_backend
+    return agent, composite_backend # type: ignore

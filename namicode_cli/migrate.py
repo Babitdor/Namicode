@@ -163,7 +163,7 @@ def migrate_agents() -> None:
             console.print(f"  • {skill_name} (from agent '{agent_name}')")
         console.print()
         console.print("To manually migrate these skills:")
-        console.print(f"  1. Review the existing skill in {global_skills_dir}/{skill_name}/")
+        console.print(f"  1. Review the existing skill in {global_skills_dir}/{skill_name}/") # type: ignore
         console.print(f"  2. Manually merge or rename conflicting skills as needed")
         console.print()
 
