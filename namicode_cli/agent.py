@@ -499,9 +499,9 @@ def create_agent_with_config(
     if is_tracing_enabled():
         tracing_enabled = True
         tracing_config = get_tracing_config()
-        console.print(
-            f"[dim]LangSmith tracing enabled: {tracing_config.project_name}[/dim]"
-        )
+        # console.print(
+        #     f"[dim]LangSmith tracing enabled: {tracing_config.project_name}[/dim]"
+        # )
     else:
         # Try to auto-configure from environment
         from namicode_cli.tracing import auto_configure
@@ -509,9 +509,9 @@ def create_agent_with_config(
         config_result = auto_configure()
         if config_result.is_configured():
             tracing_enabled = True
-            console.print(
-                f"[dim]LangSmith tracing enabled: {config_result.project_name}[/dim]"
-            )
+            # console.print(
+            #     f"[dim]LangSmith tracing enabled: {config_result.project_name}[/dim]"
+            # )
 
     # Wrap model for OpenAI tracing if enabled and model is a ChatOpenAI instance
     wrapped_model = model

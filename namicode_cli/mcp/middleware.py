@@ -24,7 +24,7 @@ from langgraph.runtime import Runtime
 from mcp.client.session import ClientSession
 
 from namicode_cli.config import console
-from namicode_cli.mcp.client import MultiServerMCPClient, create_mcp_client
+from namicode_cli.mcp.client import MultiServerMCPClient
 from namicode_cli.mcp.config import MCPConfig
 
 
@@ -192,7 +192,6 @@ class MCPMiddleware(AgentMiddleware):
                     session=None,
                     connection=connection,
                     server_name=server_name,
-                    tool_name_prefix=False,  # Keep original names
                 )
 
                 if server_tools:
@@ -200,16 +199,18 @@ class MCPMiddleware(AgentMiddleware):
 
                     # Build metadata cache with correct server attribution
                     for tool in server_tools:
-                        self._tools_cache.append({
-                            "name": tool.name,
-                            "description": tool.description or "",
-                            "server": server_name,
-                        })
+                        self._tools_cache.append(
+                            {
+                                "name": tool.name,
+                                "description": tool.description or "",
+                                "server": server_name,
+                            }
+                        )
 
-                    console.print(
-                        f"[dim]MCP: Connected to '{server_name}' "
-                        f"({len(server_tools)} tools)[/dim]"
-                    )
+                    # console.print(
+                    #     f"[dim]MCP: Connected to '{server_name}' "
+                    #     f"({len(server_tools)} tools)[/dim]"
+                    # )
 
             except Exception as e:
                 console.print(

@@ -72,11 +72,7 @@ from namicode_cli.skills import execute_skills_command, setup_skills_parser
 from namicode_cli.mcp.commands import execute_mcp_command, setup_mcp_parser
 from namicode_cli.tools import (
     fetch_url,
-    # file_diff,
-    # git_command,
     http_request,
-    # run_code,
-    # tree_view,
     web_search,
 )
 from namicode_cli.dev_server import (
@@ -300,7 +296,6 @@ async def simple_cli(
         session_manager: SessionManager for session persistence
     """
     console.clear()
-
     # Check path approval before proceeding
     if not await check_path_approval():
         console.print()
@@ -574,38 +569,34 @@ async def simple_cli(
         agent_name, query = parse_agent_mentions(user_input, settings)
         if agent_name:
             console.print()
-            console.print(
-                f"[bold cyan]@{agent_name}[/bold cyan] [dim]processing...[/dim]"
-            )
-            console.print()
+            # console.print(
+            #     f"[bold cyan]@{agent_name}[/bold cyan] [dim]processing...[/dim]"
+            # )
+            # console.print()
 
-            # invoke_subagent runs silently and returns the response
-            response = await invoke_subagent(
-                agent_name=agent_name,
-                query=query,
-                main_agent=agent,
-                settings=settings,
-                session_state=session_state,
+            subagent, _ = invoke_subagent(
+                agent_name, settings=settings, backend=backend
+            )
+            await execute_task(
+                query,
+                subagent,
+                agent_name,
+                session_state,
+                token_tracker,
                 backend=backend,
+                is_subagent=True,
             )
 
-            # Display the subagent response
-            if response:
-                from rich.markdown import Markdown
-                console.print("●", style=COLORS["agent"], markup=False, end=" ")
-                console.print(Markdown(response), style=COLORS["agent"])
-
-            console.print()
-            continue
-
-        await execute_task(
-            user_input,
-            agent,
-            assistant_id,
-            session_state,
-            token_tracker,
-            backend=backend,
-        )
+        else:
+            await execute_task(
+                user_input,
+                agent,
+                assistant_id,
+                session_state,
+                token_tracker,
+                backend=backend,
+                is_subagent=False,
+            )
 
         # Track message for auto-save and check if we should save
         messages_since_save += 1
@@ -656,7 +647,7 @@ async def _run_agent_session(
     if initial_messages:
         config = {"configurable": {"thread_id": session_state.thread_id}}
         await agent.aupdate_state(
-            config=config,
+            config=config,  # type: ignore
             values={"messages": initial_messages},
         )
         console.print(

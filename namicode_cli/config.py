@@ -53,6 +53,7 @@ COLORS = {
     "success": "#10b981",  # Green (success states)
     "warning": "#f59e0b",  # Orange (warnings)
     "error": "#dc2626",  # Deep red (errors)
+    "subagent": "#30c3f0",  # Medium red (sub-agent messages)
 }
 
 # ASCII art banner - Sleek red design
@@ -629,7 +630,7 @@ def create_model() -> BaseChatModel:
         provider = saved_model_config["provider"]
         model_name = saved_model_config["model"]
 
-        console.print(f"[dim]Using saved configuration: {provider}/{model_name}[/dim]")
+        # console.print(f"[dim]Using saved configuration: {provider}/{model_name}[/dim]")
 
         # Create model directly based on saved config
         if provider == "ollama":

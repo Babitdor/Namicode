@@ -6,21 +6,39 @@ from pathlib import Path
 
 from langgraph.checkpoint.memory import InMemorySaver
 
+from langchain.agents.middleware.human_in_the_loop import (
+    ActionRequest,
+    ApproveDecision,
+    Decision,
+    HITLRequest,
+    HITLResponse,
+    RejectDecision,
+)
+from langgraph.pregel import Pregel
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
+from pydantic import TypeAdapter, ValidationError
 
 from .config import COLORS, DEEP_AGENTS_ASCII, Settings, TOOL_ICONS, console
 from .execution import execute_task
-from .ui import TokenTracker, format_tool_display, show_interactive_help
+from .ui import (
+    TokenTracker,
+    show_interactive_help,
+)
+from langgraph.types import Command, Interrupt
 from .mcp.config import MCPConfig, MCPServerConfig
 from .mcp import presets as mcp_presets
 from .model_manager import ModelManager, MODEL_PRESETS, get_ollama_models
 from .process_manager import ProcessManager
+
 from .dev_server import list_servers, stop_server
 from langgraph.store.memory import InMemoryStore
 from nami_deepagents.backends import CompositeBackend, StateBackend, StoreBackend
 from .test_runner import run_tests, detect_test_framework, get_default_test_command
+from namicode_cli.subagent import create_subagent
+
+_HITL_REQUEST_ADAPTER = TypeAdapter(HITLRequest)
 
 
 async def _handle_init_command(
@@ -1775,14 +1793,9 @@ async def _agents_delete_interactive(ps, settings) -> bool:
     return True
 
 
-async def invoke_subagent(
-    agent_name: str,
-    query: str,
-    main_agent,  # noqa: ARG001 - kept for API consistency
-    settings: Settings,
-    session_state,  # noqa: ARG001 - kept for future state access
-    backend=None,
-) -> str:
+def invoke_subagent(
+    agent_name: str, settings: Settings, backend=None
+) -> tuple[Pregel, CompositeBackend]:
     """Invoke a custom agent as an isolated subagent using the deepagents SubAgent pattern.
 
     This follows the LangGraph subagent architecture where:
@@ -1803,426 +1816,37 @@ async def invoke_subagent(
     Returns:
         Agent's response/result as string
     """
-    import json
-    from langchain_core.messages import HumanMessage, ToolMessage
-    from nami_deepagents import create_deep_agent, SubAgent
-    from nami_deepagents.backends import CompositeBackend
-    from nami_deepagents.backends.filesystem import FilesystemBackend
-    from pathlib import Path
-    from rich.markdown import Markdown
-    from namicode_cli.ui import (
-        format_tool_display,
-        render_file_operation,
-        render_todo_list,
-    )
-    from namicode_cli.file_ops import FileOpTracker
 
-    # 1. Find agent - checks project scope first, then global
-    agent_location = settings.find_agent(agent_name)
-
-    if not agent_location:
-        return f"Error: Agent '{agent_name}' not found."
-
-    agent_dir, scope = agent_location
-    agent_md_path = agent_dir / "agent.md"
-
-    try:
-        system_prompt = agent_md_path.read_text(encoding="utf-8")
-
-    except Exception as e:
-        return f"Error reading agent configuration: {e}"
-
-    # 2. Create subagent using the deepagents pattern
-    # This provides isolated context while sharing the same tools and model
-    try:
-        from namicode_cli.config import create_model
-        from namicode_cli.tools import fetch_url, http_request, web_search
-        from namicode_cli.dev_server import (
-            list_servers_tool,
-            start_dev_server_tool,
-            stop_server_tool,
-        )
-        from namicode_cli.test_runner import run_tests_tool
-        from namicode_cli.config import settings as global_settings
-        from namicode_cli.shell import ShellMiddleware
-        from namicode_cli.skills.middleware import SkillsMiddleware
-        import os
-
-        model = create_model()
-
-        subagent_store = InMemoryStore()
-
-        # Get the SAME tools that the main agent has access to
-        # This includes HTTP tools, dev server tools, and test runner
-        tools = [
-            http_request,
-            fetch_url,
-            run_tests_tool,
-            start_dev_server_tool,
-            stop_server_tool,
-            list_servers_tool,
-        ]
-        if global_settings.has_tavily:
-            tools.append(web_search)
-
-        # Create a backend for the subagent to get filesystem tools
-        # Use the provided backend or create a local one
-        if backend is None:
-
-            subagent_backend = CompositeBackend(
-                default=FilesystemBackend(),  # Current working directory
-                routes={},  # No virtualization - use real paths
-            )
-            # subagent_backend = lambda rt: CompositeBackend(
-            #     default=FilesystemBackend(root_dir=str(Path.cwd()), virtual_mode=True),
-            #     routes={
-            #         "/memories/": StoreBackend(rt),
-            #     },
-            # )
-        else:
-            subagent_backend = backend
-
-        # Get skills directories for the subagent (same as main agent)
-        # User-level skills: ~/.nami/skills/
-        # Project-level skills: .nami/skills/ and .claude/skills/
-        skills_dir = global_settings.get_global_skills_dir()
-        project_skills_dirs = global_settings.get_project_skills_dirs()
-
-        # Add skills middleware and shell middleware for subagent
-        # This gives subagents access to the same skills as the main agent
-        subagent_middleware = [
-            SkillsMiddleware(
-                skills_dir=skills_dir,
-                assistant_id=agent_name,
-                project_skills_dirs=project_skills_dirs,
-            ),
-            ShellMiddleware(
-                workspace_root=str(Path.cwd()),
-                env=dict(os.environ),
-            ),
-        ]
-
-        # Enhance the system prompt with subagent context
-        enhanced_prompt = f"""{system_prompt}
-
----
-
-## Subagent Context
-
-You are being invoked as an isolated subagent to handle a specific task.
-Your response will be returned to the main assistant.
-
-Guidelines:
-- Focus on the specific task at hand
-- Provide clear, actionable responses
-- Keep your response concise but comprehensive
-- You have FULL access to all tools: filesystem (read, write, edit, glob, grep), shell commands, web search, HTTP requests, dev servers, and test runner
-- You have access to the SAME skills as the main agent - check the Skills System section below for available skills
-- If a skill is relevant to your task, read the SKILL.md file for detailed instructions
-- Return a synthesized summary rather than raw data
-- Do NOT ask for confirmation - execute tools directly"""
-
-        # Create a deep agent with the same capabilities as the main agent
-        # The backend provides: read_file, write_file, edit_file, glob, grep, ls
-        # The middleware provides: shell command execution
-        # The tools list provides: web search, HTTP, dev servers, tests
-        # Note: SubAgent type is imported for future use with SubAgentMiddleware
-        _ = SubAgent  # Acknowledge import for type reference
-        subagent = create_deep_agent(
-            model=model,
-            system_prompt=enhanced_prompt,
-            tools=tools,
-            backend=subagent_backend,
-            middleware=subagent_middleware,
-            store=subagent_store,
-        )
-
-        # Stream the subagent execution following Streaming.md patterns
-        # Display tool calls as they happen, accumulate AI text silently,
-        # display final response as one block
-        pending_text = ""
-        tool_call_buffers: dict[str | int, dict] = {}
-        displayed_tools: set[str] = (
-            set()
-        )  # Track tools already displayed to avoid duplicates
-
-        config = {"configurable": {"thread_id": f"subagent-{agent_name}"}}
-
-        try:
-            async for chunk in subagent.astream(
-                {"messages": [HumanMessage(content=query)]},
-                stream_mode=["messages", "updates"],
-                subgraphs=True,
-                config=config,
-            ):
-                # With subgraphs=True and dual-mode, chunks are (namespace, stream_mode, data)
-                if isinstance(chunk, tuple) and len(chunk) != 3:
-                    continue
-
-                _namespace, current_stream_mode, data = chunk
-
-                # Handle UPDATES stream for tool results and final AI responses
-                if current_stream_mode == "updates":
-                    if not isinstance(data, dict):
-                        continue
-
-                    # Process each node update
-                    for node_name, node_data in data.items():
-                        if not isinstance(node_data, dict):
-                            continue
-
-                        if "messages" in node_data:
-                            messages = node_data["messages"]
-                            if not messages or not isinstance(messages, list):
-                                continue
-
-                            last_msg = messages[-1]
-
-                            # Check if this is a ToolMessage with result
-                            if hasattr(last_msg, "status"):
-                                tool_name = getattr(last_msg, "name", "")
-                                tool_status = getattr(last_msg, "status", "")
-                                tool_id = getattr(last_msg, "tool_call_id", "")
-                                if tool_status == "ok" and tool_name:
-                                    # Tool completed - look up the call in our buffer to get args
-                                    display_args = {}
-                                    for buf_key, buf in tool_call_buffers.items():
-                                        buf_name = buf.get("name")
-                                        buf_id = buf.get("id")
-                                        if buf_name == tool_name or buf_id == tool_id:
-                                            buf_args = buf.get("args")
-                                            if isinstance(buf_args, dict):
-                                                display_args = buf_args
-                                            break
-
-                                    # Display tool with args
-                                    icon = TOOL_ICONS.get(
-                                        tool_name, TOOL_ICONS["default"]
-                                    )
-                                    display_str = format_tool_display(
-                                        tool_name, display_args
-                                    )
-                                    console.print(
-                                        f"  {icon} {display_str}",
-                                        style=f"dim {COLORS['tool']}",
-                                        markup=False,
-                                    )
-                                    displayed_tools.add(tool_name)
-
-                            # Check if this is final AI response (no tool_calls)
-                            elif (
-                                hasattr(last_msg, "tool_calls")
-                                and not last_msg.tool_calls
-                            ):
-                                msg_text = getattr(last_msg, "text", "") or getattr(
-                                    last_msg, "content", ""
-                                )
-                                if msg_text:
-                                    pending_text = msg_text
-
-                    continue
-
-                # Handle MESSAGES stream for incremental updates
-                if current_stream_mode != "messages":
-                    continue
-
-                # Messages stream returns (message, metadata) tuples
-                if not isinstance(data, tuple) or len(data) != 2:
-                    continue
-
-                message, _metadata = data
-
-                # Handle tool messages (results)
-                if (
-                    hasattr(message, "status")
-                    and getattr(message, "status", "") == "ok"
-                ):
-                    continue  # Already handled in updates stream
-
-                # Process content_blocks for tool calls and text
-                if hasattr(message, "content_blocks") and message.content_blocks:
-                    for block in message.content_blocks:
-                        block_type = block.get("type", "")
-
-                        # Accumulate text blocks silently
-                        if block_type == "text":
-                            text = block.get("text", "")
-                            if text:
-                                pending_text += text
-
-                        # Handle tool call chunks - accumulate and display when complete
-                        elif block_type in ("tool_call_chunk", "tool_call"):
-                            chunk_name = block.get("name")
-                            chunk_args = block.get("args", {})
-                            chunk_id = block.get("id")
-                            chunk_index = block.get("index")
-
-                            buffer_key = (
-                                chunk_index
-                                if chunk_index is not None
-                                else (
-                                    chunk_id
-                                    if chunk_id is not None
-                                    else len(tool_call_buffers)
-                                )
-                            )
-
-                            buffer = tool_call_buffers.setdefault(
-                                buffer_key,
-                                {
-                                    "name": None,
-                                    "id": None,
-                                    "args": None,
-                                    "args_parts": [],
-                                    "displayed": False,
-                                },
-                            )
-
-                            if chunk_name:
-                                buffer["name"] = chunk_name
-                            if chunk_id:
-                                buffer["id"] = chunk_id
-
-                            if isinstance(chunk_args, dict):
-                                # Merge args - new dict values update existing
-                                existing_args = buffer.get("args", {})
-                                if existing_args is None:
-                                    existing_args = {}
-                                existing_args.update(chunk_args)
-                                buffer["args"] = existing_args
-                                buffer["args_parts"] = []
-                            elif isinstance(chunk_args, str) and chunk_args:
-                                parts = buffer.setdefault("args_parts", [])
-                                if not parts or chunk_args != parts[-1]:
-                                    parts.append(chunk_args)
-                                buffer["args"] = "".join(parts)
-                            elif chunk_args is not None:
-                                buffer["args"] = chunk_args
-
-                            buffer_name = buffer.get("name")
-                            if buffer_name is None:
-                                continue
-
-                            # Skip if already displayed (to avoid duplicates)
-                            if buffer.get("displayed"):
-                                continue
-
-                            # Check if we have complete args to display
-                            parsed_args = buffer.get("args")
-                            if isinstance(parsed_args, str):
-                                if not parsed_args:
-                                    continue
-                                try:
-                                    parsed_args = json.loads(parsed_args)
-                                except json.JSONDecodeError:
-                                    continue
-                            elif parsed_args is None:
-                                continue
-
-                            if not isinstance(parsed_args, dict):
-                                parsed_args = {"value": parsed_args}
-
-                            # Mark as displayed and show tool call
-                            buffer["displayed"] = True
-                            icon = TOOL_ICONS.get(buffer_name, TOOL_ICONS["default"])
-                            display_str = format_tool_display(buffer_name, parsed_args)
-                            console.print(
-                                f"  {icon} {display_str}",
-                                style=f"dim {COLORS['tool']}",
-                                markup=False,
-                            )
-                            displayed_tools.add(buffer_name)
-
-        except Exception as stream_error:
-            # Fall back to ainvoke on streaming error
-            result = await subagent.ainvoke(
-                {"messages": [HumanMessage(content=query)]}, config=config
-            )
-            if "messages" in result and result["messages"]:
-                final_message = result["messages"][-1]
-                if hasattr(final_message, "content"):
-                    content = final_message.content
-                    if isinstance(content, str):
-                        return content
-                    elif isinstance(content, list):
-                        return "".join(str(c) for c in content)
-                return str(final_message)
-            return "No response from subagent."
-
-        # Return accumulated text - main.py displays the result
-        # This is a silent operation - invoke_subagent only accumulates
-        if pending_text:
-            return pending_text.strip()
-
-        # Fallback to ainvoke if streaming did not capture response
-        result = await subagent.ainvoke(
-            {"messages": [HumanMessage(content=query)]}, config=config
-        )
-        if "messages" in result and result["messages"]:
-            final_message = result["messages"][-1]
-            if hasattr(final_message, "content"):
-                content = final_message.content
-                if isinstance(content, str):
-                    return content
-                elif isinstance(content, list):
-                    return "".join(str(c) for c in content)
-            return str(final_message)
-
-        return "No response from subagent."
-    except ImportError as e:
-        # Fallback to simple model invocation if deepagents is not fully available
-        console.print(f"[dim]Subagent import error: {e}, using fallback[/dim]")
-        return await _invoke_subagent_simple(agent_name, query, system_prompt, settings)
-    except Exception as e:
-        # Try fallback on any error
-        console.print(f"[dim]Subagent error: {e}, using fallback[/dim]")
-        try:
-            return await _invoke_subagent_simple(
-                agent_name, query, system_prompt, settings
-            )
-        except Exception as fallback_error:
-            return f"Error invoking agent '{agent_name}': {e}. Fallback also failed: {fallback_error}"
-
-
-async def _invoke_subagent_simple(
-    agent_name: str,  # noqa: ARG001 - kept for logging/debugging
-    query: str,
-    system_prompt: str,
-    settings: Settings,  # noqa: ARG001 - kept for future use
-) -> str:
-    """Simple fallback subagent invocation using direct model calls.
-
-    This is a lightweight fallback when the full deepagents subagent
-    machinery is not available or fails.
-    """
-    from langchain_core.messages import HumanMessage, SystemMessage
     from namicode_cli.config import create_model
+    from namicode_cli.tools import fetch_url, http_request, web_search
+    from namicode_cli.dev_server import (
+        list_servers_tool,
+        start_dev_server_tool,
+        stop_server_tool,
+    )
+    from namicode_cli.test_runner import run_tests_tool
+    from namicode_cli.config import settings as global_settings
 
-    model = create_model()
-
-    enhanced_prompt = f"""{system_prompt}
-
----
-
-You are being invoked as a subagent to handle a specific task.
-Your response will be returned to the main assistant.
-
-Keep your response focused and actionable. Provide a clear, concise answer."""
-
-    messages = [
-        SystemMessage(content=enhanced_prompt),
-        HumanMessage(content=query),
+    tools = [
+        http_request,
+        fetch_url,
+        run_tests_tool,
+        start_dev_server_tool,
+        stop_server_tool,
+        list_servers_tool,
     ]
+    if global_settings.has_tavily:
+        tools.append(web_search)
 
-    response = await model.ainvoke(messages)
+    subagent, subagent_backend = create_subagent(
+        agent_name=agent_name,
+        tools=tools,
+        model=create_model(),
+        settings=settings,
+        backend=backend,
+    )
 
-    if hasattr(response, "content"):
-        content = response.content
-        if isinstance(content, str):
-            return content
-        elif isinstance(content, list):
-            return "".join(str(c) for c in content)
-    return str(response)
+    return subagent, subagent_backend
 
 
 async def _generate_agent_system_prompt(

@@ -1,33 +1,10 @@
-"""Task execution and streaming logic for the CLI.
-
-This module handles the execution of deep agent tasks and streaming of results
-to the terminal. It provides:
-
-- Streaming execution of agent tasks with real-time output
-- Human-in-the-loop approval for destructive operations
-- Tool call visualization and diff previews
-- Error handling and recovery
-- Context window management and token tracking
-
-Key Components:
-- execute_task(): Main task execution with streaming
-- prompt_for_tool_approval(): Interactive approval UI for tool calls
-- process_streaming_response(): Handle streaming agent responses
-- render_tool_message(): Display tool execution results
-
-The execution flow:
-1. Execute agent with streaming enabled
-2. Process tool calls and request approval if needed
-3. Render tool results and output to terminal
-4. Track token usage and context window
-5. Handle errors and provide recovery options
-- UI rendering functions for formatted output
-- Token usage tracking and context management
-"""
+"""Task execution and streaming logic for the CLI."""
 
 import asyncio
 import json
 import sys
+import termios
+import tty
 
 from langchain.agents.middleware.human_in_the_loop import (
     ActionRequest,
@@ -44,11 +21,11 @@ from rich import box
 from rich.markdown import Markdown
 from rich.panel import Panel
 
-from namicode_cli.config import COLORS, console
-from namicode_cli.errors import ErrorHandler
-from namicode_cli.file_ops import FileOpTracker, build_approval_preview
-from namicode_cli.input import parse_file_mentions
-from namicode_cli.ui import (
+from deepagents_cli.config import COLORS, console
+from deepagents_cli.file_ops import FileOpTracker, build_approval_preview
+from deepagents_cli.image_utils import create_multimodal_content
+from deepagents_cli.input import ImageTracker, parse_file_mentions
+from deepagents_cli.ui import (
     TokenTracker,
     format_tool_display,
     format_tool_message_content,
@@ -64,14 +41,7 @@ def prompt_for_tool_approval(
     action_request: ActionRequest,
     assistant_id: str | None,
 ) -> Decision | dict:
-    """Prompt user to approve/reject a tool action with interactive menu.
-
-    Uses a cross-platform prompt_toolkit-based menu with arrow key navigation
-    that works consistently on Windows, Linux, and Mac.
-
-    Args:
-        action_request: The action request containing tool name, args, and description.
-        assistant_id: Optional assistant ID for context.
+    """Prompt user to approve/reject a tool action with arrow key navigation.
 
     Returns:
         Decision (ApproveDecision or RejectDecision) OR
@@ -94,7 +64,7 @@ def prompt_for_tool_approval(
     # Display action info first
     console.print(
         Panel(
-            "[bold yellow]Tool Action Requires Approval[/bold yellow]\n\n"
+            "[bold yellow]⚠️  Tool Action Requires Approval[/bold yellow]\n\n"
             + "\n".join(body_lines),
             border_style="yellow",
             box=box.ROUNDED,
@@ -109,15 +79,11 @@ def prompt_for_tool_approval(
     selected = 0  # Start with approve selected
 
     try:
-        # Import termios/tty only when needed (Unix-only modules)
-        import termios
-        import tty
-
         fd = sys.stdin.fileno()
-        old_settings = termios.tcgetattr(fd)  # type: ignore
+        old_settings = termios.tcgetattr(fd)
 
         try:
-            tty.setraw(fd)  # type: ignore
+            tty.setraw(fd)
             # Hide cursor during menu interaction
             sys.stdout.write("\033[?25l")
             sys.stdout.flush()
@@ -192,11 +158,10 @@ def prompt_for_tool_approval(
             # Show cursor again
             sys.stdout.write("\033[?25h")
             sys.stdout.flush()
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)  # type: ignore
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
-    except (ImportError, AttributeError, Exception):
-        # Fallback for non-Unix systems (ImportError when termios/tty not available)
-        # or any other terminal-related errors
+    except (termios.error, AttributeError):
+        # Fallback for non-Unix systems
         console.print("  ☐ (A)pprove  (default)")
         console.print("  ☐ (R)eject")
         console.print("  ☐ (Auto)-accept all going forward")
@@ -224,12 +189,9 @@ async def execute_task(
     session_state,
     token_tracker: TokenTracker | None = None,
     backend=None,
-    is_subagent: bool = False,
+    image_tracker: ImageTracker | None = None,
 ) -> None:
     """Execute any task by passing it directly to the AI agent."""
-    # Initialize error handler for this execution
-    error_handler = ErrorHandler()
-
     # Parse file mentions and inject content if any
     prompt_text, mentioned_files = parse_file_mentions(user_input)
 
@@ -245,43 +207,36 @@ async def execute_task(
                     f"\n### {file_path.name}\nPath: `{file_path}`\n```\n{content}\n```"
                 )
             except Exception as e:
-                # Use error handler for better error messages
-                recovery = await error_handler.handle(
-                    e,
-                    context={"file_name": str(file_path), "file_path": str(file_path)},
+                context_parts.append(
+                    f"\n### {file_path.name}\n[Error reading file: {e}]"
                 )
-                error_msg = f"\n### {file_path.name}\n[{recovery.message}]"
-                if recovery.suggestion:
-                    error_msg += f"\n{recovery.suggestion}"
-                context_parts.append(error_msg)
 
         final_input = "\n".join(context_parts)
     else:
         final_input = prompt_text
+
+    # Include images in the message content
+    images_to_send = []
+    if image_tracker:
+        images_to_send = image_tracker.get_images()
+    if images_to_send:
+        message_content = create_multimodal_content(final_input, images_to_send)
+    else:
+        message_content = final_input
 
     config = {
         "configurable": {"thread_id": session_state.thread_id},
         "metadata": {"assistant_id": assistant_id} if assistant_id else {},
     }
 
-    # Track user message for /context command
-    if token_tracker:
-        token_tracker.increment_user_messages()
-
     has_responded = False
     captured_input_tokens = 0
     captured_output_tokens = 0
     current_todos = None  # Track current todo list state
 
-    if is_subagent:
-        status = console.status(
-            f"[bold {COLORS['subagent']}]{assistant_id} is thinking...", spinner="dots"
-        )
-    else:
-        status = console.status(
-            f"[bold {COLORS['thinking']}]Nami is thinking...",
-            spinner="dots",
-        )
+    status = console.status(
+        f"[bold {COLORS['thinking']}]Agent is thinking...", spinner="dots"
+    )
     status.start()
     spinner_active = True
 
@@ -308,11 +263,6 @@ async def execute_task(
     tool_call_buffers: dict[str | int, dict] = {}
     # Buffer assistant text so we can render complete markdown segments
     pending_text = ""
-    # Flag to prevent duplicate responses when both streams print same content
-    # Set when updates stream shows a complete AI response
-    response_shown_via_updates = False
-    # Track when a subagent (task tool) is active - skip display in this case
-    # since invoke_subagent handles subagent output
 
     def flush_text_buffer(*, final: bool = False) -> None:
         """Flush accumulated assistant text as rendered markdown when appropriate."""
@@ -329,17 +279,19 @@ async def execute_task(
         console.print(markdown, style=COLORS["agent"])
         pending_text = ""
 
+    # Clear images from tracker after creating the message
+    # (they've been encoded into the message content)
+    if image_tracker:
+        image_tracker.clear()
+
     # Stream input - may need to loop if there are interrupts
-    stream_input = {"messages": [{"role": "user", "content": final_input}]}
+    stream_input = {"messages": [{"role": "user", "content": message_content}]}
 
     try:
         while True:
             interrupt_occurred = False
             hitl_response: dict[str, HITLResponse] = {}
             suppress_resumed_output = False
-            # Reset per-turn flags and tracking
-            response_shown_via_updates = False
-            displayed_tool_ids.clear()
             # Track all pending interrupts: {interrupt_id: request_data}
             pending_interrupts: dict[str, HITLRequest] = {}
 
@@ -401,57 +353,8 @@ async def execute_task(
                                 render_todo_list(new_todos)
                                 console.print()
 
-                        # Display AI response from model node (completed message)
-                        # Only show the AI's final response after tool execution is complete
-                        # Don't show tool call intentions or raw tool results
-                        # Skip if subagent is active - invoke_subagent handles subagent output
-                        if "messages" in chunk_data:
-                            messages = chunk_data["messages"]
-                            # Check if messages is a valid list (not a Rich Overwrite object)
-                            if isinstance(messages, list) and messages:
-                                last_msg = messages[-1]
-                                msg_type = getattr(last_msg, "type", "")
-                                msg_text = getattr(last_msg, "text", None) or getattr(
-                                    last_msg, "content", ""
-                                )
-                                tool_calls = getattr(last_msg, "tool_calls", [])
-                                # Skip tool calls, tool results, and AIMessages with tool_calls
-                                # Only show AI assistant messages without tool_calls (final responses)
-                                # Skip if subagent is active
-                                if (
-                                    msg_text
-                                    and msg_type in ("ai", "assistant")
-                                    and not tool_calls
-                                ):
-                                    # Clear any pending text from messages stream to avoid duplicate
-                                    pending_text = ""
-                                    # Skip if we already showed this response
-                                    if response_shown_via_updates:
-                                        continue
-                                    response_shown_via_updates = True
-                                    if spinner_active:
-                                        status.stop()
-                                        spinner_active = False
-                                    if not has_responded:
-                                        console.print(
-                                            "●",
-                                            style=COLORS["agent"],
-                                            markup=False,
-                                            end=" ",
-                                        )
-                                        has_responded = True
-                                    console.print(
-                                        Markdown(msg_text), style=COLORS["agent"]
-                                    )
-                                    console.print()
-
                 # Handle MESSAGES stream - for content and tool calls
                 elif current_stream_mode == "messages":
-                    # Only process messages from root namespace to avoid duplicates
-                    # With subgraphs=True, the same content can appear from multiple namespaces
-                    if _namespace != ():
-                        continue
-
                     # Messages stream returns (message, metadata) tuples
                     if not isinstance(data, tuple) or len(data) != 2:
                         continue
@@ -486,7 +389,7 @@ async def execute_task(
                         # Reset spinner message after tool completes
                         if spinner_active:
                             status.update(
-                                f"[bold {COLORS['thinking']}]Nami is thinking..."
+                                f"[bold {COLORS['thinking']}]Agent is thinking..."
                             )
 
                         if tool_name == "shell" and tool_status != "success":
@@ -548,10 +451,10 @@ async def execute_task(
                     for block in message.content_blocks:
                         block_type = block.get("type")
 
-                        # Handle text blocks - skip if subagent is active or updates stream already showed
+                        # Handle text blocks
                         if block_type == "text":
                             text = block.get("text", "")
-                            if text and not response_shown_via_updates:
+                            if text:
                                 pending_text += text
 
                         # Handle reasoning blocks
@@ -633,45 +536,36 @@ async def execute_task(
                                 parsed_args = {"value": parsed_args}
 
                             flush_text_buffer(final=True)
-                            display_needed = False
                             if buffer_id is not None:
                                 if buffer_id not in displayed_tool_ids:
                                     displayed_tool_ids.add(buffer_id)
                                     file_op_tracker.start_operation(
                                         buffer_name, parsed_args, buffer_id
                                     )
-                                    display_needed = True
                                 else:
                                     file_op_tracker.update_args(buffer_id, parsed_args)
-                            else:
-                                display_needed = True
                             tool_call_buffers.pop(buffer_key, None)
+                            icon = tool_icons.get(buffer_name, "🔧")
 
-                            if display_needed:
+                            if spinner_active:
+                                status.stop()
 
-                                icon = tool_icons.get(buffer_name, "🔧")
+                            if has_responded:
+                                console.print()
 
-                                if spinner_active:
-                                    status.stop()
+                            display_str = format_tool_display(buffer_name, parsed_args)
+                            console.print(
+                                f"  {icon} {display_str}",
+                                style=f"dim {COLORS['tool']}",
+                                markup=False,
+                            )
 
-                                if has_responded:
-                                    console.print()
-
-                                display_str = format_tool_display(
-                                    buffer_name, parsed_args
-                                )
-                                console.print(
-                                    f"  {icon} {display_str}",
-                                    style=f"dim {COLORS['tool']}",
-                                    markup=False,
-                                )
-
-                                # Restart spinner with context about which tool is executing
-                                status.update(
-                                    f"[bold {COLORS['thinking']}]Executing {display_str}..."
-                                )
-                                status.start()
-                                spinner_active = True
+                            # Restart spinner with context about which tool is executing
+                            status.update(
+                                f"[bold {COLORS['thinking']}]Executing {display_str}..."
+                            )
+                            status.start()
+                            spinner_active = True
 
                     if getattr(message, "chunk_position", None) == "last":
                         flush_text_buffer(final=True)
@@ -841,9 +735,3 @@ async def execute_task(
         # Track token usage (display only via /tokens command)
         if token_tracker and (captured_input_tokens or captured_output_tokens):
             token_tracker.add(captured_input_tokens, captured_output_tokens)
-        # Track assistant response and tool calls for /context command
-        if token_tracker:
-            token_tracker.increment_assistant_messages()
-            # Track tool calls (count of unique tool call IDs displayed)
-            if displayed_tool_ids:
-                token_tracker.increment_tool_calls(len(displayed_tool_ids))
