@@ -29,6 +29,9 @@ dependencies = [
     "langsmith>=0.1.0",
 ]
 
+[project.scripts]
+nami = "namicode_cli.main:cli_main"
+
 [tool.ruff]
 line-length = 100
 exclude = []
