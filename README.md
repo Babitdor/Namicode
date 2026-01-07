@@ -233,4 +233,4 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 5. Open a Pull Request
 
 ## Special
-~ Project dedicated to my Bee 💕
+~ Project dedicated to my Bee 💕 The source of inspiration and hard work.
