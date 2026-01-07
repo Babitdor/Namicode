@@ -3,7 +3,7 @@
 import base64
 import shlex
 
-from deepagents.backends.protocol import (
+from nami_deepagents.backends.protocol import (
     EditResult,
     ExecuteResponse,
     FileInfo,

@@ -43,7 +43,7 @@ from pydantic import TypeAdapter, ValidationError
 from rich import box
 from rich.markdown import Markdown
 from rich.panel import Panel
-from namicode_cli.config import COLORS, console
+from namicode_cli.config import COLORS, console, get_agent_color
 from namicode_cli.errors import ErrorHandler
 from namicode_cli.file_ops import FileOpTracker, build_approval_preview
 from namicode_cli.input import parse_file_mentions
@@ -263,9 +263,11 @@ async def execute_task(
         "metadata": {"assistant_id": assistant_id} if assistant_id else {},
     }
     agent_display_name = assistant_id if assistant_id and is_subagent else "Nami"
-    agent_colors = (
-        COLORS["subagent"] if assistant_id and is_subagent else COLORS["agent"]
-    )
+    # Use agent-specific color if available, otherwise fall back to defaults
+    if assistant_id and is_subagent:
+        agent_colors = get_agent_color(assistant_id)
+    else:
+        agent_colors = COLORS["agent"]
     # Track user message for /context command
     if token_tracker:
         token_tracker.increment_user_messages()
@@ -664,6 +666,7 @@ async def execute_task(
                                 display_str = format_tool_display(
                                     buffer_name, parsed_args
                                 )
+
                                 console.print(
                                     f"  {icon} {display_str}",
                                     style=f"dim {COLORS['tool']}",

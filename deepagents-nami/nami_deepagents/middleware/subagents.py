@@ -48,6 +48,9 @@ class SubAgent(TypedDict):
     interrupt_on: NotRequired[dict[str, bool | InterruptOnConfig]]
     """The tool configs to use for the agent."""
 
+    color: NotRequired[str]
+    """The color for this agent's output (hex code like '#ef4444' or color name)."""
+
 
 class CompiledSubAgent(TypedDict):
     """A pre-compiled agent spec."""
@@ -60,6 +63,49 @@ class CompiledSubAgent(TypedDict):
 
     runnable: Runnable
     """The Runnable to use for the agent."""
+
+    color: NotRequired[str]
+    """The color for this agent's output (hex code like '#ef4444' or color name)."""
+
+
+# Global registry for subagent colors (name -> color)
+_subagent_colors: dict[str, str] = {}
+
+
+def get_subagent_color(name: str) -> str | None:
+    """Get the color for a subagent by name.
+
+    Args:
+        name: The name of the subagent.
+
+    Returns:
+        The color string (hex or name), or None if not set.
+    """
+    return _subagent_colors.get(name)
+
+
+def set_subagent_color(name: str, color: str) -> None:
+    """Set the color for a subagent.
+
+    Args:
+        name: The name of the subagent.
+        color: The color string (hex code like '#ef4444' or color name).
+    """
+    _subagent_colors[name] = color
+
+
+def get_all_subagent_colors() -> dict[str, str]:
+    """Get all registered subagent colors.
+
+    Returns:
+        Dictionary mapping subagent names to their colors.
+    """
+    return _subagent_colors.copy()
+
+
+def clear_subagent_colors() -> None:
+    """Clear all registered subagent colors."""
+    _subagent_colors.clear()
 
 
 DEFAULT_SUBAGENT_PROMPT = "In order to complete the objective that the user asks of you, you have access to a number of standard tools."
@@ -257,10 +303,15 @@ def _get_subagents(
         subagent_descriptions.append(
             f"- general-purpose: {DEFAULT_GENERAL_PURPOSE_DESCRIPTION}"
         )
+        # Register default color for general-purpose agent
+        set_subagent_color("general-purpose", "#30c3f0")  # Default cyan/blue
 
     # Process custom subagents
     for agent_ in subagents:
         subagent_descriptions.append(f"- {agent_['name']}: {agent_['description']}")
+        # Register color if provided
+        if "color" in agent_:
+            set_subagent_color(agent_["name"], agent_["color"])
         if "runnable" in agent_:
             custom_agent = cast("CompiledSubAgent", agent_)
             agents[custom_agent["name"]] = custom_agent["runnable"]

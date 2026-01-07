@@ -27,7 +27,11 @@ dependencies = [
     "docker>=7.0.0",
     "langchain-mcp-adapters>=0.1.0",
     "langsmith>=0.1.0",
+    "nest-asyncio>=1.6.0",
 ]
+
+[project.scripts]
+nami = "namicode_cli.main:cli_main"
 
 [tool.ruff]
 line-length = 100

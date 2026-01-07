@@ -56,6 +56,76 @@ COLORS = {
     "subagent": "#30c3f0",  # Medium red (sub-agent messages)
 }
 
+# Agent color registry - stores colors for custom agents
+_agent_colors: dict[str, str] = {}
+
+
+def get_agent_color(agent_name: str) -> str:
+    """Get the color for an agent by name.
+
+    Args:
+        agent_name: The name of the agent.
+
+    Returns:
+        The color string (hex or name), or default subagent color if not set.
+    """
+    return _agent_colors.get(agent_name, COLORS["subagent"])
+
+
+def set_agent_color(agent_name: str, color: str) -> None:
+    """Set the color for an agent.
+
+    Args:
+        agent_name: The name of the agent.
+        color: The color string (hex code like '#ef4444' or color name).
+    """
+    _agent_colors[agent_name] = color
+
+
+def clear_agent_colors() -> None:
+    """Clear all registered agent colors."""
+    _agent_colors.clear()
+
+
+def parse_agent_color(agent_md_path: Path) -> str | None:
+    """Parse color from agent.md YAML frontmatter.
+
+    Looks for a color field in YAML frontmatter at the start of the file:
+    ```
+    ---
+    color: #ef4444
+    ---
+    ```
+
+    Args:
+        agent_md_path: Path to the agent.md file.
+
+    Returns:
+        Color string if found, None otherwise.
+    """
+    try:
+        content = agent_md_path.read_text(encoding="utf-8")
+
+        # Match YAML frontmatter between --- delimiters
+        frontmatter_pattern = r"^---\s*\n(.*?)\n---\s*\n"
+        match = re.match(frontmatter_pattern, content, re.DOTALL)
+
+        if not match:
+            return None
+
+        frontmatter = match.group(1)
+
+        # Parse color from frontmatter
+        for line in frontmatter.split("\n"):
+            kv_match = re.match(r"^color:\s*(.+)$", line.strip())
+            if kv_match:
+                return kv_match.group(1).strip().strip('"').strip("'")
+
+        return None
+    except Exception:
+        return None
+
+
 # ASCII art banner - Sleek red design
 DEEP_AGENTS_ASCII = """
                                                                      

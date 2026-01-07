@@ -20,7 +20,8 @@ from namicode_cli.config import (
 from namicode_cli.agent import _add_interrupt_on, get_shared_store
 from namicode_cli.shell import ShellMiddleware
 from namicode_cli.skills import SkillsMiddleware
-from namicode_cli.mcp import MCPMiddleware
+from namicode_cli.mcp import get_shared_mcp_middleware
+from namicode_cli.shared_memory import SharedMemoryMiddleware
 from namicode_cli.tracing import (
     is_tracing_enabled,
     get_tracing_config,
@@ -106,8 +107,8 @@ def create_subagent(
     # Supports both .claude/skills/ and .nami/skills/
     project_skills_dirs = settings.get_project_skills_dirs()
 
-    # Create MCP middleware once (shared across modes for cleanup)
-    mcp_middleware = MCPMiddleware()
+    # Use shared MCP middleware to avoid reconnecting for each subagent
+    mcp_middleware = get_shared_mcp_middleware()
 
     # CONDITIONAL SETUP: Local vs Remote Sandbox
     if backend is None:
@@ -120,7 +121,7 @@ def create_subagent(
     else:
         subagent_backend = backend
 
-    # Middleware: AgentMemoryMiddleware, SkillsMiddleware, MCPMiddleware, ShellToolMiddleware
+    # Middleware: AgentMemoryMiddleware, SkillsMiddleware, MCPMiddleware, SharedMemoryMiddleware, ShellToolMiddleware
     subagent_middleware = [
         AgentMemoryMiddleware(settings=settings, assistant_id=agent_name),
         SkillsMiddleware(
@@ -129,12 +130,11 @@ def create_subagent(
             project_skills_dirs=project_skills_dirs,
         ),
         mcp_middleware,
+        SharedMemoryMiddleware(author_id=f"subagent:{agent_name}"),
         ShellMiddleware(
             workspace_root=str(Path.cwd()),
             env=dict(os.environ),
         ),
-        # FIX 4: Add AgentMemoryMiddleware if needed
-        # AgentMemoryMiddleware()  # Uncomment if this middleware is needed
     ]
 
     enhanced_prompt = f"""{system_prompt}
@@ -143,7 +143,7 @@ def create_subagent(
 
 ## Subagent Context
 
-You are being invoked as an isolated subagent to handle a specific task.
+You are being invoked as a subagent ('{agent_name}') to handle a specific task.
 Your response will be returned to the main assistant.
 
 Guidelines:
@@ -154,7 +154,12 @@ Guidelines:
 - You have access to the SAME skills as the main agent - check the Skills System section below for available skills
 - If a skill is relevant to your task, read the SKILL.md file for detailed instructions
 - Return a synthesized summary rather than raw data
-- Do NOT ask for confirmation - execute tools directly"""
+- Do NOT ask for confirmation - execute tools directly
+
+### Shared Memory
+You have access to shared memory tools (write_memory, read_memory, list_memories) that persist across all agents.
+Use these to share findings with the main agent or read context from previous conversations.
+Your writes will be attributed as 'subagent:{agent_name}'."""
 
     interrupt_on = _add_interrupt_on()
 

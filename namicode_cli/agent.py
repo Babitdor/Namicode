@@ -55,7 +55,8 @@ from namicode_cli.config import (
 from namicode_cli.integrations.sandbox_factory import get_default_working_dir
 from namicode_cli.shell import ShellMiddleware
 from namicode_cli.skills import SkillsMiddleware
-from namicode_cli.mcp import MCPMiddleware
+from namicode_cli.mcp import get_shared_mcp_middleware
+from namicode_cli.shared_memory import SharedMemoryMiddleware, reset_shared_memory_store
 from namicode_cli.tracing import (
     configure_tracing,
     is_tracing_enabled,
@@ -83,10 +84,12 @@ def get_shared_store() -> InMemoryStore:
 
 
 def reset_shared_store() -> None:
-    """Reset the shared store (useful for new sessions)."""
+    """Reset the shared store and shared memory (useful for new sessions)."""
     global _shared_store, _store_lock_initialized
     _shared_store = None
     _store_lock_initialized = False
+    # Also reset the shared memory store
+    reset_shared_memory_store()
 
 
 def list_agents() -> None:
@@ -595,8 +598,8 @@ def create_agent_with_config(
     # Supports both .claude/skills/ and .nami/skills/
     project_skills_dirs = settings.get_project_skills_dirs()
 
-    # Create MCP middleware once (shared across modes for cleanup)
-    mcp_middleware = MCPMiddleware()
+    # Use shared MCP middleware (singleton pattern avoids reconnecting for subagents)
+    mcp_middleware = get_shared_mcp_middleware()
 
     # CONDITIONAL SETUP: Local vs Remote Sandbox
     if sandbox is None:
@@ -616,7 +619,7 @@ def create_agent_with_config(
         #     },  # No virtualization - use real paths
         # )
 
-        # Middleware: AgentMemoryMiddleware, SkillsMiddleware, MCPMiddleware, ShellToolMiddleware
+        # Middleware: AgentMemoryMiddleware, SkillsMiddleware, MCPMiddleware, SharedMemoryMiddleware, ShellToolMiddleware
         agent_middleware = [
             AgentMemoryMiddleware(settings=settings, assistant_id=assistant_id),
             SkillsMiddleware(
@@ -625,6 +628,7 @@ def create_agent_with_config(
                 project_skills_dirs=project_skills_dirs,
             ),
             mcp_middleware,
+            SharedMemoryMiddleware(author_id="main-agent"),
             ShellMiddleware(
                 workspace_root=str(Path.cwd()),
                 env=dict(os.environ),
@@ -640,7 +644,7 @@ def create_agent_with_config(
             },  # No virtualization
         )
 
-        # Middleware: AgentMemoryMiddleware, SkillsMiddleware, and MCPMiddleware
+        # Middleware: AgentMemoryMiddleware, SkillsMiddleware, MCPMiddleware, and SharedMemoryMiddleware
         # NOTE: File operations (ls, read, write, edit, glob, grep) and execute tool
         # are automatically provided by create_deep_agent when backend is a SandboxBackend.
         agent_middleware = [
@@ -651,6 +655,7 @@ def create_agent_with_config(
                 project_skills_dirs=project_skills_dirs,
             ),
             mcp_middleware,
+            SharedMemoryMiddleware(author_id="main-agent"),
         ]
 
     # Get the system prompt (sandbox-aware and with skills)

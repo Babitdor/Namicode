@@ -138,21 +138,20 @@ class MCPMiddleware(AgentMiddleware):
         if not servers:
             return
 
-        # Run async discovery in a sync context
+        # Use nest_asyncio to allow nested event loops
+        # This avoids ThreadPoolExecutor issues with Docker stdio on Windows
+        import nest_asyncio
+
+        nest_asyncio.apply()
+
+        # Run async discovery
         try:
             loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # If we're already in an async context, create a new loop in a thread
-                import concurrent.futures
-
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(asyncio.run, self._discover_tools_async())
-                    future.result(timeout=120)  # 120 second timeout
-            else:
-                loop.run_until_complete(self._discover_tools_async())
         except RuntimeError:
-            # No event loop exists, create one
-            asyncio.run(self._discover_tools_async())
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+        loop.run_until_complete(self._discover_tools_async())
 
     async def _discover_tools_async(self) -> None:
         """Async implementation of tool discovery using MultiServerMCPClient.
@@ -181,7 +180,16 @@ class MCPMiddleware(AgentMiddleware):
         all_tools: list[BaseTool] = []
 
         # Load tools from each server with proper attribution
-        for server_name in servers:
+        # Prioritize Docker-based servers first (they have issues with Windows async)
+        server_names = list(servers.keys())
+        docker_servers = [
+            name for name in server_names
+            if servers[name].command == "docker"
+        ]
+        other_servers = [name for name in server_names if name not in docker_servers]
+        ordered_servers = docker_servers + other_servers
+
+        for server_name in ordered_servers:
             try:
                 connection = config_dict.get(server_name)
                 if not connection:

@@ -1662,6 +1662,43 @@ async def _agents_create_interactive(ps, settings) -> bool:
         console.print()
         return True
 
+    # Color selection
+    console.print()
+    console.print("[bold]Choose a color for this agent:[/bold]")
+    color_options = [
+        ("#ef4444", "Red"),
+        ("#f97316", "Orange"),
+        ("#f59e0b", "Amber"),
+        ("#fbbf24", "Yellow"),
+        ("#22c55e", "Green"),
+        ("#14b8a6", "Teal"),
+        ("#0ea5e9", "Sky Blue"),
+        ("#3b82f6", "Blue"),
+        ("#8b5cf6", "Violet"),
+        ("#a855f7", "Purple"),
+        ("#ec4899", "Pink"),
+        ("#6b7280", "Gray"),
+    ]
+    for i, (hex_code, name) in enumerate(color_options, 1):
+        console.print(f"  [{hex_code}]■[/{hex_code}] {i:2d}. {name} ({hex_code})")
+    console.print()
+    color_choice = (
+        await ps.prompt_async("Color (1-12, or hex code, default=7): ")
+    ).strip() or "7"
+
+    # Parse color choice
+    if color_choice.startswith("#"):
+        agent_color = color_choice
+    else:
+        try:
+            choice_idx = int(color_choice) - 1
+            if 0 <= choice_idx < len(color_options):
+                agent_color = color_options[choice_idx][0]
+            else:
+                agent_color = color_options[6][0]  # Default to Sky Blue
+        except ValueError:
+            agent_color = color_options[6][0]  # Default to Sky Blue
+
     # Generate system prompt using LLM
     console.print()
     console.print("[dim]Generating system prompt...[/dim]")
@@ -1673,10 +1710,17 @@ async def _agents_create_interactive(ps, settings) -> bool:
         console.print()
         return True
 
+    # Add YAML frontmatter with color
+    final_content = f"""---
+color: {agent_color}
+---
+
+{system_prompt}"""
+
     # Create agent directory and file
     agent_dir.mkdir(parents=True, exist_ok=True)
     agent_md = agent_dir / "agent.md"
-    agent_md.write_text(system_prompt, encoding="utf-8")
+    agent_md.write_text(final_content, encoding="utf-8")
 
     console.print()
     console.print(
@@ -1819,7 +1863,12 @@ def invoke_subagent(
         Agent's response/result as string
     """
 
-    from namicode_cli.config import create_model
+    from namicode_cli.config import (
+        create_model,
+        parse_agent_color,
+        set_agent_color,
+        settings as global_settings,
+    )
     from namicode_cli.tools import fetch_url, http_request, web_search
     from namicode_cli.dev_server import (
         list_servers_tool,
@@ -1827,7 +1876,15 @@ def invoke_subagent(
         stop_server_tool,
     )
     from namicode_cli.test_runner import run_tests_tool
-    from namicode_cli.config import settings as global_settings
+
+    # Load and register agent color from agent.md frontmatter
+    agent_location = settings.find_agent(agent_name)
+    if agent_location:
+        agent_dir, _scope = agent_location
+        agent_md_path = agent_dir / "agent.md"
+        color = parse_agent_color(agent_md_path)
+        if color:
+            set_agent_color(agent_name, color)
 
     tools = [
         http_request,
