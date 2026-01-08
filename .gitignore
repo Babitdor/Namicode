@@ -99,3 +99,6 @@ dmypy.json
 # Claude files
 .claude/
 CLAUDE.md
+
+# Serena
+.serena/
