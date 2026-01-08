@@ -386,6 +386,7 @@ _PROVIDER_TO_WORKING_DIR = {
     "runloop": "/home/user",
     "daytona": "/home/daytona",
     "docker": "/workspace",
+    "harbor": "/app",
 }
 
 

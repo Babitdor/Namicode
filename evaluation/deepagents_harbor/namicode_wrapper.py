@@ -37,43 +37,11 @@ from deepagents_harbor.tracing import create_example_id_from_instruction
 
 # Import Nami Code components
 from namicode_cli.agent import create_agent_with_config
-from namicode_cli.config import Settings
 from namicode_cli.file_tracker import reset_session_tracker
 from namicode_cli.model_manager import ModelManager, MODEL_PRESETS, ProviderType
-
-
-NAMI_SYSTEM_PROMPT = """You are Nami, an autonomous AI coding assistant executing tasks in a sandboxed evaluation environment.
-
-## WORKING DIRECTORY & ENVIRONMENT CONTEXT
-
-Your current working directory is:
-{current_directory}
-
-{file_listing_header}
-{file_listing}
-
-## EVALUATION MODE
-
-You are running in an **evaluation environment** with specific constraints:
-- This is a sandboxed Docker/cloud environment
-- All file operations go through the sandbox backend
-- Focus on completing the task efficiently and correctly
-- Tests will verify your solution automatically
-
-## BEST PRACTICES
-
-1. **Read before editing**: Always read files before modifying them
-2. **Verify your work**: Check that changes are applied correctly
-3. **Use appropriate tools**: Prefer structured tools over raw shell commands
-4. **Be methodical**: Break complex tasks into smaller steps
-5. **Handle errors gracefully**: Check command outputs and adjust if needed
-
-## IMPORTANT
-
-- Work in the /app directory unless explicitly instructed otherwise
-- The file listing above shows the initial state - use ls/glob for updates
-- Complete the task fully before finishing
-"""
+from namicode_cli.tools import fetch_url, http_request
+from namicode_cli.dev_server import list_servers_tool, start_dev_server_tool, stop_server_tool
+from namicode_cli.test_runner import run_tests_tool
 
 
 class NamiCodeWrapper(BaseAgent):
@@ -180,42 +148,6 @@ class NamiCodeWrapper(BaseAgent):
         """The version of the agent."""
         return "0.1.0"
 
-    async def _get_formatted_system_prompt(self, backend: HarborSandbox) -> str:
-        """Format the system prompt with current directory and file listing context."""
-        # Get directory information from backend
-        ls_info = await backend.als_info(".")
-        current_dir = (await backend.aexecute("pwd")).output
-
-        # Get first 15 files for more context
-        total_files = len(ls_info) if ls_info else 0
-        first_files = ls_info[:15] if ls_info else []
-
-        # Build file listing
-        if total_files == 0:
-            file_listing_header = "Current directory is empty."
-            file_listing = ""
-        elif total_files <= 15:
-            file_count_text = "1 file" if total_files == 1 else f"{total_files} files"
-            file_listing_header = f"Files in current directory ({file_count_text}):"
-            file_listing = "\n".join(
-                f"  {i + 1}. {f['path']}{'/' if f.get('is_dir') else ''}"
-                for i, f in enumerate(first_files)
-            )
-        else:
-            file_listing_header = f"Files in current directory (showing first 15 of {total_files}):"
-            file_listing = "\n".join(
-                f"  {i + 1}. {f['path']}{'/' if f.get('is_dir') else ''}"
-                for i, f in enumerate(first_files)
-            )
-
-        formatted_prompt = NAMI_SYSTEM_PROMPT.format(
-            current_directory=current_dir.strip() if current_dir else "/app",
-            file_listing_header=file_listing_header,
-            file_listing=file_listing,
-        )
-
-        return formatted_prompt
-
     async def run(
         self,
         instruction: str,
@@ -238,21 +170,24 @@ class NamiCodeWrapper(BaseAgent):
         # Create Harbor sandbox backend
         backend = HarborSandbox(environment)
 
-        # Get formatted system prompt with directory context
-        system_prompt = await self._get_formatted_system_prompt(backend)
+        # Create tools list for the agent
+        tools = [
+            http_request,
+            fetch_url,
+            run_tests_tool,
+            start_dev_server_tool,
+            stop_server_tool,
+            list_servers_tool,
+        ]
 
         # Create Nami Code agent with full middleware stack
         # Note: We use the sandbox backend for file operations
-        settings = Settings.from_environment()
-
         nami_agent, _ = create_agent_with_config(
             model=self._model,
             assistant_id=f"nami-eval-{environment.session_id}",
-            settings=settings,
+            tools=tools,
             sandbox=backend,
             sandbox_type="harbor",
-            system_prompt=system_prompt,
-            auto_approve=True,  # Skip HITL for evaluation
         )
 
         # Build metadata
