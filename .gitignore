@@ -69,12 +69,6 @@ venv.bak/
 *.swo
 *~
 
-# Claude Code local settings
-.claude/
-.serena
-.ruff_cache
-CLAUDE.md
-
 # macOS
 .DS_Store
 
@@ -102,5 +96,6 @@ dmypy.json
 *.tmp
 *.temp
 
-
-# NAMI CODE
+# Claude files
+.claude/
+CLAUDE.md
