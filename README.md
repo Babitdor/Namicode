@@ -196,8 +196,6 @@ export GITHUB_API_KEY="your-github-token"
 export DATABASE_URL="postgresql://user:pass@localhost:5432/db"
 ```
 
-See [MCP_GUIDE.md](MCP_GUIDE.md) for detailed configuration and custom server development.
-
 ### Terminal-Bench Evaluation
 
 The CLI includes a built-in Harbor evaluation framework for benchmarking agent performance on standardized coding tasks.
@@ -262,8 +260,6 @@ Results are stored in `evaluation/results/` with:
 | Refactoring | Improve code structure | "Extract this logic into a helper function" |
 | Documentation | Add docstrings and comments | "Document this class with docstrings" |
 | Testing | Write unit tests | "Add tests for edge cases" |
-
-See [EVALUATION.md](docs/EVALUATION.md) for detailed setup, custom task creation, and API integration.
 
 ## Development
 
