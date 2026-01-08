@@ -1,6 +1,6 @@
 
 <div align="center">
-    <img src="assets/NAMI.png" alt="Nami CLI Banner" width="90%"/>
+    <img src="assets/NAMI.svg" alt="Nami CLI Banner" width="90%"/>
 </div>
 
 # Nami-Code : Agentic Coding Tool
