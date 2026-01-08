@@ -1,5 +1,7 @@
 
-<img src="assets/NAMI.png" alt="Nami CLI Banner" width="80%" style="display: block; margin: 0 auto;"/>
+<div align="center">
+    <img src="assets/NAMI.png" alt="Nami CLI Banner" width="80%"/>
+</div>
 
 # Nami-Code : Agentic Coding Tool
 
