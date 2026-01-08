@@ -60,11 +60,16 @@ You have access to external tools provided by MCP servers. These extend your cap
 
 2. **Discovery**: All available MCP tools are listed above with their descriptions
    - Check the tool descriptions to understand what each tool does
-   - Review the input schema if you need to know what parameters are required
+   - Review the Parameters listed below each tool
 
-3. **Invocation**: Call MCP tools exactly like built-in tools
+3. **CRITICAL - Parameter Names**: You MUST use the EXACT parameter names shown in the "Parameters:" line for each tool
+   - Do NOT guess or use alternative parameter names
+   - If a tool shows "Parameters: relative_path", you MUST use "relative_path" (not "file_path", "path", etc.)
+   - If a tool shows "Parameters: url, method", you MUST use exactly "url" and "method"
+   - Using wrong parameter names will cause validation errors
+
+4. **Invocation**: Call MCP tools exactly like built-in tools
    - The middleware automatically routes calls to the appropriate MCP server
-   - You don't need to manage connections or authentication
    - Results are returned just like any other tool call
 
 **When to Use MCP Tools:**
@@ -72,22 +77,14 @@ You have access to external tools provided by MCP servers. These extend your cap
 - **Domain-Specific Knowledge**: When you need specialized information (e.g., documentation search, API lookups)
 - **External Data Access**: When the task requires data from external systems or databases
 - **Specialized Capabilities**: When MCP tools offer functionality not available in built-in tools
-- **User's Domain**: When the user's request clearly maps to an MCP server's domain (check descriptions above)
-
-**Best Practices:**
-
-- Read tool descriptions carefully to understand capabilities and limitations
-- Prefer MCP tools when they're specifically designed for the task
-- Combine MCP tools with built-in tools for comprehensive solutions
-- If an MCP tool fails, explain the error and try alternative approaches
 
 **Important Notes:**
 
+- ALWAYS check the exact parameter names before calling an MCP tool
 - MCP servers may become unavailable - handle tool call failures gracefully
 - Some tools may have rate limits or require specific permissions
-- Tool availability is shown above - only use tools that are currently listed
 
-Remember: MCP tools are powerful extensions that give you access to specialized knowledge and capabilities. Use them when they match the user's needs!
+Remember: MCP tools are powerful extensions. Always use the EXACT parameter names shown!
 """
 
 
@@ -207,11 +204,21 @@ class MCPMiddleware(AgentMiddleware):
 
                     # Build metadata cache with correct server attribution
                     for tool in server_tools:
+                        # Extract input schema for better parameter documentation
+                        input_schema = {}
+                        if hasattr(tool, "args_schema") and tool.args_schema:
+                            try:
+                                schema = tool.args_schema.model_json_schema()
+                                input_schema = schema.get("properties", {})
+                            except Exception:
+                                pass
+
                         self._tools_cache.append(
                             {
                                 "name": tool.name,
                                 "description": tool.description or "",
                                 "server": server_name,
+                                "input_schema": input_schema,
                             }
                         )
 
@@ -280,7 +287,17 @@ class MCPMiddleware(AgentMiddleware):
             if server_tools:
                 lines.append(f"  Tools ({len(server_tools)}):")
                 for tool in server_tools:
-                    lines.append(f"    - {tool['name']}: {tool['description']}")
+                    # Format tool with parameters
+                    tool_line = f"    - {tool['name']}: {tool['description']}"
+                    lines.append(tool_line)
+
+                    # Show required parameters from input schema
+                    input_schema = tool.get("input_schema", {})
+                    if input_schema:
+                        param_names = list(input_schema.keys())
+                        if param_names:
+                            params_str = ", ".join(param_names)
+                            lines.append(f"      Parameters: {params_str}")
             else:
                 lines.append("  (No tools available)")
 
