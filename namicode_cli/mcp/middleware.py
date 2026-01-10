@@ -180,8 +180,7 @@ class MCPMiddleware(AgentMiddleware):
         # Prioritize Docker-based servers first (they have issues with Windows async)
         server_names = list(servers.keys())
         docker_servers = [
-            name for name in server_names
-            if servers[name].command == "docker"
+            name for name in server_names if servers[name].command == "docker"
         ]
         other_servers = [name for name in server_names if name not in docker_servers]
         ordered_servers = docker_servers + other_servers
@@ -222,10 +221,10 @@ class MCPMiddleware(AgentMiddleware):
                             }
                         )
 
-                    console.print(
-                        f"[dim]MCP: Connected to '{server_name}' "
-                        f"({len(server_tools)} tools)[/dim]"
-                    )
+                    # console.print(
+                    #     f"[dim]MCP: Connected to '{server_name}' "
+                    #     f"({len(server_tools)} tools)[/dim]"
+                    # )
 
             except Exception as e:
                 console.print(

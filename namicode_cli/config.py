@@ -249,7 +249,7 @@ def _find_project_root(start_path: Path | None = None) -> Path | None:
     return None
 
 
-def _find_project_agent_md(project_root: Path) -> list[Path]:
+def _find_project_agent_md(project_root: Path) -> Path | None:
     """Find project-specific CLAUDE.md and NAMI.md file(s).
 
     Checks multiple locations and returns ALL that exist (in priority order):
@@ -266,29 +266,26 @@ def _find_project_agent_md(project_root: Path) -> list[Path]:
     Returns:
         List of paths to project config files (may contain 0-4 paths).
     """
-    paths = []
 
     # Priority 1: .claude/CLAUDE.md (Claude Code style)
     claude_dir_md = project_root / ".claude" / "CLAUDE.md"
     if claude_dir_md.exists():
-        paths.append(claude_dir_md)
+        return claude_dir_md
 
     # Priority 2: CLAUDE.md in root (Claude Code fallback)
     root_claude_md = project_root / "CLAUDE.md"
     if root_claude_md.exists():
-        paths.append(root_claude_md)
+        return root_claude_md
 
     # Priority 3: .nami/NAMI.md (Nami primary)
     nami_dir_md = project_root / ".nami" / "NAMI.md"
     if nami_dir_md.exists():
-        paths.append(nami_dir_md)
+        return nami_dir_md
 
     # Priority 4: NAMI.md in root (created by /init command)
     root_nami_md = project_root / "NAMI.md"
     if root_nami_md.exists():
-        paths.append(root_nami_md)
-
-    return paths
+        return root_nami_md
 
 
 @dataclass
@@ -519,13 +516,13 @@ class Settings:
         Returns path regardless of whether the file exists.
 
         Returns:
-            Path to {project_root}/.nami/agent.md, or None if not in a project
+            Path to {project_root}/.nami/NAMI.md, or None if not in a project
         """
         if not self.project_root:
             return None
-        return self.project_root / ".nami" / "agent.md"
+        return self.project_root / ".nami" / "NAMI.md"
 
-    def get_project_agent_md_paths(self) -> list[Path]:
+    def get_project_agent_md_paths(self) -> Path | None:
         """Get all project-level memory file paths (CLAUDE.md, NAMI.md).
 
         Finds all existing memory files and returns them in priority order.
@@ -541,7 +538,7 @@ class Settings:
             List of existing paths (may be empty if not in a project or no files found)
         """
         if not self.project_root:
-            return []
+            return None
         return _find_project_agent_md(self.project_root)
 
     @staticmethod
@@ -699,7 +696,7 @@ def get_default_coding_instructions() -> str:
     Long-term memory (agent.md) is handled separately by the middleware.
     """
     default_prompt_path = Path(__file__).parent / "default_agent_prompt.md"
-    return default_prompt_path.read_text(encoding='utf-8')
+    return default_prompt_path.read_text(encoding="utf-8")
 
 
 def create_model() -> BaseChatModel:

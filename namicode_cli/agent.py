@@ -191,7 +191,7 @@ def build_named_subagents(
 
         # Add color to subagent if available
         if agent_color:
-            subagent["color"] = agent_color
+            subagent["color"] = agent_color # type: ignore
 
         subagents.append(subagent)
 

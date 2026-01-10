@@ -35,6 +35,10 @@ class SessionMeta:
         model_name: Name of the model used
         assistant_id: Agent identifier
         message_count: Number of messages in conversation
+        current_task: Current task description
+        task_status: Task status - 'active', 'blocked', or 'complete'
+        blocked_reason: Reason for blockage if task_status is 'blocked'
+        next_step_hint: Optional hint for what to do next
     """
 
     session_id: str
@@ -47,6 +51,10 @@ class SessionMeta:
     model_name: str | None
     assistant_id: str
     message_count: int = 0
+    current_task: str | None = None
+    task_status: str = "active"  # active | blocked | complete
+    blocked_reason: str | None = None
+    next_step_hint: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -54,8 +62,17 @@ class SessionMeta:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SessionMeta":
-        """Create from dictionary."""
-        return cls(**data)
+        """Create from dictionary with backward compatibility."""
+        # Provide defaults for new fields to support old sessions
+        defaults = {
+            "current_task": None,
+            "task_status": "active",
+            "blocked_reason": None,
+            "next_step_hint": None,
+        }
+        # Merge defaults with provided data (data takes precedence)
+        merged = {**defaults, **data}
+        return cls(**merged)
 
 
 @dataclass
@@ -67,12 +84,16 @@ class SessionData:
         messages: Conversation messages
         todos: Todo list state
         tool_state: Last tool outputs and env info
+        memory: Declarative memory.md content
+        workspace_state: Last known workspace state (git + filesystem)
     """
 
     meta: SessionMeta
     messages: list[BaseMessage] = field(default_factory=list)
     todos: list[dict] | None = None
     tool_state: dict | None = None
+    memory: str | None = None
+    workspace_state: dict | None = None
 
 
 class SessionManager:
@@ -105,6 +126,12 @@ class SessionManager:
         tool_state: dict | None = None,
         model_name: str | None = None,
         project_root: Path | None = None,
+        current_task: str | None = None,
+        task_status: str = "active",
+        blocked_reason: str | None = None,
+        next_step_hint: str | None = None,
+        memory: str | None = None,
+        workspace_state: dict | None = None,
     ) -> Path:
         """Save a session to disk.
 
@@ -137,7 +164,9 @@ class SessionManager:
 
         # Compute hashes
         repo_hash = self._compute_repo_hash(project_root) if project_root else None
-        nami_md_checksum = self._compute_nami_md_checksum(project_root) if project_root else None
+        nami_md_checksum = (
+            self._compute_nami_md_checksum(project_root) if project_root else None
+        )
 
         # Create metadata
         meta = SessionMeta(
@@ -151,15 +180,36 @@ class SessionManager:
             model_name=model_name,
             assistant_id=assistant_id,
             message_count=len(messages),
+            current_task=current_task,
+            task_status=task_status,
+            blocked_reason=blocked_reason,
+            next_step_hint=next_step_hint,
         )
 
         # Save metadata
         with open(meta_path, "w") as f:
             json.dump(meta.to_dict(), f, indent=2)
 
-        # Save messages as JSONL
+        # Split messages into recent and archive
+        recent_messages, archive_messages = self._split_messages(
+            messages, recent_limit=8
+        )
+
+        # Save recent messages (for context)
+        recent_path = session_dir / "recent.jsonl"
+        with open(recent_path, "w", encoding="utf-8") as f:
+            for msg in recent_messages:
+                f.write(json.dumps(self._serialize_message(msg)) + "\n")
+
+        # Save archive messages (full history, not injected into context)
+        archive_path = session_dir / "archive.jsonl"
+        with open(archive_path, "w", encoding="utf-8") as f:
+            for msg in archive_messages:
+                f.write(json.dumps(self._serialize_message(msg)) + "\n")
+
+        # Also save full conversation for backward compatibility (deprecated)
         conversation_path = session_dir / "conversation.jsonl"
-        with open(conversation_path, "w") as f:
+        with open(conversation_path, "w", encoding="utf-8") as f:
             for msg in messages:
                 f.write(json.dumps(self._serialize_message(msg)) + "\n")
 
@@ -174,6 +224,18 @@ class SessionManager:
             tool_state_path = session_dir / "tool_state.json"
             with open(tool_state_path, "w") as f:
                 json.dump(tool_state, f, indent=2)
+
+        # Save memory.md if provided
+        if memory is not None:
+            memory_path = session_dir / "memory.md"
+            with open(memory_path, "w", encoding="utf-8") as f:
+                f.write(memory)
+
+        # Save workspace state if provided
+        if workspace_state is not None:
+            workspace_path = session_dir / "workspace_state.json"
+            with open(workspace_path, "w") as f:
+                json.dump(workspace_state, f, indent=2)
 
         return session_dir
 
@@ -201,12 +263,42 @@ class SessionManager:
         except (json.JSONDecodeError, TypeError, KeyError):
             return None
 
-        # Load messages
+        # Load messages - prioritize recent.jsonl + archive.jsonl
+        # Fall back to conversation.jsonl for backward compatibility
         messages: list[BaseMessage] = []
+        recent_path = session_dir / "recent.jsonl"
+        archive_path = session_dir / "archive.jsonl"
         conversation_path = session_dir / "conversation.jsonl"
-        if conversation_path.exists():
+
+        if recent_path.exists() or archive_path.exists():
+            # New format: load from archive + recent
+            # Load archive first (older messages)
+            if archive_path.exists():
+                try:
+                    with open(archive_path, encoding="utf-8") as f:
+                        for line in f:
+                            if line.strip():
+                                msg = self._deserialize_message(json.loads(line))
+                                if msg:
+                                    messages.append(msg)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            # Then load recent messages (newer messages)
+            if recent_path.exists():
+                try:
+                    with open(recent_path, encoding="utf-8") as f:
+                        for line in f:
+                            if line.strip():
+                                msg = self._deserialize_message(json.loads(line))
+                                if msg:
+                                    messages.append(msg)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+        elif conversation_path.exists():
+            # Old format: load from single conversation file
             try:
-                with open(conversation_path) as f:
+                with open(conversation_path, encoding="utf-8") as f:
                     for line in f:
                         if line.strip():
                             msg = self._deserialize_message(json.loads(line))
@@ -235,11 +327,33 @@ class SessionManager:
             except json.JSONDecodeError:
                 pass
 
+        # Load memory.md
+        memory: str | None = None
+        memory_path = session_dir / "memory.md"
+        if memory_path.exists():
+            try:
+                with open(memory_path, encoding="utf-8") as f:
+                    memory = f.read()
+            except OSError:
+                pass
+
+        # Load workspace state
+        workspace_state: dict | None = None
+        workspace_path = session_dir / "workspace_state.json"
+        if workspace_path.exists():
+            try:
+                with open(workspace_path) as f:
+                    workspace_state = json.load(f)
+            except json.JSONDecodeError:
+                pass
+
         return SessionData(
             meta=meta,
             messages=messages,
             todos=todos,
             tool_state=tool_state,
+            memory=memory,
+            workspace_state=workspace_state,
         )
 
     def list_sessions(self, limit: int = 10) -> list[SessionMeta]:
@@ -276,7 +390,9 @@ class SessionManager:
 
         return sessions[:limit]
 
-    def get_latest_session(self, project_root: Path | None = None) -> SessionMeta | None:
+    def get_latest_session(
+        self, project_root: Path | None = None
+    ) -> SessionMeta | None:
         """Get the most recent session, optionally filtered by project.
 
         Args:
@@ -292,6 +408,50 @@ class SessionManager:
             sessions = [s for s in sessions if s.project_root == project_str]
 
         return sessions[0] if sessions else None
+
+    def load_recent_messages(self, session_id: str) -> list[BaseMessage]:
+        """Load only recent messages from a session (for prompt construction).
+
+        Args:
+            session_id: Session identifier
+
+        Returns:
+            List of recent messages (empty list if not found)
+        """
+        session_dir = self.sessions_dir / session_id
+        recent_path = session_dir / "recent.jsonl"
+
+        if not recent_path.exists():
+            # Fallback to loading from conversation.jsonl and taking last N
+            conversation_path = session_dir / "conversation.jsonl"
+            if conversation_path.exists():
+                all_messages = []
+                try:
+                    with open(conversation_path, encoding="utf-8") as f:
+                        for line in f:
+                            if line.strip():
+                                msg = self._deserialize_message(json.loads(line))
+                                if msg:
+                                    all_messages.append(msg)
+                except (json.JSONDecodeError, TypeError):
+                    return []
+                # Return last 8 messages
+                return all_messages[-8:] if len(all_messages) > 8 else all_messages
+            return []
+
+        # Load from recent.jsonl
+        recent_messages: list[BaseMessage] = []
+        try:
+            with open(recent_path, encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        msg = self._deserialize_message(json.loads(line))
+                        if msg:
+                            recent_messages.append(msg)
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+        return recent_messages
 
     def delete_session(self, session_id: str) -> bool:
         """Delete a session from disk.
@@ -412,6 +572,26 @@ class SessionManager:
         # Unknown message type - skip
         return None
 
+    def _split_messages(
+        self,
+        messages: list[BaseMessage],
+        recent_limit: int = 8,
+    ) -> tuple[list[BaseMessage], list[BaseMessage]]:
+        """Split messages into recent (for context) and archive (for storage).
+
+        Args:
+            messages: All messages to split
+            recent_limit: Number of recent messages to keep (default 8)
+
+        Returns:
+            Tuple of (recent_messages, archive_messages)
+        """
+        if len(messages) <= recent_limit:
+            return messages, []
+
+        # Keep last N messages as recent
+        return messages[-recent_limit:], messages[:-recent_limit]
+
     def _compute_repo_hash(self, project_root: Path) -> str | None:
         """Compute hash of git HEAD for compatibility checking.
 
@@ -450,7 +630,7 @@ class SessionManager:
         # Check both NAMI.md and .nami/agent.md
         nami_md_paths = [
             project_root / "NAMI.md",
-            project_root / ".nami" / "agent.md",
+            project_root / ".nami" / "NAMI.md",
         ]
 
         for path in nami_md_paths:

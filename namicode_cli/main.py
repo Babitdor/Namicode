@@ -282,6 +282,7 @@ async def simple_cli(
     session_manager=None,
     store: InMemoryStore | None = None,
     checkpointer: InMemorySaver | None = None,
+    restored_session_data: tuple | None = None,
 ) -> None:
     """Main CLI loop.
 
@@ -297,6 +298,7 @@ async def simple_cli(
         setup_script_path: Path to setup script that was run (if any)
         no_splash: If True, skip displaying the startup splash screen
         session_manager: SessionManager for session persistence
+        restored_session_data: Tuple of (session_data, warnings, nami_md_loaded) for continuation
     """
     console.clear()
     # Check path approval before proceeding
@@ -357,18 +359,13 @@ async def simple_cli(
         console.print()
 
     console.print()
-    console.print(
-        f"[bold {COLORS['primary']}]│[/bold {COLORS['primary']}]  [bold white]Ready to Code, Boss? What can I build for you?[/bold white]  [bold {COLORS['primary']}]│[/bold {COLORS['primary']}]"
-    )
-
-    console.print()
 
     if sandbox_type:
         working_dir = get_default_working_dir(sandbox_type)
         console.print(f"  [dim]Local CLI directory: {Path.cwd()}[/dim]")
         console.print(f"  [dim]Code execution: Remote sandbox ({working_dir})[/dim]")
     else:
-        console.print(f"  [dim]Working directory: {Path.cwd()}[/dim]")
+        console.print(f"  [dim]{Path.cwd()}[/dim]")
 
     # Show memory status (agent.md / NAMI.md loaded)
     if assistant_id:
@@ -376,20 +373,31 @@ async def simple_cli(
         has_user_memory = user_agent_md.exists()
     else:
         has_user_memory = False
-    project_agent_md = settings.get_project_agent_md_path()
+    project_agent_md = settings.get_project_agent_md_paths()
     has_project_memory = project_agent_md.exists() if project_agent_md else False
 
     if has_user_memory or has_project_memory:
         memory_parts = []
         if has_user_memory:
-            memory_parts.append(f"user (~/.nami/agents/{assistant_id}/agent.md)")
+            memory_parts.append(f"(~/.nami/agents/{assistant_id}/agent.md)")
         if has_project_memory:
-            memory_parts.append("project (.nami/agent.md)")
+            memory_parts.append("Project: (.nami/NAMI.md)")
         console.print(f"  [dim]Memory: {', '.join(memory_parts)}[/dim]")
     else:
         console.print("  [dim]Memory: none (use /init to create project memory)[/dim]")
 
     console.print()
+
+    # Display restored session info if continuing
+    if restored_session_data:
+        from .session_display import display_restored_session
+
+        session_data, warnings, nami_md_loaded = restored_session_data
+        display_restored_session(
+            session_data=session_data,
+            warnings=warnings,
+            nami_md_loaded=nami_md_loaded,
+        )
 
     if session_state.auto_approve:
         console.print(
@@ -400,12 +408,12 @@ async def simple_cli(
     # Localize modifier names and show key symbols (macOS vs others)
     if sys.platform == "darwin":
         tips = (
-            "  Tips: ⏎ Enter to submit, ⌥ Option + ⏎ Enter for newline (or Esc+Enter), "
+            "Tips: ⏎ Enter to submit, ⌥ Option + ⏎ Enter for newline (or Esc+Enter), "
             "⌃E to open editor, ⌃T to toggle auto-approve, ⌃C to interrupt"
         )
     else:
         tips = (
-            "  Tips: Enter to submit, Alt+Enter (or Esc+Enter) for newline, "
+            "Tips: Enter to submit, Alt+Enter (or Esc+Enter) for newline, "
             "Ctrl+E to open editor, Ctrl+T to toggle auto-approve, Ctrl+C to interrupt"
         )
     console.print(tips, style=f"dim {COLORS['dim']}")
@@ -438,12 +446,54 @@ async def simple_cli(
             return False
 
         try:
+            from .workspace_anchoring import scan_workspace
+            from .session_summarization import (
+                should_trigger_summarization,
+                summarize_messages_to_memory,
+            )
+
             config = {"configurable": {"thread_id": session_state.thread_id}}
             state = await agent.aget_state(config)
             messages = state.values.get("messages", [])
             # Get todos from agent state if available
             todos = state.values.get("todos") or session_state.todos
+
             if messages:
+                # Scan current workspace state
+                workspace_state = (
+                    scan_workspace(settings.project_root)
+                    if settings.project_root
+                    else None
+                )
+
+                # Extract current task from session state (if available)
+                # For now, we'll use a simple heuristic - could be enhanced later
+                current_task = getattr(session_state, "current_task", None)
+
+                # Determine task status from state
+                task_status = getattr(session_state, "task_status", "active")
+
+                # Check if we should trigger summarization
+                memory_content = None
+                if should_trigger_summarization(len(messages)):
+                    if not silent:
+                        console.print("[dim]Generating session memory summary...[/dim]")
+                    try:
+                        # Get model for summarization
+                        from .config import create_model
+
+                        summary_model = create_model()
+                        memory_content = summarize_messages_to_memory(
+                            messages=messages,
+                            model=summary_model,
+                            current_task=current_task,
+                        )
+                    except Exception as e:
+                        if not silent:
+                            console.print(
+                                f"[dim]Could not generate memory summary: {e}[/dim]"
+                            )
+
                 session_manager.save_session(
                     session_id=session_state.session_id or session_state.thread_id,
                     thread_id=session_state.thread_id,
@@ -452,6 +502,10 @@ async def simple_cli(
                     todos=todos,
                     model_name=model_name,
                     project_root=settings.project_root,
+                    workspace_state=workspace_state,
+                    current_task=current_task,
+                    task_status=task_status,
+                    memory=memory_content,
                 )
                 if not silent:
                     console.print("[dim]Session saved.[/dim]")
@@ -624,6 +678,7 @@ async def _run_agent_session(
     session_manager=None,
     store: InMemoryStore | None = None,
     checkpointer: InMemorySaver | None = None,
+    restored_session_data: tuple | None = None,
 ) -> None:
     """Helper to create agent and run CLI session.
 
@@ -638,6 +693,7 @@ async def _run_agent_session(
         setup_script_path: Path to setup script that was run (if any)
         initial_messages: Optional messages to inject for session continuation
         session_manager: SessionManager for session persistence
+        restored_session_data: Tuple of (session_data, warnings, nami_md_loaded) for continuation
     """
     # Create agent with conditional tools
     tools = [
@@ -702,6 +758,7 @@ async def _run_agent_session(
         session_manager=session_manager,
         store=store,
         checkpointer=checkpointer,
+        restored_session_data=restored_session_data,
     )
 
 
@@ -735,28 +792,54 @@ async def main(
 
     # Handle session continuation
     if continue_session:
+        from .workspace_anchoring import scan_workspace, detect_drift
+        from .session_prompt_builder import build_continuation_prompt, load_nami_md
+
         project_root = Path.cwd()
         session_id = continue_session if isinstance(continue_session, str) else None
 
         result = restore_session(session_manager, session_id, project_root)
         if result:
             session_data, warnings = result
-            initial_messages = session_data.messages
 
-            # Display session info
-            console.print()
-            console.print(
-                f"[bold cyan]↺ Continuing session[/bold cyan] "
-                f"[dim]{session_data.meta.session_id[:8]}...[/dim]"
+            # Load only recent messages for context (not all messages)
+            # The continuation prompt builder will handle the full context
+            recent_messages = session_manager.load_recent_messages(
+                session_data.meta.session_id
             )
-            if session_data.meta.message_count > 0:
-                console.print(
-                    f"  [dim]{session_data.meta.message_count} messages restored[/dim]"
-                )
 
-            # Display warnings
-            for warning in warnings:
-                console.print(f"  [yellow]⚠ {warning}[/yellow]")
+            # Scan current workspace and detect drift
+            current_workspace = scan_workspace(project_root)
+            if session_data.workspace_state:
+                drift_warnings = detect_drift(
+                    session_data.workspace_state, current_workspace
+                )
+                warnings.extend(drift_warnings)
+
+            # Load NAMI.md for continuation prompt
+            nami_md_content = load_nami_md(project_root)
+
+            # Store session display data to show after splash screen
+            session_data_for_display = session_data
+            session_data_for_display.messages = recent_messages
+
+            # Build continuation messages with proper prompt structure
+            # Note: We use recent messages here, not all messages
+            session_data_with_recent = session_data
+            session_data_with_recent.messages = recent_messages
+
+            # Get base system prompt (will be used by build_continuation_prompt)
+            from .config import get_default_coding_instructions
+
+            base_system_prompt = get_default_coding_instructions()
+
+            # Build continuation prompt with correct order
+            initial_messages = build_continuation_prompt(
+                session_data=session_data_with_recent,
+                system_prompt=base_system_prompt,
+                nami_md_content=nami_md_content,
+                workspace_state=current_workspace,
+            )
 
             # Restore session state
             session_state.session_id = session_data.meta.session_id
@@ -767,12 +850,20 @@ async def main(
             if session_data.todos:
                 session_state.todos = session_data.todos
 
-            console.print()
+            # Create tuple for displaying after splash screen
+            restored_session_data = (
+                session_data_for_display,
+                warnings,
+                bool(nami_md_content),
+            )
         else:
             console.print()
             console.print("[yellow]No previous session found.[/yellow]")
             console.print("[dim]Starting new session.[/dim]")
             console.print()
+            restored_session_data = None
+    else:
+        restored_session_data = None
 
     # Branch 1: User wants a sandbox
     if sandbox_type != "none":
@@ -798,6 +889,7 @@ async def main(
                     session_manager=session_manager,
                     store=store,
                     checkpointer=checkpointer,
+                    restored_session_data=restored_session_data,
                 )
         except (ImportError, ValueError, RuntimeError, NotImplementedError) as e:
             # Sandbox creation failed - fail hard (no silent fallback)
@@ -825,6 +917,7 @@ async def main(
                 session_manager=session_manager,
                 store=store,
                 checkpointer=checkpointer,
+                restored_session_data=restored_session_data,
             )
         except KeyboardInterrupt:
             console.print("\n\n[yellow]Interrupted[/yellow]")
