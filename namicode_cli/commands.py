@@ -98,25 +98,43 @@ Project root: {project_root}
 
 Please follow these steps:
 
-1. **Explore the codebase structure:**
+1. **Subagent Delegation (if available)**
+    
+    If subagents are available, you may delegate exploration tasks to them to speed up and improve coverage. Use delegation strategically, not redundantly.
+
+    **Suggested delegation:**
+    - One subagent explores the **codebase structure and entry points**
+    - One subagent analyzes **architecture, modules, and technology stack**
+    - One subagent focuses on **development setup, commands, and tooling**
+    - One subagent reviews **testing, code style, and conventions**
+
+    Instructions for delegation:
+    - Clearly assign each subagent a well-scoped task
+    - Require subagents to report concise findings with file paths and concrete evidence
+    - **Wait for all delegated subagents to complete and return their results before proceeding**
+    - Review, reconcile, and synthesize all subagent findings yourself
+    - Resolve conflicts or inconsistencies between subagent reports
+    - Do NOT write partial files from subagents; only write the final, unified NAMI.md
+
+2. **Explore the codebase structure:**
    - Use glob to find key files (README, package.json, pyproject.toml, Cargo.toml, etc.)
    - Identify the primary programming language(s)
    - Find main entry points and important directories
    - Look for configuration files
 
-2. **Analyze the architecture:**
+3. **Analyze the architecture:**
    - Read key files to understand the project structure
    - Identify main modules/packages/components
    - Understand the technology stack
    - Note any frameworks or libraries used
 
-3. **Document development setup:**
+4. **Document development setup:**
    - Find setup/installation instructions
    - Identify build tools and commands
    - Note testing frameworks and commands
    - Document linting/formatting tools
 
-4. **Create NAMI.md with the following sections:**
+5. **Create NAMI.md with the following sections:**
 
 ## NAMI.md Structure:
 
