@@ -40,6 +40,9 @@ from rich.console import Console
 
 dotenv.load_dotenv()
 
+# Home directory for Nami configuration
+HOME_DIR = Path.home() / ".nami"
+
 # Color scheme - Red & White Theme
 COLORS = {
     "primary": "#ef4444",  # Bright red (primary actions, headings)
@@ -328,17 +331,47 @@ class Settings:
     def from_environment(cls, *, start_path: Path | None = None) -> "Settings":
         """Create settings by detecting the current environment.
 
+        Priority order for API keys:
+        1. OS keychain (via SecretManager)
+        2. Environment variables
+        3. None (not configured)
+
         Args:
             start_path: Directory to start project detection from (defaults to cwd)
 
         Returns:
             Settings instance with detected configuration
         """
-        # Detect API keys
-        openai_key = os.environ.get("OPENAI_API_KEY")
-        anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
-        google_key = os.environ.get("GOOGLE_API_KEY")
-        tavily_key = os.environ.get("TAVILY_API_KEY")
+        # Import SecretManager here to avoid circular imports
+        # (SecretManager imports from config, config imports SecretManager)
+        try:
+            from namicode_cli.onboarding import SecretManager
+
+            secret_manager = SecretManager()
+        except ImportError:
+            # If onboarding module not available yet, skip keyring
+            secret_manager = None
+
+        # Detect API keys - check keyring first, then environment variables
+        if secret_manager:
+            openai_key = secret_manager.get_secret("openai_api_key") or os.environ.get(
+                "OPENAI_API_KEY"
+            )
+            anthropic_key = secret_manager.get_secret(
+                "anthropic_api_key"
+            ) or os.environ.get("ANTHROPIC_API_KEY")
+            google_key = secret_manager.get_secret("google_api_key") or os.environ.get(
+                "GOOGLE_API_KEY"
+            )
+            tavily_key = secret_manager.get_secret("tavily_api_key") or os.environ.get(
+                "TAVILY_API_KEY"
+            )
+        else:
+            openai_key = os.environ.get("OPENAI_API_KEY")
+            anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+            google_key = os.environ.get("GOOGLE_API_KEY")
+            tavily_key = os.environ.get("TAVILY_API_KEY")
+
         langsmith_key = os.environ.get("LANGSMITH_API_KEY")
 
         # Detect Ollama host configuration
@@ -395,6 +428,56 @@ class Settings:
         """Check if currently in a git project."""
         return self.project_root is not None
 
+    def get_onboarding_status(self) -> bool:
+        """Check if onboarding has been completed.
+
+        Returns:
+            True if onboarding completed, False otherwise
+        """
+        config_file = HOME_DIR / "config.json"
+        onboarded_marker = HOME_DIR / ".onboarded"
+
+        # Check if either marker exists
+        if onboarded_marker.exists():
+            return True
+
+        # Check config.json for onboarding_completed flag
+        if config_file.exists():
+            try:
+                import json
+
+                config = json.loads(config_file.read_text(encoding="utf-8"))
+                return config.get("onboarding_completed", False)
+            except Exception:  # noqa: BLE001, S110
+                return False
+
+        return False
+
+    def mark_onboarding_complete(self) -> None:
+        """Mark onboarding as completed.
+
+        Creates completion markers in config.json and .onboarded file.
+        """
+        import json
+
+        config_file = HOME_DIR / "config.json"
+        onboarded_marker = HOME_DIR / ".onboarded"
+
+        # Update config.json
+        config = {}
+        if config_file.exists():
+            try:
+                config = json.loads(config_file.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001, S110
+                pass
+
+        config["onboarding_completed"] = True
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+        config_file.write_text(json.dumps(config, indent=2), encoding="utf-8")
+
+        # Create marker file
+        onboarded_marker.touch()
+
     @property
     def user_deepagents_dir(self) -> Path:
         """Get the base user-level .nami directory.
@@ -402,7 +485,7 @@ class Settings:
         Returns:
             Path to ~/.nami
         """
-        return Path.home() / ".nami"
+        return HOME_DIR
 
     def get_agents_root_dir(self) -> Path:
         """Get the global agents root directory.

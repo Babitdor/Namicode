@@ -27,6 +27,7 @@ dependencies = [
     "docker>=7.0.0",
     "langchain-mcp-adapters>=0.1.0",
     "langsmith>=0.1.0",
+    "keyring>=24.0.0",
     "nest-asyncio>=1.6.0",
     "pillow"
 ]

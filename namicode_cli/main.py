@@ -54,6 +54,7 @@ from namicode_cli.agent import create_agent_with_config, list_agents, reset_agen
 from namicode_cli.commands import execute_bash_command, handle_command
 from namicode_cli.config import (
     COLORS,
+    HOME_DIR,
     NAMI_CODE_ASCII,
     SessionState,
     console,
@@ -155,6 +156,11 @@ def parse_args():
         choices=["deepagents", "claude"],
         help="Use .nami/ or .claude/ directory structure",
     )
+    init_parser.add_argument(
+        "--reset",
+        action="store_true",
+        help="Re-run onboarding wizard to reset configuration",
+    )
 
     # List command
     subparsers.add_parser("list", help="List all available agents")
@@ -174,6 +180,44 @@ def parse_args():
 
     # MCP command - setup delegated to mcp module
     setup_mcp_parser(subparsers)
+
+    # Config command - view/edit configuration
+    config_parser = subparsers.add_parser(
+        "config", help="View or edit configuration (non-secret)"
+    )
+    config_parser.add_argument(
+        "config_command",
+        nargs="?",
+        choices=["show", "set", "get"],
+        default="show",
+        help="Config operation to perform",
+    )
+    config_parser.add_argument(
+        "key",
+        nargs="?",
+        help="Configuration key to get/set",
+    )
+    config_parser.add_argument(
+        "value",
+        nargs="?",
+        help="Value to set (for 'set' command)",
+    )
+
+    # Secrets command - manage API keys
+    secrets_parser = subparsers.add_parser("secrets", help="Manage API keys securely")
+    secrets_parser.add_argument(
+        "secrets_command",
+        choices=["set", "list", "delete"],
+        help="Secrets operation to perform",
+    )
+    secrets_parser.add_argument(
+        "key",
+        nargs="?",
+        help="API key name (e.g., 'openai_api_key')",
+    )
+
+    # Doctor command - validate setup
+    subparsers.add_parser("doctor", help="Validate configuration and connections")
 
     # Paths command - manage approved paths
     paths_parser = subparsers.add_parser(
@@ -1005,6 +1049,167 @@ def _execute_paths_command(args) -> None:
         console.print()
 
 
+def _execute_config_command(args) -> None:
+    """Execute config command to view/edit configuration."""
+    import json
+
+    config_file = HOME_DIR / "config.json"
+    command = args.config_command
+
+    if command == "show":
+        # Show current configuration (non-secret only)
+        if config_file.exists():
+            console.print()
+            console.print("[bold]Current Configuration:[/bold]")
+            console.print()
+            try:
+                config = json.loads(config_file.read_text(encoding="utf-8"))
+                from rich.syntax import Syntax
+
+                syntax = Syntax(
+                    json.dumps(config, indent=2), "json", theme="monokai", line_numbers=True
+                )
+                console.print(syntax)
+            except Exception as e:  # noqa: BLE001
+                console.print(f"[red]✗ Error reading config: {e}[/red]")
+            console.print()
+        else:
+            console.print()
+            console.print("[yellow]⚠ No configuration file found[/yellow]")
+            console.print("[dim]Run 'nami init' to set up configuration[/dim]")
+            console.print()
+
+    elif command == "get":
+        # Get specific configuration value
+        if not args.key:
+            console.print("[red]✗ Key required for 'get' command[/red]")
+            console.print("[dim]Usage: nami config get <key>[/dim]")
+            return
+
+        if config_file.exists():
+            try:
+                config = json.loads(config_file.read_text(encoding="utf-8"))
+                value = config.get(args.key)
+                if value is not None:
+                    console.print()
+                    console.print(f"[bold]{args.key}:[/bold] {value}")
+                    console.print()
+                else:
+                    console.print()
+                    console.print(f"[yellow]⚠ Key '{args.key}' not found[/yellow]")
+                    console.print()
+            except Exception as e:  # noqa: BLE001
+                console.print(f"[red]✗ Error reading config: {e}[/red]")
+        else:
+            console.print("[yellow]⚠ No configuration file found[/yellow]")
+
+    elif command == "set":
+        # Set configuration value
+        if not args.key or not args.value:
+            console.print("[red]✗ Both key and value required for 'set' command[/red]")
+            console.print("[dim]Usage: nami config set <key> <value>[/dim]")
+            return
+
+        config = {}
+        if config_file.exists():
+            try:
+                config = json.loads(config_file.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001, S110
+                pass
+
+        # Parse value (try JSON first, then string)
+        try:
+            parsed_value = json.loads(args.value)
+        except json.JSONDecodeError:
+            parsed_value = args.value
+
+        config[args.key] = parsed_value
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+        config_file.write_text(json.dumps(config, indent=2), encoding="utf-8")
+
+        console.print()
+        console.print(f"[green]✓ Set {args.key} = {parsed_value}[/green]")
+        console.print()
+
+
+def _execute_secrets_command(args) -> None:
+    """Execute secrets command to manage API keys."""
+    from namicode_cli.onboarding import SecretManager
+    from prompt_toolkit import prompt
+
+    secret_manager = SecretManager()
+    command = args.secrets_command
+
+    if command == "list":
+        # List all stored secrets
+        secrets = secret_manager.list_secrets()
+        console.print()
+        if secrets:
+            console.print("[bold]Configured API keys:[/bold]")
+            for secret in secrets:
+                # Display without revealing values
+                display_name = secret.replace("_api_key", "").replace("_", " ").title()
+                console.print(f"  • {display_name} ({secret})")
+        else:
+            console.print("[yellow]⚠ No API keys configured[/yellow]")
+            console.print("[dim]Use 'nami secrets set <key>' to add API keys[/dim]")
+        console.print()
+
+    elif command == "set":
+        # Set API key
+        if not args.key:
+            console.print("[red]✗ Key name required for 'set' command[/red]")
+            console.print(
+                "[dim]Usage: nami secrets set <key> (e.g., 'openai_api_key')[/dim]"
+            )
+            return
+
+        console.print()
+        console.print(f"[bold]Setting {args.key}:[/bold]")
+        api_key = prompt("Enter API key: ", is_password=True).strip()
+
+        if api_key:
+            if secret_manager.store_secret(args.key, api_key):
+                console.print()
+                console.print(f"[green]✓ API key saved to system keychain[/green]")
+                console.print()
+            else:
+                console.print()
+                console.print(f"[red]✗ Failed to save API key[/red]")
+                console.print()
+        else:
+            console.print()
+            console.print("[yellow]⚠ No API key provided, cancelled[/yellow]")
+            console.print()
+
+    elif command == "delete":
+        # Delete API key
+        if not args.key:
+            console.print("[red]✗ Key name required for 'delete' command[/red]")
+            console.print(
+                "[dim]Usage: nami secrets delete <key> (e.g., 'openai_api_key')[/dim]"
+            )
+            return
+
+        console.print()
+        console.print(f"[yellow]⚠ Delete API key '{args.key}'?[/yellow]")
+        confirm = prompt("Continue? [y/N]: ").strip().lower()
+
+        if confirm == "y":
+            if secret_manager.delete_secret(args.key):
+                console.print()
+                console.print(f"[green]✓ API key '{args.key}' deleted[/green]")
+                console.print()
+            else:
+                console.print()
+                console.print(f"[red]✗ Failed to delete API key[/red]")
+                console.print()
+        else:
+            console.print()
+            console.print("[dim]Cancelled[/dim]")
+            console.print()
+
+
 def cli_main() -> None:
     """Entry point for console script."""
     # Fix for gRPC fork issue on macOS
@@ -1018,9 +1223,48 @@ def cli_main() -> None:
     try:
         args = parse_args()
 
+        # First-run detection (skip for init and doctor commands)
+        if args.command not in ["init", "doctor", "help"]:
+            if not settings.get_onboarding_status():
+                from namicode_cli.onboarding import OnboardingWizard
+
+                console.print()
+                console.print("[yellow]→ First run detected[/yellow]")
+                console.print()
+
+                wizard = OnboardingWizard()
+                if wizard.run():
+                    console.print()
+                    console.print(
+                        "[dim]You can now run your command or start an interactive session.[/dim]"
+                    )
+                    console.print()
+                else:
+                    console.print()
+                    console.print("[red]✗ Setup incomplete[/red]")
+                    console.print("[dim]Run 'nami init --reset' to try again[/dim]")
+                    console.print()
+                    sys.exit(1)
+
         if args.command == "init":
+            # Check if --reset flag is set (re-run onboarding)
+            if args.reset:
+                from namicode_cli.onboarding import OnboardingWizard
+
+                console.print()
+                console.print(
+                    "[yellow]⚠ This will overwrite your current configuration.[/yellow]"
+                )
+                from prompt_toolkit import prompt
+
+                confirm = prompt("Continue? [y/N]: ").strip().lower()
+                if confirm == "y":
+                    wizard = OnboardingWizard()
+                    wizard.run()
+                else:
+                    console.print("[dim]Cancelled.[/dim]")
             # Interactive init if no options provided
-            if not args.scope and not args.style:
+            elif not args.scope and not args.style:
                 interactive_init()
             else:
                 # Use provided options or prompt for missing ones
@@ -1044,6 +1288,14 @@ def cli_main() -> None:
                 check_migration_status()
             else:
                 migrate_agents()
+        elif args.command == "config":
+            _execute_config_command(args)
+        elif args.command == "secrets":
+            _execute_secrets_command(args)
+        elif args.command == "doctor":
+            from namicode_cli.doctor import run_doctor
+
+            sys.exit(run_doctor())
         else:
             # Create session state from args
             session_state = SessionState(

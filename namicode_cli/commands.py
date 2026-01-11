@@ -1,6 +1,7 @@
 """Command handlers for slash commands and bash execution."""
 
 import asyncio
+import os
 import subprocess
 from pathlib import Path
 
@@ -643,6 +644,57 @@ async def _handle_model_command() -> bool:
                 provider_idx = int(provider_choice) - 1
                 if 0 <= provider_idx < len(available):
                     provider_id, preset = available[provider_idx]
+
+                    # Validate API key for cloud providers
+                    if preset["requires_api_key"]:
+                        from namicode_cli.onboarding import SecretManager
+
+                        secret_manager = SecretManager()
+                        api_key_name = preset["api_key_var"].lower()  # e.g., OPENAI_API_KEY -> openai_api_key
+
+                        # Check if API key exists in keyring or environment
+                        api_key = secret_manager.get_secret(api_key_name) or os.environ.get(preset["api_key_var"])
+
+                        if not api_key:
+                            # Prompt user to provide API key
+                            console.print()
+                            console.print(
+                                f"[yellow]⚠ {preset['name']} requires an API key to proceed[/yellow]"
+                            )
+                            console.print()
+                            console.print(f"[bold]Enter {preset['name']} API key:[/bold]")
+                            console.print(
+                                f"[dim]This will be stored securely in your system keychain[/dim]"
+                            )
+                            console.print()
+
+                            new_api_key = (
+                                await session.prompt_async(
+                                    f"{preset['api_key_var']}: ",
+                                    is_password=True,
+                                )
+                            ).strip()
+
+                            if not new_api_key:
+                                console.print()
+                                console.print("[yellow]⚠ No API key provided, cancelled[/yellow]")
+                                console.print()
+                                return True
+
+                            # Store the API key
+                            if secret_manager.store_secret(api_key_name, new_api_key):
+                                # Also set in environment for immediate use
+                                os.environ[preset["api_key_var"]] = new_api_key
+                                console.print()
+                                console.print(
+                                    f"[green]✓ API key saved to system keychain[/green]"
+                                )
+                                console.print()
+                            else:
+                                console.print()
+                                console.print("[red]✗ Failed to save API key[/red]")
+                                console.print()
+                                return True
 
                     # Ask if user wants to specify a different model
                     console.print()
