@@ -1,3 +1,78 @@
+## v0.0.14 - 2025-01-11
+
+### Features
+
+#### Onboarding System (e19f4b6)
+- New interactive onboarding wizard for first-time setup
+- `namicode_cli/onboarding.py` (456 lines) - Complete onboarding workflow
+- `namicode_cli/doctor.py` (178 lines) - System health checks and diagnostics
+- New `SecretManager` class for secure API key storage via keyring
+- Interactive model selection with provider detection
+- ModelManager integration for intelligent provider selection
+
+#### E2B Sandbox Integration (3a5d2aa)
+- New `namicode_cli/integrations/e2b_executor.py` (241 lines)
+- E2B cloud sandbox for secure code execution
+- `test_e2b.py` (186 lines) - Comprehensive test suite
+- Added `e2b_api_key` to supported API providers
+
+#### Default Subagent System (3a5d2aa)
+- New `namicode_cli/default_subagents/` module
+- `subagents.py` (36 lines) - Subagent factory functions
+- `prompt.py` (138 lines) - Pre-configured system prompts for:
+  - `code-explorer-agent` - Deep code research and exploration
+  - `code-doc-agent` - Documentation generation from code
+  - `code-simplifier-agent` - Code simplification and refactoring
+
+#### Enhanced Agent Tools (3a5d2aa)
+- `namicode_cli/tools.py` (138 lines) - Extended tool implementations
+- New `get_default_subagents()` tool for retrieving pre-configured subagents
+- Improved tool registration and discovery
+
+#### Agent Management UI (60b4cc4)
+- Enhanced `commands.py` with agent management commands
+- Improved agent listing and status display
+- Better error handling for agent operations
+
+### Configuration Updates
+
+#### Deployment Preparation (c8e7e0f)
+- Updated `pyproject.toml` with enhanced metadata and dependencies
+- Improved `setup.py` for better distribution
+- Added additional package classifiers
+
+#### Model Configuration (e19f4b6, d0384ab)
+- Enhanced model selection and configuration
+- `config.py` updated with 101 lines of improvements
+- Better error messages and validation
+
+### Bug Fixes
+
+#### Session and Message History Fixes (2399a25)
+- Fixed message history persistence across sessions
+- Improved session state management
+- Better handling of long-running sessions
+
+### Documentation
+
+#### README Updates (c8e7e0f)
+- Cleaned up README content
+- Removed outdated installation instructions
+- Improved clarity and structure
+
+### Files Changed Summary
+
+| Commit | Files Changed | Lines Added/Removed | Description |
+|--------|---------------|---------------------|-------------|
+| 3a5d2aa | 16 files | +900/-609 | E2B sandbox, default subagents, tools |
+| c8e7e0f | 3 files | +46/-9 | pyproject, setup.py, README updates |
+| 60b4cc4 | 1 file | +54/-17 | Agent management UI |
+| e19f4b6 | 10 files | +1751/-8 | Onboarding system, doctor, model selection |
+| d0384ab | 1 file | +2/-4 | Config bug fixes |
+| 7c78368 | 2 files | +31/-1 | Agent memory fixes |
+
+---
+
 ## v0.0.13 - 2025-01-10
 
 ### Features

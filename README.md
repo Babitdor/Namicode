@@ -12,7 +12,10 @@ An open-source terminal-based AI coding assistant that runs in your terminal, si
 - **Persistent Memory**: Agent remembers your preferences, coding style, and project context across sessions
 - **Project-Aware**: Automatically detects project roots and loads project-specific configurations
 - **MCP Support**: Extend capabilities with Model Context Protocol servers
-- **Sandbox Execution**: Run code safely in remote sandboxes (Modal, Runloop, Daytona, Docker)
+- **Sandbox Execution**: Run code safely in remote sandboxes (Modal, Runloop, Daytona, Docker, E2B)
+- **Onboarding System**: Interactive first-run setup with API key management and model selection
+- **Doctor Command**: System diagnostics to verify your environment
+- **Default Subagents**: Built-in specialized agents for code exploration, documentation, and simplification
 - **Terminal-Bench Evaluation**: Built-in Harbor evaluation framework for benchmark testing
 - **Security-First**: Automatic .gitignore enforcement to protect sensitive files
 
@@ -66,6 +69,12 @@ nami --auto-approve
 
 # Execute in a remote sandbox
 nami --sandbox modal
+
+# Execute code in E2B cloud sandbox
+nami --sandbox e2b
+
+# Run system diagnostics
+nami doctor
 ```
 
 ## Built-in Tools
@@ -140,6 +149,18 @@ nami skills info web-research
 
 Skills follow [Anthropic's progressive disclosure pattern](https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills) - the agent knows skills exist but only loads full instructions when needed.
 
+### Default Subagents
+
+Nami-Code includes built-in specialized subagents for common tasks:
+
+| Subagent | Description |
+|----------|-------------|
+| `code-explorer-agent` | Deep code research and exploration |
+| `code-doc-agent` | Documentation generation from code |
+| `code-simplifier-agent` | Code simplification and refactoring |
+
+These subagents are automatically available and can be invoked via the `task` tool for parallel, focused work on specific aspects of your codebase.
+
 ### MCP Integration
 
 Extend the agent with Model Context Protocol servers for specialized capabilities:
@@ -192,6 +213,73 @@ nami mcp info my-server
 # Some MCP servers require additional configuration
 export GITHUB_API_KEY="your-github-token"
 export DATABASE_URL="postgresql://user:pass@localhost:5432/db"
+```
+
+### E2B Cloud Sandbox
+
+E2B provides secure cloud sandbox execution for running code with full isolation:
+
+```bash
+# Execute in E2B cloud sandbox
+nami --sandbox e2b
+
+# Run Python scripts securely
+nami --sandbox e2b <<< "print('Hello from E2B!')"
+```
+
+**Setup:**
+```bash
+# Get your E2B API key from https://e2b.dev/
+export E2B_API_KEY="your-e2b-api-key"
+```
+
+E2B sandboxes are ideal for:
+- Running untrusted code safely
+- Testing code in clean, isolated environments
+- Executing code that requires specific dependencies
+
+### Doctor Command
+
+Run system diagnostics to verify your environment:
+
+```bash
+nami doctor
+```
+
+The `doctor` command checks:
+- Python version and environment
+- Required dependencies
+- API key configurations
+- Sandbox connectivity
+- Project configuration
+
+### Onboarding System
+
+On first run, Nami-Code guides you through an interactive setup:
+
+```bash
+# First run - launches onboarding wizard
+nami
+```
+
+The onboarding process includes:
+- **API Key Setup**: Securely store your LLM provider API keys
+- **Model Selection**: Choose your preferred model and provider
+- **Environment Verification**: System checks for dependencies
+- **Secret Management**: Keys stored securely via OS keychain
+
+**Manual Configuration:**
+You can also set API keys manually via environment variables or the `.env` file:
+
+```bash
+# OpenAI (default)
+export OPENAI_API_KEY="your-openai-api-key"
+
+# Anthropic
+export ANTHROPIC_API_KEY="your-anthropic-api-key"
+
+# E2B (for cloud sandbox)
+export E2B_API_KEY="your-e2b-api-key"
 ```
 
 ### Terminal-Bench Evaluation
@@ -317,7 +405,10 @@ The CLI implements a "Deep Agent" architecture with four key components:
 - `ui.py` - Rich-based UI rendering
 - `skills/` - Skills system implementation
 - `mcp/` - Model Context Protocol integration
-- `integrations/` - Sandbox providers (Modal, Runloop, Daytona, Docker)
+- `integrations/` - Sandbox providers (Modal, Runloop, Daytona, Docker, E2B)
+- `onboarding.py` - Interactive first-run setup and secret management
+- `doctor.py` - System diagnostics and environment checks
+- `default_subagents/` - Built-in specialized subagents
 - `evaluation/` - Harbor evaluation framework for Terminal-Bench benchmarking
 - `shared_memory.py` - Cross-agent memory sharing with attribution
 
