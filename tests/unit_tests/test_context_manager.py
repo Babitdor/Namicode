@@ -2,7 +2,7 @@
 
 import pytest
 
-from namicode_cli.context_manager import (
+from namicode_cli.context.context_manager import (
     CONTEXT_CRITICAL_THRESHOLD,
     CONTEXT_WARNING_THRESHOLD,
     MODEL_CONTEXT_WINDOWS,

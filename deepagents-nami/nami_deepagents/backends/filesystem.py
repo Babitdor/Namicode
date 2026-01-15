@@ -79,7 +79,9 @@ class FilesystemBackend(BackendProtocol):
             try:
                 full.relative_to(self.cwd)
             except ValueError:
-                raise ValueError(f"Path:{full} outside root directory: {self.cwd}") from None
+                raise ValueError(
+                    f"Path:{full} outside root directory: {self.cwd}"
+                ) from None
             return full
 
         path = Path(key)
@@ -88,23 +90,15 @@ class FilesystemBackend(BackendProtocol):
         return (self.cwd / path).resolve()
 
     def ls_info(self, path: str) -> list[FileInfo]:
-        """List files and directories in the specified directory (non-recursive).
-
-        Args:
-            path: Absolute directory path to list files from.
-
-        Returns:
-            List of FileInfo-like dicts for files and directories directly in the directory.
-            Directories have a trailing / in their path and is_dir=True.
-        """
+        """List files and directories in the specified directory (non-recursive)."""
         dir_path = self._resolve_path(path)
         if not dir_path.exists() or not dir_path.is_dir():
             return []
 
         results: list[FileInfo] = []
 
-        # Convert cwd to string for comparison
-        cwd_str = str(self.cwd)
+        # WINDOWS FIX: Normalize to forward slashes for comparison
+        cwd_str = str(self.cwd).replace("\\", "/")
         if not cwd_str.endswith("/"):
             cwd_str += "/"
 
@@ -117,10 +111,11 @@ class FilesystemBackend(BackendProtocol):
                 except OSError:
                     continue
 
-                abs_path = str(child_path)
+                # WINDOWS FIX: Normalize to forward slashes
+                abs_path = str(child_path).replace("\\", "/")
 
                 if not self.virtual_mode:
-                    # Non-virtual mode: use absolute paths
+                    # Non-virtual mode: use absolute paths (but normalized)
                     if is_file:
                         try:
                             st = child_path.stat()
@@ -129,7 +124,9 @@ class FilesystemBackend(BackendProtocol):
                                     "path": abs_path,
                                     "is_dir": False,
                                     "size": int(st.st_size),
-                                    "modified_at": datetime.fromtimestamp(st.st_mtime).isoformat(),
+                                    "modified_at": datetime.fromtimestamp(
+                                        st.st_mtime
+                                    ).isoformat(),
                                 }
                             )
                         except OSError:
@@ -142,7 +139,9 @@ class FilesystemBackend(BackendProtocol):
                                     "path": abs_path + "/",
                                     "is_dir": True,
                                     "size": 0,
-                                    "modified_at": datetime.fromtimestamp(st.st_mtime).isoformat(),
+                                    "modified_at": datetime.fromtimestamp(
+                                        st.st_mtime
+                                    ).isoformat(),
                                 }
                             )
                         except OSError:
@@ -151,9 +150,11 @@ class FilesystemBackend(BackendProtocol):
                     # Virtual mode: strip cwd prefix
                     if abs_path.startswith(cwd_str):
                         relative_path = abs_path[len(cwd_str) :]
-                    elif abs_path.startswith(str(self.cwd)):
+                    elif abs_path.startswith(str(self.cwd).replace("\\", "/")):
                         # Handle case where cwd doesn't end with /
-                        relative_path = abs_path[len(str(self.cwd)) :].lstrip("/")
+                        relative_path = abs_path[
+                            len(str(self.cwd).replace("\\", "/")) :
+                        ].lstrip("/")
                     else:
                         # Path is outside cwd, return as-is or skip
                         relative_path = abs_path
@@ -168,7 +169,9 @@ class FilesystemBackend(BackendProtocol):
                                     "path": virt_path,
                                     "is_dir": False,
                                     "size": int(st.st_size),
-                                    "modified_at": datetime.fromtimestamp(st.st_mtime).isoformat(),
+                                    "modified_at": datetime.fromtimestamp(
+                                        st.st_mtime
+                                    ).isoformat(),
                                 }
                             )
                         except OSError:
@@ -181,7 +184,9 @@ class FilesystemBackend(BackendProtocol):
                                     "path": virt_path + "/",
                                     "is_dir": True,
                                     "size": 0,
-                                    "modified_at": datetime.fromtimestamp(st.st_mtime).isoformat(),
+                                    "modified_at": datetime.fromtimestamp(
+                                        st.st_mtime
+                                    ).isoformat(),
                                 }
                             )
                         except OSError:
@@ -232,7 +237,9 @@ class FilesystemBackend(BackendProtocol):
                 return f"Error: Line offset {offset} exceeds file length ({len(lines)} lines)"
 
             selected_lines = lines[start_idx:end_idx]
-            return format_content_with_line_numbers(selected_lines, start_line=start_idx + 1)
+            return format_content_with_line_numbers(
+                selected_lines, start_line=start_idx + 1
+            )
         except (OSError, UnicodeDecodeError) as e:
             return f"Error reading file '{file_path}': {e}"
 
@@ -247,7 +254,9 @@ class FilesystemBackend(BackendProtocol):
         resolved_path = self._resolve_path(file_path)
 
         if resolved_path.exists():
-            return WriteResult(error=f"Cannot write to {file_path} because it already exists. Read and then make an edit, or write to a new path.")
+            return WriteResult(
+                error=f"Cannot write to {file_path} because it already exists. Read and then make an edit, or write to a new path."
+            )
 
         try:
             # Create parent directories if needed
@@ -286,7 +295,9 @@ class FilesystemBackend(BackendProtocol):
             with os.fdopen(fd, "r", encoding="utf-8") as f:
                 content = f.read()
 
-            result = perform_string_replacement(content, old_string, new_string, replace_all)
+            result = perform_string_replacement(
+                content, old_string, new_string, replace_all
+            )
 
             if isinstance(result, str):
                 return EditResult(error=result)
@@ -301,7 +312,9 @@ class FilesystemBackend(BackendProtocol):
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(new_content)
 
-            return EditResult(path=file_path, files_update=None, occurrences=int(occurrences))
+            return EditResult(
+                path=file_path, files_update=None, occurrences=int(occurrences)
+            )
         except (OSError, UnicodeDecodeError, UnicodeEncodeError) as e:
             return EditResult(error=f"Error editing file '{file_path}': {e}")
 
@@ -334,17 +347,21 @@ class FilesystemBackend(BackendProtocol):
         matches: list[GrepMatch] = []
         for fpath, items in results.items():
             for line_num, line_text in items:
-                matches.append({"path": fpath, "line": int(line_num), "text": line_text})
+                matches.append(
+                    {"path": fpath, "line": int(line_num), "text": line_text}
+                )
         return matches
 
-    def _ripgrep_search(self, pattern: str, base_full: Path, include_glob: str | None) -> dict[str, list[tuple[int, str]]] | None:
+    def _ripgrep_search(
+        self, pattern: str, base_full: Path, include_glob: str | None
+    ) -> dict[str, list[tuple[int, str]]] | None:
         cmd = ["rg", "--json"]
         if include_glob:
             cmd.extend(["--glob", include_glob])
         cmd.extend(["--", pattern, str(base_full)])
 
         try:
-            proc = subprocess.run(  # noqa: S603
+            proc = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
@@ -369,7 +386,9 @@ class FilesystemBackend(BackendProtocol):
             p = Path(ftext)
             if self.virtual_mode:
                 try:
-                    virt = "/" + str(p.resolve().relative_to(self.cwd))
+                    # WINDOWS FIX: Normalize to forward slashes
+                    rel_path = str(p.resolve().relative_to(self.cwd)).replace("\\", "/")
+                    virt = "/" + rel_path
                 except Exception:
                     continue
             else:
@@ -382,7 +401,9 @@ class FilesystemBackend(BackendProtocol):
 
         return results
 
-    def _python_search(self, pattern: str, base_full: Path, include_glob: str | None) -> dict[str, list[tuple[int, str]]]:
+    def _python_search(
+        self, pattern: str, base_full: Path, include_glob: str | None
+    ) -> dict[str, list[tuple[int, str]]]:
         try:
             regex = re.compile(pattern)
         except re.error:
@@ -394,7 +415,9 @@ class FilesystemBackend(BackendProtocol):
         for fp in root.rglob("*"):
             if not fp.is_file():
                 continue
-            if include_glob and not wcglob.globmatch(fp.name, include_glob, flags=wcglob.BRACE):
+            if include_glob and not wcglob.globmatch(
+                fp.name, include_glob, flags=wcglob.BRACE
+            ):
                 continue
             try:
                 if fp.stat().st_size > self.max_file_size_bytes:
@@ -409,7 +432,11 @@ class FilesystemBackend(BackendProtocol):
                 if regex.search(line):
                     if self.virtual_mode:
                         try:
-                            virt_path = "/" + str(fp.resolve().relative_to(self.cwd))
+                            # WINDOWS FIX: Normalize to forward slashes
+                            rel_path = str(fp.resolve().relative_to(self.cwd)).replace(
+                                "\\", "/"
+                            )
+                            virt_path = "/" + rel_path
                         except Exception:
                             continue
                     else:
@@ -419,8 +446,11 @@ class FilesystemBackend(BackendProtocol):
         return results
 
     def glob_info(self, pattern: str, path: str = "/") -> list[FileInfo]:
+        """List files matching a glob pattern."""
+        # Normalize pattern to use forward slashes (wcmatch.glob expects this)
         if pattern.startswith("/"):
             pattern = pattern.lstrip("/")
+        pattern = pattern.replace("\\", "/")
 
         search_path = self.cwd if path == "/" else self._resolve_path(path)
         if not search_path.exists() or not search_path.is_dir():
@@ -428,15 +458,23 @@ class FilesystemBackend(BackendProtocol):
 
         results: list[FileInfo] = []
         try:
-            # Use recursive globbing to match files in subdirectories as tests expect
-            for matched_path in search_path.rglob(pattern):
+            # Use wcmatch.glob for advanced pattern support including **
+            # FORCEUNIX flag ensures forward slash handling on all platforms
+            flags = wcglob.GLOBSTAR | wcglob.BRACE | wcglob.FORCEUNIX
+            matched_paths = wcglob.glob(pattern, root_dir=str(search_path), flags=flags)
+
+            for matched_rel in matched_paths:
+                matched_path = search_path / matched_rel
                 try:
                     is_file = matched_path.is_file()
                 except OSError:
                     continue
                 if not is_file:
                     continue
-                abs_path = str(matched_path)
+
+                # WINDOWS FIX: Normalize to forward slashes
+                abs_path = str(matched_path).replace("\\", "/")
+
                 if not self.virtual_mode:
                     try:
                         st = matched_path.stat()
@@ -445,21 +483,28 @@ class FilesystemBackend(BackendProtocol):
                                 "path": abs_path,
                                 "is_dir": False,
                                 "size": int(st.st_size),
-                                "modified_at": datetime.fromtimestamp(st.st_mtime).isoformat(),
+                                "modified_at": datetime.fromtimestamp(
+                                    st.st_mtime
+                                ).isoformat(),
                             }
                         )
                     except OSError:
                         results.append({"path": abs_path, "is_dir": False})
                 else:
-                    cwd_str = str(self.cwd)
+                    # WINDOWS FIX: Normalize cwd to forward slashes
+                    cwd_str = str(self.cwd).replace("\\", "/")
                     if not cwd_str.endswith("/"):
                         cwd_str += "/"
+
                     if abs_path.startswith(cwd_str):
                         relative_path = abs_path[len(cwd_str) :]
-                    elif abs_path.startswith(str(self.cwd)):
-                        relative_path = abs_path[len(str(self.cwd)) :].lstrip("/")
+                    elif abs_path.startswith(str(self.cwd).replace("\\", "/")):
+                        relative_path = abs_path[
+                            len(str(self.cwd).replace("\\", "/")) :
+                        ].lstrip("/")
                     else:
                         relative_path = abs_path
+
                     virt = "/" + relative_path
                     try:
                         st = matched_path.stat()
@@ -468,7 +513,9 @@ class FilesystemBackend(BackendProtocol):
                                 "path": virt,
                                 "is_dir": False,
                                 "size": int(st.st_size),
-                                "modified_at": datetime.fromtimestamp(st.st_mtime).isoformat(),
+                                "modified_at": datetime.fromtimestamp(
+                                    st.st_mtime
+                                ).isoformat(),
                             }
                         )
                     except OSError:
@@ -499,7 +546,7 @@ class FilesystemBackend(BackendProtocol):
 
                 flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
                 if hasattr(os, "O_NOFOLLOW"):
-                    flags |= os.O_NOFOLLOW
+                    flags |= os.O_NOFOLLOW  # type: ignore
                 fd = os.open(resolved_path, flags, 0o644)
                 with os.fdopen(fd, "wb") as f:
                     f.write(content)
@@ -508,14 +555,20 @@ class FilesystemBackend(BackendProtocol):
             except FileNotFoundError:
                 responses.append(FileUploadResponse(path=path, error="file_not_found"))
             except PermissionError:
-                responses.append(FileUploadResponse(path=path, error="permission_denied"))
+                responses.append(
+                    FileUploadResponse(path=path, error="permission_denied")
+                )
             except (ValueError, OSError) as e:
                 # ValueError from _resolve_path for path traversal, OSError for other file errors
                 if isinstance(e, ValueError) or "invalid" in str(e).lower():
-                    responses.append(FileUploadResponse(path=path, error="invalid_path"))
+                    responses.append(
+                        FileUploadResponse(path=path, error="invalid_path")
+                    )
                 else:
                     # Generic error fallback
-                    responses.append(FileUploadResponse(path=path, error="invalid_path"))
+                    responses.append(
+                        FileUploadResponse(path=path, error="invalid_path")
+                    )
 
         return responses
 
@@ -537,14 +590,28 @@ class FilesystemBackend(BackendProtocol):
                 fd = os.open(resolved_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
                 with os.fdopen(fd, "rb") as f:
                     content = f.read()
-                responses.append(FileDownloadResponse(path=path, content=content, error=None))
+                responses.append(
+                    FileDownloadResponse(path=path, content=content, error=None)
+                )
             except FileNotFoundError:
-                responses.append(FileDownloadResponse(path=path, content=None, error="file_not_found"))
+                responses.append(
+                    FileDownloadResponse(
+                        path=path, content=None, error="file_not_found"
+                    )
+                )
             except PermissionError:
-                responses.append(FileDownloadResponse(path=path, content=None, error="permission_denied"))
+                responses.append(
+                    FileDownloadResponse(
+                        path=path, content=None, error="permission_denied"
+                    )
+                )
             except IsADirectoryError:
-                responses.append(FileDownloadResponse(path=path, content=None, error="is_directory"))
+                responses.append(
+                    FileDownloadResponse(path=path, content=None, error="is_directory")
+                )
             except ValueError:
-                responses.append(FileDownloadResponse(path=path, content=None, error="invalid_path"))
+                responses.append(
+                    FileDownloadResponse(path=path, content=None, error="invalid_path")
+                )
             # Let other errors propagate
         return responses

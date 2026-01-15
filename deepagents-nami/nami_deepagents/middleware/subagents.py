@@ -567,5 +567,5 @@ class SubAgentMiddleware(AgentMiddleware):
                 if request.system_prompt
                 else self.system_prompt
             )
-            return await handler(request.override(system_prompt=system_prompt))
+            return await handler(request.override(system_prompt=system_prompt)) # type: ignore
         return await handler(request)

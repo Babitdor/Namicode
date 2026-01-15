@@ -2,6 +2,7 @@
 
 from nami_deepagents.graph import create_deep_agent
 from nami_deepagents.middleware.filesystem import FilesystemMiddleware
+from nami_deepagents.middleware.memory import MemoryMiddleware
 from nami_deepagents.middleware.subagents import (
     CompiledSubAgent,
     SubAgent,
@@ -16,6 +17,7 @@ __all__ = [
     "CompiledSubAgent",
     "FilesystemMiddleware",
     "SubAgent",
+    "MemoryMiddleware",
     "SubAgentMiddleware",
     "create_deep_agent",
     "get_subagent_color",

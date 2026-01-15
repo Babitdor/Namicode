@@ -7,15 +7,15 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-from deepagents.backends import CompositeBackend
-from deepagents.backends.filesystem import FilesystemBackend
+from nami_deepagents.backends import CompositeBackend
+from nami_deepagents.backends.filesystem import FilesystemBackend
 from langchain_core.language_models import LanguageModelInput
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import Runnable
 from langchain_core.tools import BaseTool, tool
 
-from namicode_cli.agent import create_agent_with_config
+from namicode_cli.agents.core_agent import create_agent_with_config
 
 
 @tool(description="Sample tool")

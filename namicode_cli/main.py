@@ -50,19 +50,22 @@ from langgraph.store.memory import InMemoryStore
 from langgraph.checkpoint.memory import InMemorySaver
 from nami_deepagents.backends.protocol import SandboxBackendProtocol
 
-from namicode_cli.agent import create_agent_with_config, list_agents, reset_agent
-from namicode_cli.commands import execute_bash_command, handle_command
-from namicode_cli.config import (
+from namicode_cli.agents.core_agent import (
+    create_agent_with_config,
+    list_agents,
+    reset_agent,
+)
+from namicode_cli.commands.commands import execute_bash_command, handle_command
+from namicode_cli.config.config import (
     COLORS,
     HOME_DIR,
     NAMI_CODE_ASCII,
-    SessionState,
     console,
-    create_model,
     settings,
 )
-from namicode_cli.execution import execute_task
-from namicode_cli.init_commands import init_project_config, interactive_init
+from namicode_cli.config.model_create import create_model
+from namicode_cli.states.Session import SessionState
+from namicode_cli.ui.execution import execute_task
 from namicode_cli.input import create_prompt_session, ImageTracker
 from namicode_cli.migrate import check_migration_status, migrate_agents
 from namicode_cli.integrations.sandbox_factory import (
@@ -70,7 +73,8 @@ from namicode_cli.integrations.sandbox_factory import (
     get_default_working_dir,
 )
 from namicode_cli.path_approval import check_path_approval, PathApprovalManager
-from namicode_cli.skills import execute_skills_command, setup_skills_parser
+from namicode_cli.commands.commands import execute_skills_command
+from namicode_cli.skills.skill_creation import setup_skills_parser
 from namicode_cli.mcp.commands import execute_mcp_command, setup_mcp_parser
 from namicode_cli.tools import (
     execute_in_e2b,
@@ -78,14 +82,14 @@ from namicode_cli.tools import (
     http_request,
     web_search,
 )
-from namicode_cli.dev_server import (
+from namicode_cli.server_runner.dev_server import (
     list_servers_tool,
     start_dev_server_tool,
     stop_server_tool,
 )
-from namicode_cli.test_runner import run_tests_tool
+from namicode_cli.server_runner.test_runner import run_tests_tool
 from namicode_cli.process_manager import ProcessManager
-from namicode_cli.ui import TokenTracker, show_help
+from namicode_cli.ui.ui_elements import TokenTracker, show_help
 
 # Auto-save configuration
 AUTO_SAVE_INTERVAL_SECONDS = 300  # Save session every 5 minutes
@@ -435,7 +439,7 @@ async def simple_cli(
 
     # Display restored session info if continuing
     if restored_session_data:
-        from .session_display import display_restored_session
+        from namicode_cli.ui.session_display import display_restored_session
 
         session_data, warnings, nami_md_loaded = restored_session_data
         display_restored_session(
@@ -491,8 +495,8 @@ async def simple_cli(
             return False
 
         try:
-            from .workspace_anchoring import scan_workspace
-            from .session_summarization import (
+            from namicode_cli.tracking.workspace_anchoring import scan_workspace
+            from namicode_cli.session.session_summarization import (
                 should_trigger_summarization,
                 summarize_messages_to_memory,
             )
@@ -525,7 +529,7 @@ async def simple_cli(
                         console.print("[dim]Generating session memory summary...[/dim]")
                     try:
                         # Get model for summarization
-                        from .config import create_model
+                        from namicode_cli.config.model_create import create_model
 
                         summary_model = create_model()
                         memory_content = summarize_messages_to_memory(
@@ -667,8 +671,7 @@ async def simple_cli(
 
         # Check for @agent mentions
         from namicode_cli.input import parse_agent_mentions
-        from namicode_cli.commands import invoke_subagent
-
+        from namicode_cli.commands.commands import invoke_subagent
         agent_name, query = parse_agent_mentions(user_input, settings)
         if agent_name:
             console.print()
@@ -680,7 +683,6 @@ async def simple_cli(
             subagent, _ = invoke_subagent(
                 agent_name,
                 settings=settings,
-                backend=backend,
                 store=store,
                 checkpointer=checkpointer,
             )
@@ -775,7 +777,7 @@ async def _run_agent_session(
         )
 
     # Calculate baseline token count for accurate token tracking
-    from .agent import get_system_prompt
+    from namicode_cli.agents.core_agent import get_system_prompt
     from .token_utils import calculate_baseline_tokens
 
     agent_dir = settings.get_agent_dir(assistant_id)
@@ -826,8 +828,8 @@ async def main(
         setup_script_path: Optional path to setup script to run in sandbox
         continue_session: If True, continue last session. If string, use as session ID.
     """
-    from .session_persistence import SessionManager
-    from .session_restore import restore_session
+    from namicode_cli.session.session_persistence import SessionManager
+    from namicode_cli.session.session_restore import restore_session
 
     model = create_model()
     store = InMemoryStore()
@@ -838,8 +840,14 @@ async def main(
 
     # Handle session continuation
     if continue_session:
-        from .workspace_anchoring import scan_workspace, detect_drift
-        from .session_prompt_builder import build_continuation_prompt, load_nami_md
+        from namicode_cli.tracking.workspace_anchoring import (
+            scan_workspace,
+            detect_drift,
+        )
+        from namicode_cli.session.session_prompt_builder import (
+            build_continuation_prompt,
+            load_nami_md,
+        )
 
         project_root = Path.cwd()
         session_id = continue_session if isinstance(continue_session, str) else None
@@ -875,7 +883,7 @@ async def main(
             session_data_with_recent.messages = recent_messages
 
             # Get base system prompt (will be used by build_continuation_prompt)
-            from .config import get_default_coding_instructions
+            from namicode_cli.config.config import get_default_coding_instructions
 
             base_system_prompt = get_default_coding_instructions()
 
@@ -1069,7 +1077,10 @@ def _execute_config_command(args) -> None:
                 from rich.syntax import Syntax
 
                 syntax = Syntax(
-                    json.dumps(config, indent=2), "json", theme="monokai", line_numbers=True
+                    json.dumps(config, indent=2),
+                    "json",
+                    theme="monokai",
+                    line_numbers=True,
                 )
                 console.print(syntax)
             except Exception as e:  # noqa: BLE001
@@ -1265,14 +1276,7 @@ def cli_main() -> None:
                     wizard.run()
                 else:
                     console.print("[dim]Cancelled.[/dim]")
-            # Interactive init if no options provided
-            elif not args.scope and not args.style:
-                interactive_init()
-            else:
-                # Use provided options or prompt for missing ones
-                scope = args.scope or "project"
-                style = args.style or "deepagents"
-                init_project_config(style=style, scope=scope)
+
         elif args.command == "help":
             show_help()
         elif args.command == "list":

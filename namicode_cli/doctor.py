@@ -11,7 +11,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from namicode_cli.config import HOME_DIR, Settings, create_model
+from namicode_cli.config.config import HOME_DIR, Settings, create_model
 from namicode_cli.onboarding import SecretManager
 
 console = Console()
@@ -58,7 +58,9 @@ def run_doctor() -> int:
             results.append(("✓", f"{display_key} API key set", ""))
     else:
         results.append(("⚠", "No API keys found", ""))
-        results.append(("ℹ", "Run 'nami secrets set <provider>_api_key' to add keys", ""))
+        results.append(
+            ("ℹ", "Run 'nami secrets set <provider>_api_key' to add keys", "")
+        )
 
     # Check 3: LLM provider connection
     if config_file.exists():
@@ -74,7 +76,9 @@ def run_doctor() -> int:
                 try:
                     response = requests.get(f"{ollama_host}/api/tags", timeout=5)
                     if response.status_code == 200:  # noqa: PLR2004
-                        results.append(("✓", "Ollama connection successful", ollama_host))
+                        results.append(
+                            ("✓", "Ollama connection successful", ollama_host)
+                        )
                     else:
                         results.append(
                             (
@@ -85,15 +89,13 @@ def run_doctor() -> int:
                         )
                         all_passed = False
                 except Exception as e:  # noqa: BLE001
-                    results.append(
-                        ("✗", f"Ollama connection failed: {e}", ollama_host)
-                    )
+                    results.append(("✗", f"Ollama connection failed: {e}", ollama_host))
                     all_passed = False
             else:
                 # Test cloud provider by creating model instance
                 try:
                     settings = Settings.from_environment()
-                    _ = create_model(settings, provider)
+                    _ = create_model()
                     results.append(
                         ("✓", f"{provider.title()} connection successful", "")
                     )
@@ -144,7 +146,9 @@ def run_doctor() -> int:
             results.append(("✗", f"E2B sandbox test failed: {e}", ""))
             all_passed = False
     else:
-        results.append(("ℹ", "E2B not configured (optional)", "For secure code execution"))
+        results.append(
+            ("ℹ", "E2B not configured (optional)", "For secure code execution")
+        )
 
     # Check 6: File permissions on secrets.json (if using fallback)
     secrets_file = SecretManager.FALLBACK_FILE

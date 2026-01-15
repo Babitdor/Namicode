@@ -7,18 +7,16 @@ workflow for first-time setup.
 import json
 import os
 import stat
+from getpass import getpass
 from pathlib import Path
 from typing import Any
 
 import requests
-from prompt_toolkit import prompt
-from prompt_toolkit.completion import WordCompleter
 from rich.console import Console
 from rich.panel import Panel
 
-from namicode_cli.config import HOME_DIR, Settings
-from namicode_cli.model_manager import ModelManager
-from namicode_cli.nami_config import NamiConfig
+from namicode_cli.config.config import HOME_DIR, Settings
+from namicode_cli.config.nami_config import NamiConfig
 
 console = Console()
 
@@ -235,7 +233,7 @@ class OnboardingWizard:
                 "[yellow]⚠ Connection tests failed. "
                 "You can continue but may need to fix configuration later.[/yellow]"
             )
-            response = prompt("Continue anyway? [y/N]: ").strip().lower()
+            response = input("Continue anyway? [y/N]: ").strip().lower()
             if response != "y":
                 return False
 
@@ -268,8 +266,7 @@ class OnboardingWizard:
             console.print(f"  {key}. {provider['display']}")
         console.print()
 
-        completer = WordCompleter(list(self.PROVIDERS.keys()), ignore_case=True)
-        choice = prompt("> ", completer=completer).strip()
+        choice = input("> ").strip()
 
         if choice not in self.PROVIDERS:
             console.print("[red]✗ Invalid choice[/red]")
@@ -291,13 +288,13 @@ class OnboardingWizard:
 
         if provider == "ollama":
             # Ollama: just needs host
-            host = prompt("  Host [http://localhost:11434]: ").strip()
+            host = input("  Host [http://localhost:11434]: ").strip()
             if not host:
                 host = "http://localhost:11434"
             return {"host": host}
 
         # Cloud providers: need API key
-        api_key = prompt(f"  {provider.title()} API key: ", is_password=True).strip()
+        api_key = getpass(f"  {provider.title()} API key: ")
         if not api_key:
             console.print(f"[red]✗ {provider.title()} API key required[/red]")
             return None
@@ -317,7 +314,7 @@ class OnboardingWizard:
         console.print()
         console.print("[bold]Search provider (Tavily):[/bold]")
         console.print("  [dim]Required for web search. Press Enter to skip.[/dim]")
-        tavily_key = prompt("  Tavily API key: ", is_password=True).strip()
+        tavily_key = getpass("  Tavily API key: ")
 
         if tavily_key:
             self.secret_manager.store_secret(API_KEY_NAMES["tavily"], tavily_key)
@@ -335,7 +332,7 @@ class OnboardingWizard:
         console.print("[bold]Sandbox execution provider (E2B):[/bold]")
         console.print("  [dim]Required for secure code execution. Press Enter to skip.[/dim]")
         console.print("  [dim]Get your free API key at: https://e2b.dev[/dim]")
-        e2b_key = prompt("  E2B API key: ", is_password=True).strip()
+        e2b_key = getpass("  E2B API key: ")
 
         if e2b_key:
             self.secret_manager.store_secret(API_KEY_NAMES["e2b"], e2b_key)
@@ -386,6 +383,8 @@ class OnboardingWizard:
                 os.environ[f"{provider.upper()}_API_KEY"] = api_key
 
                 # Try to create model using ModelManager
+                from namicode_cli.config.model_manager import ModelManager
+
                 model_manager = ModelManager()
                 _ = model_manager.create_model_for_provider(provider)
 
@@ -458,7 +457,7 @@ class OnboardingWizard:
         # Also save to NamiConfig for backward compatibility
         if provider == "ollama":
             # Check if Ollama models are installed
-            from namicode_cli.model_manager import get_ollama_models
+            from namicode_cli.config.model_manager import get_ollama_models
 
             available_models = get_ollama_models()
 

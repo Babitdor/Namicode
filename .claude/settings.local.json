@@ -3,7 +3,13 @@
     "allow": [
       "Bash(python:*)",
       "Bash(find:*)",
-      "Bash(uv run python:*)"
+      "Bash(uv run python:*)",
+      "Bash(dir:*)",
+      "Bash(uv sync:*)",
+      "Bash(uv run pytest:*)",
+      "Bash(uv run:*)",
+      "Bash(uv pip list:*)",
+      "Bash(uv pip install:*)"
     ]
   }
 }

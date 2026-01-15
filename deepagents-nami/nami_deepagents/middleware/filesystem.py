@@ -103,85 +103,88 @@ def _validate_path(
     r"""Validate and normalize file path for security.
 
     Ensures paths are safe to use by preventing directory traversal attacks
-    and enforcing consistent formatting. In virtual mode, all paths are normalized
-    to use forward slashes and start with a leading slash.
-
-    When virtual_mode=True, this function rejects Windows absolute paths (e.g., C:/..., F:/...)
-    to maintain consistency. When virtual_mode=False, Windows absolute paths are allowed
-    for local filesystem access.
+    and enforcing consistent formatting. Supports both Windows and Unix-style paths
+    across all platforms.
 
     Args:
         path: The path to validate and normalize.
         allowed_prefixes: Optional list of allowed path prefixes. If provided,
             the normalized path must start with one of these prefixes.
-        virtual_mode: If True, reject Windows absolute paths and enforce virtual path format.
-            If False, allow Windows absolute paths for local filesystem access. Defaults to True.
+        virtual_mode: If True, normalize all paths to virtual format (forward slashes).
+            If False, resolve to absolute paths and check against allowed_prefixes.
+            Defaults to True.
 
     Returns:
         Normalized canonical path. In virtual mode, starts with `/` and uses forward slashes.
-        In non-virtual mode, preserves absolute Windows paths.
+        In non-virtual mode, returns absolute path with forward slashes.
 
     Raises:
-        ValueError: If path contains traversal sequences (`..` or `~`) in virtual mode, is a
-            Windows absolute path in virtual mode, or does not start with an
-            allowed prefix when `allowed_prefixes` is specified.
+        ValueError: If path contains traversal sequences (`..` or `~`) in virtual mode,
+            or does not start with an allowed prefix when `allowed_prefixes` is specified.
 
     Example:
         ```python
+        # Virtual mode (default) - works on all platforms
         validate_path("foo/bar")  # Returns: "/foo/bar"
+        validate_path(r"C:\Users\file.txt")  # Returns: "/C/Users/file.txt"
         validate_path("/./foo//bar")  # Returns: "/foo/bar"
         validate_path("../etc/passwd")  # Raises ValueError
-        validate_path(r"C:\\Users\\file.txt")  # Raises ValueError (virtual_mode=True)
-        validate_path(r"C:\\Users\\file.txt", virtual_mode=False)  # Returns: "C:/Users/file.txt"
-        validate_path("/data/file.txt", allowed_prefixes=["/data/"])  # OK
-        validate_path("/etc/file.txt", allowed_prefixes=["/data/"])  # Raises ValueError
+
+        # Non-virtual mode - allows actual filesystem paths
+        validate_path(r"C:\Users\file.txt", virtual_mode=False)  # Returns: "C:/Users/file.txt"
+        validate_path("/home/user/file.txt", virtual_mode=False)  # Returns: "/home/user/file.txt"
         ```
     """
     # In virtual mode, apply strict path traversal checks
     if virtual_mode and (".." in path or path.startswith("~")):
         raise ValueError(f"Path traversal not allowed: {path}")
 
-    # Reject Windows absolute paths only in virtual mode
-    # This maintains consistency in virtual filesystem paths
-    if virtual_mode and re.match(r"^[a-zA-Z]:", path):
-        raise ValueError(
-            f"Windows absolute paths are not supported: {path}. Please use virtual paths starting with / (e.g., /workspace/file.txt)"
-        )
+    # Detect if this is a Windows absolute path (C:, D:, etc.)
+    is_windows_absolute = bool(re.match(r"^[a-zA-Z]:", path))
 
-    # Use PureWindowsPath for accurate Windows parsing when not in virtual mode.
     if virtual_mode:
-        path_obj = Path(path)
+        # In virtual mode, normalize all paths to forward-slash format
+        # Convert Windows paths (C:\path or C:/path) to virtual format (/C/path)
+        if is_windows_absolute:
+            # Extract drive letter and rest of path
+            drive_letter = path[0].upper()
+            rest_of_path = path[2:].replace("\\", "/")
+            # Convert to virtual format: C:\Users\file.txt -> /C/Users/file.txt
+            normalized = f"/{drive_letter}{rest_of_path}"
+        else:
+            # Unix-style or relative path
+            path_obj = Path(path)
+            normalized = str(path_obj).replace("\\", "/")
+
+            # Add leading slash for relative paths
+            if not normalized.startswith("/"):
+                normalized = f"/{normalized}"
     else:
-        path_obj = PureWindowsPath(path)
+        # Non-virtual mode: resolve to absolute path
+        # Use PureWindowsPath if it's a Windows path, otherwise use Path
+        if is_windows_absolute:
+            path_obj = PureWindowsPath(path)
+        else:
+            path_obj = Path(path)
 
-    # Convert to string and normalize slashes for consistent internal handling
-    normalized = str(path_obj).replace("\\", "/")
+        # Convert to string and normalize slashes
+        normalized = str(path_obj).replace("\\", "/")
 
-    # Add leading slash for relative paths in virtual mode
-    if (
-        virtual_mode
-        and not normalized.startswith("/")
-        and not re.match(r"^[a-zA-Z]:", normalized)
-    ):
-        normalized = f"/{normalized}"
-
-    # This is the key security addition.
-    if not virtual_mode:
         try:
-            # Resolve the path to its absolute, canonical form, following symlinks.
+            # Resolve the path to its absolute, canonical form
             resolved_path_obj = Path(normalized).resolve()
         except RuntimeError as e:
-            # Handle infinite symlink loops or other resolution errors.
+            # Handle infinite symlink loops or other resolution errors
             raise ValueError(
                 f"Path cannot be resolved safely: {normalized}. Error: {e}"
             )
 
-        # Convert back to string with forward slashes for consistency.
+        # Convert back to string with forward slashes
         resolved_path = str(resolved_path_obj).replace("\\", "/")
 
-        # --- Check Against Allowed Prefixes (After Resolution) ---
+        # Check against allowed prefixes (after resolution)
         if allowed_prefixes is not None:
-            # Also resolve each allowed prefix to ensure a fair comparison.
+            # Also resolve each allowed prefix to ensure fair comparison
             resolved_allowed_prefixes = [
                 str(Path(p).resolve()).replace("\\", "/") for p in allowed_prefixes
             ]
@@ -189,18 +192,19 @@ def _validate_path(
                 resolved_path.startswith(prefix) for prefix in resolved_allowed_prefixes
             ):
                 raise ValueError(
-                    f"Resolved path must start with one of {resolved_allowed_prefixes}: {resolved_path} (from original: {path})"
+                    f"Resolved path must start with one of {resolved_allowed_prefixes}: "
+                    f"{resolved_path} (from original: {path})"
                 )
-        # Return the secure, resolved path.
-        return resolved_path
-    else:
-        # For virtual mode, security relies on the earlier string checks and prefix validation.
-        if allowed_prefixes is not None and not any(
-            normalized.startswith(prefix) for prefix in allowed_prefixes
-        ):
-            raise ValueError(f"Path must start with one of {allowed_prefixes}: {path}")
 
-        return normalized
+        return resolved_path
+
+    # For virtual mode, check prefix validation on normalized path
+    if allowed_prefixes is not None and not any(
+        normalized.startswith(prefix) for prefix in allowed_prefixes
+    ):
+        raise ValueError(f"Path must start with one of {allowed_prefixes}: {path}")
+
+    return normalized
 
 
 class FilesystemState(AgentState):

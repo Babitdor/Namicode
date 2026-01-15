@@ -25,7 +25,7 @@ NEW STRUCTURE (Claude Code Compatible):
 import shutil
 from pathlib import Path
 
-from namicode_cli.config import COLORS, console
+from namicode_cli.config.config import COLORS, console
 
 
 def detect_old_structure() -> list[Path]:
@@ -83,10 +83,8 @@ def migrate_agents() -> None:
     console.print("  3. Preserve all agent.md files and configurations")
     console.print()
 
-    # Ask for confirmation
-    from prompt_toolkit import prompt
-
-    confirm = prompt("Proceed with migration? (yes/no): ", default="yes").strip().lower()
+    # Ask for confirmation using simple input()
+    confirm = input("Proceed with migration? (yes/no): ").strip().lower()
 
     if confirm not in ["yes", "y"]:
         console.print("[yellow]Migration cancelled.[/yellow]")

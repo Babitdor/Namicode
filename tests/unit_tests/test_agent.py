@@ -3,7 +3,7 @@
 from pathlib import Path
 from unittest.mock import Mock
 
-from namicode_cli.agent import (
+from namicode_cli.agents.core_agent import (
     _format_edit_file_description,
     _format_execute_description,
     _format_fetch_url_description,

@@ -11,7 +11,7 @@ from namicode_cli.compaction import (
     compact_conversation,
     summarize_conversation,
 )
-from namicode_cli.context_manager import CompactionResult
+from namicode_cli.context.context_manager import CompactionResult
 
 
 class TestSummarizationPrompt:

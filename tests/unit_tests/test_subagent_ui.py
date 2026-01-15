@@ -12,8 +12,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from namicode_cli.file_ops import FileOpTracker, FileOperationRecord, compute_unified_diff
-from namicode_cli.ui import render_file_operation, render_todo_list
+from namicode_cli.file_ops import (
+    FileOpTracker,
+    FileOperationRecord,
+    compute_unified_diff,
+)
+from namicode_cli.ui.ui_elements import render_file_operation, render_todo_list
 
 
 class TestSubagentFileOpTracker:
@@ -21,8 +25,8 @@ class TestSubagentFileOpTracker:
 
     def test_file_op_tracker_initialization(self, tmp_path: Path) -> None:
         """Test that FileOpTracker initializes correctly for subagent."""
-        from deepagents.backends.filesystem import FilesystemBackend
-        from deepagents.backends import CompositeBackend
+        from nami_deepagents.backends.filesystem import FilesystemBackend
+        from nami_deepagents.backends import CompositeBackend
 
         backend = CompositeBackend(
             default=FilesystemBackend(),
@@ -87,7 +91,10 @@ class TestSubagentFileOpTracker:
         test_file.write_text("def hello():\n    return 'world'\n")
 
         # Start operation
-        args = {"file_path": str(test_file), "content": "def hello():\n    return 'hello world'\n"}
+        args = {
+            "file_path": str(test_file),
+            "content": "def hello():\n    return 'hello world'\n",
+        }
         tracker.start_operation("write_file", args, "call-100")
 
         # Simulate the write happening
@@ -196,7 +203,9 @@ class TestRenderFileOperation:
         record.metrics.lines_written = 20
         record.metrics.lines_added = 5
         record.metrics.lines_removed = 3
-        record.diff = "--- app.py (before)\n+++ app.py (after)\n@@ -1,3 +1,5 @@\n-old\n+new"
+        record.diff = (
+            "--- app.py (before)\n+++ app.py (after)\n@@ -1,3 +1,5 @@\n-old\n+new"
+        )
 
         with patch("namicode_cli.ui.console") as mock_console:
             render_file_operation(record)

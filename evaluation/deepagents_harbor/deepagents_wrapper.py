@@ -14,9 +14,9 @@ from harbor.models.agent.context import AgentContext
 
 # Load .env file if present
 load_dotenv()
-from namicode_cli.agent import create_agent_with_config
-from namicode_cli.config import Settings
-from namicode_cli.model_manager import ModelManager, MODEL_PRESETS, ProviderType
+from namicode_cli.agents.core_agent import create_agent_with_config
+from namicode_cli.config.config import Settings
+from namicode_cli.config.model_manager import ModelManager, MODEL_PRESETS, ProviderType
 from harbor.models.trajectories import (
     Agent,
     FinalMetrics,

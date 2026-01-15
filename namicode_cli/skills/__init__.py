@@ -8,14 +8,7 @@ Public API:
 All other components are internal implementation details.
 """
 
-from namicode_cli.skills.commands import (
-    execute_skills_command,
-    setup_skills_parser,
-)
 from namicode_cli.skills.middleware import SkillsMiddleware
-
 __all__ = [
     "SkillsMiddleware",
-    "execute_skills_command",
-    "setup_skills_parser",
 ]

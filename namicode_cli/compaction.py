@@ -9,7 +9,7 @@ from typing import Any
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
-from namicode_cli.context_manager import CompactionResult
+from namicode_cli.context.context_manager import CompactionResult
 
 # Summarization prompt template
 SUMMARIZATION_PROMPT = '''You are summarizing a conversation between a user and an AI coding assistant.

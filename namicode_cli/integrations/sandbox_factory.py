@@ -10,7 +10,7 @@ from pathlib import Path
 
 from nami_deepagents.backends.protocol import SandboxBackendProtocol
 
-from namicode_cli.config import console
+from namicode_cli.config.config import console
 
 
 def _run_sandbox_setup(backend: SandboxBackendProtocol, setup_script_path: str) -> None:

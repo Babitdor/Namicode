@@ -25,7 +25,7 @@ Example structure:
 
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import NotRequired, TypedDict, cast
+from typing import Any, NotRequired, TypedDict, cast
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
@@ -268,7 +268,7 @@ class SkillsMiddleware(AgentMiddleware):
         else:
             system_prompt = skills_section
 
-        return handler(request.override(system_prompt=system_prompt))
+        return handler(request.override(system_prompt=system_prompt)) # type: ignore
 
     async def awrap_model_call(
         self,
@@ -304,4 +304,4 @@ class SkillsMiddleware(AgentMiddleware):
         else:
             system_prompt = skills_section
 
-        return await handler(request.override(system_prompt=system_prompt))
+        return await handler(request.override(system_prompt=system_prompt)) # type: ignore

@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from namicode_cli.agent_memory import AgentMemoryMiddleware
+from namicode_cli.memory.agent_memory import AgentMemoryMiddleware
 from namicode_cli.config import Settings
 from namicode_cli.skills import SkillsMiddleware
 

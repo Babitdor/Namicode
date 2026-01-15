@@ -12,15 +12,43 @@ Nami-Code is an open-source terminal-based AI coding assistant similar to Claude
 |-------|------------|---------|
 | **Language** | Python 3.11+ (`>=3.11,<4.0`) | Core implementation |
 | **Agent Framework** | LangGraph + LangChain | Agent orchestration, state management |
-| **LLM Providers** | langchain-openai, langchain-anthropic, langchain-ollama, langchain-google-genai | Model access |
+| **LLM Providers** | langchain-openai, langchain-ollama, langchain-google-genai, langchain-anthropic | Model access |
 | **CLI UI** | Rich, prompt-toolkit | Terminal UI, syntax highlighting, interactive input |
-| **Sandbox Execution** | Modal, Daytona, Runloop, Docker SDKs | Remote code execution |
+| **Sandbox Execution** | Modal, Daytona, Runloop, Docker, E2B | Remote code execution |
 | **Web Search** | Tavily API | Web research capability |
-| **Protocols** | MCP (Model Context Protocol), ACP | Tool server integration |
+| **Protocols** | MCP (Model Context Protocol) | Tool server integration |
 | **Observability** | LangSmith | Tracing and debugging |
 | **Testing** | pytest, pytest-asyncio | Test framework |
 | **Code Quality** | ruff (linting + formatting), mypy (type checking) | Code quality |
 | **Package Management** | uv (recommended), pip | Fast Python package manager |
+
+### Dependencies Breakdown
+
+**Core AI/ML Frameworks:**
+- `langchain>=1.0.7` - Core AI orchestration framework
+- `langchain-openai>=0.1.0` - OpenAI integration
+- `langchain-ollama>=1.0.0` - Local Ollama model integration
+- `langchain-google-genai>=3.2.0` - Google AI integration
+
+**CLI & UI Components:**
+- `rich>=13.0.0` - Terminal UI rendering with colors
+- `prompt-toolkit>=3.0.52` - Interactive command-line interface
+
+**Sandbox Integrations:**
+- `modal>=0.65.0` - Modal sandbox
+- `daytona>=0.113.0` - Daytona workspace
+- `runloop-api-client>=0.69.0` - Runloop sandbox
+- `docker>=7.0.0` - Docker containers
+- `e2b-code-interpreter>=1.0.0` - E2B cloud sandbox
+
+**Protocol & Standards:**
+- `mcp>=1.0.0` - Model Context Protocol support
+- `langchain-mcp-adapters>=0.1.0` - MCP integration
+
+**Development Tools:**
+- `ruff` - Code linting and formatting
+- `mypy` - Type checking
+- `pytest` - Testing framework
 
 ## Project Structure
 
@@ -305,12 +333,66 @@ Skills follow Anthropic's progressive disclosure pattern:
 - Full instructions loaded from `SKILL.md` when skill is invoked
 - Supports both global (`~/.nami/agents/{AGENT_NAME}/skills/`) and project-specific (`.nami/skills/`) skills
 
-Structure:
+### Skill Management
+
+```bash
+# List all available skills
+nami skills list
+
+# Create a new skill
+nami skills create my-skill
+
+# Create project-specific skill
+nami skills create my-skill --project
+
+# View skill details
+nami skills info web-research
+```
+
+### Skill Structure:
 ```
 ~/.nami/agents/default/skills/
 ├── web-research/
 │   ├── SKILL.md        # YAML frontmatter + instructions
 │   └── helper.py       # Optional supporting files
+```
+
+## MCP Integration
+
+**Location**: `namicode_cli/mcp/`
+
+Model Context Protocol servers extend agent capabilities:
+- `client.py` - MultiServerMCPClient for managing multiple MCP connections
+- `middleware.py` - Injects MCP tools into agent middleware chain
+- `presets.py` - Preset configurations (filesystem, github, postgres, puppeteer)
+- `commands.py` - CLI commands for MCP management (add, list, remove, info)
+
+MCP tools are namespaced: `servername__toolname` (e.g., `github__search_repos`)
+
+### MCP Management
+
+**Preset Configurations:**
+```bash
+nami mcp add filesystem --preset filesystem
+nami mcp add github --preset github
+nami mcp add postgres --preset postgres
+nami mcp add puppeteer --preset puppeteer
+```
+
+**Custom MCP Servers:**
+```bash
+# HTTP transport
+nami mcp add custom-server --transport http --url https://example.com/mcp
+
+# Stdio transport
+nami mcp add my-server --transport stdio --command "python -m my_mcp_server"
+```
+
+**MCP Commands:**
+```bash
+nami mcp list          # List configured servers
+nami mcp remove my-server  # Remove server
+nami mcp info my-server     # View server details
 ```
 
 ### MCP Integration
@@ -485,6 +567,50 @@ nami-deepagents = { path = "./deepagents-nami" }
 - **Skills**: `~/.nami/agents/<name>/skills/` (global), `.nami/skills/` (project)
 - **MCP config**: `~/.nami/mcp-config.json`
 
+## Error Handling
+
+### Error Taxonomy (`namicode_cli/errors/taxonomy.py`)
+
+Errors are classified for appropriate recovery strategies:
+
+```python
+class ErrorCategory(Enum):
+    USER_ERROR = "user_error"
+    FILE_NOT_FOUND = "file_not_found"
+    PERMISSION_DENIED = "permission_denied"
+    COMMAND_NOT_FOUND = "command_not_found"
+    SYNTAX_ERROR = "syntax_error"
+    NETWORK_ERROR = "network_error"
+    CONTEXT_OVERFLOW = "context_overflow"
+    TOOL_ERROR = "tool_error"
+    SYSTEM_ERROR = "system_error"
+
+@dataclass
+class RecoverableError:
+    category: ErrorCategory
+    original_error: Exception
+    context: dict
+    recovery_suggestion: str
+    user_message: str
+    retry_allowed: bool = True
+```
+
+### Error Recovery (`namicode_cli/errors/handlers.py`)
+
+| Strategy | Purpose |
+|----------|---------|
+| `FileNotFoundRecovery` | Handle missing files |
+| `PermissionDeniedRecovery` | Handle permission issues |
+| `ContextOverflowRecovery` | Handle context/window overflow |
+| `NetworkErrorRecovery` | Handle network issues with exponential backoff (1s, 2s, 4s) |
+| `CommandNotFoundRecovery` | Handle missing commands |
+
+**Error Handler Features:**
+- Automatic error classification
+- Recovery suggestions for users
+- Exponential backoff for network errors
+- Graceful sandbox-specific error handling
+
 ## Key Deep Agent Components
 
 ### create_deep_agent() (`deepagents-nami/nami_deepagents/graph.py`)
@@ -508,18 +634,178 @@ def create_deep_agent(
 ```
 
 **Default middleware applied by create_deep_agent():**
-- TodoListMiddleware - Planning
-- FilesystemMiddleware(backend) - File operations
-- SubAgentMiddleware - Task delegation
+- TodoListMiddleware - Planning with write_todos
+- FilesystemMiddleware(backend) - File operations (ls, read, write, edit, glob, grep, execute)
+- SubAgentMiddleware - Task delegation via task tool
 - SummarizationMiddleware - Context management (70% trigger, 15% keep)
 - AnthropicPromptCachingMiddleware - Token optimization
 - PatchToolCallsMiddleware - Tool call fixes
 
-### SubAgent Specification (`deepagents-nami/nami_deepagents/middleware/subagents.py`)
+**Default Model:** Claude Sonnet 4 (`claude-sonnet-4-5-20250929`)
 
-Subagents can be defined as specifications or pre-compiled agents:
+## Architectural Patterns
 
-```python
+### Design Patterns Implemented in Nami-Code:
+
+**Factory Pattern:**
+- Agent Factory (`create_deep_agent()`)
+- Sandbox Factory (`create_sandbox()`)
+- Model Factory (`create_model()`)
+
+**Middleware Pattern:**
+- Chain of Responsibility with sequential middleware application
+- Each middleware handles specific concern independently
+- Plugin architecture for easy extension
+
+**Command Pattern:**
+- CLI commands implemented as discrete handlers
+- Tools follow uniform interface
+- Skill commands for management operations
+
+**Observer Pattern:**
+- Real-time token and session state monitoring
+- Event-driven UI updates
+- Background process management
+
+**Strategy Pattern:**
+- Multiple execution environments (local vs sandbox)
+- Dynamic model provider selection
+- Different tool implementations per environment
+
+**Facade Pattern:**
+- Simplified interfaces for complex external APIs
+- Unified tool APIs across different backends
+- Single point configuration management
+
+### Key Architectural Decisions
+
+1. **LangGraph-Based Architecture**: Leverages LangChain ecosystem while providing advanced agent capabilities with checkpointing and streaming support.
+
+2. **Deep Agent Pattern**: Enables hierarchical task decomposition with human oversight and parallel execution.
+
+3. **Skills-Based Extensibility**: Following Anthropic's progressive disclosure pattern for scalable knowledge management.
+
+4. **Multi-Provider Strategy**: Sandbox flexibility with security isolation and unified interfaces.
+
+5. **Human-in-the-Loop Design**: Safety-first approach with configurable approval workflows.
+
+## Project Structure
+
+### Core Package Layout
+
+The project follows a modular architecture with clear separation of concerns:
+
+```
+namicode_cli/
+├── main.py                    # CLI entry point, argument parsing, REPL loop
+├── agent.py                  # Agent creation with middleware stack
+├── execution.py              # Task execution and streaming
+├── config.py                 # Settings and model provider configuration
+├── ui.py                     # Rich-based UI rendering
+├── commands.py               # Slash command handlers
+├── input.py                  # Interactive input with prompt_toolkit
+├── skills/                   # Progressive disclosure skill system
+├── mcp/                      # Model Context Protocol integration
+├── integrations/             # Sandbox provider implementations
+├── default_subagents/        # Built-in specialized subagents
+├── agent_memory.py           # Persistent agent memory
+├── shared_memory.py          # Cross-agent communication
+├── file_tracker.py           # File operation tracking
+├── onboarding.py             # Interactive first-run setup
+├── doctor.py                 # System diagnostics
+└── evaluation/               # Terminal-Bench evaluation framework
+```
+
+### DeepAgents Core Library (`deepagents-nami/`)
+
+Key directory structure for the core dependency:
+
+```
+deepagents-nami/
+├── nami_deepagents/
+│   ├── agent.py              # create_deep_agent() implementation
+│   ├── graph.py              # LangGraph Pregel state management
+│   ├── backends/             # Storage backend abstractions
+│   │   ├── protocol.py       # BackendProtocol interface
+│   │   ├── filesystem.py     # Local filesystem backend
+│   │   ├── state.py          # LangGraph state wrapper
+│   │   ├── store.py          # LangGraph Store wrapper
+│   │   ├── sandbox.py        # Sandbox base class
+│   │   ├── composite.py      # Multi-backend router
+│   │   └── utils.py          # Backend utilities
+│   ├── middleware/           # Agent middleware
+│   │   ├── filesystem.py     # File operation tools
+│   │   ├── subagents.py      # Subagent spawning
+│   │   └── patch_tool_calls.py # Tool call handling
+│   └── tests/                # Core library tests
+```
+
+## Important Files
+
+| File | Purpose |
+|------|---------|
+| `pyproject.toml` | Main project configuration, dependencies, tooling |
+| `deepagents-nami/pyproject.toml` | Core agent library configuration |
+| `Makefile` | Development commands and automation |
+| `README.md` | Comprehensive project documentation |
+| `CLAUDE.md` | Claude Code-specific guidance |
+| `.env.template` | Environment variable template |
+| `namicode_cli/main.py` | CLI entry point and REPL loop |
+| `namicode_cli/agent.py` | Agent creation with middleware configuration |
+| `namicode_cli/config.py` | Settings and model provider management |
+| `namicode_cli/execution.py` | Task execution and approval workflows |
+
+## Common Workflows
+
+### Development
+```bash
+# Setup environment
+uv venv
+uv sync --all-groups
+
+# Run tests before committing
+make lint
+make test
+
+# Format code
+make format
+
+# Run CLI locally
+uv run nami
+```
+
+### Adding New Features
+1. Implement functionality in `namicode_cli/` modules
+2. If core agent capability needed, contribute to `deepagents-nami/`
+3. Add unit tests in `tests/unit_tests/`
+4. Update relevant documentation
+
+### Testing Approach
+- Unit tests isolated with socket disabled
+- Integration tests for full I/O scenarios
+- Use `pytest.raises()` for error handling tests
+- Mock external dependencies for reliability
+
+## Additional Notes
+
+### Version Compatibility
+- Requires Python 3.11+ for modern async/await patterns
+- LangChain 1.0+ compatibility requirements
+- Backward compatibility maintained within semantic versioning
+
+### Security Considerations
+- Environment variable management via OS keychain
+- Sandbox isolation for untrusted code execution
+- Automatic .gitignore enforcement
+- Input validation for file operations
+
+### Performance Optimization
+- Context summarization at 70% token usage
+- Progressive disclosure reduces prompt overhead
+- Efficient file operation tracking
+- Background process management
+
+This NAMI.md provides comprehensive guidance for AI assistants working with the Nami-Code project, covering architecture, development practices, and key workflows.
 class SubAgent(TypedDict):
     name: str                    # How main agent calls it
     description: str             # Shown to main agent for decisions
@@ -577,12 +863,58 @@ create_sandbox(provider: str, **kwargs) → SandboxBackendProtocol
 | `daytona` | daytona.py | Daytona workspace |
 | `runloop` | runloop.py | Runloop sandbox |
 | `docker` | docker.py | Docker containers |
+| `e2b` | e2b_executor.py | E2B cloud code interpreter |
+
+**SandboxProvider Configuration** (`integrations/sandbox_factory.py`):
 
 Each provider implements `SandboxBackendProtocol` with:
-- `execute(command)` → ExecuteResponse
+- `execute(command)` → ExecuteResponse (output, exit_code, truncation flag)
 - `upload_files(files)` → List[FileUploadResponse]
 - `download_files(paths)` → List[FileDownloadResponse]
-- `id` property → Unique sandbox ID
+- `id` property → Unique sandbox identifier
+
+**Sandbox Selection:**
+- Default: Local mode (no sandbox)
+- Optional: `--sandbox <provider>` flag to enable remote execution
+- Provider auto-detection based on available API keys
+
+## Configuration File Locations
+
+| Setting | Location |
+|---------|----------|
+| API Keys | OS keyring or `~/.nami/.env` or `.env` file |
+| Global Agents | `~/.nami/agents/{agent_name}/agent.md` |
+| MCP Configuration | `~/.nami/mcp.json` |
+| Project Memory | `.nami/NAMI.md` or `.claude/CLAUDE.md` or `CLAUDE.md` |
+| Skills | `~/.nami/{agent}/skills/` or `.nami/skills/` |
+| Session State | `~/.nami/sessions/` |
+
+## CLI Commands Reference
+
+| Command | Purpose |
+|---------|---------|
+| `nami` | Interactive mode (default) |
+| `nami init` | Initialize project/global config |
+| `nami list` | List available agents |
+| `nami reset --agent <name>` | Reset agent state |
+| `nami skills list\|add\|remove` | Skills management |
+| `nami mcp list\|add\|remove\|run` | MCP server management |
+| `nami config show\|set\|get` | Configuration management |
+| `nami secrets set\|list\|remove` | API key management |
+| `nami doctor` | System diagnostics |
+| `nami paths list\|allow\|deny` | Path approval management |
+| `nami migrate` | Directory structure migration |
+| `nami --sandbox <provider>` | Run in sandbox mode |
+
+## Version Information
+
+| Component | Version |
+|-----------|---------|
+| Package Name | `namicode-cli` |
+| Current Version | 0.0.10 (pyproject.toml) |
+| Core Library Version | 0.2.8 (deepagents-nami/pyproject.toml) |
+| Python Range | `>=3.11,<4.0` |
+| Entry Point | `nami = namicode_cli.main:cli_main` |
 
 ## Security Features
 
@@ -590,3 +922,70 @@ Each provider implements `SandboxBackendProtocol` with:
 - **Path validation**: FilesystemMiddleware validates paths to prevent directory traversal
 - **Sandbox isolation**: Remote execution runs in isolated containers/VMs
 - **Human-in-the-loop**: Potentially destructive operations require approval (unless `--auto-approve`)
+- **Path approval system**: Unapproved directories require explicit user permission before access
+
+## File Operations Best Practices
+
+### Pattern for Codebase Exploration
+
+1. **First scan**: `read_file(path, limit=100)` - See file structure and key sections
+2. **Targeted read**: `read_file(path, offset=100, limit=200)` - read_file specific sections if needed
+3. **Full read**: Only use `read_file(path)` without limit when necessary for editing
+
+### When to Paginate
+
+- Reading any file >500 lines
+- Exploring unfamiliar codebases (always start with limit=100)
+- Reading multiple files in sequence
+- Any research or investigation task
+
+### read_file-Before-edit Rule
+
+You MUST read a file before editing it. The system tracks all file reads and will reject edit operations on files you haven't read in the session.
+
+## Recommended Patterns for AI Assistants
+
+### Working with Subagents
+
+**When to delegate:**
+- Domain expertise needed: Task matches a specialized agent's expertise
+- Complex multi-step work: Research + analysis + synthesis
+- Context isolation beneficial: Task would bloat the main context window
+
+**When NOT to delegate:**
+- Simple 1-2 step tasks
+- Task doesn't match any specialized agent
+- User explicitly asks YOU (the main agent) to do it
+
+**Delegation pattern:**
+1. Identify task requires specialization
+2. Choose appropriate subagent based on domain
+3. Prepare clear, complete instructions
+4. Delegate: `task(description="...", subagent_type="agent-name")`
+5. Receive synthesized result
+6. Integrate into final response to user
+
+### Using Skills
+
+Skills follow a progressive disclosure pattern:
+
+1. **Recognition**: User request matches skill's description
+2. **Load**: read_file skill's full instructions from `SKILL.md`
+3. **Execute**: Follow the skill's step-by-step workflow
+4. **Access**: Use helper scripts with absolute paths if provided
+
+### Code Quality Workflow
+
+1. Before making changes: `make lint` to check issues
+2. After changes: `make format` to auto-fix formatting
+3. Run tests: `make test` to verify functionality
+4. Type check: `uv run mypy .` for type safety
+
+## Common Error Patterns
+
+| Error Type | Location | Handling |
+|------------|----------|----------|
+| Path validation | `file_tracker.py` | Use approved paths only |
+| Socket isolation | Unit tests | Tests use `--disable-socket` |
+| Token limits | `token_utils.py` | Context compaction at 70% |
+| Sandbox failures | `integrations/` | Auto-fallback to local mode |

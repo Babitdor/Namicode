@@ -34,7 +34,7 @@ class StoreBackend(BackendProtocol):
     The namespace can include an optional assistant_id for multi-agent isolation.
     """
 
-    def __init__(self, runtime: "ToolRuntime"):
+    def __init__(self, runtime: "ToolRuntime"): # type: ignore
         """Initialize StoreBackend with runtime.
 
         Args:

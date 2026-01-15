@@ -23,7 +23,7 @@ from langchain_core.tools import BaseTool
 from langgraph.runtime import Runtime
 from mcp.client.session import ClientSession
 
-from namicode_cli.config import console
+from namicode_cli.config.config import console
 from namicode_cli.mcp.client import MultiServerMCPClient
 from namicode_cli.mcp.config import MCPConfig
 
@@ -207,7 +207,7 @@ class MCPMiddleware(AgentMiddleware):
                         input_schema = {}
                         if hasattr(tool, "args_schema") and tool.args_schema:
                             try:
-                                schema = tool.args_schema.model_json_schema()
+                                schema = tool.args_schema.model_json_schema()  # type: ignore
                                 input_schema = schema.get("properties", {})
                             except Exception:
                                 pass
@@ -233,7 +233,7 @@ class MCPMiddleware(AgentMiddleware):
                 )
 
         # Store all tools for the agent
-        self.tools = all_tools
+        self.tools = all_tools  # type: ignore
 
     async def on_session_start(
         self,
@@ -309,9 +309,9 @@ class MCPMiddleware(AgentMiddleware):
         request: ModelRequest,
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> ModelResponse:
-        """Inject MCP information into the system prompt.
+        """Inject MCP tools and information into the model request.
 
-        This runs on every model call to ensure MCP tools info is always available.
+        This runs on every model call to ensure MCP tools are always available.
 
         Args:
             request: The model request being processed
@@ -323,31 +323,40 @@ class MCPMiddleware(AgentMiddleware):
         # Get MCP tools metadata from state
         mcp_tools = request.state.get("mcp_tools", [])
 
-        if not mcp_tools:
-            # No MCP tools available, skip injection
-            return handler(request)
+        # Build updated request
+        updated_request = request
 
-        # Get servers configuration
-        servers = self.mcp_config.list_servers()
+        # Add MCP tools to the request if we have any
+        if self.tools:
+            # Merge MCP tools with existing tools
+            updated_tools = list(request.tools) + self.tools
+            updated_request = updated_request.override(tools=updated_tools)
 
-        # Format the MCP section
-        servers_list = self._format_servers_list(servers, mcp_tools)
-        mcp_section = MCP_SYSTEM_PROMPT.format(servers_list=servers_list)
+        # Inject MCP info into system prompt if we have tools
+        if mcp_tools:
+            # Get servers configuration
+            servers = self.mcp_config.list_servers()
 
-        # Inject into system prompt
-        if request.system_prompt:
-            system_prompt = request.system_prompt + "\n\n" + mcp_section
-        else:
-            system_prompt = mcp_section
+            # Format the MCP section
+            servers_list = self._format_servers_list(servers, mcp_tools)
+            mcp_section = MCP_SYSTEM_PROMPT.format(servers_list=servers_list)
 
-        return handler(request.override(system_prompt=system_prompt))
+            # Inject into system prompt
+            if updated_request.system_prompt:
+                system_prompt = updated_request.system_prompt + "\n\n" + mcp_section
+            else:
+                system_prompt = mcp_section
+
+            updated_request = updated_request.override(system_prompt=system_prompt) # type: ignore
+
+        return handler(updated_request)
 
     async def awrap_model_call(
         self,
         request: ModelRequest,
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
     ) -> ModelResponse:
-        """(async) Inject MCP information into the system prompt.
+        """(async) Inject MCP tools and information into the model request.
 
         Args:
             request: The model request being processed
@@ -359,24 +368,33 @@ class MCPMiddleware(AgentMiddleware):
         # Get MCP tools metadata from state
         mcp_tools = request.state.get("mcp_tools", [])
 
-        if not mcp_tools:
-            # No MCP tools available, skip injection
-            return await handler(request)
+        # Build updated request
+        updated_request = request
 
-        # Get servers configuration
-        servers = self.mcp_config.list_servers()
+        # Add MCP tools to the request if we have any
+        if self.tools:
+            # Merge MCP tools with existing tools
+            updated_tools = list(request.tools) + self.tools
+            updated_request = updated_request.override(tools=updated_tools)
 
-        # Format the MCP section
-        servers_list = self._format_servers_list(servers, mcp_tools)
-        mcp_section = MCP_SYSTEM_PROMPT.format(servers_list=servers_list)
+        # Inject MCP info into system prompt if we have tools
+        if mcp_tools:
+            # Get servers configuration
+            servers = self.mcp_config.list_servers()
 
-        # Inject into system prompt
-        if request.system_prompt:
-            system_prompt = request.system_prompt + "\n\n" + mcp_section
-        else:
-            system_prompt = mcp_section
+            # Format the MCP section
+            servers_list = self._format_servers_list(servers, mcp_tools)
+            mcp_section = MCP_SYSTEM_PROMPT.format(servers_list=servers_list)
 
-        return await handler(request.override(system_prompt=system_prompt))
+            # Inject into system prompt
+            if updated_request.system_prompt:
+                system_prompt = updated_request.system_prompt + "\n\n" + mcp_section
+            else:
+                system_prompt = mcp_section
+
+            updated_request = updated_request.override(system_prompt=system_prompt) # type: ignore
+
+        return await handler(updated_request)
 
 
 __all__ = ["MCPMiddleware"]

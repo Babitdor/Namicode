@@ -29,8 +29,8 @@ from rich.console import Console
 
 from namicode_cli import config as config_module
 from namicode_cli import main as main_module
-from namicode_cli.agent import create_agent_with_config
-from namicode_cli.config import SessionState, create_model
+from namicode_cli.agents.core_agent import create_agent_with_config
+from namicode_cli.config.config import SessionState, create_model
 from namicode_cli.main import simple_cli
 
 
@@ -77,7 +77,7 @@ async def run_cli_task(task: str, tmp_path: Path) -> AsyncIterator[tuple[Path, s
                 patch.object(config_module, "console", captured_console),
             ):
                 # Import after patching
-                from namicode_cli.agent import create_agent_with_config
+                from namicode_cli.agents.core_agent import create_agent_with_config
                 from namicode_cli.config import create_model
 
                 # Create real agent with real model (will use env var or fail gracefully)

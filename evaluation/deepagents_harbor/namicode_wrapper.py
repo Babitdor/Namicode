@@ -36,12 +36,12 @@ from deepagents_harbor.backend import HarborSandbox
 from deepagents_harbor.tracing import create_example_id_from_instruction
 
 # Import Nami Code components
-from namicode_cli.agent import create_agent_with_config
-from namicode_cli.file_tracker import reset_session_tracker
-from namicode_cli.model_manager import ModelManager, MODEL_PRESETS, ProviderType
+from namicode_cli.agents.core_agent import create_agent_with_config
+from namicode_cli.tracking.file_tracker import reset_session_tracker
+from namicode_cli.config.model_manager import ModelManager, MODEL_PRESETS, ProviderType
 from namicode_cli.tools import fetch_url, http_request
-from namicode_cli.dev_server import list_servers_tool, start_dev_server_tool, stop_server_tool
-from namicode_cli.test_runner import run_tests_tool
+from namicode_cli.server_runner.dev_server import list_servers_tool, start_dev_server_tool, stop_server_tool
+from namicode_cli.server_runner.test_runner import run_tests_tool
 
 
 class NamiCodeWrapper(BaseAgent):

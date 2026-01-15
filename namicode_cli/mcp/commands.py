@@ -10,8 +10,8 @@ These commands are registered with the CLI via main.py:
 import argparse
 import sys
 from typing import Any
-
-from namicode_cli.config import COLORS, console
+from pathlib import Path
+from namicode_cli.config.config import COLORS, console
 from namicode_cli.mcp.config import MCPConfig, MCPServerConfig
 
 
@@ -265,6 +265,53 @@ def setup_mcp_parser(subparsers: Any) -> argparse.ArgumentParser:
     return mcp_parser
 
 
+async def execute_bash_command_async(command: str) -> None:
+    """Execute a bash command and return output as a string.
+
+    Args:
+        command: The bash command to execute
+
+    Returns:
+        Output string
+    """
+    import subprocess
+
+    try:
+        # Execute the command
+        result = subprocess.run(
+            command,
+            check=False,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=Path.cwd(),
+        )
+
+        output_lines = []
+
+        # Show the command
+        output_lines.append(f"$ {command}")
+        output_lines.append("")
+
+        # Add output
+        if result.stdout:
+            output_lines.append(result.stdout.strip())
+        if result.stderr:
+            output_lines.append(f"[stderr]\n{result.stderr.strip()}")
+
+        # Show return code if non-zero
+        if result.returncode != 0:
+            output_lines.append(f"\nExit code: {result.returncode}")
+
+        return "\n".join(output_lines)  # type: ignore
+
+    except subprocess.TimeoutExpired:
+        return "Command timed out after 30 seconds"  # type: ignore
+    except Exception as e:
+        return f"Error executing command: {e}"  # type: ignore
+
+
 def execute_mcp_command(args: argparse.Namespace) -> None:
     """Execute MCP subcommands based on parsed arguments.
 
@@ -328,7 +375,9 @@ def execute_mcp_command(args: argparse.Namespace) -> None:
         )
         console.print("  nami mcp list")
         console.print("  nami mcp remove docs-langchain")
-        console.print("\n[dim]For more help on a specific command:[/dim]", style=COLORS["dim"])
+        console.print(
+            "\n[dim]For more help on a specific command:[/dim]", style=COLORS["dim"]
+        )
         console.print("  nami mcp <command> --help", style=COLORS["dim"])
 
 

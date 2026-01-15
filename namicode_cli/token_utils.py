@@ -5,10 +5,12 @@ from pathlib import Path
 
 from langchain_core.messages import SystemMessage
 
-from namicode_cli.config import console, settings
+from namicode_cli.config.config import console, settings
 
 
-def calculate_baseline_tokens(model, agent_dir: Path, system_prompt: str, assistant_id: str) -> int:
+def calculate_baseline_tokens(
+    model, agent_dir: Path, system_prompt: str, assistant_id: str
+) -> int:
     """Calculate baseline context tokens using the model's official tokenizer.
 
     This uses the model's get_num_tokens_from_messages() method to get
@@ -31,10 +33,10 @@ def calculate_baseline_tokens(model, agent_dir: Path, system_prompt: str, assist
     agent_md_path = agent_dir / "agent.md"
     user_memory = ""
     if agent_md_path.exists():
-        user_memory = agent_md_path.read_text(encoding='utf-8')
+        user_memory = agent_md_path.read_text(encoding="utf-8")
 
     # Load project agent.md content
-    from .config import _find_project_agent_md, _find_project_root
+    from .config.config import _find_project_agent_md, _find_project_root
 
     project_memory = ""
     project_root = _find_project_root()
@@ -44,8 +46,8 @@ def calculate_baseline_tokens(model, agent_dir: Path, system_prompt: str, assist
             try:
                 # Combine all project agent.md files (if multiple exist)
                 contents = []
-                for path in project_md_paths:
-                    contents.append(path.read_text(encoding='utf-8'))
+                for path in project_md_paths:  # type: ignore
+                    contents.append(path.read_text(encoding="utf-8"))
                 project_memory = "\n\n".join(contents)
             except Exception:
                 pass
@@ -63,7 +65,9 @@ def calculate_baseline_tokens(model, agent_dir: Path, system_prompt: str, assist
     )
 
     # Combine all parts in the same order as the middleware
-    full_system_prompt = memory_section + "\n\n" + system_prompt + "\n\n" + memory_system_prompt
+    full_system_prompt = (
+        memory_section + "\n\n" + system_prompt + "\n\n" + memory_system_prompt
+    )
 
     # Count tokens using the model's official method
     messages = [SystemMessage(content=full_system_prompt)]
@@ -80,12 +84,16 @@ def calculate_baseline_tokens(model, agent_dir: Path, system_prompt: str, assist
             return model.get_num_tokens_from_messages(messages)
     except Exception as e:
         # Fallback if token counting fails
-        console.print(f"[yellow]Warning: Could not calculate baseline tokens: {e}[/yellow]")
+        console.print(
+            f"[yellow]Warning: Could not calculate baseline tokens: {e}[/yellow]"
+        )
         return 0
 
 
 def get_memory_system_prompt(
-    assistant_id: str, project_root: Path | None = None, has_project_memory: bool = False
+    assistant_id: str,
+    project_root: Path | None = None,
+    has_project_memory: bool = False,
 ) -> str:
     """Get the long-term memory system prompt text.
 
@@ -95,7 +103,7 @@ def get_memory_system_prompt(
         has_project_memory: Whether project memory was loaded
     """
     # Import from agent_memory middleware
-    from .agent_memory import LONGTERM_MEMORY_SYSTEM_PROMPT
+    from .memory.agent_memory import LONGTERM_MEMORY_SYSTEM_PROMPT
 
     agent_dir = settings.get_agent_dir(assistant_id)
     agent_dir_absolute = str(agent_dir)

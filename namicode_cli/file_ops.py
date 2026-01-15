@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from nami_deepagents.backends.utils import perform_string_replacement
 
-from namicode_cli.config import settings
+from namicode_cli.config.config import settings
 
 if TYPE_CHECKING:
     from nami_deepagents.backends.protocol import BACKEND_TYPES

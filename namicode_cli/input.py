@@ -20,8 +20,9 @@ from prompt_toolkit.enums import EditingMode
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.output.vt100 import Vt100_Output
-from .image_utils import ImageData
-from .config import COLORS, COMMANDS, SessionState, Settings, console
+from namicode_cli.image_utils import ImageData
+from namicode_cli.config.config import COLORS, COMMANDS, Settings, console
+from namicode_cli.states.Session import SessionState
 
 # Regex patterns for context-aware completion
 AT_MENTION_RE = re.compile(r"@(?P<path>(?:[^\s@]|(?<=\\)\s)*)$")
@@ -265,6 +266,11 @@ def get_bottom_toolbar(
 
     def toolbar() -> list[tuple[str, str]]:
         parts = []
+
+        # Check if plan mode is active
+        if session_state.plan_mode_enabled:
+            parts.append(("bg:#0ea5e9 fg:#ffffff bold", " PLAN MODE "))
+            parts.append(("", " | "))
 
         # Check if we're in BASH mode (input starts with !)
         try:
