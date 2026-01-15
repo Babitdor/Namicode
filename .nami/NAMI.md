@@ -4,158 +4,125 @@ This file provides guidance to AI assistants when working with code in this repo
 
 ## Project Overview
 
-Nami-Code is an open-source terminal-based AI coding assistant similar to Claude Code. It's built on the `nami-deepagents` library (located in `deepagents-nami/`), which implements a "Deep Agent" architecture with planning tools, subagent delegation, file system access, and detailed prompts. The CLI supports multiple LLM providers (OpenAI, Anthropic, Google, Ollama), sandbox execution (Modal, Runloop, Daytona, Docker), MCP integration, and progressive disclosure skills.
+Nami-Code is an open-source terminal-based AI coding assistant built on the `deepagents` library. It implements a "Deep Agent" architecture with planning capabilities, subagent delegation, file system access, and persistent prompts. The CLI provides interactive AI assistance with specialized subagents for code exploration, documentation, and simplification.
+
+**Key Features:**
+- Built-in tools: file operations, shell execution, web search
+- Customizable skills system with progressive disclosure
+- Persistent memory across sessions
+- Model Context Protocol (MCP) support for external tools
+- Sandbox execution: Modal, Runloop, Daytona, Docker, E2B
+- Dual UI: CLI REPL and Textual TUI
+- 15+ specialized subagents for domain-specific tasks
 
 ## Technology Stack
 
-| Layer | Technology | Purpose |
-|-------|------------|---------|
-| **Language** | Python 3.11+ (`>=3.11,<4.0`) | Core implementation |
-| **Agent Framework** | LangGraph + LangChain | Agent orchestration, state management |
-| **LLM Providers** | langchain-openai, langchain-ollama, langchain-google-genai, langchain-anthropic | Model access |
-| **CLI UI** | Rich, prompt-toolkit | Terminal UI, syntax highlighting, interactive input |
-| **Sandbox Execution** | Modal, Daytona, Runloop, Docker, E2B | Remote code execution |
-| **Web Search** | Tavily API | Web research capability |
-| **Protocols** | MCP (Model Context Protocol) | Tool server integration |
-| **Observability** | LangSmith | Tracing and debugging |
-| **Testing** | pytest, pytest-asyncio | Test framework |
-| **Code Quality** | ruff (linting + formatting), mypy (type checking) | Code quality |
-| **Package Management** | uv (recommended), pip | Fast Python package manager |
+**Core:**
+- Python 3.11-3.13
+- LangChain DeepAgents v0.2.8 (local dependency in `deepagents-nami/`)
+- LangGraph with Pregel architecture for agent orchestration
 
-### Dependencies Breakdown
+**UI & Terminal:**
+- Textual (TUI framework)
+- prompt-toolkit (CLI REPL)
+- Rich (formatted terminal output)
 
-**Core AI/ML Frameworks:**
-- `langchain>=1.0.7` - Core AI orchestration framework
-- `langchain-openai>=0.1.0` - OpenAI integration
-- `langchain-ollama>=1.0.0` - Local Ollama model integration
-- `langchain-google-genai>=3.2.0` - Google AI integration
+**LLM Providers:**
+- Anthropic (Claude Sonnet 4.5, recommended)
+- OpenAI
+- Ollama
+- Google GenAI
+- Groq
 
-**CLI & UI Components:**
-- `rich>=13.0.0` - Terminal UI rendering with colors
-- `prompt-toolkit>=3.0.52` - Interactive command-line interface
-
-**Sandbox Integrations:**
-- `modal>=0.65.0` - Modal sandbox
-- `daytona>=0.113.0` - Daytona workspace
-- `runloop-api-client>=0.69.0` - Runloop sandbox
-- `docker>=7.0.0` - Docker containers
-- `e2b-code-interpreter>=1.0.0` - E2B cloud sandbox
-
-**Protocol & Standards:**
-- `mcp>=1.0.0` - Model Context Protocol support
-- `langchain-mcp-adapters>=0.1.0` - MCP integration
-
-**Development Tools:**
-- `ruff` - Code linting and formatting
-- `mypy` - Type checking
-- `pytest` - Testing framework
+**Key Dependencies:**
+- langchain-anthropic, langchain-mcp-adapters
+- daytona, modal, runloop-api-client, docker, e2b-code-interpreter
+- tavily-python (web search)
+- pytest, ruff, mypy (development)
 
 ## Project Structure
 
 ```
-namicode-cli/
-├── namicode_cli/              # Main CLI application
-│   ├── main.py                # CLI entry point, argument parsing, REPL loop
-│   ├── agent.py               # Agent creation with middleware stack, shared store management
-│   ├── execution.py           # Task streaming, human-in-the-loop approval, tool rendering
-│   ├── config.py              # Settings, API keys, model creation, colors, ASCII banner
-│   ├── commands.py            # Slash commands (/help, /tokens, /clear, /quit)
-│   ├── input.py               # Prompt session with prompt_toolkit, image handling
-│   ├── shell.py               # Shell execution middleware for local mode
-│   ├── tools.py               # HTTP tools (web_search, fetch_url, http_request)
-│   ├── ui.py                  # Token tracking, diff rendering, help display
-│   ├── file_ops.py            # File operation tracking and diff previews
-│   ├── agent_memory.py        # Persistent agent memory (user + project level)
-│   ├── shared_memory.py       # Cross-agent communication via InMemoryStore
-│   ├── file_tracker.py        # Session-scoped file operation tracking
-│   ├── session_persistence.py # Session save/restore, auto-save functionality
-│   ├── context_manager.py     # Context management for long conversations
-│   ├── compaction.py          # Message compaction for context optimization
-│   ├── tracing.py             # LangSmith tracing configuration
-│   ├── process_manager.py     # Background process management
-│   ├── dev_server.py          # Dev server management tools
-│   ├── test_runner.py         # Test execution tools
-│   ├── token_utils.py         # Token calculation utilities
-│   ├── path_approval.py       # Path approval for unapproved directories
-│   ├── session_restore.py     # Session restoration logic
-│   ├── migrate.py             # Migration utilities for config updates
-│   ├── init_commands.py       # Project initialization commands
-│   ├── image_utils.py         # Image handling utilities
-│   ├── nami_config.py         # Nami-specific configuration
-│   ├── model_manager.py       # Model provider management
-│   ├── default_agent_prompt.md # Default agent system prompt
-│   ├── skills/                # Progressive disclosure skill system
-│   │   ├── middleware.py      # Skills middleware injection
-│   │   ├── load.py            # Skill loading and metadata parsing
-│   │   ├── commands.py        # Skill management CLI commands
-│   │   └── registry.py        # Skill registry management
-│   ├── mcp/                   # Model Context Protocol integration
-│   │   ├── middleware.py      # MCP tools injection middleware
-│   │   ├── client.py          # MultiServerMCPClient for connections
-│   │   ├── presets.py         # Preset configurations
-│   │   └── commands.py        # MCP management CLI commands
-│   ├── integrations/          # Sandbox provider implementations
-│   │   ├── sandbox_factory.py # Factory for creating sandbox instances
-│   │   ├── modal.py           # Modal sandbox integration
-│   │   ├── runloop.py         # Runloop sandbox integration
-│   │   ├── daytona.py         # Daytona workspace integration
-│   │   └── docker.py          # Docker container integration
-│   └── errors/                # Error handling utilities
-│       ├── handlers.py        # Exception handling decorators
-│       └── taxonomy.py        # Error taxonomy and categorization
-│
-├── deepagents-nami/           # Core agent library (local dependency)
-│   ├── nami_deepagents/
-│   │   ├── __init__.py        # Exports: create_deep_agent, middleware
-│   │   ├── graph.py           # create_deep_agent() factory with middleware stack
-│   │   ├── backends/          # Storage backend implementations
-│   │   │   ├── __init__.py    # Backend exports (BackendProtocol, etc.)
-│   │   │   ├── protocol.py    # BackendProtocol interface definitions
-│   │   │   ├── filesystem.py  # Local filesystem backend
-│   │   │   ├── state.py       # LangGraph state wrapper (StateBackend)
-│   │   │   ├── store.py       # LangGraph Store wrapper (StoreBackend)
-│   │   │   ├── sandbox.py     # Sandbox base class
-│   │   │   ├── composite.py   # Multi-backend router by path prefix
-│   │   │   └── utils.py       # Backend utilities (formatting, truncation)
-│   │   └── middleware/        # Agent middleware
-│   │       ├── __init__.py    # Middleware exports
-│   │       ├── filesystem.py  # File operation tools (ls, read, write, edit, glob, grep, execute)
-│   │       ├── subagents.py   # Subagent spawning via task tool
-│   │       └── patch_tool_calls.py # Dangling tool call handling
-│   ├── pyproject.toml         # Core library config (v0.2.8)
-│   └── tests/                 # Core library tests
-│
-├── tests/                     # Test suite
-│   ├── unit_tests/            # Unit tests (socket disabled)
-│   │   ├── test_*.py          # Various unit tests
-│   │   ├── mcp/               # MCP-related tests
-│   │   └── skills/            # Skills-related tests
-│   ├── integration_tests/     # Integration tests (full I/O)
-│   │   ├── benchmarks/        # Benchmark tests
-│   │   ├── conftest.py        # LangSmith tracing fixture
-│   │   └── test_*.py          # Integration tests
-│   └── test_project_memory.py # Project memory tests
-│
-├── evaluation/                # Terminal-Bench Harbor evaluation framework
-├── assets/                    # Project assets (banners, icons)
-├── changelog/                 # Changelog files
-├── pyproject.toml             # Main project config (v0.0.10)
-├── Makefile                   # Development commands
-├── CLAUDE.md                  # Claude Code guidance
-└── README.md                  # Project documentation
+namicode_cli/                 # Main CLI application
+├── main.py                   # CLI entry point, REPL loop
+├── app.py                    # Textual TUI application
+├── TUI_main_cli.py           # TUI-specific entry point
+├── agents/                   # Agent creation and configuration
+│   ├── core_agent.py         # Agent factory with middleware
+│   ├── default_subagents/    # Pre-built subagents
+│   │   └── subagents.py      # code-explorer, code-doc, code-simplifier
+│   └── named_agents.py       # Agent profile management
+├── config/                   # Configuration management
+│   ├── config.py             # Settings, colors, UI constants
+│   ├── model_create.py       # Model factory
+│   └── model_manager.py      # Model configuration
+├── commands/                 # CLI command handlers
+├── integrations/             # Sandbox providers
+│   ├── sandbox_factory.py    # Factory for sandbox backends
+│   ├── modal.py
+│   ├── runloop.py
+│   ├── daytona.py
+│   ├── docker.py
+│   └── e2b_executor.py
+├── mcp/                      # Model Context Protocol
+│   ├── middleware.py         # MCP middleware
+│   ├── client.py             # MultiServerMCPClient
+│   └── presets.py            # Preset configurations
+├── skills/                   # Skills system
+│   ├── middleware.py         # Skills middleware
+│   ├── load.py               # Skill loading
+│   └── skill_creation.py     # LLM-powered skill creation
+├── session/                  # Session persistence
+│   ├── session_persistence.py
+│   ├── session_restore.py
+│   └── session_prompt_builder.py
+├── ui/                       # Rich-based UI rendering
+├── widgets/                  # 15+ Textual TUI widgets
+├── memory/                   # Memory systems
+│   ├── agent_memory.py       # Persistent agent memory
+│   └── shared_memory.py      # Cross-agent communication
+├── tracking/                 # Tracking systems
+│   ├── file_tracker.py       # File operation tracking
+│   ├── workspace_anchoring.py
+│   └── tracing.py            # LangSmith integration
+└── errors/                   # Error handling
+
+deepagents-nami/              # Core agent library (local dependency)
+├── nami_deepagents/
+│   ├── agent.py              # create_deep_agent() implementation
+│   ├── graph.py              # Main agent factory (LangGraph Pregel)
+│   ├── backends/             # Backend abstraction layer
+│   │   ├── protocol.py       # BackendProtocol interfaces
+│   │   ├── composite.py      # CompositeBackend routing
+│   │   ├── filesystem.py     # Local filesystem ops
+│   │   ├── sandbox.py        # Remote sandbox execution
+│   │   ├── state.py          # In-memory state backend
+│   │   └── store.py          # Persistent storage backend
+│   ├── middleware/           # Agent middleware
+│   │   ├── subagents.py      # SubAgentMiddleware
+│   │   ├── memory.py         # MemoryMiddleware
+│   │   ├── filesystem.py     # FilesystemMiddleware
+│   │   ├── skills.py         # SkillsMiddleware
+│   │   └── planning.py       # PlanModeMiddleware
+│   └── tools/                # Built-in tools
+
+evaluation/                   # Terminal-Bench evaluation framework
+acp/                          # Agent Client Protocol support (WIP)
+tests/
+├── unit_tests/               # Fast, isolated tests
+└── integration_tests/        # Slower, cross-component tests
 ```
 
 ## Development Setup
 
 ### Prerequisites
-
-- Python 3.11 or higher
-- [uv](https://docs.astral.sh/uv/) (recommended package manager)
+- Python 3.11, 3.12, or 3.13
+- uv (recommended) or pip
 
 ### Installation
 
 ```bash
-# Clone the repository
+# Clone repository
 git clone https://github.com/Babitdor/namicode-cli.git
 cd namicode-cli
 
@@ -163,829 +130,422 @@ cd namicode-cli
 uv venv
 uv sync --all-groups
 
-# Install in editable mode (alternative)
+# Install in editable mode
 uv pip install -e .
 ```
 
 ### Environment Configuration
 
-Configure API keys in `.env` file (copy from `.env.template`):
+Copy `.env.template` to `.env` and configure API keys:
 
 ```bash
-# Required for LLM access
-export OPENAI_API_KEY="your-openai-api-key"
-# or
-export ANTHROPIC_API_KEY="your-anthropic-api-key"
+# Required (choose one or both)
+OPENAI_API_KEY=your_key_here
+ANTHROPIC_API_KEY=your_key_here
 
-# Optional: Web search
-export TAVILY_API_KEY="your-tavily-api-key"
+# Optional (for web search)
+TAVILY_API_KEY=your_key_here
 
-# Optional: Sandbox providers
-export DAYTONA_API_KEY="your-daytona-key"
-export MODAL_TOKEN_ID="your-modal-token"
-export MODAL_TOKEN_SECRET="your-modal-secret"
+# Optional (for sandboxes)
+E2B_API_KEY=your_key_here
 ```
+
+API keys can also be stored in OS keychain (primary method) or `~/.nami/secrets.json` (fallback).
 
 ## Development Commands
 
 ### Running the CLI
 
 ```bash
-# Run during development
+# Run CLI (development mode)
+make run
+# or
 uv run nami
 
-# Run with reinstall
-make run_reinstall
+# Run with specific agent
+uv run nami --agent <agent_name>
+
+# Continue previous session
+uv run nami --continue
+
+# Run with sandbox
+uv run nami --sandbox <modal|daytona|docker|runloop>
 ```
 
 ### Testing
 
 ```bash
-# Run unit tests (socket disabled for isolation)
-make test
+make test                  # Unit tests only
+make test_integration      # Integration tests only
+make test_all              # All tests
+make test_cov              # With coverage report
+make test_watch            # Watch mode (ptw)
 
 # Run specific test file
-make test TEST_FILE=tests/unit_tests/test_specific.py
-
-# Run integration tests
-make test_integration
-
-# Run all tests
-make test_all
-
-# Run tests with coverage
-make test_cov
-
-# Run tests in watch mode
-make test_watch
+make test TEST_FILE=tests/unit_tests/tools/test_file_ops.py
 ```
 
 ### Code Quality
 
 ```bash
-# Format code (ruff format + ruff check --fix)
-make format
+make lint                  # Check format and linting
+make format                # Format and fix issues
 
-# Check linting without fixing
-make lint
+# Type checking
+uv run mypy namicode_cli/
+
+# Clean build artifacts
+make clean
 ```
 
-### Cleanup
+### Building Package
 
 ```bash
-make clean  # Remove build artifacts, caches, egg-info
+uv build                  # Build wheel and sdist
 ```
 
 ## Architecture
 
-### Deep Agent Pattern
+### Key Architectural Patterns
 
-Nami-Code implements the "Deep Agent" architecture with four core components:
+**1. LangGraph Pregel Architecture**
+- CompiledStateGraph with checkpointing for conversation persistence
+- State management through LangGraph StateGraph
+- Message passing between nodes (agent, tools, human-in-the-loop)
 
-1. **Planning tool** (`write_todos`) - Task decomposition and tracking for complex multi-step work
-2. **Subagents** (`task` tool) - Parallel delegation with context isolation for independent subtasks
-3. **File system access** - Context offloading via CompositeBackend combining local filesystem and remote sandbox backends
-4. **Detailed prompts** - Persistent memory via agent.md files loaded at session start
+**2. CompositeBackend Pattern**
+- Routes file operations to different backends based on path prefixes
+- Example: `/memories/` → memory backend, `/workspace/` → sandbox backend
+- Implemented in `deepagents-nami/nami_deepagents/backends/composite.py`
 
-### Middleware Stack
+**3. Middleware Pipeline**
+Sequential middleware applied to agent execution:
 
-Middleware is applied sequentially during agent creation (in `agent.py:create_agent_with_config()`):
+**Main Agent Middleware Stack:**
+1. TodoListMiddleware - Task management with `write_todos` tool
+2. MemoryMiddleware - Persistent context from AGENTS.md files
+3. SkillsMiddleware - Progressive disclosure skills system
+4. MCPMiddleware - Model Context Protocol external tools
+5. FilesystemMiddleware - File operations
+6. SubAgentMiddleware - Subagent delegation via `task` tool
+7. SummarizationMiddleware - Context management
+8. AnthropicPromptCachingMiddleware - Performance optimization
+9. PatchToolCallsMiddleware - Dangling tool call handling
+10. HumanInTheLoopMiddleware - Interruption handling
 
-**Nami-Code Custom Middleware:**
-1. `AgentMemoryMiddleware` (`agent_memory.py`) - Loads persistent memory into system prompt
-2. `SkillsMiddleware` (`skills/middleware.py`) - Progressive disclosure skill system
-3. `ShellMiddleware` (`shell.py`) - Local shell command execution (local mode only)
-4. `MCPMiddleware` (`mcp/middleware.py`) - Model Context Protocol tools
-5. `SharedMemoryMiddleware` (`shared_memory.py`) - Cross-agent communication
-6. `FileTrackerMiddleware` (`file_tracker.py`) - Track file operations
+**CLI Agent Middleware Stack** (in `core_agent.py:create_agent_with_config()`):
+1. FileTrackerMiddleware - Read-before-edit enforcement
+2. SkillsMiddleware - Agent skills
+3. MCPMiddleware - External tools
+4. SharedMemoryMiddleware - Cross-agent communication
+5. ShellMiddleware - Shell execution
+6. MemoryMiddleware - Persistent context
 
-**DeepAgent Core Middleware** (applied by `create_deep_agent()` in `graph.py`):
-7. `TodoListMiddleware` - Planning with `write_todos` tool
-8. `FilesystemMiddleware` - File operations (ls, read, write, edit, glob, grep, execute)
-9. `SubAgentMiddleware` - Subagent spawning via `task` tool
-10. `SummarizationMiddleware` - Context summarization (triggers at 70% usage)
-11. `AnthropicPromptCachingMiddleware` - Token optimization
-12. `PatchToolCallsMiddleware` - Dangling tool call handling
+**4. Subagent Delegation**
+- Main agent spawns specialized subagents via `task` tool
+- Subagents have lighter middleware stack (no recursion)
+- Ephemeral isolation with cross-agent communication via shared memory
 
-**Optional:**
-13. `HumanInTheLoopMiddleware` - Tool approval (if configured with `interrupt_on`)
+**5. Backend Abstraction**
+- Protocol-oriented design: `BackendProtocol` and `SandboxBackendProtocol`
+- Pluggable backends: FilesystemBackend, StateBackend, StoreBackend, CompositeBackend
+- Sandbox implementations: Modal, Runloop, Daytona, Docker, E2B
 
-### Backend Architecture
+**6. Factory Pattern**
+- `sandbox_factory.py` creates appropriate sandbox backend based on configuration
+- Model factory in `config/model_create.py` for LLM provider instantiation
 
-**BackendProtocol** defines the interface for all storage backends in `deepagents-nami/backends/protocol.py`:
+**7. Dual UI Architecture**
+- CLI REPL (`main.py`) and Textual TUI (`app.py`)
+- Share core execution logic via `textual_adapter.py`
 
-| Method | Purpose |
-|--------|---------|
-| `ls_info(path)` | List directory contents with metadata |
-| `read(path, offset, limit)` | Read file with line numbers (cat -n format) |
-| `write(path, content)` | Create new file (WriteResult with state update) |
-| `edit(path, old, new, replace_all)` | String replacement (EditResult) |
-| `grep_raw(pattern, path, glob)` | Search files (literal string matching) |
-| `glob_info(pattern, path)` | Find files by glob pattern |
-| `upload_files(files)` | Upload batch of files |
-| `download_files(paths)` | Download batch of files |
+### Main Modules
 
-**SandboxBackendProtocol** extends BackendProtocol with:
+**Core Agent System:**
+- `core_agent.py` - Agent creation with 6-10 middleware layers
+- `graph.py` (deepagents) - create_deep_agent() using LangGraph Pregel
+- `backends/` (deepagents) - Backend abstraction layer
+- `middleware/` (deepagents) - Middleware implementations
 
-| Method | Purpose |
-|--------|---------|
-| `execute(command)` | Run shell commands (returns output, exit_code, truncation flag) |
-| `id` | Unique sandbox identifier |
+**Sandbox Integration:**
+- `sandbox_factory.py` - Unified sandbox interface
+- Provider implementations: modal.py, runloop.py, daytona.py, docker.py, e2b_executor.py
 
-**Available Backends:**
+**Extension Systems:**
+- `skills/` - Progressive disclosure with 3-level pattern (metadata → path → content)
+- `mcp/` - Model Context Protocol server management with tool namespacing
 
-| Backend | Location | Storage Location | Persistence |
-|---------|----------|------------------|-------------|
-| `FilesystemBackend` | `filesystem.py` | Real filesystem | Permanent |
-| `StateBackend` | `state.py` | LangGraph state | Ephemeral (per thread) |
-| `StoreBackend` | `store.py` | LangGraph Store | Permanent (cross-thread) |
-| `CompositeBackend` | `composite.py` | Routes to multiple backends by path prefix | Varies by backend |
-
-**CompositeBackend Pattern** combines multiple backend types:
-- Files routed by path prefix to appropriate backend
-- Enables seamless local + sandbox operation
-- Default: local filesystem for `/`, sandbox for `/workspace`
-
-### Memory Systems
-
-**Agent Memory** (`agent_memory.py`):
-- Persistent memory via `agent.md` files
-- Global: `~/.nami/agents/default/agent.md` - Agent personality and universal preferences
-- Project: `.nami/NAMI.md` or `.claude/CLAUDE.md` - Project-specific context
-
-**Shared Memory** (`shared_memory.py`):
-- Cross-agent communication via LangGraph InMemoryStore
-- Memory entries include attribution (author, timestamp, tags)
-- Namespace: `("shared_memory",)`
-- Accessible to main agent and all subagents
-
-**File Tracker** (`file_tracker.py`):
-- Tracks read/write operations during session
-- Provides context-aware file operation suggestions
-- Session-scoped (reset on new session)
-
-### Skills System
-
-**Location**: `namicode_cli/skills/`
-
-Skills follow Anthropic's progressive disclosure pattern:
-- Metadata (name + description) injected into system prompt
-- Full instructions loaded from `SKILL.md` when skill is invoked
-- Supports both global (`~/.nami/agents/{AGENT_NAME}/skills/`) and project-specific (`.nami/skills/`) skills
-
-### Skill Management
-
-```bash
-# List all available skills
-nami skills list
-
-# Create a new skill
-nami skills create my-skill
-
-# Create project-specific skill
-nami skills create my-skill --project
-
-# View skill details
-nami skills info web-research
-```
-
-### Skill Structure:
-```
-~/.nami/agents/default/skills/
-├── web-research/
-│   ├── SKILL.md        # YAML frontmatter + instructions
-│   └── helper.py       # Optional supporting files
-```
-
-## MCP Integration
-
-**Location**: `namicode_cli/mcp/`
-
-Model Context Protocol servers extend agent capabilities:
-- `client.py` - MultiServerMCPClient for managing multiple MCP connections
-- `middleware.py` - Injects MCP tools into agent middleware chain
-- `presets.py` - Preset configurations (filesystem, github, postgres, puppeteer)
-- `commands.py` - CLI commands for MCP management (add, list, remove, info)
-
-MCP tools are namespaced: `servername__toolname` (e.g., `github__search_repos`)
-
-### MCP Management
-
-**Preset Configurations:**
-```bash
-nami mcp add filesystem --preset filesystem
-nami mcp add github --preset github
-nami mcp add postgres --preset postgres
-nami mcp add puppeteer --preset puppeteer
-```
-
-**Custom MCP Servers:**
-```bash
-# HTTP transport
-nami mcp add custom-server --transport http --url https://example.com/mcp
-
-# Stdio transport
-nami mcp add my-server --transport stdio --command "python -m my_mcp_server"
-```
-
-**MCP Commands:**
-```bash
-nami mcp list          # List configured servers
-nami mcp remove my-server  # Remove server
-nami mcp info my-server     # View server details
-```
-
-### MCP Integration
-
-**Location**: `namicode_cli/mcp/`
-
-Model Context Protocol servers extend agent capabilities:
-- `client.py` - MultiServerMCPClient for managing multiple MCP connections
-- `middleware.py` - Injects MCP tools into agent middleware chain
-- `presets.py` - Preset configurations (filesystem, github, postgres, puppeteer)
-- `commands.py` - CLI commands for MCP management (add, list, remove, info)
-
-MCP tools are namespaced: `servername__toolname` (e.g., `github__search_repos`)
-
-### Built-in Tools
-
-**From nami-deepagents**:
-- File operations: `ls`, `read_file`, `write_file`, `edit_file`, `glob`, `grep`
-- Planning: `write_todos`
-- Delegation: `task` (spawns subagents)
-- Execution: `execute_bash` (local), `execute` (sandbox)
-
-**From namicode_cli**:
-- `web_search` - Web search via Tavily API
-- `fetch_url` - Fetch and convert web pages to markdown
-- `dev_server.py` - Development server management
-- `test_runner.py` - Test execution
+**Session Management:**
+- `session_persistence.py` - Split storage (recent 8 messages + archive)
+- `session_restore.py` - Workspace anchoring with drift detection
+- `session_prompt_builder.py` - Context-aware continuation prompts
 
 ## Important Files
 
-| File | Purpose |
-|------|---------|
-| `pyproject.toml` | Project metadata, dependencies, ruff/mypy/pytest configuration |
-| `Makefile` | Development commands (test, lint, format, run, clean) |
-| `deepagents-nami/pyproject.toml` | Core agent library configuration |
-| `deepagents-nami/nami_deepagents/agent.py` | create_deep_agent() implementation |
-| `namicode_cli/main.py` | CLI entry point with REPL loop |
-| `namicode_cli/agent.py` | Agent creation with middleware stack configuration |
-| `namicode_cli/config.py` | Model provider and settings configuration |
-| `namicode_cli/execution.py` | Task streaming and approval handling |
-| `.env.template` | Environment variable template |
-| `CLAUDE.md` | Claude-specific development guidance |
+### Entry Points
+- `namicode_cli/main.py:52-90` - CLI entry point, REPL loop, signal handling
+- `namicode_cli/app.py:84-100` - Textual TUI application
+- `namicode_cli/__main__.py` - Module execution entry point
+
+### Configuration
+- `pyproject.toml` - Project metadata, dependencies, tool configuration
+- `Makefile` - Development commands (test, lint, format, run)
+- `.env.template` - Environment variable template
+
+### Core Agent
+- `namicode_cli/agents/core_agent.py` - Agent factory, middleware stack
+- `deepagents-nami/nami_deepagents/graph.py` - create_deep_agent() implementation
+- `deepagents-nami/nami_deepagents/backends/protocol.py` - Backend protocols
+- `deepagents-nami/nami_deepagents/backends/composite.py` - Multi-backend routing
+
+### Key Components
+- `namicode_cli/integrations/sandbox_factory.py` - Sandbox factory
+- `namicode_cli/skills/middleware.py` - Skills middleware
+- `namicode_cli/mcp/client.py` - MultiServerMCPClient
+- `namicode_cli/tracking/file_tracker.py` - File operation tracking
+- `namicode_cli/session/session_persistence.py` - Session persistence
+
+### CLI/UI
+- `namicode_cli/ui/execution.py` - Task execution and streaming
+- `namicode_cli/widgets/` - 15+ Textual TUI components
 
 ## Common Workflows
 
-### Creating New Middleware
+### Adding a New Middleware
 
-1. Inherit from `AgentMiddleware` base class
+1. Inherit from `AgentMiddleware` in `deepagents-nami/nami_deepagents/middleware/base.py`
 2. Define state schema extending `AgentState`
-3. Implement `__call__` method to wrap model requests/responses
-4. Add to middleware stack in `agent.py:create_agent_with_config()`
-5. Order matters - middleware is applied sequentially
+3. Implement `__call__` to wrap model requests/responses
+4. Add to middleware stack in `core_agent.py:create_agent_with_config()`
+5. Order matters - middleware applied sequentially
 
-### Adding New Sandbox Provider
+### Adding a New Sandbox Provider
 
-1. Create provider file in `namicode_cli/integrations/` (e.g., `new_provider.py`)
-2. Implement `SandboxBackendProtocol` interface
-3. Add provider factory case in `sandbox_factory.py`
-4. Update documentation and CLI help text
+1. Implement `SandboxBackendProtocol` from `backends/protocol.py`
+2. Extend `BaseSandbox` from `backends/sandbox.py` for shell operations
+3. Add to `sandbox_factory.py` factory
+4. Test with both unit and integration tests
 
-### Creating New Skills
+### Creating a New Agent Profile
 
-1. Create skill directory: `~/.nami/agents/default/skills/my-skill/`
-2. Add `SKILL.md` with YAML frontmatter containing name and description
-3. Add optional `helper.py` for supporting functions
-4. Skill becomes available to agent (metadata loaded, full instructions on use)
+1. Create directory: `~/.nami/agents/<agent_name>/`
+2. Create `agent.md` with YAML frontmatter for color
+3. Write system prompt in markdown
+4. Reference in @agent mentions: `@agent_name`
+
+### Modifying deepagents-nami
+
+1. Edit files in `deepagents-nami/nami_deepagents/`
+2. Changes immediately available with `uv run` (no reinstall needed)
+3. Run tests in both directories if applicable
 
 ## Testing
 
-### Test Structure
-
-- **Unit Tests**: `tests/unit_tests/` - Socket disabled (`--disable-socket --allow-unix-socket`) for isolation
-- **Integration Tests**: `tests/integration_tests/` - Full I/O allowed, includes conftest.py fixtures
-- **DeepAgents Tests**: `deepagents-nami/tests/` - Core library tests
-
-### Testing Framework
-
-- **pytest** with 10-second default timeout (configurable per-test)
-- **pytest-asyncio** for async test support
-- **pytest-cov** for coverage reporting
-- **pytest-xdist** for parallel execution
+### Framework and Structure
+- **Framework:** pytest with pytest-cov, pytest-watch
+- **Timeout:** Default 10 seconds per test
+- **Structure:**
+  - `tests/unit_tests/` - Fast, isolated tests (socket disabled via `--disable-socket`)
+  - `tests/integration_tests/` - Slower, cross-component tests (with sandboxes, LangSmith)
 
 ### Running Tests
 
 ```bash
-make test                           # Unit tests (default)
-make test_integration              # Integration tests
-make test_all                      # All tests
-make test_cov                      # With coverage report
-make test_watch                    # Watch mode
+# Unit tests (fast, isolated)
+make test
+
+# Integration tests (with sandboxes)
+make test_integration
+
+# All tests
+make test_all
+
+# Coverage report
+make test_cov
+
+# Watch mode
+make test_watch
+
+# Specific test file
+make test TEST_FILE=tests/unit_tests/tools/test_file_ops.py
 ```
+
+### Test Conventions
+
+- **Test files:** `test_*.py` naming convention
+- **Test classes:** `TestClassName` (PascalCase)
+- **Test functions:** `test_descriptive_name` (snake_case)
+- **Fixtures:** Use `tmp_path: Path` for file operations
+- **Assertions:** Plain `assert` statements allowed
+- **Session fixtures:** LangSmith client flushes after each test (integration_tests/conftest.py)
+
+### Testing Philosophy
+
+- Unit tests should be fast and isolated (no external dependencies)
+- Integration tests cover cross-component interactions and sandbox operations
+- Use mocks for dependencies in unit tests
+- Test both success and failure paths
+- Timeout enforcement prevents hanging tests
 
 ## Code Style and Conventions
 
-### Linting and Formatting
+### Formatting
+- **Tool:** ruff (formatting + linting)
+- **Line length:** 100 characters
+- **Rules:** ALL rules enabled by default
+- **Docstrings:** Google-style convention
 
-**Primary Tool**: ruff (handles both linting and formatting)
+### Commands
 
-Configuration in `pyproject.toml`:
-- Line length: 100 characters
-- Docstring convention: Google-style
-- All rules enabled with specific ignores for practical development
-
-**Ignored Rules** (per `pyproject.toml`):
-```python
-COM812      # Conflicts with formatter
-ISC001      # Conflicts with formatter
-PERF203     # Rarely useful
-SLF001      # Private member access (needed for middleware patterns)
-PLC0415     # Import position (dynamic loading required)
-PLR0913     # Too many arguments
-C901        # Function complexity
+```bash
+make lint      # Check format and linting (ruff format --check + ruff check)
+make format    # Format and fix (ruff format + ruff check --fix)
+uv run mypy namicode_cli/  # Type checking
 ```
 
-**Per-file ignores**:
-- `namicode_cli/cli.py`: T201 (print statements allowed in CLI)
-- `tests/*`: D1, S101, S311, ANN201, INP001, PLR2004
-
-### Type Checking
-
-**mypy** configured in strict mode with reduced strictness:
-```toml
-[tool.mypy]
-strict = true
-ignore_missing_imports = true
-disallow_any_generics = false
-warn_return_any = false
-```
+### Type Hints
+- mypy strict mode enabled
+- Use `from __future__ import annotations` for forward references
+- `collections.abc` for type aliases (Generator, Mapping, etc.)
+- `Literal` types for constrained values
 
 ### Naming Conventions
 
-| Element | Convention | Examples |
-|---------|------------|----------|
-| Modules | `snake_case.py` | `file_ops.py`, `test_runner.py` |
-| Classes | `PascalCase` | `CompositeBackend`, `SandboxBackendProtocol` |
-| Functions/Variables | `snake_case()` | `get_shared_store()`, `agent_memory` |
-| Constants | `SCREAMING_SNAKE_CASE` | `MAX_TOKENS`, `DEFAULT_MODEL` |
-| Private Methods | `_snake_case()` | `_format_write_file_description()` |
-| Test Files | `test_*.py` | `test_agent.py`, `test_config.py` |
-| Test Functions | `snake_case()` | `test_format_write_file_description_create_new_file()` |
+- **Variables/Functions:** snake_case (`_find_project_root`, `get_context_window_size`)
+- **Classes:** PascalCase (`FileOpTracker`, `ApprovalPreview`)
+- **Constants:** UPPER_SNAKE_CASE (`COLORS`, `HOME_DIR`, `MODEL_CONTEXT_WINDOWS`)
+- **Private members:** `_underscore_prefix` (`_format_write_file_description`)
 
-### Docstrings
+### Ruff Configuration Highlights
 
-Google-style docstrings required:
-```python
-def get_shared_store() -> InMemoryStore:
-    """Get or create the shared InMemoryStore for agent/subagent communication.
+- Google-style docstrings
+- Formatter conflicts: COM812, ISC001 ignored
+- Private member access: SLF001 allowed
+- Function arguments: PLR0913 flexible
+- Test-specific: D1 (doc rules), S101 (asserts), S311 (random), INP001 (implicit namespace) ignored
 
-    Returns:
-        Shared InMemoryStore instance
-    """
-```
+### Common Patterns
 
-## Working with deepagents-nami
+- Use `dataclass` decorators for data models with `field()` for defaults
+- Rich console for CLI output with color schemes defined in constants
+- Context managers for resource management
+- Explicit error handling with rich formatting
 
-The `deepagents-nami/` directory is a **local dependency** linked via:
+## Additional Notes
+
+### Local Dependency
+
+The `deepagents-nami/` directory is a local dependency linked via:
 ```toml
 [tool.uv.sources]
 nami-deepagents = { path = "./deepagents-nami" }
 ```
 
-**Development pattern:**
+When modifying deepagents functionality:
 1. Make changes in `deepagents-nami/nami_deepagents/`
-2. Changes are immediately available to `namicode_cli/` (no reinstall with `uv run`)
-3. Run tests from both directories if applicable
-4. Coordinate changes that span both codebases
-
-## Memory File Locations
-
-- **Global agent**: `~/.nami/agents/<name>/agent.md`
-- **Project agent**: `.nami/NAMI.md` or `.claude/CLAUDE.md`
-- **Skills**: `~/.nami/agents/<name>/skills/` (global), `.nami/skills/` (project)
-- **MCP config**: `~/.nami/mcp-config.json`
-
-## Error Handling
-
-### Error Taxonomy (`namicode_cli/errors/taxonomy.py`)
-
-Errors are classified for appropriate recovery strategies:
-
-```python
-class ErrorCategory(Enum):
-    USER_ERROR = "user_error"
-    FILE_NOT_FOUND = "file_not_found"
-    PERMISSION_DENIED = "permission_denied"
-    COMMAND_NOT_FOUND = "command_not_found"
-    SYNTAX_ERROR = "syntax_error"
-    NETWORK_ERROR = "network_error"
-    CONTEXT_OVERFLOW = "context_overflow"
-    TOOL_ERROR = "tool_error"
-    SYSTEM_ERROR = "system_error"
-
-@dataclass
-class RecoverableError:
-    category: ErrorCategory
-    original_error: Exception
-    context: dict
-    recovery_suggestion: str
-    user_message: str
-    retry_allowed: bool = True
-```
-
-### Error Recovery (`namicode_cli/errors/handlers.py`)
-
-| Strategy | Purpose |
-|----------|---------|
-| `FileNotFoundRecovery` | Handle missing files |
-| `PermissionDeniedRecovery` | Handle permission issues |
-| `ContextOverflowRecovery` | Handle context/window overflow |
-| `NetworkErrorRecovery` | Handle network issues with exponential backoff (1s, 2s, 4s) |
-| `CommandNotFoundRecovery` | Handle missing commands |
-
-**Error Handler Features:**
-- Automatic error classification
-- Recovery suggestions for users
-- Exponential backoff for network errors
-- Graceful sandbox-specific error handling
-
-## Key Deep Agent Components
-
-### create_deep_agent() (`deepagents-nami/nami_deepagents/graph.py`)
-
-The core factory function that creates LangGraph-based deep agents. Key parameters:
-
-```python
-def create_deep_agent(
-    model: str | BaseChatModel | None = None,
-    tools: Sequence[BaseTool | Callable | dict[str, Any]] | None = None,
-    system_prompt: str | None = None,
-    middleware: Sequence[AgentMiddleware] = (),
-    subagents: list[SubAgent | CompiledSubAgent] | None = None,
-    checkpointer: Checkpointer | None = None,
-    store: BaseStore | None = None,
-    backend: BackendProtocol | BackendFactory | None = None,
-    interrupt_on: dict[str, bool | InterruptOnConfig] | None = None,
-    debug: bool = False,
-    name: str | None = None,
-) -> CompiledStateGraph
-```
-
-**Default middleware applied by create_deep_agent():**
-- TodoListMiddleware - Planning with write_todos
-- FilesystemMiddleware(backend) - File operations (ls, read, write, edit, glob, grep, execute)
-- SubAgentMiddleware - Task delegation via task tool
-- SummarizationMiddleware - Context management (70% trigger, 15% keep)
-- AnthropicPromptCachingMiddleware - Token optimization
-- PatchToolCallsMiddleware - Tool call fixes
-
-**Default Model:** Claude Sonnet 4 (`claude-sonnet-4-5-20250929`)
-
-## Architectural Patterns
-
-### Design Patterns Implemented in Nami-Code:
-
-**Factory Pattern:**
-- Agent Factory (`create_deep_agent()`)
-- Sandbox Factory (`create_sandbox()`)
-- Model Factory (`create_model()`)
-
-**Middleware Pattern:**
-- Chain of Responsibility with sequential middleware application
-- Each middleware handles specific concern independently
-- Plugin architecture for easy extension
-
-**Command Pattern:**
-- CLI commands implemented as discrete handlers
-- Tools follow uniform interface
-- Skill commands for management operations
-
-**Observer Pattern:**
-- Real-time token and session state monitoring
-- Event-driven UI updates
-- Background process management
-
-**Strategy Pattern:**
-- Multiple execution environments (local vs sandbox)
-- Dynamic model provider selection
-- Different tool implementations per environment
-
-**Facade Pattern:**
-- Simplified interfaces for complex external APIs
-- Unified tool APIs across different backends
-- Single point configuration management
-
-### Key Architectural Decisions
-
-1. **LangGraph-Based Architecture**: Leverages LangChain ecosystem while providing advanced agent capabilities with checkpointing and streaming support.
-
-2. **Deep Agent Pattern**: Enables hierarchical task decomposition with human oversight and parallel execution.
-
-3. **Skills-Based Extensibility**: Following Anthropic's progressive disclosure pattern for scalable knowledge management.
-
-4. **Multi-Provider Strategy**: Sandbox flexibility with security isolation and unified interfaces.
-
-5. **Human-in-the-Loop Design**: Safety-first approach with configurable approval workflows.
-
-## Project Structure
-
-### Core Package Layout
-
-The project follows a modular architecture with clear separation of concerns:
-
-```
-namicode_cli/
-├── main.py                    # CLI entry point, argument parsing, REPL loop
-├── agent.py                  # Agent creation with middleware stack
-├── execution.py              # Task execution and streaming
-├── config.py                 # Settings and model provider configuration
-├── ui.py                     # Rich-based UI rendering
-├── commands.py               # Slash command handlers
-├── input.py                  # Interactive input with prompt_toolkit
-├── skills/                   # Progressive disclosure skill system
-├── mcp/                      # Model Context Protocol integration
-├── integrations/             # Sandbox provider implementations
-├── default_subagents/        # Built-in specialized subagents
-├── agent_memory.py           # Persistent agent memory
-├── shared_memory.py          # Cross-agent communication
-├── file_tracker.py           # File operation tracking
-├── onboarding.py             # Interactive first-run setup
-├── doctor.py                 # System diagnostics
-└── evaluation/               # Terminal-Bench evaluation framework
-```
-
-### DeepAgents Core Library (`deepagents-nami/`)
-
-Key directory structure for the core dependency:
-
-```
-deepagents-nami/
-├── nami_deepagents/
-│   ├── agent.py              # create_deep_agent() implementation
-│   ├── graph.py              # LangGraph Pregel state management
-│   ├── backends/             # Storage backend abstractions
-│   │   ├── protocol.py       # BackendProtocol interface
-│   │   ├── filesystem.py     # Local filesystem backend
-│   │   ├── state.py          # LangGraph state wrapper
-│   │   ├── store.py          # LangGraph Store wrapper
-│   │   ├── sandbox.py        # Sandbox base class
-│   │   ├── composite.py      # Multi-backend router
-│   │   └── utils.py          # Backend utilities
-│   ├── middleware/           # Agent middleware
-│   │   ├── filesystem.py     # File operation tools
-│   │   ├── subagents.py      # Subagent spawning
-│   │   └── patch_tool_calls.py # Tool call handling
-│   └── tests/                # Core library tests
-```
-
-## Important Files
-
-| File | Purpose |
-|------|---------|
-| `pyproject.toml` | Main project configuration, dependencies, tooling |
-| `deepagents-nami/pyproject.toml` | Core agent library configuration |
-| `Makefile` | Development commands and automation |
-| `README.md` | Comprehensive project documentation |
-| `CLAUDE.md` | Claude Code-specific guidance |
-| `.env.template` | Environment variable template |
-| `namicode_cli/main.py` | CLI entry point and REPL loop |
-| `namicode_cli/agent.py` | Agent creation with middleware configuration |
-| `namicode_cli/config.py` | Settings and model provider management |
-| `namicode_cli/execution.py` | Task execution and approval workflows |
-
-## Common Workflows
-
-### Development
-```bash
-# Setup environment
-uv venv
-uv sync --all-groups
-
-# Run tests before committing
-make lint
-make test
-
-# Format code
-make format
-
-# Run CLI locally
-uv run nami
-```
-
-### Adding New Features
-1. Implement functionality in `namicode_cli/` modules
-2. If core agent capability needed, contribute to `deepagents-nami/`
-3. Add unit tests in `tests/unit_tests/`
-4. Update relevant documentation
-
-### Testing Approach
-- Unit tests isolated with socket disabled
-- Integration tests for full I/O scenarios
-- Use `pytest.raises()` for error handling tests
-- Mock external dependencies for reliability
-
-## Additional Notes
-
-### Version Compatibility
-- Requires Python 3.11+ for modern async/await patterns
-- LangChain 1.0+ compatibility requirements
-- Backward compatibility maintained within semantic versioning
-
-### Security Considerations
-- Environment variable management via OS keychain
-- Sandbox isolation for untrusted code execution
-- Automatic .gitignore enforcement
-- Input validation for file operations
-
-### Performance Optimization
-- Context summarization at 70% token usage
-- Progressive disclosure reduces prompt overhead
-- Efficient file operation tracking
-- Background process management
-
-This NAMI.md provides comprehensive guidance for AI assistants working with the Nami-Code project, covering architecture, development practices, and key workflows.
-class SubAgent(TypedDict):
-    name: str                    # How main agent calls it
-    description: str             # Shown to main agent for decisions
-    system_prompt: str           # Subagent personality
-    tools: Sequence[...]         # Available tools
-    model: NotRequired[...]      # Override default model
-    middleware: NotRequired[...] # Additional middleware
-    interrupt_on: NotRequired[...] # HITL configuration
-
-class CompiledSubAgent(TypedDict):
-    name: str
-    description: str
-    runnable: Runnable           # Pre-built LangGraph graph
-    color: NotRequired[str]      # Output color (hex)
-```
-
-## Entry Point Flow
-
-```
-cli_main() [main.py:entry point]
-    │
-    ▼
-parse_args() [main.py]
-    ├── Interactive mode → run_cli_session()
-    ├── Commands (list, help, reset) → execute directly
-    └── Skills/MCP → setup subparser → execute command
-    │
-    ▼
-run_cli_session() [main.py]
-    │
-    ├─> create_model() [config.py] → Detect LLM provider
-    ├─> create_sandbox() [sandbox_factory.py] → Remote execution (optional)
-    ├─> create_agent_with_config() [agent.py]
-    │   └─> create_deep_agent() [graph.py]
-    │       └─> Builds LangGraph Pregel graph
-    │           with middleware stack
-    │
-    └─> simple_cli() [main.py:interactive loop]
-        └─> execute_task() [execution.py]
-            └─> agent.astream()
-                └─> Middleware chain → LLM → Tools
-```
-
-## Sandbox Integration
-
-**Factory Pattern** (`integrations/sandbox_factory.py:49-314`):
-
-```python
-create_sandbox(provider: str, **kwargs) → SandboxBackendProtocol
-```
-
-| Provider | File | Features |
-|----------|------|----------|
-| `modal` | modal.py | Modal cloud execution |
-| `daytona` | daytona.py | Daytona workspace |
-| `runloop` | runloop.py | Runloop sandbox |
-| `docker` | docker.py | Docker containers |
-| `e2b` | e2b_executor.py | E2B cloud code interpreter |
-
-**SandboxProvider Configuration** (`integrations/sandbox_factory.py`):
-
-Each provider implements `SandboxBackendProtocol` with:
-- `execute(command)` → ExecuteResponse (output, exit_code, truncation flag)
-- `upload_files(files)` → List[FileUploadResponse]
-- `download_files(paths)` → List[FileDownloadResponse]
-- `id` property → Unique sandbox identifier
-
-**Sandbox Selection:**
-- Default: Local mode (no sandbox)
-- Optional: `--sandbox <provider>` flag to enable remote execution
-- Provider auto-detection based on available API keys
-
-## Configuration File Locations
-
-| Setting | Location |
-|---------|----------|
-| API Keys | OS keyring or `~/.nami/.env` or `.env` file |
-| Global Agents | `~/.nami/agents/{agent_name}/agent.md` |
-| MCP Configuration | `~/.nami/mcp.json` |
-| Project Memory | `.nami/NAMI.md` or `.claude/CLAUDE.md` or `CLAUDE.md` |
-| Skills | `~/.nami/{agent}/skills/` or `.nami/skills/` |
-| Session State | `~/.nami/sessions/` |
-
-## CLI Commands Reference
-
-| Command | Purpose |
-|---------|---------|
-| `nami` | Interactive mode (default) |
-| `nami init` | Initialize project/global config |
-| `nami list` | List available agents |
-| `nami reset --agent <name>` | Reset agent state |
-| `nami skills list\|add\|remove` | Skills management |
-| `nami mcp list\|add\|remove\|run` | MCP server management |
-| `nami config show\|set\|get` | Configuration management |
-| `nami secrets set\|list\|remove` | API key management |
-| `nami doctor` | System diagnostics |
-| `nami paths list\|allow\|deny` | Path approval management |
-| `nami migrate` | Directory structure migration |
-| `nami --sandbox <provider>` | Run in sandbox mode |
-
-## Version Information
-
-| Component | Version |
-|-----------|---------|
-| Package Name | `namicode-cli` |
-| Current Version | 0.0.10 (pyproject.toml) |
-| Core Library Version | 0.2.8 (deepagents-nami/pyproject.toml) |
-| Python Range | `>=3.11,<4.0` |
-| Entry Point | `nami = namicode_cli.main:cli_main` |
-
-## Security Features
-
-- **.gitignore enforcement**: Files in `.gitignore` are never accessed by the agent
-- **Path validation**: FilesystemMiddleware validates paths to prevent directory traversal
-- **Sandbox isolation**: Remote execution runs in isolated containers/VMs
-- **Human-in-the-loop**: Potentially destructive operations require approval (unless `--auto-approve`)
-- **Path approval system**: Unapproved directories require explicit user permission before access
-
-## File Operations Best Practices
-
-### Pattern for Codebase Exploration
-
-1. **First scan**: `read_file(path, limit=100)` - See file structure and key sections
-2. **Targeted read**: `read_file(path, offset=100, limit=200)` - read_file specific sections if needed
-3. **Full read**: Only use `read_file(path)` without limit when necessary for editing
-
-### When to Paginate
-
-- Reading any file >500 lines
-- Exploring unfamiliar codebases (always start with limit=100)
-- Reading multiple files in sequence
-- Any research or investigation task
-
-### read_file-Before-edit Rule
-
-You MUST read a file before editing it. The system tracks all file reads and will reject edit operations on files you haven't read in the session.
-
-## Recommended Patterns for AI Assistants
-
-### Working with Subagents
-
-**When to delegate:**
-- Domain expertise needed: Task matches a specialized agent's expertise
-- Complex multi-step work: Research + analysis + synthesis
-- Context isolation beneficial: Task would bloat the main context window
-
-**When NOT to delegate:**
-- Simple 1-2 step tasks
-- Task doesn't match any specialized agent
-- User explicitly asks YOU (the main agent) to do it
-
-**Delegation pattern:**
-1. Identify task requires specialization
-2. Choose appropriate subagent based on domain
-3. Prepare clear, complete instructions
-4. Delegate: `task(description="...", subagent_type="agent-name")`
-5. Receive synthesized result
-6. Integrate into final response to user
-
-### Using Skills
-
-Skills follow a progressive disclosure pattern:
-
-1. **Recognition**: User request matches skill's description
-2. **Load**: read_file skill's full instructions from `SKILL.md`
-3. **Execute**: Follow the skill's step-by-step workflow
-4. **Access**: Use helper scripts with absolute paths if provided
-
-### Code Quality Workflow
-
-1. Before making changes: `make lint` to check issues
-2. After changes: `make format` to auto-fix formatting
-3. Run tests: `make test` to verify functionality
-4. Type check: `uv run mypy .` for type safety
-
-## Common Error Patterns
-
-| Error Type | Location | Handling |
-|------------|----------|----------|
-| Path validation | `file_tracker.py` | Use approved paths only |
-| Socket isolation | Unit tests | Tests use `--disable-socket` |
-| Token limits | `token_utils.py` | Context compaction at 70% |
-| Sandbox failures | `integrations/` | Auto-fallback to local mode |
+2. Changes immediately available to `namicode_cli/` with `uv run`
+3. Run tests in both directories
+
+### Memory File Locations
+
+- Global agent: `~/.nami/agents/default/agent.md`
+- Project agent: `.nami/NAMI.md` or `.claude/CLAUDE.md`
+- Skills: `~/.nami/skills/` (global), `.nami/skills/` (project, higher priority)
+- MCP config: `~/.nami/mcp.json`
+- Path approval: `~/.nami/approved_paths.json`
+- Sessions: `~/.nami/sessions/<session_id>/`
+- Secrets: OS keychain (primary) or `~/.nami/secrets.json` (fallback)
+
+### CLI Commands Reference
+
+**Slash Commands:**
+- `/help` - Show available commands
+- `/tokens` - Show token usage
+- `/context` - Display context window usage
+- `/clear` - Clear conversation
+- `/exit`, `/quit` - Exit session
+- `/init` - Initialize new session
+- `/skills` - Manage skills
+- `/mcp` - Manage MCP servers
+- `/list` - List available agents
+- `/continue` - Continue previous session
+- `/model` - Change LLM model
+- `/paths` - Manage approved paths
+- `/server` - Manage development servers
+
+**Bash Commands:**
+- `!command` - Execute shell commands directly
+
+**Subagent Invocation:**
+- `@agent_name` - Invoke named subagent
+
+### Path Approval System
+
+The path approval system provides security for file operations:
+- Tracks approved and denied paths per session
+- Requires approval for operations outside approved paths
+- Configuration stored in `~/.nami/approved_paths.json`
+- Recursive directory approval support
+- Audit trail of all approval decisions
+
+### Troubleshooting
+
+**Sandbox connection failures:**
+- Check API keys in environment variables or keychain
+- Verify network connectivity
+- Run `/doctor` for diagnostic checks
+
+**File operation errors:**
+- Check `/paths` for approval status
+- Verify file permissions
+- Check for symlink attacks (virtual mode protection)
+
+**Token limit exceeded:**
+- Check `/context` for usage
+- Consider summarization
+- Use pagination for large files
+
+**Agent not responding:**
+- Check LLM provider connection
+- Verify API key validity
+- Run `/doctor` for diagnostics
+
+### File Operation Rules (Enforced)
+
+**Critical: Read-Before-Edit Rule**
+You MUST read a file before editing it. The system tracks all file reads and will REJECT edit operations on files you haven't read in this session.
+
+**Why this matters:**
+- Prevents editing the wrong file or wrong location
+- Ensures you have current file content before making changes
+- Catches stale edits if the file changed since you last saw it
+
+**File Operation Best Practices:**
+1. **Always read first:** Before any edit_file or write_file (to existing file), use read_file
+2. **Use pagination for large files:** `read_file(path, limit=100)` for initial scan
+3. **Verify before edit:** Check the content you want to replace actually exists
+4. **Track your changes:** The system logs all file operations for the session
+
+### Changelog Maintenance
+
+After implementing any feature, bug fix, refactor, or significant change:
+
+1. Create/update changelog file in `changelog/` directory
+2. Use versioning format: `changelog_v{version}.md` (e.g., `changelog_v0.1.md`)
+3. Include for each entry:
+   - Date of change (YYYY-MM-DD)
+   - Type: **Feature**, **Bug Fix**, **Refactor**, **Documentation**, **Breaking Change**
+   - Description of what changed
+   - Related issue/PR number (if applicable)
+
+### Evaluation Framework
+
+DeepAgents Harbor (`evaluation/`) provides comprehensive benchmarking:
+
+- **DeepAgentsWrapper** - SDK-based agent with minimal config
+- **NamiCodeWrapper** - Full CLI agent with complete middleware
+- **HarborSandbox** - Backend implementation for Harbor environments
+- **Terminal Bench 2.0** - 90+ tasks across domains (coding, security, DevOps, AI/ML, science, gaming)
+- **LangSmith Integration** - Automatic trace capture and experiment management
+
+See `evaluation/` directory for detailed evaluation commands and workflows.

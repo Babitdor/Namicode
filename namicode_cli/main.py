@@ -312,6 +312,11 @@ def parse_args():
         help="Show the version number and exit",
     )
     parser.add_argument(
+        "--tui",
+        action="store_true",
+        help="Launch Textual-based TUI interface instead of CLI",
+    )
+    parser.add_argument(
         "-h", "--help", action="help", help="Show this help message and exit"
     )
 
@@ -982,6 +987,224 @@ async def main(
             sys.exit(1)
 
 
+async def main_tui(
+    assistant_id: str,
+    session_state,
+    sandbox_type: str = "none",
+    sandbox_id: str | None = None,
+    setup_script_path: str | None = None,
+    continue_session: bool | str = False,
+) -> None:
+    """Main entry point for TUI mode with conditional sandbox support.
+
+    Args:
+        assistant_id: Agent identifier for memory storage
+        session_state: Session state with auto-approve settings
+        sandbox_type: Type of sandbox ("none", "modal", "runloop", "daytona")
+        sandbox_id: Optional existing sandbox ID to reuse
+        setup_script_path: Optional path to setup script to run in sandbox
+        continue_session: If True, continue last session. If string, use as session ID.
+    """
+    from namicode_cli.session.session_persistence import SessionManager
+    from namicode_cli.session.session_restore import restore_session
+    from namicode_cli.app import run_textual_app
+    from namicode_cli.config.config import settings as app_settings
+
+    model = create_model()
+    store = InMemoryStore()
+    checkpointer = InMemorySaver()
+    session_manager = SessionManager()
+    initial_messages: list | None = None
+
+    # Handle session continuation
+    if continue_session:
+        from namicode_cli.tracking.workspace_anchoring import (
+            scan_workspace,
+            detect_drift,
+        )
+        from namicode_cli.session.session_prompt_builder import (
+            build_continuation_prompt,
+            load_nami_md,
+        )
+
+        project_root = Path.cwd()
+        session_id = continue_session if isinstance(continue_session, str) else None
+
+        result = restore_session(session_manager, session_id, project_root)
+        if result:
+            session_data, warnings = result
+
+            # Load only recent messages for context
+            recent_messages = session_manager.load_recent_messages(
+                session_data.meta.session_id
+            )
+
+            # Scan current workspace and detect drift
+            current_workspace = scan_workspace(project_root)
+            if session_data.workspace_state:
+                drift_warnings = detect_drift(
+                    session_data.workspace_state, current_workspace
+                )
+                warnings.extend(drift_warnings)
+
+            # Load NAMI.md for continuation prompt
+            nami_md_content = load_nami_md(project_root)
+
+            # Build continuation messages with proper prompt structure
+            session_data_with_recent = session_data
+            session_data_with_recent.messages = recent_messages
+
+            # Get base system prompt
+            from namicode_cli.config.config import get_default_coding_instructions
+
+            base_system_prompt = get_default_coding_instructions()
+
+            # Build continuation prompt with correct order
+            initial_messages = build_continuation_prompt(
+                session_data=session_data_with_recent,
+                system_prompt=base_system_prompt,
+                nami_md_content=nami_md_content,
+                workspace_state=current_workspace,
+            )
+
+            # Restore session state
+            session_state.session_id = session_data.meta.session_id
+            session_state.thread_id = session_data.meta.thread_id
+            session_state.is_continued = True
+
+            # Restore todos if available
+            if session_data.todos:
+                session_state.todos = session_data.todos
+        else:
+            console.print()
+            console.print("[yellow]No previous session found.[/yellow]")
+            console.print("[dim]Starting new session.[/dim]")
+            console.print()
+
+    # Create agent with tools
+    tools = [
+        http_request,
+        fetch_url,
+        execute_in_e2b,
+        run_tests_tool,
+        start_dev_server_tool,
+        stop_server_tool,
+        list_servers_tool,
+    ]
+    if settings.has_tavily:
+        tools.append(web_search)
+
+    # Branch 1: User wants a sandbox
+    if sandbox_type != "none":
+        try:
+            console.print()
+            with create_sandbox(
+                sandbox_type, sandbox_id=sandbox_id, setup_script_path=setup_script_path
+            ) as sandbox_backend:
+                console.print(
+                    f"[yellow]⚡ Remote execution enabled ({sandbox_type})[/yellow]"
+                )
+                console.print()
+
+                agent, composite_backend = create_agent_with_config(
+                    model,
+                    assistant_id,
+                    tools,
+                    sandbox=sandbox_backend,
+                    sandbox_type=sandbox_type,
+                    store=store,
+                    checkpointer=checkpointer,
+                )
+
+                # Inject initial messages if continuing a session
+                if initial_messages:
+                    config = {"configurable": {"thread_id": session_state.thread_id}}
+                    await agent.aupdate_state(
+                        config=config,
+                        values={"messages": initial_messages},
+                    )
+
+                # Get model name for context window calculation
+                model_name = getattr(model, "model_name", None) or getattr(
+                    model, "model", "unknown"
+                )
+
+                await run_textual_app(
+                    agent=agent,
+                    assistant_id=assistant_id,
+                    backend=composite_backend,
+                    auto_approve=session_state.auto_approve,
+                    cwd=Path.cwd(),
+                    thread_id=session_state.thread_id,
+                    session_state=session_state,
+                    session_manager=session_manager,
+                    store=store,
+                    checkpointer=checkpointer,
+                    model_name=model_name,
+                    settings=app_settings,
+                )
+        except (ImportError, ValueError, RuntimeError, NotImplementedError) as e:
+            console.print()
+            console.print("[red]❌ Sandbox creation failed[/red]")
+            console.print(f"[dim]{e}[/dim]")
+            sys.exit(1)
+        except KeyboardInterrupt:
+            console.print("\n\n[yellow]Interrupted[/yellow]")
+            sys.exit(0)
+        except Exception as e:
+            console.print(f"\n[bold red]Error:[/bold red] {e}\n")
+            console.print_exception()
+            sys.exit(1)
+
+    # Branch 2: User wants local mode (none or default)
+    else:
+        try:
+            agent, composite_backend = create_agent_with_config(
+                model,
+                assistant_id,
+                tools,
+                sandbox=None,
+                sandbox_type=None,
+                store=store,
+                checkpointer=checkpointer,
+            )
+
+            # Inject initial messages if continuing a session
+            if initial_messages:
+                config = {"configurable": {"thread_id": session_state.thread_id}}
+                await agent.aupdate_state(
+                    config=config,
+                    values={"messages": initial_messages},
+                )
+
+            # Get model name for context window calculation
+            model_name = getattr(model, "model_name", None) or getattr(
+                model, "model", "unknown"
+            )
+
+            await run_textual_app(
+                agent=agent,
+                assistant_id=assistant_id,
+                backend=composite_backend,
+                auto_approve=session_state.auto_approve,
+                cwd=Path.cwd(),
+                thread_id=session_state.thread_id,
+                session_state=session_state,
+                session_manager=session_manager,
+                store=store,
+                checkpointer=checkpointer,
+                model_name=model_name,
+                settings=app_settings,
+            )
+        except KeyboardInterrupt:
+            console.print("\n\n[yellow]Interrupted[/yellow]")
+            sys.exit(0)
+        except Exception as e:
+            console.print(f"\n[bold red]Error:[/bold red] {e}\n")
+            console.print_exception()
+            sys.exit(1)
+
+
 def _execute_paths_command(args) -> None:
     """Execute paths management commands."""
     manager = PathApprovalManager()
@@ -1308,17 +1531,30 @@ def cli_main() -> None:
                 auto_approve=args.auto_approve, no_splash=args.no_splash
             )
 
-            # API key validation happens in create_model()
-            asyncio.run(
-                main(
-                    args.agent,
-                    session_state,
-                    args.sandbox,
-                    args.sandbox_id,
-                    args.sandbox_setup,
-                    args.continue_session,
+            # Check if TUI mode is requested
+            if getattr(args, 'tui', False):
+                asyncio.run(
+                    main_tui(
+                        args.agent,
+                        session_state,
+                        args.sandbox,
+                        args.sandbox_id,
+                        args.sandbox_setup,
+                        args.continue_session,
+                    )
                 )
-            )
+            else:
+                # API key validation happens in create_model()
+                asyncio.run(
+                    main(
+                        args.agent,
+                        session_state,
+                        args.sandbox,
+                        args.sandbox_id,
+                        args.sandbox_setup,
+                        args.continue_session,
+                    )
+                )
     except KeyboardInterrupt:
         # Clean exit on Ctrl+C - suppress ugly traceback
         console.print("\n\n[yellow]Interrupted[/yellow]")

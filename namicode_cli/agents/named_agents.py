@@ -147,7 +147,7 @@ def create_subagent(
         ),
         MemoryMiddleware(backend=FilesystemBackend(), sources=memory_sources),
         SkillsMiddleware(backend=FilesystemBackend(), sources=skill_sources),
-        # mcp_middleware,
+        mcp_middleware,
         SharedMemoryMiddleware(author_id=f"subagent:{agent_name}"),
         ShellMiddleware(
             workspace_root=str(Path.cwd()),

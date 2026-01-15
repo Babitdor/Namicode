@@ -1,4 +1,4 @@
-"""Status bar widget for deepagents-cli."""
+"""Status bar widget for Nami-Code TUI."""
 
 from __future__ import annotations
 
@@ -81,11 +81,25 @@ class StatusBar(Horizontal):
         padding: 0 1;
         color: $text-muted;
     }
+
+    StatusBar .status-plan-mode {
+        width: auto;
+        padding: 0 1;
+        display: none;
+    }
+
+    StatusBar .status-plan-mode.active {
+        display: block;
+        background: #0ea5e9;
+        color: white;
+        text-style: bold;
+    }
     """
 
     mode: reactive[str] = reactive("normal", init=False)
     status_message: reactive[str] = reactive("", init=False)
     auto_approve: reactive[bool] = reactive(default=False, init=False)
+    plan_mode: reactive[bool] = reactive(default=False, init=False)
     cwd: reactive[str] = reactive("", init=False)
     tokens: reactive[int] = reactive(0, init=False)
 
@@ -103,6 +117,7 @@ class StatusBar(Horizontal):
     def compose(self) -> ComposeResult:
         """Compose the status bar layout."""
         yield Static("", classes="status-mode normal", id="mode-indicator")
+        yield Static("PLAN MODE", classes="status-plan-mode", id="plan-mode-indicator")
         yield Static(
             "manual | shift+tab to cycle",
             classes="status-auto-approve off",
@@ -231,3 +246,22 @@ class StatusBar(Horizontal):
             count: Current context token count
         """
         self.tokens = count
+
+    def watch_plan_mode(self, new_value: bool) -> None:  # noqa: FBT001
+        """Update plan mode indicator when state changes."""
+        try:
+            indicator = self.query_one("#plan-mode-indicator", Static)
+        except NoMatches:
+            return
+
+        indicator.remove_class("active")
+        if new_value:
+            indicator.add_class("active")
+
+    def set_plan_mode(self, *, enabled: bool) -> None:
+        """Set the plan mode state.
+
+        Args:
+            enabled: Whether plan mode is enabled
+        """
+        self.plan_mode = enabled

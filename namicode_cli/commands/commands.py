@@ -222,6 +222,12 @@ This file provides guidance to AI assistants when working with code in this repo
    - Make it comprehensive but concise
    - Focus on information that would help an AI assistant understand and work with the codebase
 
+6. **Hard constraint**
+- The final NAMI.md **MUST NOT exceed 45,000 characters**
+- If content is too long, summarize aggressively
+- Prefer bullet points over prose
+- Omit redundant explanations
+
 Please start exploring now and create the NAMI.md file."""
 
     # Show status

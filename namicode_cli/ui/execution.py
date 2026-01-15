@@ -329,9 +329,14 @@ async def execute_task(  # type: ignore
 
     def flush_text_buffer(*, final: bool = False) -> None:
         """Flush accumulated assistant text as rendered markdown when appropriate."""
-        nonlocal pending_text, spinner_active, has_responded
+        nonlocal pending_text, spinner_active, has_responded, response_shown_via_updates
         if not final or not pending_text.strip():
             return
+        # Skip if updates stream already showed the response to avoid duplicates
+        if response_shown_via_updates:
+            pending_text = ""
+            return
+        response_shown_via_updates = True  # Mark as shown to prevent future duplicates
         if spinner_active:
             status.stop()
             spinner_active = False
@@ -350,6 +355,7 @@ async def execute_task(  # type: ignore
     try:
         while True:
             interrupt_occurred = False
+            seen_message_ids = set()
             hitl_response: dict[str, HITLResponse] = {}
             suppress_resumed_output = False
             # Reset per-turn flags and tracking
@@ -361,7 +367,7 @@ async def execute_task(  # type: ignore
 
             async for chunk in agent.astream(
                 stream_input,
-                stream_mode=["messages", "updates"],  # Dual-mode for HITL support
+                stream_mode=["updates", "messages"],  # Dual-mode for HITL support
                 subgraphs=True,
                 config=config,
                 durability="exit",
@@ -473,12 +479,15 @@ async def execute_task(  # type: ignore
                                     and msg_type in ("ai", "assistant")
                                     and not tool_calls
                                 ):
-                                    # Clear any pending text from messages stream to avoid duplicate
-                                    pending_text = ""
-                                    # Skip if we already showed this response
-                                    if response_shown_via_updates:
+                                    # ✅ THEN: Skip ONLY if already seen
+                                    if msg_id and msg_id in seen_message_ids:
                                         continue
-                                    response_shown_via_updates = True
+
+                                    # ✅ Mark as seen BEFORE printing
+                                    if msg_id:
+                                        seen_message_ids.add(msg_id)
+
+                                    # ✅ PRINT (first time only)
                                     if spinner_active:
                                         status.stop()
                                         spinner_active = False
@@ -491,12 +500,13 @@ async def execute_task(  # type: ignore
                                             end=" ",
                                         )
                                         has_responded = True
-
                                     console.print(
-                                        agent_display_name,
-                                        style=agent_colors,
+                                        agent_display_name, style=agent_colors
                                     )
                                     console.print(Markdown(msg_text), justify="full")
+                                    response_shown_via_updates = (
+                                        True  # Your existing flag
+                                    )
 
                 # Handle MESSAGES stream - for content and tool calls
                 elif current_stream_mode == "messages":
@@ -510,6 +520,11 @@ async def execute_task(  # type: ignore
                         continue
 
                     message, _metadata = data
+
+                    if hasattr(message, "id"):
+                        msg_id = message.id
+                        if msg_id in seen_message_ids:
+                            continue  # Skip entire message if already processed via updates
 
                     if isinstance(message, HumanMessage):
                         content = message.text
@@ -533,11 +548,20 @@ async def execute_task(  # type: ignore
                     if isinstance(message, ToolMessage):
                         # Tool results are sent to the agent, not displayed to users
                         # Exception: show shell command errors to help with debugging
+                        tool_id = getattr(message, "id", None) or getattr(
+                            message, "tool_call_id", None
+                        )
+
+                        if tool_id and tool_id in seen_message_ids:
+                            continue
+
+                        if tool_id:
+                            seen_message_ids.add(tool_id)
+
                         tool_name = getattr(message, "name", "")
                         tool_status = getattr(message, "status", "success")
                         tool_content = format_tool_message_content(message.content)
                         record = file_op_tracker.complete_with_message(message)
-
                         # Special handling for task tool completion: display completion banner
                         tool_call_id = getattr(message, "tool_call_id", None)
                         if tool_name == "task" and tool_call_id in active_subagents:
@@ -625,11 +649,10 @@ async def execute_task(  # type: ignore
                     # Process content blocks (this is the key fix!)
                     for block in message.content_blocks:
                         block_type = block.get("type")
-
                         # Handle text blocks - skip if subagent is active or updates stream already showed
                         if block_type == "text":
                             text = block.get("text", "")
-                            if text and not response_shown_via_updates:
+                            if text:
                                 pending_text += text
 
                         # Handle reasoning blocks
@@ -763,10 +786,10 @@ async def execute_task(  # type: ignore
                                     # Get subagent color if available
                                     subagent_color = get_agent_color(subagent_type)
 
-                                    # Truncate description for banner
+                                    # INCREASED: Show 120 chars instead of 60
                                     desc_preview = (
-                                        description[:60] + "..."
-                                        if len(description) > 60
+                                        description[:120] + "..."
+                                        if len(description) > 120
                                         else description
                                     )
 
@@ -789,14 +812,26 @@ async def execute_task(  # type: ignore
                                     )
                                     console.print()
 
-                                # Restart spinner with context about which tool is executing
-                                status.update(
-                                    f"[bold {COLORS['thinking']}]{agent_display_name} is executing {display_str}..."
-                                )
-                                status.start()
-                                spinner_active = True
+                                    # NEW: Background running indicator
+                                    console.print(
+                                        f"│ 🟡 {subagent_type} is now running in the background...",
+                                        style=f"dim {subagent_color}",
+                                    )
+                                    console.print(
+                                        "╰" + "─" * 60, style=f"dim {subagent_color}"
+                                    )
+                                    console.print()
 
-                    if getattr(message, "chunk_position", None) == "last":
+                                    # Restart spinner with context about which tool is executing
+                                    status.update(
+                                        f"[bold {COLORS['thinking']}]{agent_display_name} is executing {display_str}..."
+                                    )
+                                    status.start()
+                                    spinner_active = True
+
+                    if getattr(message, "chunk_position", None) == "last":  # ← HERE
+                        if hasattr(message, "id"):
+                            seen_message_ids.add(message.id)
                         flush_text_buffer(final=True)
 
             # After streaming loop - handle interrupt if it occurred

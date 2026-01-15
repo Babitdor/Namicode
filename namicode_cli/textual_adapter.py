@@ -173,6 +173,8 @@ async def execute_task_textual(
     # when multiple subagents stream in parallel
     pending_text_by_namespace: dict[tuple, str] = {}
     assistant_message_by_namespace: dict[tuple, Any] = {}
+    # Track which namespaces have already shown response (to prevent duplicates)
+    response_shown_by_namespace: dict[tuple, bool] = {}
 
     # Clear images from tracker after creating the message
     if image_tracker:
@@ -261,6 +263,7 @@ async def execute_task_textual(
                                 pending_text,
                                 ns_key,
                                 assistant_message_by_namespace,
+                                response_shown_by_namespace,
                             )
                             pending_text_by_namespace[ns_key] = ""
                         continue
@@ -294,6 +297,7 @@ async def execute_task_textual(
                                     pending_text,
                                     ns_key,
                                     assistant_message_by_namespace,
+                                    response_shown_by_namespace,
                                 )
                                 pending_text_by_namespace[ns_key] = ""
                             if tool_content:
@@ -310,6 +314,7 @@ async def execute_task_textual(
                                     pending_text,
                                     ns_key,
                                     assistant_message_by_namespace,
+                                    response_shown_by_namespace,
                                 )
                                 pending_text_by_namespace[ns_key] = ""
                             if record.diff:
@@ -343,10 +348,30 @@ async def execute_task_textual(
                         if block_type == "text":
                             text = block.get("text", "")
                             if text:
-                                # Track accumulated text for reference
-                                pending_text = pending_text_by_namespace.get(ns_key, "")
-                                pending_text += text
-                                pending_text_by_namespace[ns_key] = pending_text
+                                # Anthropic's content_blocks sends FULL accumulated text, not deltas
+                                # We need to compute the actual delta to avoid duplicates
+                                current_accumulated = pending_text_by_namespace.get(ns_key, "")
+
+                                # Skip if this is exactly what we already have
+                                if text == current_accumulated:
+                                    continue
+
+                                # Compute the delta - the new text we haven't seen yet
+                                # If the new text starts with what we have, extract only the new part
+                                if text.startswith(current_accumulated):
+                                    delta = text[len(current_accumulated):]
+                                else:
+                                    # Text doesn't extend current - might be a reset or different block
+                                    # Use full text but only if we don't already have more content
+                                    if len(text) <= len(current_accumulated):
+                                        continue  # Skip shorter/same length content
+                                    delta = text
+
+                                if not delta:
+                                    continue
+
+                                # Update accumulated text to the full new text
+                                pending_text_by_namespace[ns_key] = text
 
                                 # Get or create assistant message for this namespace
                                 current_msg = assistant_message_by_namespace.get(ns_key)
@@ -359,9 +384,9 @@ async def execute_task_textual(
                                     if adapter._scroll_to_bottom:
                                         adapter._scroll_to_bottom()
 
-                                # Append just the new text chunk for smoother streaming
+                                # Append only the DELTA for proper streaming
                                 # (uses MarkdownStream internally for better performance)
-                                await current_msg.append_content(text)
+                                await current_msg.append_content(delta)
 
                         elif block_type in ("tool_call_chunk", "tool_call"):
                             chunk_name = block.get("name")
@@ -433,6 +458,7 @@ async def execute_task_textual(
                                     pending_text,
                                     ns_key,
                                     assistant_message_by_namespace,
+                                    response_shown_by_namespace,
                                 )
                                 pending_text_by_namespace[ns_key] = ""
                                 assistant_message_by_namespace.pop(ns_key, None)
@@ -463,6 +489,7 @@ async def execute_task_textual(
                                 pending_text,
                                 ns_key,
                                 assistant_message_by_namespace,
+                                response_shown_by_namespace,
                             )
                             pending_text_by_namespace[ns_key] = ""
                             assistant_message_by_namespace.pop(ns_key, None)
@@ -471,10 +498,12 @@ async def execute_task_textual(
             for ns_key, pending_text in list(pending_text_by_namespace.items()):
                 if pending_text:
                     await _flush_assistant_text_ns(
-                        adapter, pending_text, ns_key, assistant_message_by_namespace
+                        adapter, pending_text, ns_key, assistant_message_by_namespace,
+                        response_shown_by_namespace,
                     )
             pending_text_by_namespace.clear()
             assistant_message_by_namespace.clear()
+            response_shown_by_namespace.clear()
 
             # Handle HITL after stream completes
             if interrupt_occurred:
@@ -640,6 +669,7 @@ async def _flush_assistant_text_ns(
     text: str,
     ns_key: tuple,
     assistant_message_by_namespace: dict[tuple, Any],
+    response_shown_by_namespace: dict[tuple, bool] | None = None,
 ) -> None:
     """Flush accumulated assistant text for a specific namespace.
 
@@ -648,6 +678,12 @@ async def _flush_assistant_text_ns(
     """
     if not text.strip():
         return
+
+    # Skip if response was already shown for this namespace (to prevent duplicates)
+    if response_shown_by_namespace is not None:
+        if response_shown_by_namespace.get(ns_key, False):
+            return
+        response_shown_by_namespace[ns_key] = True
 
     current_msg = assistant_message_by_namespace.get(ns_key)
     if current_msg is None:
