@@ -1,0 +1,115 @@
+{
+  "workflow_id": "data_processing_pipeline",
+  "name": "Data Processing Pipeline Development",
+  "description": "Complete data pipeline development workflow including ingestion, processing, storage, and analysis.",
+  "steps": [
+    {
+      "step_id": "requirements_analysis",
+      "name": "Requirements Analysis",
+      "agent": "ralph",
+      "task": "Analyze data processing requirements. Define data sources, processing logic, output formats, performance requirements, and data quality standards.",
+      "dependencies": [],
+      "iterations": 2,
+      "on_failure": "stop"
+    },
+    {
+      "step_id": "data_ingestion",
+      "name": "Data Ingestion",
+      "agent": "coder",
+      "task": "Implement data ingestion layer. Set up connections to data sources (databases, APIs, files), implement data fetching, handle authentication, and create initial data validation.",
+      "dependencies": [
+        "requirements_analysis"
+      ],
+      "iterations": 6,
+      "on_failure": "retry"
+    },
+    {
+      "step_id": "data_transformation",
+      "name": "Data Transformation",
+      "agent": "coder",
+      "task": "Implement data transformation logic. Build ETL/ELT processes, handle data type conversions, apply business rules, and implement data cleaning and enrichment.",
+      "dependencies": [
+        "data_ingestion"
+      ],
+      "iterations": 8,
+      "on_failure": "retry"
+    },
+    {
+      "step_id": "data_validation",
+      "name": "Data Validation",
+      "agent": "tester",
+      "task": "Implement comprehensive data validation. Create schema validation, data quality checks, anomaly detection, and validation reports. Handle invalid data appropriately.",
+      "dependencies": [
+        "data_transformation"
+      ],
+      "iterations": 5,
+      "on_failure": "continue"
+    },
+    {
+      "step_id": "data_storage",
+      "name": "Data Storage",
+      "agent": "coder",
+      "task": "Set up data storage solution. Design database schema, implement data storage logic, optimize queries, and set up data archiving and retention policies.",
+      "dependencies": [
+        "data_validation"
+      ],
+      "iterations": 6,
+      "on_failure": "stop"
+    },
+    {
+      "step_id": "pipeline_orchestration",
+      "name": "Pipeline Orchestration",
+      "agent": "coder",
+      "task": "Implement pipeline orchestration. Use workflow orchestrator (Airflow, Dagster, Prefect), define dependencies, schedule runs, and handle failures and retries.",
+      "dependencies": [
+        "data_storage"
+      ],
+      "iterations": 6,
+      "on_failure": "retry"
+    },
+    {
+      "step_id": "performance_optimization",
+      "name": "Performance Optimization",
+      "agent": "coder",
+      "task": "Optimize pipeline performance. Implement parallelization, batching, caching, and incremental processing. Profile and identify bottlenecks.",
+      "dependencies": [
+        "pipeline_orchestration"
+      ],
+      "iterations": 5,
+      "on_failure": "continue"
+    },
+    {
+      "step_id": "testing",
+      "name": "Pipeline Testing",
+      "agent": "tester",
+      "task": "Write comprehensive tests for the pipeline. Test individual components, integration tests, end-to-end tests, and performance tests. Test error handling and recovery.",
+      "dependencies": [
+        "performance_optimization"
+      ],
+      "iterations": 5,
+      "on_failure": "continue"
+    },
+    {
+      "step_id": "monitoring_alerting",
+      "name": "Monitoring and Alerting",
+      "agent": "coder",
+      "task": "Set up pipeline monitoring and alerting. Track pipeline runs, data quality metrics, processing times, and error rates. Create dashboards and alert rules.",
+      "dependencies": [
+        "testing"
+      ],
+      "iterations": 4,
+      "on_failure": "continue"
+    },
+    {
+      "step_id": "documentation",
+      "name": "Documentation",
+      "agent": "ralph",
+      "task": "Create comprehensive pipeline documentation. Document data flow, dependencies, configurations, troubleshooting guides, and data lineage.",
+      "dependencies": [
+        "monitoring_alerting"
+      ],
+      "iterations": 3,
+      "on_failure": "continue"
+    }
+  ]
+}

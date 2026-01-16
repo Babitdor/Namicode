@@ -1,0 +1,94 @@
+{
+  "workflow_id": "rest_api_dev",
+  "name": "REST API Development",
+  "description": "API-first development workflow including API design, endpoint implementation, authentication, testing, and documentation.",
+  "steps": [
+    {
+      "step_id": "api_design",
+      "name": "API Design",
+      "agent": "ralph",
+      "task": "Design the REST API architecture. Define endpoints, request/response formats, data models, authentication scheme, and versioning strategy. Create API specification in OpenAPI/Swagger format.",
+      "dependencies": [],
+      "iterations": 3,
+      "on_failure": "stop"
+    },
+    {
+      "step_id": "project_setup",
+      "name": "Project Setup",
+      "agent": "ralph",
+      "task": "Set up the API project with appropriate framework (e.g., FastAPI, Flask, Express). Configure project structure, dependencies, development tools, and initial configuration files.",
+      "dependencies": [
+        "api_design"
+      ],
+      "iterations": 2,
+      "on_failure": "stop"
+    },
+    {
+      "step_id": "data_models",
+      "name": "Data Models",
+      "agent": "coder",
+      "task": "Implement data models and schemas based on the API design. Set up database ORM, define tables/relations, and add validation rules.",
+      "dependencies": [
+        "project_setup"
+      ],
+      "iterations": 5,
+      "on_failure": "stop"
+    },
+    {
+      "step_id": "endpoints",
+      "name": "Endpoint Implementation",
+      "agent": "coder",
+      "task": "Implement all API endpoints following REST principles. Add proper error handling, status codes, and input validation. Implement business logic and data access layer.",
+      "dependencies": [
+        "data_models"
+      ],
+      "iterations": 10,
+      "on_failure": "retry"
+    },
+    {
+      "step_id": "authentication",
+      "name": "Authentication & Authorization",
+      "agent": "coder",
+      "task": "Implement authentication (JWT, OAuth, API keys) and authorization (role-based access control, permissions). Secure sensitive endpoints and add rate limiting.",
+      "dependencies": [
+        "endpoints"
+      ],
+      "iterations": 5,
+      "on_failure": "stop"
+    },
+    {
+      "step_id": "api_testing",
+      "name": "API Testing",
+      "agent": "tester",
+      "task": "Write comprehensive tests for the API. Test all endpoints, authentication, error handling, edge cases, and performance. Include unit, integration, and end-to-end tests.",
+      "dependencies": [
+        "authentication"
+      ],
+      "iterations": 5,
+      "on_failure": "continue"
+    },
+    {
+      "step_id": "api_docs",
+      "name": "API Documentation",
+      "agent": "ralph",
+      "task": "Generate comprehensive API documentation. Create interactive API docs (Swagger/OpenAPI UI), write usage examples, and document authentication and error codes.",
+      "dependencies": [
+        "endpoints"
+      ],
+      "iterations": 3,
+      "on_failure": "continue"
+    },
+    {
+      "step_id": "deployment",
+      "name": "Deployment Setup",
+      "agent": "coder",
+      "task": "Prepare API for deployment. Create Docker container, configure environment variables, set up health checks, and prepare production deployment scripts.",
+      "dependencies": [
+        "api_testing",
+        "api_docs"
+      ],
+      "iterations": 3,
+      "on_failure": "stop"
+    }
+  ]
+}

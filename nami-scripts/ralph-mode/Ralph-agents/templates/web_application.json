@@ -1,0 +1,95 @@
+{
+  "workflow_id": "web_app_dev",
+  "name": "Web Application Development",
+  "description": "Full-stack web application development workflow including frontend, backend, database integration, testing, and deployment preparation.",
+  "steps": [
+    {
+      "step_id": "project_setup",
+      "name": "Project Setup",
+      "agent": "ralph",
+      "task": "Set up the web application project structure. Choose an appropriate tech stack (e.g., React + Node.js, Vue + Python, etc.). Configure build tools, package manager, and development environment.",
+      "dependencies": [],
+      "iterations": 3,
+      "on_failure": "stop"
+    },
+    {
+      "step_id": "backend_api",
+      "name": "Backend API Development",
+      "agent": "coder",
+      "task": "Develop the backend REST API. Design database schema, implement endpoints, add authentication/authorization, and handle errors properly. Use best practices for the chosen framework.",
+      "dependencies": [
+        "project_setup"
+      ],
+      "iterations": 10,
+      "on_failure": "retry"
+    },
+    {
+      "step_id": "frontend_ui",
+      "name": "Frontend UI Development",
+      "agent": "coder",
+      "task": "Build the frontend user interface. Create responsive components, implement state management, connect to the API, and add proper routing and navigation.",
+      "dependencies": [
+        "project_setup"
+      ],
+      "iterations": 10,
+      "on_failure": "retry"
+    },
+    {
+      "step_id": "database_integration",
+      "name": "Database Integration",
+      "agent": "coder",
+      "task": "Set up and integrate the database. Create migrations, seed initial data, optimize queries, and implement proper data validation and relationships.",
+      "dependencies": [
+        "backend_api"
+      ],
+      "iterations": 5,
+      "on_failure": "stop"
+    },
+    {
+      "step_id": "api_testing",
+      "name": "API Testing",
+      "agent": "tester",
+      "task": "Write comprehensive tests for the backend API. Test all endpoints, authentication, error handling, and edge cases. Include integration tests.",
+      "dependencies": [
+        "backend_api"
+      ],
+      "iterations": 5,
+      "on_failure": "continue"
+    },
+    {
+      "step_id": "frontend_testing",
+      "name": "Frontend Testing",
+      "agent": "tester",
+      "task": "Write tests for the frontend components. Test UI rendering, user interactions, state management, and API integration. Use appropriate testing framework.",
+      "dependencies": [
+        "frontend_ui"
+      ],
+      "iterations": 5,
+      "on_failure": "continue"
+    },
+    {
+      "step_id": "deployment_prep",
+      "name": "Deployment Preparation",
+      "agent": "ralph",
+      "task": "Prepare the application for deployment. Create Docker containers, configure CI/CD pipelines, set up environment variables, and prepare deployment documentation.",
+      "dependencies": [
+        "api_testing",
+        "frontend_testing",
+        "database_integration"
+      ],
+      "iterations": 3,
+      "on_failure": "stop"
+    },
+    {
+      "step_id": "documentation",
+      "name": "Documentation",
+      "agent": "ralph",
+      "task": "Create comprehensive documentation including README, API documentation, deployment guide, and user manual. Add code comments and document configuration options.",
+      "dependencies": [
+        "deployment_prep"
+      ],
+      "iterations": 3,
+      "on_failure": "continue"
+    }
+  ]
+}

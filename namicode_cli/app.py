@@ -55,7 +55,7 @@ AUTO_SAVE_MESSAGE_THRESHOLD = 5  # Save after every N new messages
 class TextualTokenTracker:
     """Token tracker that updates the status bar."""
 
-    def __init__(self, update_callback: callable) -> None:
+    def __init__(self, update_callback: callable) -> None:  # type: ignore
         """Initialize with a callback to update the display."""
         self._update_callback = update_callback
         self.current_context = 0
@@ -98,7 +98,11 @@ class NamiCodeApp(App):
         Binding("ctrl+d", "quit_app", "Quit", show=False, priority=True),
         Binding("ctrl+t", "toggle_auto_approve", "Toggle Auto-Approve", show=False),
         Binding(
-            "shift+tab", "toggle_auto_approve", "Toggle Auto-Approve", show=False, priority=True
+            "shift+tab",
+            "toggle_auto_approve",
+            "Toggle Auto-Approve",
+            show=False,
+            priority=True,
         ),
         Binding("ctrl+o", "toggle_tool_output", "Toggle Tool Output", show=False),
         # Approval menu keys (handled at App level for reliability)
@@ -390,13 +394,17 @@ class NamiCodeApp(App):
             if output:
                 # Display output as assistant message (uses markdown for code blocks)
                 msg = AssistantMessage(f"```\n{output}\n```")
-                await self._mount_message(msg)
+                await self._mount_message(msg)  # type: ignore
                 await msg.write_initial_content()
             else:
-                await self._mount_message(SystemMessage("Command completed (no output)"))
+                await self._mount_message(
+                    SystemMessage("Command completed (no output)")
+                )
 
             if result.returncode != 0:
-                await self._mount_message(ErrorMessage(f"Exit code: {result.returncode}"))
+                await self._mount_message(
+                    ErrorMessage(f"Exit code: {result.returncode}")
+                )
 
             # Scroll to show the output
             self._scroll_chat_to_bottom()
@@ -429,8 +437,9 @@ class NamiCodeApp(App):
 
         if cmd == "clear":
             from langgraph.checkpoint.memory import InMemorySaver
+
             # Reset agent checkpointer if available
-            if self._agent and hasattr(self._agent, 'checkpointer'):
+            if self._agent and hasattr(self._agent, "checkpointer"):
                 self._agent.checkpointer = InMemorySaver()
             await self._clear_messages()
             # Reset thread to start fresh conversation
@@ -438,7 +447,9 @@ class NamiCodeApp(App):
                 self._session_state.thread_id = uuid.uuid4().hex[:8]
             if self._token_tracker:
                 self._token_tracker.reset()
-            await self._mount_message(SystemMessage(f"Fresh start! Conversation reset."))
+            await self._mount_message(
+                SystemMessage(f"Fresh start! Conversation reset.")
+            )
             return
 
         if cmd in ("threads", "sessions"):
@@ -454,7 +465,9 @@ class NamiCodeApp(App):
                     formatted = f"{count / 1000:.1f}K"
                 else:
                     formatted = str(count)
-                await self._mount_message(SystemMessage(f"Current context: {formatted} tokens"))
+                await self._mount_message(
+                    SystemMessage(f"Current context: {formatted} tokens")
+                )
             else:
                 await self._mount_message(SystemMessage("No token usage yet"))
             return
@@ -481,12 +494,20 @@ class NamiCodeApp(App):
 
         if cmd == "mcp":
             await self._mount_message(UserMessage(command))
-            await self._mount_message(SystemMessage("MCP management: Use the CLI for full MCP configuration (`nami` then `/mcp`)"))
+            await self._mount_message(
+                SystemMessage(
+                    "MCP management: Use the CLI for full MCP configuration (`nami` then `/mcp`)"
+                )
+            )
             return
 
         if cmd == "model":
             await self._mount_message(UserMessage(command))
-            await self._mount_message(SystemMessage("Model management: Use the CLI for model switching (`nami` then `/model`)"))
+            await self._mount_message(
+                SystemMessage(
+                    "Model management: Use the CLI for model switching (`nami` then `/model`)"
+                )
+            )
             return
 
         if cmd == "skills":
@@ -526,7 +547,11 @@ class NamiCodeApp(App):
 
         # Unknown command
         await self._mount_message(UserMessage(command))
-        await self._mount_message(SystemMessage(f"Unknown command: /{cmd}. Type /help for available commands."))
+        await self._mount_message(
+            SystemMessage(
+                f"Unknown command: /{cmd}. Type /help for available commands."
+            )
+        )
 
     async def _handle_user_message(self, message: str) -> None:
         """Handle a user message to send to the agent.
@@ -565,7 +590,9 @@ class NamiCodeApp(App):
             )
         else:
             await self._mount_message(
-                SystemMessage("Agent not configured. Run with --agent flag or use standalone mode.")
+                SystemMessage(
+                    "Agent not configured. Run with --agent flag or use standalone mode."
+                )
             )
 
     async def _invoke_subagent(self, agent_name: str, query: str) -> None:
@@ -600,9 +627,13 @@ class NamiCodeApp(App):
                 exclusive=False,
             )
         except Exception as e:
-            await self._mount_message(ErrorMessage(f"Failed to invoke @{agent_name}: {e}"))
+            await self._mount_message(
+                ErrorMessage(f"Failed to invoke @{agent_name}: {e}")
+            )
 
-    async def _run_subagent_task(self, query: str, subagent: Any, agent_name: str) -> None:
+    async def _run_subagent_task(
+        self, query: str, subagent: Any, agent_name: str
+    ) -> None:
         """Run a subagent task.
 
         Args:
@@ -616,7 +647,7 @@ class NamiCodeApp(App):
                 agent=subagent,
                 assistant_id=agent_name,
                 session_state=self._session_state,
-                adapter=self._ui_adapter,
+                adapter=self._ui_adapter,  # type: ignore
                 backend=self._backend,
             )
         except Exception as e:
@@ -635,7 +666,7 @@ class NamiCodeApp(App):
                 agent=self._agent,
                 assistant_id=self._assistant_id,
                 session_state=self._session_state,
-                adapter=self._ui_adapter,
+                adapter=self._ui_adapter,  # type: ignore
                 backend=self._backend,
             )
         except Exception as e:  # noqa: BLE001
@@ -894,7 +925,9 @@ class NamiCodeApp(App):
                     self._status_bar.set_plan_mode(enabled=False)
                 await self._mount_message(SystemMessage("Plan mode disabled"))
             elif arg == "status":
-                status = "enabled" if self._session_state.plan_mode_enabled else "disabled"
+                status = (
+                    "enabled" if self._session_state.plan_mode_enabled else "disabled"
+                )
                 await self._mount_message(SystemMessage(f"Plan mode is {status}"))
             else:
                 await self._mount_message(SystemMessage("Usage: /plan [on|off|status]"))
@@ -910,7 +943,9 @@ class NamiCodeApp(App):
         """Handle /sessions command."""
         if not self._session_manager:
             if self._session_state:
-                await self._mount_message(SystemMessage(f"Current session: {self._session_state.thread_id}"))
+                await self._mount_message(
+                    SystemMessage(f"Current session: {self._session_state.thread_id}")
+                )
             else:
                 await self._mount_message(SystemMessage("No active session"))
             return
@@ -922,9 +957,13 @@ class NamiCodeApp(App):
 
         lines = ["**Saved Sessions:**\n"]
         for meta in sessions:
-            project = Path(meta.project_root).name if meta.project_root else "no project"
+            project = (
+                Path(meta.project_root).name if meta.project_root else "no project"
+            )
             model = meta.model_name or "unknown"
-            lines.append(f"- `{meta.session_id[:8]}` - {project} ({model}), {meta.message_count} messages")
+            lines.append(
+                f"- `{meta.session_id[:8]}` - {project} ({model}), {meta.message_count} messages"
+            )
 
         msg = AssistantMessage("\n".join(lines))
         await self._mount_message(msg)
@@ -945,10 +984,14 @@ class NamiCodeApp(App):
 
         project_root = self._settings.project_root
         if not project_root:
-            await self._mount_message(ErrorMessage("Not in a project directory (no .git found)"))
+            await self._mount_message(
+                ErrorMessage("Not in a project directory (no .git found)")
+            )
             return
 
-        await self._mount_message(SystemMessage(f"Initializing NAMI.md for {project_root.name}..."))
+        await self._mount_message(
+            SystemMessage(f"Initializing NAMI.md for {project_root.name}...")
+        )
 
         # Use the agent to explore and create NAMI.md
         init_prompt = f"""Please explore this codebase at {project_root} and create a comprehensive NAMI.md file.
@@ -978,7 +1021,9 @@ Save it to {project_root / '.nami' / 'NAMI.md'}"""
         """Handle /skills command."""
         from namicode_cli.skills.load import list_skills
 
-        user_skills_dir = self._settings.ensure_user_skills_dir(self._assistant_id or "nami-agent")
+        user_skills_dir = self._settings.ensure_user_skills_dir(
+            self._assistant_id or "nami-agent"
+        )
         project_skills_dir = self._settings.get_project_skills_dir()
 
         skills = list_skills(
@@ -987,7 +1032,9 @@ Save it to {project_root / '.nami' / 'NAMI.md'}"""
         )
 
         if not skills:
-            await self._mount_message(SystemMessage("No skills found. Use CLI to create skills."))
+            await self._mount_message(
+                SystemMessage("No skills found. Use CLI to create skills.")
+            )
             return
 
         lines = ["**Available Skills:**\n"]
@@ -1011,7 +1058,9 @@ Save it to {project_root / '.nami' / 'NAMI.md'}"""
 
         lines = ["**Available Agents:**\n"]
         for agent_info in agents:
-            lines.append(f"- **@{agent_info['name']}** - {agent_info.get('description', 'No description')}")
+            lines.append(
+                f"- **@{agent_info['name']}** - {agent_info.get('description', 'No description')}"
+            )
 
         msg = AssistantMessage("\n".join(lines))
         await self._mount_message(msg)
@@ -1030,7 +1079,9 @@ Save it to {project_root / '.nami' / 'NAMI.md'}"""
         lines = ["**Running Dev Servers:**\n"]
         for server in servers:
             status_icon = "Healthy" if server.status.value == "healthy" else "Unknown"
-            lines.append(f"- **{server.name}** - {server.url} (PID: {server.pid}, {status_icon})")
+            lines.append(
+                f"- **{server.name}** - {server.url} (PID: {server.pid}, {status_icon})"
+            )
 
         msg = AssistantMessage("\n".join(lines))
         await self._mount_message(msg)
@@ -1038,7 +1089,11 @@ Save it to {project_root / '.nami' / 'NAMI.md'}"""
 
     async def _handle_tests_command(self, cmd_args: str | None) -> None:
         """Handle /tests command."""
-        from namicode_cli.server_runner.test_runner import run_tests, detect_test_framework, get_default_test_command
+        from namicode_cli.server_runner.test_runner import (
+            run_tests,
+            detect_test_framework,
+            get_default_test_command,
+        )
 
         working_dir = str(Path.cwd())
 
@@ -1046,7 +1101,11 @@ Save it to {project_root / '.nami' / 'NAMI.md'}"""
             framework = detect_test_framework(working_dir)
             command = get_default_test_command(framework)
             if not command:
-                await self._mount_message(ErrorMessage("Could not detect test framework. Specify command: /tests pytest"))
+                await self._mount_message(
+                    ErrorMessage(
+                        "Could not detect test framework. Specify command: /tests pytest"
+                    )
+                )
                 return
         else:
             command = cmd_args.strip()
@@ -1074,7 +1133,9 @@ Save it to {project_root / '.nami' / 'NAMI.md'}"""
         if result.success:
             await self._mount_message(SystemMessage("Tests passed!"))
         else:
-            await self._mount_message(ErrorMessage(f"Tests failed: {result.error or 'See output above'}"))
+            await self._mount_message(
+                ErrorMessage(f"Tests failed: {result.error or 'See output above'}")
+            )
 
     async def _handle_kill_command(self, cmd_args: str | None) -> None:
         """Handle /kill command."""
@@ -1090,13 +1151,17 @@ Save it to {project_root / '.nami' / 'NAMI.md'}"""
                 if result:
                     await self._mount_message(SystemMessage(f"Killed process {pid}"))
                 else:
-                    await self._mount_message(ErrorMessage(f"No process found with PID {pid}"))
+                    await self._mount_message(
+                        ErrorMessage(f"No process found with PID {pid}")
+                    )
             except ValueError:
                 result = await manager.stop_by_name(arg)
                 if result:
                     await self._mount_message(SystemMessage(f"Killed process '{arg}'"))
                 else:
-                    await self._mount_message(ErrorMessage(f"No process found with name '{arg}'"))
+                    await self._mount_message(
+                        ErrorMessage(f"No process found with name '{arg}'")
+                    )
         else:
             processes = manager.list_processes(alive_only=True)
             if not processes:
@@ -1130,13 +1195,17 @@ Save it to {project_root / '.nami' / 'NAMI.md'}"""
         )
 
         if result.success:
-            await self._mount_message(SystemMessage(
-                f"Compacted: {result.messages_before} -> {result.messages_after} messages, ~{result.tokens_saved:,} tokens saved"
-            ))
+            await self._mount_message(
+                SystemMessage(
+                    f"Compacted: {result.messages_before} -> {result.messages_after} messages, ~{result.tokens_saved:,} tokens saved"
+                )
+            )
             if self._token_tracker:
                 self._token_tracker.reset()
         else:
-            await self._mount_message(ErrorMessage(f"Compaction failed: {result.error}"))
+            await self._mount_message(
+                ErrorMessage(f"Compaction failed: {result.error}")
+            )
 
     async def _handle_trace_command(self, cmd_args: str | None) -> None:
         """Handle /trace command."""
@@ -1175,7 +1244,8 @@ Save it to {project_root / '.nami' / 'NAMI.md'}"""
                 return False
 
             self._session_manager.save_session(
-                session_id=self._session_state.session_id or self._session_state.thread_id,
+                session_id=self._session_state.session_id
+                or self._session_state.thread_id,
                 thread_id=self._session_state.thread_id,
                 messages=messages,
                 assistant_id=self._assistant_id,

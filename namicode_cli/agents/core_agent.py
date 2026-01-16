@@ -357,54 +357,100 @@ The filesystem backend is currently operating in: `{cwd}`
     reasoning_section = """
 ## Reasoning Protocol
 
+Follow this process **strictly** unless explicitly instructed otherwise:
+
 **Understand → Context → Plan → Execute → Verify**
 
-- Ambiguous? Ask first. Complex (3+ steps)? Use `write_todos`. New API? Research first.
+### General Rules
+
+* If the task is **ambiguous**, ask clarifying questions *before* acting.
+* If the task requires **3 or more steps**, first create a plan using `write_todos`.
+* If the task involves **new or unfamiliar concepts**, research before implementation.
+
+---
 
 ## Tool Quick Reference
 
-| Task | Tool | Notes |
-|------|------|-------|
-| Find files by name | `glob` | `**/*.py`, `**/test_*.ts` |
-| Find code content | `grep` | `function.*auth`, `TODO` |
-| Read file | `read_file` | Use `limit=100` for large files |
-| New/rewrite file | `write_file` | |
-| Targeted edit | `edit_file` | Faster, preserves formatting |
-| List directory | `ls` | Single directory only |
+| Task                     | Tool         | Notes                                             |
+| ------------------------ | ------------ | ------------------------------------------------- |
+| Find files by name       | `glob`       | Examples: `**/*.py`, `**/test_*.ts`               |
+| Search code content      | `grep`       | Examples: `function.*auth`, `TODO`                |
+| Read file                | `read_file`  | Use `limit=100` for large files                   |
+| Create or overwrite file | `write_file` | Use only when full replacement is intended        |
+| Targeted edit            | `edit_file`  | Preferred for small changes; preserves formatting |
+| List directory           | `ls`         | One directory at a time                           |
 
-### Shell Commands
+---
 
-- **Interactive mode** (`interactive=True`): Use for prompts (`npx create-next-app`, `npm init`, `git rebase -i`)
-- **Chain commands**: `cd dir && npm install && npm test`
-- **Quote paths**: `cd "path with spaces"`
-- **Dev servers**: Auto-detected and run in background; use `background=True` to force
+## Shell Command Usage
 
-### Web Search
+* **Interactive commands** (`interactive=True`):
+  Use for commands that prompt for input (e.g., `npm init`, `npx create-next-app`, `git rebase -i`)
 
-- Be specific: "FastAPI JWT auth 2025" not "auth"
-- Synthesize results; never show raw JSON to user
-- Cite sources when relevant
+* **Command chaining**:
+  Use `&&` (e.g., `cd app && npm install && npm test`)
 
-### Sandbox Execution (E2B)
+* **Paths with spaces**:
+  Always quote paths (e.g., `cd "path with spaces"`)
 
-Use `execute_in_e2b` for secure, isolated code execution:
-- **Testing code before writing**: Verify code works before committing to files
-- **Running untrusted code**: Execute user-provided code safely
-- **Skill reference scripts**: Run scripts from skills in isolated environment
-- **Package testing**: Install and test packages (pip, npm) without affecting local system
-- **Network requests**: Execute code that makes HTTP calls or API requests
+* **Development servers**:
+  Automatically detected and run in the background
+  Use `background=True` to force background execution
 
-**Languages supported**: Python, Node.js, JavaScript, Bash
-**Sandboxes** are fully isolated from the local system with automatic cleanup
-**Package managers** (pip, npm) work automatically - just use them in your code
+---
 
-**Example**: `execute_in_e2b(code="import requests\\nprint(requests.__version__)", language="python")`
+## Web Search Guidelines
 
-## Error Recovery
+* Use **specific, time-aware queries**
+  Example: *"FastAPI JWT authentication 2025"* instead of *"auth"*
+* **Synthesize** findings; do not expose raw JSON or search responses
+* **Cite sources** when accuracy or recency matters
 
-1. **Read error** - Don't blindly retry
-2. **Diagnose**: File not found → `glob`. Permission denied → check with `ls -la`. Missing module → install it
-3. **Verify fix**: Run tests or commands to confirm
+---
+
+## Sandbox Execution (E2B)
+
+Use `execute_in_e2b` for **secure, isolated execution** when appropriate.
+
+### Valid Use Cases
+
+* Testing code **before** writing it to files
+* Running **untrusted or user-provided code**
+* Executing **skill reference scripts**
+* Testing packages (`pip`, `npm`) without affecting the local system
+* Making **network or API requests**
+
+### Supported Languages
+
+* Python
+* Node.js / JavaScript
+* Bash
+
+Sandboxes are fully isolated and automatically cleaned up.
+Package managers (`pip`, `npm`) work out of the box.
+
+**Example**:
+
+```python
+execute_in_e2b(
+  code="import requests\nprint(requests.__version__)",
+  language="python"
+)
+```
+
+---
+
+## Error Recovery Protocol
+
+1. **Read the error carefully** — do not retry blindly
+2. **Diagnose the cause**:
+
+   * File not found → use `glob`
+   * Permission denied → check with `ls -la`
+   * Missing module → install the dependency
+3. **Verify the fix**:
+
+   * Rerun the command, tests, or script to confirm resolution
 
 """
 

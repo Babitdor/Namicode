@@ -1,0 +1,138 @@
+{
+  "workflow_id": "microservices_architecture",
+  "name": "Microservices Architecture Development",
+  "description": "Complete microservices development workflow including service design, implementation, inter-service communication, and deployment.",
+  "steps": [
+    {
+      "step_id": "architecture_design",
+      "name": "Architecture Design",
+      "agent": "ralph",
+      "task": "Design microservices architecture. Define service boundaries, identify domain-driven design contexts, create service contracts, and design communication patterns.",
+      "dependencies": [],
+      "iterations": 3,
+      "on_failure": "stop"
+    },
+    {
+      "step_id": "api_design",
+      "name": "API Design",
+      "agent": "ralph",
+      "task": "Design APIs for all services. Create OpenAPI specifications, define request/response formats, implement versioning strategy, and document API contracts.",
+      "dependencies": [
+        "architecture_design"
+      ],
+      "iterations": 4,
+      "on_failure": "stop"
+    },
+    {
+      "step_id": "service_skeleton",
+      "name": "Service Skeleton Creation",
+      "agent": "coder",
+      "task": "Create project skeletons for all microservices. Set up project structure, dependency management, build tools, and local development environment.",
+      "dependencies": [
+        "api_design"
+      ],
+      "iterations": 4,
+      "on_failure": "stop"
+    },
+    {
+      "step_id": "service_implementation",
+      "name": "Service Implementation",
+      "agent": "coder",
+      "task": "Implement core business logic for each service. Follow clean architecture principles, implement domain models, and ensure proper separation of concerns.",
+      "dependencies": [
+        "service_skeleton"
+      ],
+      "iterations": 10,
+      "on_failure": "retry"
+    },
+    {
+      "step_id": "inter_service_communication",
+      "name": "Inter-Service Communication",
+      "agent": "coder",
+      "task": "Implement communication between services. Set up synchronous (REST/gRPC) and asynchronous (message queue) communication, implement circuit breakers, and handle failures gracefully.",
+      "dependencies": [
+        "service_implementation"
+      ],
+      "iterations": 8,
+      "on_failure": "retry"
+    },
+    {
+      "step_id": "data_management",
+      "name": "Data Management",
+      "agent": "coder",
+      "task": "Design and implement data management strategy. Define database per service pattern, implement data synchronization, handle transactions, and set up database migrations.",
+      "dependencies": [
+        "service_implementation"
+      ],
+      "iterations": 6,
+      "on_failure": "stop"
+    },
+    {
+      "step_id": "authentication_authorization",
+      "name": "Authentication & Authorization",
+      "agent": "coder",
+      "task": "Implement centralized authentication and authorization. Set up OAuth2/OIDC, implement service-to-service authentication, and define role-based access control.",
+      "dependencies": [
+        "service_skeleton"
+      ],
+      "iterations": 5,
+      "on_failure": "stop"
+    },
+    {
+      "step_id": "observability",
+      "name": "Observability",
+      "agent": "coder",
+      "task": "Implement observability across services. Add distributed tracing, structured logging, metrics collection, and correlation IDs. Create centralized dashboards.",
+      "dependencies": [
+        "service_implementation"
+      ],
+      "iterations": 5,
+      "on_failure": "continue"
+    },
+    {
+      "step_id": "testing",
+      "name": "Testing",
+      "agent": "tester",
+      "task": "Implement comprehensive testing strategy. Write unit tests for each service, integration tests for communication, contract tests, and end-to-end tests.",
+      "dependencies": [
+        "inter_service_communication",
+        "data_management"
+      ],
+      "iterations": 8,
+      "on_failure": "continue"
+    },
+    {
+      "step_id": "containerization",
+      "name": "Containerization",
+      "agent": "coder",
+      "task": "Containerize all microservices. Create optimized Dockerfiles, set up docker-compose for local development, and prepare container images for deployment.",
+      "dependencies": [
+        "testing"
+      ],
+      "iterations": 4,
+      "on_failure": "stop"
+    },
+    {
+      "step_id": "deployment",
+      "name": "Deployment",
+      "agent": "coder",
+      "task": "Set up deployment infrastructure. Implement service mesh (if needed), configure load balancing, set up service discovery, and prepare Kubernetes manifests.",
+      "dependencies": [
+        "containerization"
+      ],
+      "iterations": 6,
+      "on_failure": "retry"
+    },
+    {
+      "step_id": "documentation",
+      "name": "Documentation",
+      "agent": "ralph",
+      "task": "Create comprehensive microservices documentation. Document architecture, service boundaries, API specs, deployment guides, and runbooks.",
+      "dependencies": [
+        "deployment"
+      ],
+      "iterations": 3,
+      "on_failure": "continue"
+    }
+  ]
+}

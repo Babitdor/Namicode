@@ -1,0 +1,107 @@
+{
+  "workflow_id": "testing_workflow",
+  "name": "Comprehensive Testing Workflow",
+  "description": "Complete testing workflow covering test planning, unit tests, integration tests, test execution, and coverage analysis.",
+  "steps": [
+    {
+      "step_id": "test_planning",
+      "name": "Test Planning",
+      "agent": "ralph",
+      "task": "Analyze the codebase and create a comprehensive test plan. Identify testable components, define test categories (unit, integration, e2e), and prioritize test coverage areas.",
+      "dependencies": [],
+      "iterations": 2,
+      "on_failure": "stop"
+    },
+    {
+      "step_id": "test_setup",
+      "name": "Test Environment Setup",
+      "agent": "coder",
+      "task": "Set up the testing environment. Configure test framework (pytest, jest, etc.), set up test databases, mock external services, and configure CI/CD for automated testing.",
+      "dependencies": [
+        "test_planning"
+      ],
+      "iterations": 2,
+      "on_failure": "stop"
+    },
+    {
+      "step_id": "unit_tests",
+      "name": "Unit Tests",
+      "agent": "tester",
+      "task": "Write comprehensive unit tests for all functions, classes, and modules. Use fixtures, mocks, and parameterized tests. Aim for high coverage of business logic.",
+      "dependencies": [
+        "test_setup"
+      ],
+      "iterations": 8,
+      "on_failure": "continue"
+    },
+    {
+      "step_id": "integration_tests",
+      "name": "Integration Tests",
+      "agent": "tester",
+      "task": "Write integration tests that verify components work together correctly. Test API integrations, database operations, and service interactions.",
+      "dependencies": [
+        "unit_tests"
+      ],
+      "iterations": 6,
+      "on_failure": "continue"
+    },
+    {
+      "step_id": "e2e_tests",
+      "name": "End-to-End Tests",
+      "agent": "tester",
+      "task": "Write end-to-end tests that verify complete user workflows and system behavior. Test critical paths from user perspective.",
+      "dependencies": [
+        "integration_tests"
+      ],
+      "iterations": 5,
+      "on_failure": "continue"
+    },
+    {
+      "step_id": "test_execution",
+      "name": "Test Execution",
+      "agent": "tester",
+      "task": "Execute all tests and collect results. Run tests in parallel where possible, capture output, and identify failing tests.",
+      "dependencies": [
+        "unit_tests",
+        "integration_tests",
+        "e2e_tests"
+      ],
+      "iterations": 2,
+      "on_failure": "stop"
+    },
+    {
+      "step_id": "coverage_analysis",
+      "name": "Coverage Analysis",
+      "agent": "tester",
+      "task": "Generate and analyze test coverage reports. Identify untested code paths, calculate coverage metrics, and create gaps report for areas needing more tests.",
+      "dependencies": [
+        "test_execution"
+      ],
+      "iterations": 2,
+      "on_failure": "continue"
+    },
+    {
+      "step_id": "bug_fixing",
+      "name": "Bug Fixing",
+      "agent": "coder",
+      "task": "Fix bugs identified during testing. Ensure fixes are properly tested and do not introduce new issues. Add regression tests for fixed bugs.",
+      "dependencies": [
+        "test_execution"
+      ],
+      "iterations": 5,
+      "on_failure": "retry"
+    },
+    {
+      "step_id": "test_report",
+      "name": "Test Report",
+      "agent": "ralph",
+      "task": "Create comprehensive test report summarizing test results, coverage metrics, bugs found and fixed, and recommendations for improving test quality.",
+      "dependencies": [
+        "coverage_analysis",
+        "bug_fixing"
+      ],
+      "iterations": 2,
+      "on_failure": "continue"
+    }
+  ]
+}

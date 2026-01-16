@@ -1,0 +1,116 @@
+{
+  "workflow_id": "devops_pipeline",
+  "name": "DevOps/CI-CD Pipeline Development",
+  "description": "Complete DevOps workflow including infrastructure setup, CI/CD pipeline creation, monitoring, and security implementation.",
+  "steps": [
+    {
+      "step_id": "infrastructure_planning",
+      "name": "Infrastructure Planning",
+      "agent": "ralph",
+      "task": "Plan infrastructure architecture. Define cloud provider, regions, availability zones, and resource requirements. Create infrastructure diagrams and cost estimates.",
+      "dependencies": [],
+      "iterations": 3,
+      "on_failure": "stop"
+    },
+    {
+      "step_id": "iac_setup",
+      "name": "Infrastructure as Code",
+      "agent": "coder",
+      "task": "Implement infrastructure using IaC tools (Terraform, CloudFormation, Pulumi). Define resources, create modules, set up state management, and implement best practices for modularity and reusability.",
+      "dependencies": [
+        "infrastructure_planning"
+      ],
+      "iterations": 8,
+      "on_failure": "retry"
+    },
+    {
+      "step_id": "containerization",
+      "name": "Containerization",
+      "agent": "coder",
+      "task": "Create Docker containers for the application. Write optimized Dockerfiles, set up multi-stage builds, create docker-compose for local development, and implement security best practices.",
+      "dependencies": [
+        "iac_setup"
+      ],
+      "iterations": 5,
+      "on_failure": "stop"
+    },
+    {
+      "step_id": "ci_pipeline",
+      "name": "CI Pipeline",
+      "agent": "coder",
+      "task": "Build continuous integration pipeline. Set up automated testing, code quality checks, security scanning, and artifact building. Configure branch protection and pull request checks.",
+      "dependencies": [
+        "containerization"
+      ],
+      "iterations": 6,
+      "on_failure": "stop"
+    },
+    {
+      "step_id": "cd_pipeline",
+      "name": "CD Pipeline",
+      "agent": "coder",
+      "task": "Build continuous deployment pipeline. Implement deployment strategies (blue-green, canary), automated rollback mechanisms, and environment promotion workflows.",
+      "dependencies": [
+        "ci_pipeline"
+      ],
+      "iterations": 6,
+      "on_failure": "retry"
+    },
+    {
+      "step_id": "monitoring_setup",
+      "name": "Monitoring Setup",
+      "agent": "coder",
+      "task": "Set up comprehensive monitoring and observability. Implement metrics collection, logging, distributed tracing, and alerting. Create dashboards for system health.",
+      "dependencies": [
+        "cd_pipeline"
+      ],
+      "iterations": 6,
+      "on_failure": "continue"
+    },
+    {
+      "step_id": "security_hardening",
+      "name": "Security Hardening",
+      "agent": "coder",
+      "task": "Implement security best practices. Set up secrets management, configure network security, implement authentication/authorization, and enable security scanning in CI/CD.",
+      "dependencies": [
+        "iac_setup",
+        "monitoring_setup"
+      ],
+      "iterations": 6,
+      "on_failure": "stop"
+    },
+    {
+      "step_id": "backup_disaster",
+      "name": "Backup and Disaster Recovery",
+      "agent": "coder",
+      "task": "Implement backup and disaster recovery strategies. Set up automated backups, test restore procedures, create disaster recovery runbooks, and implement RTO/RPO targets.",
+      "dependencies": [
+        "security_hardening"
+      ],
+      "iterations": 4,
+      "on_failure": "continue"
+    },
+    {
+      "step_id": "pipeline_testing",
+      "name": "Pipeline Testing",
+      "agent": "tester",
+      "task": "Test the complete DevOps pipeline. Verify CI/CD workflows, test deployment scenarios, validate monitoring alerts, and perform disaster recovery drills.",
+      "dependencies": [
+        "backup_disaster"
+      ],
+      "iterations": 4,
+      "on_failure": "continue"
+    },
+    {
+      "step_id": "documentation",
+      "name": "Documentation",
+      "agent": "ralph",
+      "task": "Create comprehensive DevOps documentation. Document infrastructure, CI/CD processes, runbooks, troubleshooting guides, and onboarding procedures.",
+      "dependencies": [
+        "pipeline_testing"
+      ],
+      "iterations": 3,
+      "on_failure": "continue"
+    }
+  ]
+}

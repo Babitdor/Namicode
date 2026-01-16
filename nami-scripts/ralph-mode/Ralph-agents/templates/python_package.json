@@ -1,0 +1,84 @@
+{
+  "workflow_id": "python_package_dev",
+  "name": "Python Package Development",
+  "description": "Complete workflow for creating a Python package from scratch including setup, implementation, testing, documentation, and packaging.",
+  "steps": [
+    {
+      "step_id": "setup_project",
+      "name": "Project Setup",
+      "agent": "ralph",
+      "task": "Set up the Python package project structure with proper directory layout, pyproject.toml, setup.py, and initial README. Include proper package hierarchy with src/ directory layout. Add .gitignore for Python projects.",
+      "dependencies": [],
+      "iterations": 3,
+      "on_failure": "stop"
+    },
+    {
+      "step_id": "implement_core",
+      "name": "Core Implementation",
+      "agent": "coder",
+      "task": "Implement the core functionality of the package. Write clean, well-documented Python code following PEP 8 standards. Include type hints and docstrings for all public APIs.",
+      "dependencies": [
+        "setup_project"
+      ],
+      "iterations": 10,
+      "on_failure": "retry"
+    },
+    {
+      "step_id": "write_tests",
+      "name": "Write Tests",
+      "agent": "tester",
+      "task": "Write comprehensive unit tests using pytest. Include tests for all public functions and classes. Use fixtures where appropriate. Aim for high code coverage.",
+      "dependencies": [
+        "implement_core"
+      ],
+      "iterations": 5,
+      "on_failure": "continue"
+    },
+    {
+      "step_id": "integration_tests",
+      "name": "Integration Tests",
+      "agent": "tester",
+      "task": "Write integration tests that verify the package works end-to-end. Test error handling and edge cases.",
+      "dependencies": [
+        "write_tests"
+      ],
+      "iterations": 3,
+      "on_failure": "continue"
+    },
+    {
+      "step_id": "documentation",
+      "name": "Documentation",
+      "agent": "ralph",
+      "task": "Create comprehensive documentation including README, API docs, usage examples, and changelog. Add inline docstrings following Google or NumPy style.",
+      "dependencies": [
+        "implement_core"
+      ],
+      "iterations": 5,
+      "on_failure": "continue"
+    },
+    {
+      "step_id": "packaging",
+      "name": "Packaging",
+      "agent": "coder",
+      "task": "Configure package build system using build and twine. Ensure proper package metadata, dependencies, and entry points. Add MANIFEST.in if needed.",
+      "dependencies": [
+        "setup_project"
+      ],
+      "iterations": 3,
+      "on_failure": "stop"
+    },
+    {
+      "step_id": "final_review",
+      "name": "Final Review",
+      "agent": "ralph",
+      "task": "Review the complete package. Check that all files are present, documentation is accurate, tests pass, and package can be installed and imported. Generate a final summary.",
+      "dependencies": [
+        "write_tests",
+        "documentation",
+        "packaging"
+      ],
+      "iterations": 2,
+      "on_failure": "continue"
+    }
+  ]
+}

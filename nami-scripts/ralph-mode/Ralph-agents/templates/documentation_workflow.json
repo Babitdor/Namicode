@@ -1,0 +1,132 @@
+{
+  "workflow_id": "documentation_workflow",
+  "name": "Documentation Creation Workflow",
+  "description": "Complete documentation creation workflow covering README, API docs, user guides, examples, and documentation review.",
+  "steps": [
+    {
+      "step_id": "doc_planning",
+      "name": "Documentation Planning",
+      "agent": "ralph",
+      "task": "Analyze the codebase and create a documentation plan. Identify target audience, required documentation types (user guide, API reference, tutorials), and structure. Define documentation standards and style guide.",
+      "dependencies": [],
+      "iterations": 2,
+      "on_failure": "stop"
+    },
+    {
+      "step_id": "readme",
+      "name": "README Creation",
+      "agent": "ralph",
+      "task": "Create a comprehensive README.md. Include project description, features, installation instructions, quick start guide, usage examples, contribution guidelines, and license information.",
+      "dependencies": [
+        "doc_planning"
+      ],
+      "iterations": 3,
+      "on_failure": "stop"
+    },
+    {
+      "step_id": "api_docs",
+      "name": "API Documentation",
+      "agent": "ralph",
+      "task": "Generate API documentation from code comments and docstrings. Document all public APIs with parameters, return types, exceptions, and usage examples. Use appropriate documentation generation tools.",
+      "dependencies": [
+        "readme"
+      ],
+      "iterations": 5,
+      "on_failure": "continue"
+    },
+    {
+      "step_id": "user_guide",
+      "name": "User Guide",
+      "agent": "ralph",
+      "task": "Write detailed user guide covering installation, configuration, usage patterns, and common workflows. Include screenshots, diagrams, and step-by-step instructions where helpful.",
+      "dependencies": [
+        "readme"
+      ],
+      "iterations": 5,
+      "on_failure": "continue"
+    },
+    {
+      "step_id": "examples",
+      "name": "Code Examples",
+      "agent": "coder",
+      "task": "Create practical code examples demonstrating key features and usage patterns. Write executable examples, add comments explaining the code, and include expected output.",
+      "dependencies": [
+        "user_guide"
+      ],
+      "iterations": 4,
+      "on_failure": "continue"
+    },
+    {
+      "step_id": "tutorials",
+      "name": "Tutorials",
+      "agent": "ralph",
+      "task": "Create step-by-step tutorials for common use cases and workflows. Structure tutorials progressively from basic to advanced concepts. Include exercises and challenges.",
+      "dependencies": [
+        "examples"
+      ],
+      "iterations": 4,
+      "on_failure": "continue"
+    },
+    {
+      "step_id": "contributing_guide",
+      "name": "Contributing Guide",
+      "agent": "ralph",
+      "task": "Write CONTRIBUTING.md covering development setup, coding standards, testing guidelines, pull request process, and code review expectations. Help contributors get started quickly.",
+      "dependencies": [
+        "readme"
+      ],
+      "iterations": 3,
+      "on_failure": "continue"
+    },
+    {
+      "step_id": "inline_docs",
+      "name": "Inline Code Documentation",
+      "agent": "coder",
+      "task": "Review and improve inline code documentation. Add missing docstrings, improve existing ones, ensure consistent style, and document complex algorithms and design decisions.",
+      "dependencies": [
+        "api_docs"
+      ],
+      "iterations": 5,
+      "on_failure": "continue"
+    },
+    {
+      "step_id": "changelog",
+      "name": "Changelog",
+      "agent": "ralph",
+      "task": "Create CHANGELOG.md documenting version history, new features, bug fixes, breaking changes, and migration guides. Follow semantic versioning conventions.",
+      "dependencies": [
+        "api_docs"
+      ],
+      "iterations": 2,
+      "on_failure": "continue"
+    },
+    {
+      "step_id": "doc_review",
+      "name": "Documentation Review",
+      "agent": "tester",
+      "task": "Review all documentation for accuracy, clarity, completeness, and consistency. Test code examples for correctness, verify installation instructions, and check for outdated information.",
+      "dependencies": [
+        "api_docs",
+        "user_guide",
+        "examples",
+        "tutorials",
+        "contributing_guide",
+        "inline_docs",
+        "changelog"
+      ],
+      "iterations": 3,
+      "on_failure": "continue"
+    },
+    {
+      "step_id": "doc_site",
+      "name": "Documentation Site Setup",
+      "agent": "coder",
+      "task": "Set up a documentation site using tools like Sphinx, MkDocs, or Docusaurus. Configure theming, search, navigation, and automated builds from markdown.",
+      "dependencies": [
+        "doc_review"
+      ],
+      "iterations": 3,
+      "on_failure": "continue"
+    }
+  ]
+}

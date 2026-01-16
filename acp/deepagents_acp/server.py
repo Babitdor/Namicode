@@ -41,7 +41,7 @@ from acp.schema import (
     DeniedOutcome,
     ToolCall as ACPToolCall,
 )
-from deepagents import create_deep_agent
+from nami_deepagents import create_deep_agent
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from langchain_core.messages.content import ToolCall
