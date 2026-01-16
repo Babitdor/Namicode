@@ -78,6 +78,7 @@ from namicode_cli.skills.skill_creation import setup_skills_parser
 from namicode_cli.mcp.commands import execute_mcp_command, setup_mcp_parser
 from namicode_cli.tools import (
     convert_format,
+    duckduckgo_search,
     execute_in_e2b,
     fetch_url,
     format_code,
@@ -763,6 +764,8 @@ async def _run_agent_session(
         package_info,
         convert_format,
         format_code,
+        # Web search (always available, no API key needed)
+        duckduckgo_search,
     ]
     if settings.has_tavily:
         tools.append(web_search)
@@ -1101,6 +1104,8 @@ async def main_tui(
         package_info,
         convert_format,
         format_code,
+        # Web search (always available, no API key needed)
+        duckduckgo_search,
     ]
     if settings.has_tavily:
         tools.append(web_search)

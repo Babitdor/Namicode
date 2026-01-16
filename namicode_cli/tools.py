@@ -170,6 +170,99 @@ def web_search(
         return {"error": f"Web search error: {e!s}", "query": query}
 
 
+def duckduckgo_search(
+    query: str,
+    max_results: int = 5,
+    region: str = "wt-wt",
+    safesearch: Literal["on", "moderate", "off"] = "moderate",
+    time_range: Literal["d", "w", "m", "y", ""] = "",
+) -> dict[str, Any]:
+    """Search the web using DuckDuckGo (no API key required).
+
+    A free alternative to Tavily for web search. Returns relevant search results
+    that you should synthesize into a natural response for the user.
+
+    Args:
+        query: The search query (be specific and detailed)
+        max_results: Number of results to return (default: 5, max: 20)
+        region: Region for search results (default: "wt-wt" for worldwide)
+                Examples: "us-en", "uk-en", "de-de", "fr-fr", "jp-jp"
+        safesearch: Safe search level - "on", "moderate", or "off"
+        time_range: Time filter - "d" (day), "w" (week), "m" (month), "y" (year), "" (any)
+
+    Returns:
+        Dictionary containing:
+        - success: Whether search succeeded
+        - results: List of search results, each with:
+            - title: Page title
+            - url: Page URL
+            - body: Relevant excerpt/snippet from the page
+        - query: The original search query
+        - total_results: Number of results returned
+
+    IMPORTANT: After using this tool:
+    1. Read through the 'body' field of each result
+    2. Extract relevant information that answers the user's question
+    3. Synthesize this into a clear, natural language response
+    4. Cite sources by mentioning the page titles or URLs
+    5. NEVER show the raw JSON to the user - always provide a formatted response
+
+    Example:
+        duckduckgo_search("Python asyncio tutorial")
+        duckduckgo_search("latest news AI", time_range="w")
+    """
+    try:
+        from ddgs import DDGS
+    except ImportError:
+        try:
+            from duckduckgo_search import DDGS  # Fallback to old package name
+        except ImportError:
+            return {
+                "success": False,
+                "error": "ddgs not installed. Install with: pip install ddgs",
+                "query": query,
+            }
+
+    # Limit max_results to reasonable bounds
+    max_results = min(max(1, max_results), 20)
+
+    try:
+        with DDGS() as ddgs:
+            results = list(
+                ddgs.text(
+                    query,
+                    region=region,
+                    safesearch=safesearch,
+                    timelimit=time_range if time_range else None,
+                    max_results=max_results,
+                )
+            )
+
+        # Format results to match expected structure
+        formatted_results = [
+            {
+                "title": r.get("title", ""),
+                "url": r.get("href", r.get("link", "")),
+                "body": r.get("body", r.get("snippet", "")),
+            }
+            for r in results
+        ]
+
+        return {
+            "success": True,
+            "results": formatted_results,
+            "query": query,
+            "total_results": len(formatted_results),
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"DuckDuckGo search error: {e!s}",
+            "query": query,
+        }
+
+
 def fetch_url(url: str, timeout: int = 30) -> dict[str, Any]:
     """Fetch content from a URL and convert HTML to markdown format.
 

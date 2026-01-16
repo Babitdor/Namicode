@@ -51,6 +51,8 @@ dependencies = [
     "pyyaml>=6.0",
     "tomli-w>=1.0.0",
     "black>=24.0.0",
+    # Web search (no API key required)
+    "ddgs>=7.0.0",
 ]
 
 [project.urls]
