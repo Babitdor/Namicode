@@ -77,9 +77,12 @@ from namicode_cli.commands.commands import execute_skills_command
 from namicode_cli.skills.skill_creation import setup_skills_parser
 from namicode_cli.mcp.commands import execute_mcp_command, setup_mcp_parser
 from namicode_cli.tools import (
+    convert_format,
     execute_in_e2b,
     fetch_url,
+    format_code,
     http_request,
+    package_info,
     web_search,
 )
 from namicode_cli.server_runner.dev_server import (
@@ -756,6 +759,10 @@ async def _run_agent_session(
         start_dev_server_tool,
         stop_server_tool,
         list_servers_tool,
+        # Utility tools
+        package_info,
+        convert_format,
+        format_code,
     ]
     if settings.has_tavily:
         tools.append(web_search)
@@ -1090,6 +1097,10 @@ async def main_tui(
         start_dev_server_tool,
         stop_server_tool,
         list_servers_tool,
+        # Utility tools
+        package_info,
+        convert_format,
+        format_code,
     ]
     if settings.has_tavily:
         tools.append(web_search)

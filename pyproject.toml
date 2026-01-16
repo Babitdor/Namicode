@@ -46,7 +46,11 @@ dependencies = [
     "e2b-code-interpreter>=1.0.0",
     "textual>=1.0.0",
     "textual-autocomplete>=3.0.0",
-    "aiosqlite>=0.19.0"
+    "aiosqlite>=0.19.0",
+    # Format conversion and code formatting tools
+    "pyyaml>=6.0",
+    "tomli-w>=1.0.0",
+    "black>=24.0.0",
 ]
 
 [project.urls]

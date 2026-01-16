@@ -347,3 +347,367 @@ def execute_in_e2b(
             "- E2B service unavailable\n\n"
             f"Error details: {e!s}"
         )
+
+
+def package_info(
+    name: str,
+    registry: Literal["pypi", "npm"] = "pypi",
+) -> dict[str, Any]:
+    """Get package metadata from PyPI or npm registry.
+
+    Useful for researching packages before adding them as dependencies,
+    checking latest versions, or understanding package details.
+
+    Args:
+        name: Package name to look up
+        registry: Package registry - "pypi" for Python packages, "npm" for Node.js
+
+    Returns:
+        Dictionary containing:
+        - name: Package name
+        - version: Latest version
+        - description: Package description
+        - author: Package author/maintainer
+        - license: Package license
+        - homepage: Project homepage URL
+        - repository: Source code repository URL
+        - dependencies: List of dependencies (npm) or requires (pypi)
+        - keywords: Package keywords/tags
+
+    Example:
+        package_info("requests", registry="pypi")
+        package_info("express", registry="npm")
+    """
+    try:
+        if registry == "pypi":
+            url = f"https://pypi.org/pypi/{name}/json"
+            response = requests.get(url, timeout=10)
+
+            if response.status_code == 404:
+                return {"error": f"Package '{name}' not found on PyPI", "name": name}
+
+            response.raise_for_status()
+            data = response.json()
+            info = data.get("info", {})
+
+            return {
+                "success": True,
+                "registry": "pypi",
+                "name": info.get("name"),
+                "version": info.get("version"),
+                "description": info.get("summary"),
+                "author": info.get("author") or info.get("maintainer"),
+                "author_email": info.get("author_email") or info.get("maintainer_email"),
+                "license": info.get("license"),
+                "homepage": info.get("home_page") or info.get("project_url"),
+                "repository": next(
+                    (
+                        url
+                        for key, url in (info.get("project_urls") or {}).items()
+                        if "source" in key.lower() or "repo" in key.lower() or "github" in key.lower()
+                    ),
+                    None,
+                ),
+                "requires_python": info.get("requires_python"),
+                "dependencies": info.get("requires_dist") or [],
+                "keywords": info.get("keywords", "").split(",") if info.get("keywords") else [],
+                "classifiers": info.get("classifiers", [])[:10],  # Limit classifiers
+            }
+
+        elif registry == "npm":
+            url = f"https://registry.npmjs.org/{name}"
+            response = requests.get(url, timeout=10)
+
+            if response.status_code == 404:
+                return {"error": f"Package '{name}' not found on npm", "name": name}
+
+            response.raise_for_status()
+            data = response.json()
+            latest_version = data.get("dist-tags", {}).get("latest", "")
+            latest_data = data.get("versions", {}).get(latest_version, {})
+
+            # Extract repository URL
+            repo = latest_data.get("repository", {})
+            repo_url = repo.get("url", "") if isinstance(repo, dict) else repo
+            if repo_url:
+                repo_url = repo_url.replace("git+", "").replace("git://", "https://").rstrip(".git")
+
+            return {
+                "success": True,
+                "registry": "npm",
+                "name": data.get("name"),
+                "version": latest_version,
+                "description": data.get("description"),
+                "author": (
+                    latest_data.get("author", {}).get("name")
+                    if isinstance(latest_data.get("author"), dict)
+                    else latest_data.get("author")
+                ),
+                "license": latest_data.get("license"),
+                "homepage": latest_data.get("homepage"),
+                "repository": repo_url,
+                "dependencies": list(latest_data.get("dependencies", {}).keys()),
+                "dev_dependencies": list(latest_data.get("devDependencies", {}).keys())[:10],
+                "keywords": data.get("keywords", []),
+                "engines": latest_data.get("engines"),
+            }
+
+        else:
+            return {"error": f"Unknown registry: {registry}. Use 'pypi' or 'npm'"}
+
+    except requests.exceptions.Timeout:
+        return {"error": f"Request timed out while fetching {registry} package info", "name": name}
+    except requests.exceptions.RequestException as e:
+        return {"error": f"Network error: {e!s}", "name": name}
+    except Exception as e:
+        return {"error": f"Failed to get package info: {e!s}", "name": name}
+
+
+def convert_format(
+    content: str,
+    from_format: Literal["json", "yaml", "toml"],
+    to_format: Literal["json", "yaml", "toml"],
+    indent: int = 2,
+) -> dict[str, Any]:
+    """Convert between JSON, YAML, and TOML data formats.
+
+    Useful for converting configuration files, API responses, or data
+    between different serialization formats.
+
+    Args:
+        content: The content string to convert
+        from_format: Source format - "json", "yaml", or "toml"
+        to_format: Target format - "json", "yaml", or "toml"
+        indent: Indentation level for output (default: 2)
+
+    Returns:
+        Dictionary containing:
+        - success: Whether conversion succeeded
+        - result: The converted content string
+        - from_format: Source format used
+        - to_format: Target format used
+
+    Example:
+        # Convert JSON to YAML
+        convert_format('{"name": "test", "value": 123}', "json", "yaml")
+
+        # Convert YAML to TOML
+        convert_format("name: test\\nvalue: 123", "yaml", "toml")
+    """
+    # Parse input based on source format
+    try:
+        if from_format == "json":
+            data = json.loads(content)
+
+        elif from_format == "yaml":
+            try:
+                import yaml
+            except ImportError:
+                return {
+                    "success": False,
+                    "error": "PyYAML not installed. Install with: pip install pyyaml",
+                }
+            data = yaml.safe_load(content)
+
+        elif from_format == "toml":
+            try:
+                import tomllib
+            except ImportError:
+                try:
+                    import tomli as tomllib  # Fallback for Python < 3.11
+                except ImportError:
+                    return {
+                        "success": False,
+                        "error": "TOML parser not available. Requires Python 3.11+ or: pip install tomli",
+                    }
+            data = tomllib.loads(content)
+
+        else:
+            return {"success": False, "error": f"Unknown source format: {from_format}"}
+
+    except json.JSONDecodeError as e:
+        return {"success": False, "error": f"Invalid JSON: {e!s}"}
+    except Exception as e:
+        return {"success": False, "error": f"Failed to parse {from_format}: {e!s}"}
+
+    # Convert to target format
+    try:
+        if to_format == "json":
+            result = json.dumps(data, indent=indent, ensure_ascii=False)
+
+        elif to_format == "yaml":
+            try:
+                import yaml
+            except ImportError:
+                return {
+                    "success": False,
+                    "error": "PyYAML not installed. Install with: pip install pyyaml",
+                }
+            result = yaml.dump(
+                data,
+                default_flow_style=False,
+                allow_unicode=True,
+                indent=indent,
+                sort_keys=False,
+            )
+
+        elif to_format == "toml":
+            try:
+                import tomli_w
+            except ImportError:
+                return {
+                    "success": False,
+                    "error": "TOML writer not installed. Install with: pip install tomli-w",
+                }
+            result = tomli_w.dumps(data)
+
+        else:
+            return {"success": False, "error": f"Unknown target format: {to_format}"}
+
+        return {
+            "success": True,
+            "result": result,
+            "from_format": from_format,
+            "to_format": to_format,
+        }
+
+    except Exception as e:
+        return {"success": False, "error": f"Failed to convert to {to_format}: {e!s}"}
+
+
+def format_code(
+    code: str,
+    language: Literal["python", "javascript", "typescript", "json", "yaml"],
+    line_length: int = 88,
+) -> dict[str, Any]:
+    """Format code using language-appropriate formatters.
+
+    Formats code to follow standard style conventions:
+    - Python: Uses Black formatter
+    - JavaScript/TypeScript: Uses basic formatting (or Prettier if available)
+    - JSON: Uses standard library json formatting
+    - YAML: Uses PyYAML formatting
+
+    Args:
+        code: The code string to format
+        language: Programming language - "python", "javascript", "typescript", "json", "yaml"
+        line_length: Maximum line length (default: 88, Black's default)
+
+    Returns:
+        Dictionary containing:
+        - success: Whether formatting succeeded
+        - result: The formatted code string
+        - language: Language that was formatted
+        - formatter: Name of formatter used
+        - changed: Whether the code was modified
+
+    Example:
+        format_code("def foo( x,y ):return x+y", "python")
+        format_code('{"a":1,"b":2}', "json")
+    """
+    original = code
+
+    try:
+        if language == "python":
+            try:
+                import black
+            except ImportError:
+                return {
+                    "success": False,
+                    "error": "Black not installed. Install with: pip install black",
+                }
+            try:
+                mode = black.Mode(line_length=line_length)
+                result = black.format_str(code, mode=mode)
+                return {
+                    "success": True,
+                    "result": result,
+                    "language": language,
+                    "formatter": "black",
+                    "changed": result != original,
+                }
+            except black.InvalidInput as e:
+                return {"success": False, "error": f"Invalid Python syntax: {e!s}"}
+
+        elif language == "json":
+            try:
+                data = json.loads(code)
+                result = json.dumps(data, indent=2, ensure_ascii=False)
+                return {
+                    "success": True,
+                    "result": result,
+                    "language": language,
+                    "formatter": "json.dumps",
+                    "changed": result != original,
+                }
+            except json.JSONDecodeError as e:
+                return {"success": False, "error": f"Invalid JSON: {e!s}"}
+
+        elif language == "yaml":
+            try:
+                import yaml
+            except ImportError:
+                return {
+                    "success": False,
+                    "error": "PyYAML not installed. Install with: pip install pyyaml",
+                }
+            try:
+                data = yaml.safe_load(code)
+                result = yaml.dump(
+                    data,
+                    default_flow_style=False,
+                    allow_unicode=True,
+                    indent=2,
+                    sort_keys=False,
+                )
+                return {
+                    "success": True,
+                    "result": result,
+                    "language": language,
+                    "formatter": "pyyaml",
+                    "changed": result != original,
+                }
+            except yaml.YAMLError as e:
+                return {"success": False, "error": f"Invalid YAML: {e!s}"}
+
+        elif language in ("javascript", "typescript"):
+            # Try to use Prettier via subprocess if available
+            try:
+                parser = "typescript" if language == "typescript" else "babel"
+                result = subprocess.run(
+                    ["npx", "prettier", "--parser", parser, "--print-width", str(line_length)],
+                    input=code,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+                if result.returncode == 0:
+                    return {
+                        "success": True,
+                        "result": result.stdout,
+                        "language": language,
+                        "formatter": "prettier",
+                        "changed": result.stdout != original,
+                    }
+                else:
+                    # Prettier failed or not available, provide basic formatting
+                    return {
+                        "success": False,
+                        "error": f"Prettier formatting failed: {result.stderr or 'Unknown error'}",
+                        "hint": "Install Prettier globally: npm install -g prettier",
+                    }
+            except FileNotFoundError:
+                return {
+                    "success": False,
+                    "error": "Prettier not available (npx not found)",
+                    "hint": "Install Node.js and Prettier: npm install -g prettier",
+                }
+            except subprocess.TimeoutExpired:
+                return {"success": False, "error": "Prettier timed out after 30 seconds"}
+
+        else:
+            return {"success": False, "error": f"Unsupported language: {language}"}
+
+    except Exception as e:
+        return {"success": False, "error": f"Formatting failed: {e!s}"}
