@@ -11,7 +11,8 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from namicode_cli.config.config import HOME_DIR, Settings, create_model
+from namicode_cli.config.config import HOME_DIR, Settings
+from namicode_cli.config.model_create import create_model
 from namicode_cli.onboarding import SecretManager
 
 console = Console()

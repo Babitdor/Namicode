@@ -52,7 +52,6 @@ from nami_deepagents.middleware import (
     PlanModeMiddleware,
 )
 
-# from namicode_cli.memory.agent_memory import AgentMemoryMiddleware
 from namicode_cli.tracking.file_tracker import (
     FileTrackerMiddleware,
     get_session_tracker,
@@ -725,15 +724,16 @@ def create_agent_with_config(
     # Setup agent directory for persistent memory
     # Global Memory
     agent_md = settings.get_user_agent_md_path(assistant_id)
+
+    if not agent_md.exists():
+        source_content = get_default_coding_instructions()
+        agent_md.write_text(source_content)
+
     memory_sources.append(str(agent_md))
 
     # Project NAMI.md
     project_memory = settings.get_project_agent_md_paths()
     memory_sources.append(str(project_memory))
-
-    if not agent_md.exists():
-        source_content = get_default_coding_instructions()
-        agent_md.write_text(source_content)
 
     # Skills directory - global (shared across all agents at ~/.nami/skills/)
     skills_dir = settings.ensure_user_skills_dir()
@@ -766,7 +766,6 @@ def create_agent_with_config(
             include_system_prompt=True,
         ),
         PlanModeMiddleware(enabled_by_default=False),
-        # AgentMemoryMiddleware(settings=settings, assistant_id=assistant_id),
         SkillsMiddleware(backend=FilesystemBackend(), sources=skill_sources),
         mcp_middleware,
         SharedMemoryMiddleware(author_id="main-agent"),
@@ -812,7 +811,7 @@ def create_agent_with_config(
     # Use provided checkpointer or fallback to InMemorySaver
     final_checkpointer = checkpointer if checkpointer is not None else InMemorySaver()
     agent = create_deep_agent(
-        name="Nami-Agent",
+        name=assistant_id,
         model=wrapped_model,
         system_prompt=system_prompt,
         tools=tools,

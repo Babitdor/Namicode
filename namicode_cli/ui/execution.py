@@ -274,7 +274,12 @@ async def execute_task(  # type: ignore
         "configurable": {"thread_id": session_state.thread_id},
         "metadata": {"assistant_id": assistant_id} if assistant_id else {},
     }
-    agent_display_name = assistant_id if assistant_id and is_subagent else "Nami"
+    
+    # Display agent names properly
+    agent_display_name = assistant_id
+
+    if assistant_id == "nami-agent":
+        agent_display_name = "Nami"
     # Use agent-specific color if available, otherwise fall back to defaults
     if assistant_id and is_subagent:
         agent_colors = get_agent_color(assistant_id)
@@ -788,8 +793,8 @@ async def execute_task(  # type: ignore
 
                                     # INCREASED: Show 120 chars instead of 60
                                     desc_preview = (
-                                        description[:120] + "..."
-                                        if len(description) > 120
+                                        description[:300] + "..."
+                                        if len(description) > 300
                                         else description
                                     )
 

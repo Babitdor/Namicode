@@ -1,0 +1,106 @@
+# Ralph Agents Configuration
+# Configuration for the Ralph autonomous agent system
+
+default_settings:
+  # Model configuration
+  model: "claude-sonnet-4-5-20250514"
+  temperature: 0.7
+  max_tokens: 8192
+  timeout: 300  # seconds per request
+
+  # Agent behavior
+  auto_approve: true
+  max_iterations: 0  # 0 = unlimited
+  context_window: 200000
+
+  # Working directory
+  work_dir: "./workspace"
+  
+  # Logging
+  log_level: "INFO"
+  log_file: "ralph.log"
+
+  # Checkpoint settings
+  checkpoint:
+    enabled: false
+    interval: 1  # Save checkpoint every N iterations
+    max_checkpoints: 10
+    directory: "./checkpoints"
+
+  # Metrics settings
+  metrics:
+    enabled: true
+    directory: "./metrics"
+    export_format: "json"  # json, csv
+    real_time: false  # Show metrics during execution
+
+  # Collaboration settings
+  collaboration:
+    default_mode: "sequential"  # sequential, parallel, hierarchical, peer_review
+    max_parallel_tasks: 3
+    timeout: 600  # seconds per task
+
+  # Performance tuning
+  performance:
+    batch_tool_calls: false
+    cache_results: true
+    preload_workspace: true
+
+# Agent profiles
+agents:
+  # General purpose autonomous agent
+  ralph:
+    name: "Ralph"
+    description: "Autonomous agent for iterative development tasks"
+    color: "#ef4444"
+    system_prompt: |
+      You are Ralph, an autonomous agent that works in iterative loops.
+      
+      Each iteration:
+      1. Review what exists in the filesystem
+      2. Understand the current state
+      3. Make progress toward the goal
+      4. Prepare for the next iteration
+      
+      Key principles:
+      - Filesystem and git are your memory
+      - Each loop starts with fresh context
+      - Always make incremental progress
+      - Check what exists before creating new things
+      - Use git to track your progress
+
+  # Specialized agent for code generation
+  coder:
+    name: "Coder"
+    description: "Code generation and refactoring specialist"
+    color: "#3b82f6"
+    system_prompt: |
+      You are Coder, a specialized agent for code generation and refactoring.
+      
+      Focus on:
+      - Writing clean, maintainable code
+      - Following project conventions
+      - Adding proper documentation
+      - Testing your changes
+      - Incremental improvements
+
+  # Specialized agent for testing
+  tester:
+    name: "Tester"
+    description: "Testing and quality assurance specialist"
+    color: "#10b981"
+    system_prompt: |
+      You are Tester, a specialized agent for testing and quality assurance.
+      
+      Focus on:
+      - Writing comprehensive tests
+      - Finding bugs and edge cases
+      - Validating requirements
+      - Ensuring code quality
+      - Providing feedback on implementation
+
+# Task categories for agent selection
+task_categories:
+  code_generation: "coder"
+  testing: "tester"
+  general: "ralph"

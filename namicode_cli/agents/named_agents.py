@@ -15,9 +15,8 @@ from nami_deepagents.middleware import SkillsMiddleware, MemoryMiddleware
 import os
 from namicode_cli.config.config import (
     config,
-    console,
 )
-from namicode_cli.agents.core_agent import _add_interrupt_on, get_shared_store
+from namicode_cli.agents.core_agent import _add_interrupt_on
 from namicode_cli.shell import ShellMiddleware
 from namicode_cli.mcp import get_shared_mcp_middleware
 from namicode_cli.memory.shared_memory import SharedMemoryMiddleware
