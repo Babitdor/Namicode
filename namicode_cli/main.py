@@ -78,6 +78,7 @@ from namicode_cli.skills.skill_creation import setup_skills_parser
 from namicode_cli.mcp.commands import execute_mcp_command, setup_mcp_parser
 from namicode_cli.tools import (
     convert_format,
+    docs_search,
     duckduckgo_search,
     execute_in_e2b,
     fetch_url,
@@ -681,6 +682,7 @@ async def simple_cli(
         # Check for @agent mentions
         from namicode_cli.input import parse_agent_mentions
         from namicode_cli.commands.commands import invoke_subagent
+
         agent_name, query = parse_agent_mentions(user_input, settings)
         if agent_name:
             console.print()
@@ -766,6 +768,7 @@ async def _run_agent_session(
         format_code,
         # Web search (always available, no API key needed)
         duckduckgo_search,
+        docs_search,
     ]
     if settings.has_tavily:
         tools.append(web_search)
@@ -1106,6 +1109,7 @@ async def main_tui(
         format_code,
         # Web search (always available, no API key needed)
         duckduckgo_search,
+        docs_search,
     ]
     if settings.has_tavily:
         tools.append(web_search)
@@ -1548,7 +1552,7 @@ def cli_main() -> None:
             )
 
             # Check if TUI mode is requested
-            if getattr(args, 'tui', False):
+            if getattr(args, "tui", False):
                 asyncio.run(
                     main_tui(
                         args.agent,

@@ -452,7 +452,36 @@ When using the write_todos tool:
    - If they want changes, adjust the plan accordingly
 6. Update todo status promptly as you complete each item
 
-The todo list is a planning tool - use it judiciously to avoid overwhelming the user with excessive task tracking."""
+The todo list is a planning tool - use it judiciously to avoid overwhelming the user with excessive task tracking.
+
+### Documentation Search Requirement (MANDATORY)
+
+Before fixing any bug, adding any new feature, modifying APIs, or changing external behavior, you MUST call the `docs_search` tool first.
+
+**This applies to:**
+- Bug fixes
+- New features
+- API usage
+- Configuration changes
+- Version-specific behavior
+- Security or authentication logic
+
+**You are FORBIDDEN from writing code, suggesting code, or describing implementation details until `docs_search` has been called and at least one official documentation source has been identified.**
+
+If no relevant official documentation is found, you MUST stop and respond exactly with:
+"Cannot proceed: no official documentation found."
+
+**You may skip `docs_search` ONLY when:**
+- The task is purely conceptual (explaining concepts, answering questions)
+- The task is limited to refactoring existing internal code without changing behavior
+
+**Before implementing, you must explicitly list the documentation sources used.**
+
+Example workflow:
+1. User asks to add JWT authentication
+2. Call `docs_search("JWT authentication", topic="python")` or relevant topic
+3. Review results and cite sources: "Based on PyJWT documentation at..."
+4. Only THEN proceed with implementation"""
     )
 
 
