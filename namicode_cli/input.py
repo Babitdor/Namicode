@@ -367,6 +367,15 @@ def create_prompt_session(_assistant_id, session_state: SessionState) -> PromptS
         # Force UI refresh to update toolbar
         event.app.invalidate()
 
+    # Bind Shift+Tab to toggle plan mode
+    @kb.add("s-tab")
+    def _(event) -> None:
+        """Toggle plan mode on/off."""
+        session_state.toggle_plan_mode()
+        session_state.pending_plan_mode_sync = True
+        # Force UI refresh to update toolbar
+        event.app.invalidate()
+
     # Bind regular Enter to submit (intuitive behavior)
     @kb.add("enter")
     def _(event) -> None:

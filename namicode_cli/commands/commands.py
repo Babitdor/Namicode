@@ -2781,15 +2781,14 @@ async def _handle_plan_command(agent, session_state, args: str | None = None) ->
     if args is None or args.strip() == "":
         # Toggle mode
         new_state = not current_state
-        try:
-            await set_agent_plan_mode_state(agent, session_state.thread_id, new_state)
-        except Exception:
-            pass
-
-        # Update session state for UI indicator
-        session_state.plan_mode_enabled = new_state
 
         if new_state:
+            # Enabling plan mode - no approval needed
+            try:
+                await set_agent_plan_mode_state(agent, session_state.thread_id, new_state)
+            except Exception:
+                pass
+            session_state.plan_mode_enabled = new_state
             console.print()
             console.print(
                 Panel(
@@ -2797,16 +2796,29 @@ async def _handle_plan_command(agent, session_state, args: str | None = None) ->
                     "\u2022 Agent will focus on understanding before executing\n"
                     "\u2022 Questions will be asked to clarify requirements\n"
                     "\u2022 Plans will be presented before implementation\n\n"
-                    "[dim]Use /plan off to disable[/dim]",
+                    "[dim]Use Shift+Tab or /plan off to exit[/dim]",
                     title="[cyan]Plan Mode[/cyan]",
                     border_style="cyan",
                     box=box.ROUNDED,
                 )
             )
         else:
-            console.print()
-            console.print("[yellow]Plan Mode Disabled[/yellow]")
-            console.print("[dim]Agent will proceed directly with tasks.[/dim]")
+            # Disabling plan mode - show approval dialog
+            from namicode_cli.ui.question_prompt import prompt_for_plan_approval
+
+            result = prompt_for_plan_approval(
+                todos=session_state.todos,
+                plan_summary="Review your plan before proceeding",
+            )
+            if result["approved"]:
+                try:
+                    await set_agent_plan_mode_state(agent, session_state.thread_id, False)
+                except Exception:
+                    pass
+                session_state.plan_mode_enabled = False
+                console.print("[green]Plan Mode Disabled - ready to execute[/green]")
+            else:
+                console.print("[cyan]Staying in Plan Mode[/cyan]")
         console.print()
         return True
 
@@ -2823,12 +2835,22 @@ async def _handle_plan_command(agent, session_state, args: str | None = None) ->
         return True
 
     elif arg == "off":
-        try:
-            await set_agent_plan_mode_state(agent, session_state.thread_id, False)
-        except Exception:
-            pass
-        session_state.plan_mode_enabled = False
-        console.print("[yellow]Plan Mode Disabled[/yellow]")
+        # Show plan approval before exiting plan mode
+        from namicode_cli.ui.question_prompt import prompt_for_plan_approval
+
+        result = prompt_for_plan_approval(
+            todos=session_state.todos,
+            plan_summary="Review your plan before proceeding",
+        )
+        if result["approved"]:
+            try:
+                await set_agent_plan_mode_state(agent, session_state.thread_id, False)
+            except Exception:
+                pass
+            session_state.plan_mode_enabled = False
+            console.print("[green]Plan Mode Disabled - ready to execute[/green]")
+        else:
+            console.print("[cyan]Staying in Plan Mode[/cyan]")
         console.print()
         return True
 

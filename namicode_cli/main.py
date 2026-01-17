@@ -649,6 +649,25 @@ async def simple_cli(
         if not user_input:
             continue
 
+        # Sync plan mode state to agent if needed (from Shift+Tab toggle)
+        if session_state.pending_plan_mode_sync:
+            session_state.pending_plan_mode_sync = False
+            try:
+                from namicode_cli.agents.core_agent import set_agent_plan_mode_state
+
+                await set_agent_plan_mode_state(
+                    agent, session_state.thread_id, session_state.plan_mode_enabled
+                )
+                if session_state.plan_mode_enabled:
+                    console.print()
+                    console.print(
+                        "[cyan]Plan Mode Enabled[/cyan] - Agent will create a plan before executing"
+                    )
+                    console.print("[dim]Press Shift+Tab when ready to review and approve the plan[/dim]")
+                    console.print()
+            except Exception:
+                pass
+
         # Check for slash commands first
         if user_input.startswith("/"):
             result = await handle_command(

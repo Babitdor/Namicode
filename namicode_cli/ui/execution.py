@@ -427,6 +427,69 @@ async def execute_task(  # type: ignore
 
                                     continue
 
+                                # Check if this is a plan approval interrupt (from exit_plan_mode tool)
+                                if (
+                                    isinstance(interrupt_value, dict)
+                                    and interrupt_value.get("type") == "plan_approval"
+                                ):
+                                    if spinner_active:
+                                        status.stop()
+                                        spinner_active = False
+
+                                    # Import and show plan approval dialog
+                                    from namicode_cli.ui.question_prompt import (
+                                        prompt_for_plan_approval,
+                                    )
+
+                                    console.print()
+                                    console.print(
+                                        "[cyan]Planning complete.[/cyan] Review the plan:",
+                                        style="bold",
+                                    )
+
+                                    result = prompt_for_plan_approval(
+                                        todos=current_todos,
+                                        plan_summary="Agent has created a plan for your task",
+                                    )
+
+                                    if result["approved"]:
+                                        # User approved - exit plan mode
+                                        session_state.plan_mode_enabled = False
+                                        try:
+                                            from namicode_cli.agents.core_agent import (
+                                                set_agent_plan_mode_state,
+                                            )
+
+                                            await set_agent_plan_mode_state(
+                                                agent, session_state.thread_id, False
+                                            )
+                                        except Exception:
+                                            pass
+                                        hitl_response[interrupt_obj.id] = {
+                                            "approved": True
+                                        }
+                                        console.print(
+                                            "[green]Plan approved! Executing...[/green]"
+                                        )
+                                    else:
+                                        # User rejected - stay in plan mode
+                                        hitl_response[interrupt_obj.id] = {
+                                            "approved": False
+                                        }
+                                        console.print(
+                                            "[yellow]Plan rejected. Revise the plan.[/yellow]"
+                                        )
+
+                                    console.print()
+                                    interrupt_occurred = True
+
+                                    # Restart spinner
+                                    if not spinner_active:
+                                        status.start()
+                                        spinner_active = True
+
+                                    continue
+
                                 # Interrupt has required fields: value (HITLRequest) and id (str)
                                 # Validate the HITLRequest using TypeAdapter
                                 try:
@@ -998,6 +1061,10 @@ async def execute_task(  # type: ignore
 
     if spinner_active:
         status.stop()
+
+    # Update session_state.todos if we have any
+    if current_todos:
+        session_state.todos = current_todos
 
     if has_responded:
         console.print()

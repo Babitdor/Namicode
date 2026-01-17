@@ -79,45 +79,35 @@ class PlanModeStateUpdate(TypedDict):
 
 # System prompt for plan mode (injected when enabled)
 PLAN_MODE_SYSTEM_PROMPT = """
-## Plan Mode (ACTIVE)
+## Plan Mode (ACTIVE) - PLANNING ONLY
 
-You are currently in **Plan Mode**. In this mode:
+You are currently in **Plan Mode**. This is a PLANNING-ONLY phase.
 
-1. **Focus on Understanding First**
-   - Analyze the user's request thoroughly before proposing solutions
-   - Identify ambiguities, missing requirements, or unclear goals
-   - Consider multiple approaches before committing to one
+### CRITICAL RULES:
+1. **DO NOT EXECUTE** - You must ONLY create a plan, not execute it
+2. **NO FILE OPERATIONS** - Do not write, edit, or create any files
+3. **NO CODE CHANGES** - Do not implement any code yet
+4. **PLAN FIRST** - Create your plan using the `write_todos` tool
 
-2. **Ask Questions When Needed**
-   - Use `ask_question` to clarify requirements BEFORE starting work
-   - Choose structured questions (multiple choice) for bounded decisions
-   - Choose open-ended questions when you need detailed user input
+### Your Task in Plan Mode:
+1. **Analyze** the user's request thoroughly
+2. **Decompose** the task into clear, actionable steps
+3. **Identify** dependencies, constraints, and potential issues
+4. **Create a plan** using `write_todos` with all steps needed
+5. **Call `exit_plan_mode`** to submit the plan for user approval
 
-3. **Plan Before Executing**
-   - Create a clear plan using `write_todos` before making changes
-   - Present the plan to the user and wait for approval
-   - Break complex tasks into verifiable milestones
+### Plan Structure (use write_todos):
+- Break complex tasks into small, verifiable steps
+- Each todo should be a single, clear action
+- Order todos by dependency (what must happen first)
+- Include verification steps (e.g., "Test the changes")
 
-4. **When to Ask Questions**
-   - Ambiguous requirements ("make it better" - better how?)
-   - Technical choices with tradeoffs (database selection, architecture)
-   - Missing context (API credentials, deployment targets)
-   - Confirmation of understanding before large changes
+### After Planning:
+Once you create the plan with `write_todos`, you MUST call `exit_plan_mode` to submit
+your plan for user approval. The user will review and approve before you execute.
 
-5. **Question Best Practices**
-   - **Structured questions** for: yes/no, choose from options, priority ranking
-   - **Open-ended questions** for: detailed requirements, user preferences, context gathering
-   - Include context about WHY you're asking to help the user respond effectively
-
-Example usage:
-```
-ask_question(
-    question="What database would you prefer for this project?",
-    question_type="structured",
-    options=["PostgreSQL", "MongoDB", "SQLite", "Let me decide based on requirements"],
-    context="This affects how I structure the data models and queries."
-)
-```
+**REMEMBER: In Plan Mode, you are a PLANNER, not an EXECUTOR.**
+**ALWAYS call `exit_plan_mode` when your plan is ready.**
 """
 
 # System prompt for ask_question tool (always included)
@@ -137,6 +127,43 @@ Use this when:
 
 The user will see your question and respond directly.
 """
+
+
+def _exit_plan_mode() -> str:
+    """Exit plan mode and submit the plan for user approval.
+
+    Call this tool when you have finished creating your plan using write_todos.
+    The user will review your plan and decide whether to approve it.
+
+    Returns:
+        The user's decision: "approved" or "rejected".
+    """
+    # Use LangGraph's interrupt to pause execution and get user approval
+    response = interrupt({
+        "type": "plan_approval",
+        "message": "Plan is ready for review",
+    })
+
+    # Return the user's decision
+    if isinstance(response, dict):
+        if response.get("approved"):
+            return "Plan approved. You may now execute the plan."
+        else:
+            return "Plan rejected. Please revise the plan based on user feedback."
+    return str(response)
+
+
+def _create_exit_plan_mode_tool() -> BaseTool:
+    """Create the exit_plan_mode tool."""
+    return StructuredTool.from_function(
+        name="exit_plan_mode",
+        func=_exit_plan_mode,
+        description=(
+            "Exit plan mode and submit your plan for user approval. "
+            "Call this after creating your plan with write_todos. "
+            "The user will review and approve or reject the plan."
+        ),
+    )
 
 
 def _ask_question(
@@ -226,11 +253,12 @@ class PlanModeMiddleware(AgentMiddleware):
         self.enabled_by_default = enabled_by_default
         self.include_system_prompt = include_system_prompt
         self._ask_question_tool = _create_ask_question_tool()
+        self._exit_plan_mode_tool = _create_exit_plan_mode_tool()
 
     @property
     def tools(self) -> list[BaseTool]:
         """Return tools provided by this middleware."""
-        return [self._ask_question_tool]
+        return [self._ask_question_tool, self._exit_plan_mode_tool]
 
     def before_agent(  # type: ignore
         self, state: PlanModeState, runtime, config
