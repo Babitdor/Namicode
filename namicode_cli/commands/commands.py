@@ -2415,6 +2415,7 @@ async def handle_command(
     assistant_id: str,
     session_manager=None,
     model_name: str | None = None,
+    image_tracker=None,
 ) -> str | bool:
     """Handle slash commands. Returns 'exit' to exit, True if handled, False to pass to agent."""
     # Parse command and optional arguments
@@ -2637,6 +2638,18 @@ async def handle_command(
             console.print()
         return True
 
+    if cmd == "images":
+        # Manage images in the conversation
+        try:
+            return await _handle_images_command(cmd_args, image_tracker)
+        except Exception as e:
+            console.print(f"[red]Error running /images command: {e}[/red]")
+            import traceback
+
+            console.print(f"[dim]{traceback.format_exc()}[/dim]")
+            console.print()
+        return True
+
     console.print()
     console.print(f"[yellow]Unknown command: /{cmd}[/yellow]")
     console.print("[dim]Type /help for available commands.[/dim]")
@@ -2746,6 +2759,122 @@ async def _handle_files_command() -> bool:
     console.print()
 
     return True
+
+
+async def _handle_images_command(args: str | None, image_tracker) -> bool:
+    """Handle /images command to manage images in the conversation.
+
+    Usage:
+        /images          - List all images in the conversation
+        /images list     - List all images
+        /images remove <id> - Remove an image by ID (e.g., /images remove image-1)
+        /images clear    - Clear all images
+
+    Args:
+        args: Optional arguments (list, remove <id>, clear).
+        image_tracker: The ImageTracker instance.
+
+    Returns:
+        True (always handled).
+    """
+    console.print()
+
+    if image_tracker is None:
+        console.print("[yellow]Image tracking not available.[/yellow]")
+        console.print()
+        return True
+
+    # Parse subcommand
+    if args is None or args.strip() == "" or args.strip().lower() == "list":
+        # List all images
+        images = image_tracker.list_images()
+
+        if not images:
+            console.print("[dim]No images in the current conversation.[/dim]")
+            console.print()
+            console.print("[dim]Tip: Paste an image with Ctrl+V or use @path/to/image.png[/dim]")
+            console.print()
+            return True
+
+        # Header
+        header = Text()
+        header.append("🖼️ ", style="bold")
+        header.append("Images in Conversation", style=f"bold {COLORS['primary']}")
+
+        console.print(Panel(header, border_style=COLORS["primary"]))
+        console.print()
+
+        # Create table
+        table = Table(show_header=True, header_style="bold", box=None, padding=(0, 1))
+        table.add_column("ID", style="cyan")
+        table.add_column("Format", style="dim")
+        table.add_column("Size", justify="right")
+        table.add_column("Placeholder")
+
+        for img in images:
+            size_str = f"{img['size_kb']:.1f} KB"
+            table.add_row(
+                img["id"],
+                img["format"].upper(),
+                size_str,
+                img["placeholder"],
+            )
+
+        console.print(table)
+        console.print()
+        console.print(f"[dim]Total: {len(images)} image(s)[/dim]")
+        console.print()
+        console.print("[dim]Use /images remove <id> to remove an image[/dim]")
+        console.print("[dim]Use /images clear to remove all images[/dim]")
+        console.print()
+        return True
+
+    arg_parts = args.strip().split(maxsplit=1)
+    subcmd = arg_parts[0].lower()
+
+    if subcmd == "remove":
+        if len(arg_parts) < 2:
+            console.print("[red]Usage: /images remove <id>[/red]")
+            console.print("[dim]Example: /images remove image-1[/dim]")
+            console.print()
+            return True
+
+        image_id = arg_parts[1].strip()
+
+        # Normalize ID format (allow "1" or "image-1")
+        if not image_id.startswith("image-"):
+            image_id = f"image-{image_id}"
+
+        if image_tracker.remove_image(image_id):
+            console.print(f"[green]Removed {image_id}[/green]")
+        else:
+            console.print(f"[red]Image not found: {image_id}[/red]")
+            # Show available images
+            images = image_tracker.list_images()
+            if images:
+                available = ", ".join(img["id"] for img in images)
+                console.print(f"[dim]Available images: {available}[/dim]")
+        console.print()
+        return True
+
+    elif subcmd == "clear":
+        count = image_tracker.count
+        if count == 0:
+            console.print("[dim]No images to clear.[/dim]")
+        else:
+            image_tracker.clear()
+            console.print(f"[green]Cleared {count} image(s) from conversation[/green]")
+        console.print()
+        return True
+
+    else:
+        console.print("[red]Unknown subcommand. Usage:[/red]")
+        console.print("  /images          - List all images")
+        console.print("  /images list     - List all images")
+        console.print("  /images remove <id> - Remove an image")
+        console.print("  /images clear    - Clear all images")
+        console.print()
+        return True
 
 
 async def _handle_plan_command(agent, session_state, args: str | None = None) -> bool:

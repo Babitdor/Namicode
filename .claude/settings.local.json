@@ -9,7 +9,8 @@
       "Bash(uv run pytest:*)",
       "Bash(uv run:*)",
       "Bash(uv pip list:*)",
-      "Bash(uv pip install:*)"
+      "Bash(uv pip install:*)",
+      "Bash(.venv/Scripts/python -m pytest tests/unit_tests/test_vision.py -v --tb=short)"
     ]
   }
 }

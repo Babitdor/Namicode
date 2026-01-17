@@ -20,7 +20,7 @@ from prompt_toolkit.enums import EditingMode
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.output.vt100 import Vt100_Output
-from namicode_cli.image_utils import ImageData
+from namicode_cli.image_utils import ImageData, get_clipboard_image
 from namicode_cli.config.config import COLORS, COMMANDS, Settings, console
 from namicode_cli.states.Session import SessionState
 
@@ -34,35 +34,87 @@ EXIT_CONFIRM_WINDOW = 3.0
 
 
 class ImageTracker:
-    """Track pasted images in the current conversation."""
+    """Track pasted images in the current conversation with ID-based access."""
 
     def __init__(self) -> None:
-        self.images: list[ImageData] = []
+        self._images: dict[str, ImageData] = {}  # id -> ImageData
         self.next_id = 1
 
     def add_image(self, image_data: ImageData) -> str:
-        """Add an image and return its placeholder text.
+        """Add an image and return its ID.
 
         Args:
             image_data: The image data to track
 
         Returns:
-            Placeholder string like "[image 1]"
+            Image ID like "image-1"
         """
-        placeholder = f"[image {self.next_id}]"
-        image_data.placeholder = placeholder
-        self.images.append(image_data)
+        image_id = f"image-{self.next_id}"
+        image_data.placeholder = f"[{image_id}]"
+        self._images[image_id] = image_data
         self.next_id += 1
-        return placeholder
+        return image_id
+
+    def get_image(self, image_id: str) -> ImageData | None:
+        """Get an image by ID.
+
+        Args:
+            image_id: The image ID (e.g., "image-1")
+
+        Returns:
+            ImageData if found, None otherwise
+        """
+        return self._images.get(image_id)
 
     def get_images(self) -> list[ImageData]:
-        """Get all tracked images."""
-        return self.images.copy()
+        """Get all tracked images as a list."""
+        return list(self._images.values())
+
+    def get_images_dict(self) -> dict[str, ImageData]:
+        """Get all tracked images as a dict."""
+        return self._images.copy()
+
+    def remove_image(self, image_id: str) -> bool:
+        """Remove an image by ID.
+
+        Args:
+            image_id: The image ID to remove
+
+        Returns:
+            True if removed, False if not found
+        """
+        return self._images.pop(image_id, None) is not None
+
+    def list_images(self) -> list[dict]:
+        """List all images with metadata.
+
+        Returns:
+            List of dicts with id, format, size_kb, placeholder
+        """
+        return [
+            {
+                "id": image_id,
+                "format": img.format,
+                "size_kb": img.size_kb,
+                "placeholder": img.placeholder,
+            }
+            for image_id, img in self._images.items()
+        ]
 
     def clear(self) -> None:
         """Clear all tracked images and reset counter."""
-        self.images.clear()
+        self._images.clear()
         self.next_id = 1
+
+    @property
+    def count(self) -> int:
+        """Get number of tracked images."""
+        return len(self._images)
+
+    @property
+    def images(self) -> list[ImageData]:
+        """Get all tracked images (backward compatibility)."""
+        return list(self._images.values())
 
 
 class FilePathCompleter(Completer):
@@ -309,7 +361,9 @@ def get_bottom_toolbar(
     return toolbar
 
 
-def create_prompt_session(_assistant_id, session_state: SessionState) -> PromptSession:
+def create_prompt_session(
+    _assistant_id, session_state: SessionState, image_tracker: ImageTracker | None = None
+) -> PromptSession:
     """Create a configured PromptSession with all features."""
     # Set default editor if not already set
     if "EDITOR" not in os.environ:
@@ -358,6 +412,27 @@ def create_prompt_session(_assistant_id, session_state: SessionState) -> PromptS
         session_state.exit_hint_handle = loop.call_later(EXIT_CONFIRM_WINDOW, clear_hint)  # type: ignore
 
         app.invalidate()
+
+    # Bind Ctrl+V to paste clipboard image (if available)
+    @kb.add("c-v")
+    def _(event) -> None:
+        """Check for clipboard image and add to tracker, otherwise do normal paste."""
+        if image_tracker:
+            try:
+                clipboard_image = get_clipboard_image()
+                if clipboard_image:
+                    image_id = image_tracker.add_image(clipboard_image)
+                    # Insert placeholder text
+                    event.current_buffer.insert_text(f"[{image_id}] ")
+                    console.print(
+                        f"[dim]Image pasted: {image_id} ({clipboard_image.size_kb:.1f} KB)[/dim]"
+                    )
+                    event.app.invalidate()
+                    return
+            except Exception:
+                pass  # Fall through to normal paste
+        # No image in clipboard - do normal paste from system clipboard
+        event.current_buffer.paste_clipboard_data(event.app.clipboard.get_data())
 
     # Bind Ctrl+T to toggle auto-approve
     @kb.add("c-t")

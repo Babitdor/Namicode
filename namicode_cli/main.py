@@ -480,9 +480,9 @@ async def simple_cli(
     console.print()
 
     # Create prompt session and token tracker
-    session = create_prompt_session(assistant_id, session_state)
     token_tracker = TokenTracker()
     image_tracker = ImageTracker()
+    session = create_prompt_session(assistant_id, session_state, image_tracker)
     token_tracker.set_baseline(baseline_tokens)
     if model_name:
         token_tracker.set_model(model_name)
@@ -678,6 +678,7 @@ async def simple_cli(
                 assistant_id,  # type: ignore
                 session_manager=session_manager,
                 model_name=model_name,
+                image_tracker=image_tracker,
             )
             if result == "exit":
                 await _cleanup_and_save_session()

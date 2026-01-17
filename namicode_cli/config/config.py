@@ -190,6 +190,7 @@ COMMANDS = {
     "tests": "Run project tests (e.g., /tests or /tests pytest -v)",
     "trace": "Manage LangSmith tracing (status, enable, disable, projects)",
     "kill": "Kill a running process by PID or name (e.g., /kill 1234)",
+    "images": "Manage images in conversation (list, remove <id>, clear)",
     "exit": "Exit the CLI",
 }
 

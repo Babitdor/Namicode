@@ -48,6 +48,8 @@ from namicode_cli.errors.handlers import ErrorHandler
 from namicode_cli.file_ops import FileOpTracker, build_approval_preview
 from namicode_cli.input import parse_file_mentions, ImageTracker
 from namicode_cli.image_utils import create_multimodal_content
+from namicode_cli.vision import model_supports_vision, suggest_vision_model
+from namicode_cli.config.model_create import get_current_model_name
 from namicode_cli.ui.ui_elements import (
     TokenTracker,
     format_tool_display,
@@ -266,6 +268,20 @@ async def execute_task(  # type: ignore
     if image_tracker:
         images_to_send = image_tracker.get_images()
     if images_to_send:
+        # Check if current model supports vision
+        current_model = get_current_model_name()
+        if not model_supports_vision(current_model):
+            suggested = suggest_vision_model(current_model)
+            console.print()
+            console.print(
+                f"[yellow]Warning: Current model '{current_model}' may not support images.[/yellow]"
+            )
+            if suggested:
+                console.print(
+                    f"[dim]Consider using a vision model like '{suggested}'[/dim]"
+                )
+                console.print("[dim]Use /model to change models.[/dim]")
+            console.print()
         message_content = create_multimodal_content(final_input, images_to_send)
     else:
         message_content = final_input
@@ -274,7 +290,7 @@ async def execute_task(  # type: ignore
         "configurable": {"thread_id": session_state.thread_id},
         "metadata": {"assistant_id": assistant_id} if assistant_id else {},
     }
-    
+
     # Display agent names properly
     agent_display_name = assistant_id
 
