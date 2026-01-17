@@ -10,7 +10,11 @@
       "Bash(uv run:*)",
       "Bash(uv pip list:*)",
       "Bash(uv pip install:*)",
-      "Bash(.venv/Scripts/python -m pytest tests/unit_tests/test_vision.py -v --tb=short)"
+      "Bash(.venv/Scripts/python -m pytest tests/unit_tests/test_vision.py -v --tb=short)",
+      "WebSearch",
+      "WebFetch(domain:platform.stability.ai)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:www.datacamp.com)"
     ]
   }
 }

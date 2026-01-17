@@ -355,6 +355,7 @@ class Settings:
     google_api_key: str | None
     tavily_api_key: str | None
     langsmith_api_key: str | None
+    replicate_api_key: str | None
 
     # Ollama configuration
     ollama_host: str | None
@@ -408,11 +409,15 @@ class Settings:
             tavily_key = secret_manager.get_secret("tavily_api_key") or os.environ.get(
                 "TAVILY_API_KEY"
             )
+            replicate_key = secret_manager.get_secret(
+                "replicate_api_key"
+            ) or os.environ.get("REPLICATE_API_TOKEN")
         else:
             openai_key = os.environ.get("OPENAI_API_KEY")
             anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
             google_key = os.environ.get("GOOGLE_API_KEY")
             tavily_key = os.environ.get("TAVILY_API_KEY")
+            replicate_key = os.environ.get("REPLICATE_API_TOKEN")
 
         langsmith_key = os.environ.get("LANGSMITH_API_KEY")
 
@@ -433,6 +438,7 @@ class Settings:
             google_api_key=google_key,
             tavily_api_key=tavily_key,
             langsmith_api_key=langsmith_key,
+            replicate_api_key=replicate_key,
             ollama_host=ollama_host,
             project_root=project_root,
             langsmith_project=langsmith_project,
@@ -459,6 +465,11 @@ class Settings:
     def has_tavily(self) -> bool:
         """Check if Tavily API key is configured."""
         return self.tavily_api_key is not None
+
+    @property
+    def has_replicate(self) -> bool:
+        """Check if Replicate API key is configured."""
+        return self.replicate_api_key is not None
 
     @property
     def has_langsmith(self) -> bool:

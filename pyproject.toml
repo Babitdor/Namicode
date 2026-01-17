@@ -53,6 +53,8 @@ dependencies = [
     "black>=24.0.0",
     # Web search (no API key required)
     "ddgs>=7.0.0",
+    # Image generation (Replicate API)
+    "replicate>=0.25.0",
 ]
 
 [project.urls]

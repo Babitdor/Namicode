@@ -30,6 +30,7 @@ import json
 import os
 import subprocess
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -985,3 +986,170 @@ def format_code(
 
     except Exception as e:
         return {"success": False, "error": f"Formatting failed: {e!s}"}
+
+
+# =============================================================================
+# Image Generation (Replicate API)
+# =============================================================================
+
+# Available models on Replicate
+REPLICATE_MODELS = {
+    "flux-schnell": "black-forest-labs/flux-schnell",  # Fast, good quality
+    "flux-dev": "black-forest-labs/flux-dev",  # Higher quality, slower
+    "sdxl": "stability-ai/sdxl:39ed52f2a78e934b3ba6e2a89f5b1c712de7dfea535525255b1aa35c5565e08b",
+    "sdxl-turbo": "stability-ai/sdxl-turbo",  # Fast SDXL
+}
+
+
+def generate_image(
+    prompt: str,
+    output_path: str | None = None,
+    model: str = "flux-schnell",
+    aspect_ratio: str = "1:1",
+    output_format: str = "png",
+    num_outputs: int = 1,
+    seed: int | None = None,
+) -> dict[str, Any]:
+    """Generate an image using Replicate API (open source models like FLUX and SDXL).
+
+    IMPORTANT: This tool generates images from text descriptions using open source
+    models like FLUX and SDXL. Free tier includes 50 generations per month.
+
+    Args:
+        prompt: Text description of the image to generate. Be specific and detailed.
+        output_path: Path to save the image. If not provided, saves to current directory
+                     with timestamp (e.g., "generated_20240115_143022.png")
+        model: Model to use:
+            - "flux-schnell" (default) - Fast FLUX model, ~1.2 seconds
+            - "flux-dev" - Higher quality FLUX, slower
+            - "sdxl" - Stable Diffusion XL
+            - "sdxl-turbo" - Fast SDXL variant
+        aspect_ratio: Output dimensions - "1:1", "16:9", "9:16", "4:3", "3:4", "21:9"
+        output_format: Image format - "png", "jpg", "webp"
+        num_outputs: Number of images to generate (1-4)
+        seed: Random seed for reproducibility (optional)
+
+    Returns:
+        Dictionary with:
+        - success: bool - Whether generation succeeded
+        - file_path: str | list[str] - Path(s) to saved image(s)
+        - model: str - Model used
+        - error: str - Error message (if failed)
+    """
+    try:
+        import replicate
+    except ImportError:
+        return {
+            "success": False,
+            "error": "replicate package not installed. Run: pip install replicate",
+        }
+
+    # Get API key
+    from namicode_cli.onboarding import SecretManager
+
+    secret_manager = SecretManager()
+    api_key = secret_manager.get_secret("replicate_api_key") or os.environ.get(
+        "REPLICATE_API_TOKEN"
+    )
+
+    if not api_key:
+        return {
+            "success": False,
+            "error": "REPLICATE_API_TOKEN not configured. Get your free API key at https://replicate.com/account/api-tokens",
+        }
+
+    # Validate model
+    if model not in REPLICATE_MODELS:
+        return {
+            "success": False,
+            "error": f"Invalid model '{model}'. Valid options: {list(REPLICATE_MODELS.keys())}",
+        }
+
+    # Set API token
+    os.environ["REPLICATE_API_TOKEN"] = api_key
+
+    # Build input parameters
+    model_id = REPLICATE_MODELS[model]
+
+    input_params = {
+        "prompt": prompt,
+        "num_outputs": min(max(num_outputs, 1), 4),
+        "output_format": output_format,
+    }
+
+    # Add aspect ratio (FLUX models support this)
+    if model.startswith("flux"):
+        input_params["aspect_ratio"] = aspect_ratio
+
+    if seed is not None:
+        input_params["seed"] = seed
+
+    try:
+        # Run the model
+        output = replicate.run(model_id, input=input_params)
+
+        # Handle output (can be list of URLs or FileOutput objects)
+        if not output:
+            return {
+                "success": False,
+                "error": "No output received from model",
+            }
+
+        # Convert to list if single output
+        outputs = (
+            list(output)
+            if hasattr(output, "__iter__") and not isinstance(output, str)
+            else [output]
+        )
+
+        saved_paths = []
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        for i, img_output in enumerate(outputs):
+            # Determine output path
+            if output_path and len(outputs) == 1:
+                save_path = output_path
+            elif output_path:
+                base, ext = os.path.splitext(output_path)
+                save_path = f"{base}_{i + 1}{ext}"
+            else:
+                suffix = f"_{i + 1}" if len(outputs) > 1 else ""
+                save_path = f"generated_{timestamp}{suffix}.{output_format}"
+
+            # Save the image
+            output_file = Path(save_path)
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+
+            # Handle different output types
+            if hasattr(img_output, "read"):
+                # FileOutput object
+                output_file.write_bytes(img_output.read())
+            elif isinstance(img_output, str) and img_output.startswith("http"):
+                # URL - download it
+                response = requests.get(img_output, timeout=60)
+                response.raise_for_status()
+                output_file.write_bytes(response.content)
+            else:
+                # Assume bytes
+                output_file.write_bytes(img_output)
+
+            saved_paths.append(str(output_file.absolute()))
+
+        return {
+            "success": True,
+            "file_path": saved_paths[0] if len(saved_paths) == 1 else saved_paths,
+            "model": model,
+            "prompt": prompt[:100] + "..." if len(prompt) > 100 else prompt,
+        }
+
+    except Exception as e:
+        error_msg = str(e)
+        if "authentication" in error_msg.lower() or "unauthorized" in error_msg.lower():
+            return {
+                "success": False,
+                "error": "Invalid API token. Check your REPLICATE_API_TOKEN.",
+            }
+        return {
+            "success": False,
+            "error": f"Error generating image: {error_msg}",
+        }

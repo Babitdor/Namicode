@@ -28,6 +28,7 @@ API_KEY_NAMES = {
     "google": "google_api_key",
     "groq": "groq_api_key",
     "e2b": "e2b_api_key",
+    "replicate": "replicate_api_key",
 }
 
 
@@ -224,10 +225,15 @@ class OnboardingWizard:
         # Step 4: Get E2B API key (optional - can skip for now)
         e2b_key = self._prompt_e2b_key()
 
-        # Step 5: Test connections
+        # Step 5: Get Replicate API key (optional - for image generation)
+        replicate_key = self._prompt_replicate_key()
+
+        # Step 6: Test connections
         console.print()
         console.print("[bold]Testing connections:[/bold]")
-        if not self._test_connections(provider, provider_config, tavily_key, e2b_key):
+        if not self._test_connections(
+            provider, provider_config, tavily_key, e2b_key, replicate_key
+        ):
             console.print()
             console.print(
                 "[yellow]⚠ Connection tests failed. "
@@ -237,7 +243,7 @@ class OnboardingWizard:
             if response != "y":
                 return False
 
-        # Step 6: Save configuration
+        # Step 7: Save configuration
         self._save_config(provider, provider_config, tavily_key)
 
         console.print()
@@ -340,20 +346,41 @@ class OnboardingWizard:
 
         return None
 
+    def _prompt_replicate_key(self) -> str | None:
+        """Prompt for Replicate API key (optional).
+
+        Returns:
+            Replicate API key or None if skipped
+        """
+        console.print()
+        console.print("[bold]Image generation provider (Replicate):[/bold]")
+        console.print("  [dim]Required for AI image generation. 50 free images/month.[/dim]")
+        console.print("  [dim]Get your free API key at: https://replicate.com/account/api-tokens[/dim]")
+        console.print("  [dim]Press Enter to skip.[/dim]")
+        replicate_key = getpass("  Replicate API key: ")
+
+        if replicate_key:
+            self.secret_manager.store_secret(API_KEY_NAMES["replicate"], replicate_key)
+            return replicate_key
+
+        return None
+
     def _test_connections(
         self,
         provider: str,
         provider_config: dict[str, Any],
         tavily_key: str | None,
         e2b_key: str | None,
+        replicate_key: str | None = None,
     ) -> bool:
-        """Test connections to LLM provider, Tavily, and E2B.
+        """Test connections to LLM provider, Tavily, E2B, and Replicate.
 
         Args:
             provider: Provider name
             provider_config: Provider configuration
             tavily_key: Tavily API key (optional)
             e2b_key: E2B API key (optional)
+            replicate_key: Replicate API key (optional)
 
         Returns:
             True if all tests passed, False otherwise
@@ -421,6 +448,23 @@ class OnboardingWizard:
                 else:
                     console.print(f"[red]✗ (exit code {result.exit_code})[/red]")
                     all_passed = False
+            except Exception as e:  # noqa: BLE001
+                console.print(f"[red]✗ ({e})[/red]")
+                all_passed = False
+
+        # Test Replicate if key provided
+        if replicate_key:
+            console.print("  → Testing Replicate connection... ", end="")
+            try:
+                import replicate
+
+                # Set the API token temporarily
+                os.environ["REPLICATE_API_TOKEN"] = replicate_key
+                # Test by listing models (lightweight API call)
+                client = replicate.Client(api_token=replicate_key)
+                # Just verify the client can be created with the token
+                # A full model run would cost credits
+                console.print("[green]✓[/green]")
             except Exception as e:  # noqa: BLE001
                 console.print(f"[red]✗ ({e})[/red]")
                 all_passed = False

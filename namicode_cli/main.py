@@ -83,6 +83,7 @@ from namicode_cli.tools import (
     execute_in_e2b,
     fetch_url,
     format_code,
+    generate_image,
     http_request,
     package_info,
     web_search,
@@ -789,6 +790,8 @@ async def _run_agent_session(
         # Web search (always available, no API key needed)
         duckduckgo_search,
         docs_search,
+        # Image generation (Replicate API - 50 free/month)
+        generate_image,
     ]
     if settings.has_tavily:
         tools.append(web_search)
@@ -1130,6 +1133,8 @@ async def main_tui(
         # Web search (always available, no API key needed)
         duckduckgo_search,
         docs_search,
+        # Image generation (Replicate API - 50 free/month)
+        generate_image,
     ]
     if settings.has_tavily:
         tools.append(web_search)
