@@ -25,11 +25,9 @@ Dependencies:
 The Tavily client is initialized if TAVILY_API_KEY is available in settings.
 """
 
-import difflib
 import json
 import os
 import subprocess
-import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -1153,3 +1151,769 @@ def generate_image(
             "success": False,
             "error": f"Error generating image: {error_msg}",
         }
+
+
+# =============================================================================
+# Code Quality Tools (Linting, Formatting, Type Checking)
+# =============================================================================
+
+
+def _detect_project_type(path: str | Path) -> dict[str, Any]:
+    """Detect project type and available tools.
+
+    Args:
+        path: File or directory path
+
+    Returns:
+        Dict with project_type, linter, formatter, type_checker info
+    """
+    path = Path(path)
+    if path.is_file():
+        working_dir = path.parent
+        file_ext = path.suffix.lower()
+    else:
+        working_dir = path
+        file_ext = None
+
+    result: dict[str, Any] = {
+        "project_type": "unknown",
+        "linter": None,
+        "formatter": None,
+        "type_checker": None,
+        "working_dir": str(working_dir),
+    }
+
+    # Check for Python project
+    python_indicators = [
+        working_dir / "pyproject.toml",
+        working_dir / "setup.py",
+        working_dir / "requirements.txt",
+        working_dir / "ruff.toml",
+        working_dir / ".ruff.toml",
+    ]
+
+    for indicator in python_indicators:
+        if indicator.exists():
+            result["project_type"] = "python"
+            # Check for ruff
+            try:
+                subprocess.run(
+                    ["ruff", "--version"],
+                    capture_output=True,
+                    timeout=5,
+                    check=True,
+                )
+                result["linter"] = "ruff"
+                result["formatter"] = "ruff"
+            except (FileNotFoundError, subprocess.CalledProcessError):
+                pass
+
+            # Check for mypy
+            try:
+                subprocess.run(
+                    ["mypy", "--version"],
+                    capture_output=True,
+                    timeout=5,
+                    check=True,
+                )
+                result["type_checker"] = "mypy"
+            except (FileNotFoundError, subprocess.CalledProcessError):
+                # Try pyright
+                try:
+                    subprocess.run(
+                        ["pyright", "--version"],
+                        capture_output=True,
+                        timeout=5,
+                        check=True,
+                    )
+                    result["type_checker"] = "pyright"
+                except (FileNotFoundError, subprocess.CalledProcessError):
+                    pass
+            break
+
+    # Check for Node.js project
+    package_json = working_dir / "package.json"
+    if package_json.exists() and result["project_type"] == "unknown":
+        result["project_type"] = "javascript"
+        try:
+            pkg_content = json.loads(package_json.read_text())
+            dev_deps = pkg_content.get("devDependencies", {})
+            deps = pkg_content.get("dependencies", {})
+            all_deps = {**deps, **dev_deps}
+
+            # Check for ESLint
+            if "eslint" in all_deps:
+                result["linter"] = "eslint"
+
+            # Check for Prettier
+            if "prettier" in all_deps:
+                result["formatter"] = "prettier"
+
+            # Check for TypeScript
+            if "typescript" in all_deps:
+                result["project_type"] = "typescript"
+                result["type_checker"] = "tsc"
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # Detect by file extension if still unknown
+    if file_ext and result["project_type"] == "unknown":
+        if file_ext in (".py", ".pyi"):
+            result["project_type"] = "python"
+        elif file_ext in (".js", ".jsx", ".mjs"):
+            result["project_type"] = "javascript"
+        elif file_ext in (".ts", ".tsx"):
+            result["project_type"] = "typescript"
+        elif file_ext == ".go":
+            result["project_type"] = "go"
+            result["linter"] = "golangci-lint"
+            result["formatter"] = "gofmt"
+        elif file_ext == ".rs":
+            result["project_type"] = "rust"
+            result["linter"] = "clippy"
+            result["formatter"] = "rustfmt"
+
+    return result
+
+
+def lint_code(
+    path: str = ".",
+    fix: bool = False,
+    show_fixes: bool = True,
+) -> dict[str, Any]:
+    """Lint code to find errors, style issues, and potential bugs.
+
+    IMPORTANT: Use this tool AFTER writing or editing code to catch issues early.
+    It detects undefined variables, unused imports, syntax errors, and style violations.
+
+    Args:
+        path: File or directory to lint (default: current directory)
+        fix: Auto-fix issues where possible (default: False, only report)
+        show_fixes: Show what fixes are available (default: True)
+
+    Returns:
+        Dictionary with:
+        - success: bool - True if no errors found
+        - linter: str - Tool used (ruff, eslint, etc.)
+        - errors: list - List of errors found
+        - warnings: list - List of warnings found
+        - fixed: int - Number of issues auto-fixed (if fix=True)
+        - summary: str - Human-readable summary
+
+    Detects:
+        - Undefined variables and names
+        - Unused imports and variables
+        - Syntax errors
+        - Type annotation issues
+        - Security vulnerabilities (SQL injection, etc.)
+        - Style violations
+    """
+    path = Path(path).resolve()
+    if not path.exists():
+        return {
+            "success": False,
+            "error": f"Path not found: {path}",
+        }
+
+    project = _detect_project_type(path)
+
+    if project["linter"] == "ruff":
+        return _lint_with_ruff(path, fix, show_fixes)
+    elif project["linter"] == "eslint":
+        return _lint_with_eslint(path, fix)
+    elif project["project_type"] == "python":
+        # Try ruff anyway, it might be installed globally
+        try:
+            subprocess.run(["ruff", "--version"], capture_output=True, check=True, timeout=5)
+            return _lint_with_ruff(path, fix, show_fixes)
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            return {
+                "success": False,
+                "error": "No linter available. Install ruff: pip install ruff",
+            }
+    elif project["project_type"] in ("javascript", "typescript"):
+        return _lint_with_eslint(path, fix)
+    else:
+        return {
+            "success": False,
+            "error": f"No linter configured for {project['project_type']} projects",
+            "hint": "For Python: pip install ruff. For JS/TS: npm install eslint",
+        }
+
+
+def _lint_with_ruff(path: Path, fix: bool, show_fixes: bool) -> dict[str, Any]:
+    """Run ruff linter on Python code."""
+    cmd = ["ruff", "check", str(path), "--output-format", "json"]
+
+    if fix:
+        cmd.append("--fix")
+    if show_fixes:
+        cmd.append("--show-fixes")
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+
+        errors: list[dict[str, Any]] = []
+        warnings: list[dict[str, Any]] = []
+
+        if result.stdout.strip():
+            try:
+                issues = json.loads(result.stdout)
+                for issue in issues:
+                    entry = {
+                        "file": issue.get("filename", ""),
+                        "line": issue.get("location", {}).get("row", 0),
+                        "column": issue.get("location", {}).get("column", 0),
+                        "code": issue.get("code", ""),
+                        "message": issue.get("message", ""),
+                        "fix": issue.get("fix", {}).get("message") if issue.get("fix") else None,
+                    }
+                    # Treat E (error) and F (fatal/undefined) as errors
+                    if entry["code"].startswith(("E", "F")):
+                        errors.append(entry)
+                    else:
+                        warnings.append(entry)
+            except json.JSONDecodeError:
+                # Fallback to text output
+                errors.append({"message": result.stdout})
+
+        # Check for syntax errors in stderr
+        if result.stderr and "SyntaxError" in result.stderr:
+            errors.append({
+                "file": str(path),
+                "code": "E999",
+                "message": result.stderr.strip(),
+            })
+
+        total_issues = len(errors) + len(warnings)
+        summary_parts = []
+        if errors:
+            summary_parts.append(f"{len(errors)} error(s)")
+        if warnings:
+            summary_parts.append(f"{len(warnings)} warning(s)")
+
+        return {
+            "success": len(errors) == 0,
+            "linter": "ruff",
+            "errors": errors,
+            "warnings": warnings,
+            "total_issues": total_issues,
+            "summary": ", ".join(summary_parts) if summary_parts else "No issues found",
+            "exit_code": result.returncode,
+        }
+
+    except subprocess.TimeoutExpired:
+        return {"success": False, "error": "Linting timed out after 120 seconds"}
+    except FileNotFoundError:
+        return {"success": False, "error": "ruff not found. Install with: pip install ruff"}
+    except Exception as e:
+        return {"success": False, "error": f"Linting failed: {e!s}"}
+
+
+def _lint_with_eslint(path: Path, fix: bool) -> dict[str, Any]:
+    """Run ESLint on JavaScript/TypeScript code."""
+    cmd = ["npx", "eslint", str(path), "--format", "json"]
+
+    if fix:
+        cmd.append("--fix")
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+
+        errors: list[dict[str, Any]] = []
+        warnings: list[dict[str, Any]] = []
+
+        if result.stdout.strip():
+            try:
+                files = json.loads(result.stdout)
+                for file_result in files:
+                    for msg in file_result.get("messages", []):
+                        entry = {
+                            "file": file_result.get("filePath", ""),
+                            "line": msg.get("line", 0),
+                            "column": msg.get("column", 0),
+                            "code": msg.get("ruleId", ""),
+                            "message": msg.get("message", ""),
+                        }
+                        if msg.get("severity", 0) == 2:  # noqa: PLR2004
+                            errors.append(entry)
+                        else:
+                            warnings.append(entry)
+            except json.JSONDecodeError:
+                errors.append({"message": result.stdout})
+
+        return {
+            "success": len(errors) == 0,
+            "linter": "eslint",
+            "errors": errors,
+            "warnings": warnings,
+            "total_issues": len(errors) + len(warnings),
+            "summary": f"{len(errors)} error(s), {len(warnings)} warning(s)"
+            if errors or warnings
+            else "No issues found",
+        }
+
+    except subprocess.TimeoutExpired:
+        return {"success": False, "error": "ESLint timed out after 120 seconds"}
+    except FileNotFoundError:
+        return {"success": False, "error": "ESLint not found. Install with: npm install eslint"}
+    except Exception as e:
+        return {"success": False, "error": f"Linting failed: {e!s}"}
+
+
+def format_code_file(
+    path: str,
+    check_only: bool = False,
+) -> dict[str, Any]:
+    """Format a code file using the project's configured formatter.
+
+    IMPORTANT: Use this tool to ensure consistent code style. Respects project
+    configuration (pyproject.toml, .prettierrc, etc.).
+
+    Args:
+        path: File or directory to format
+        check_only: If True, only check if formatting needed (don't modify files)
+
+    Returns:
+        Dictionary with:
+        - success: bool - True if formatted successfully (or no changes needed)
+        - formatter: str - Tool used (ruff, prettier, gofmt, etc.)
+        - files_changed: list - Files that were/would be changed
+        - already_formatted: bool - True if no changes needed
+
+    Supported formatters:
+        - Python: ruff format (or black fallback)
+        - JavaScript/TypeScript: prettier
+        - Go: gofmt
+        - Rust: rustfmt
+    """
+    path = Path(path).resolve()
+    if not path.exists():
+        return {
+            "success": False,
+            "error": f"Path not found: {path}",
+        }
+
+    project = _detect_project_type(path)
+
+    if project["formatter"] == "ruff":
+        return _format_with_ruff(path, check_only)
+    elif project["formatter"] == "prettier":
+        return _format_with_prettier(path, check_only)
+    elif project["formatter"] == "gofmt":
+        return _format_with_gofmt(path, check_only)
+    elif project["formatter"] == "rustfmt":
+        return _format_with_rustfmt(path, check_only)
+    elif project["project_type"] == "python":
+        # Try ruff format anyway
+        try:
+            subprocess.run(["ruff", "--version"], capture_output=True, check=True, timeout=5)
+            return _format_with_ruff(path, check_only)
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            return {
+                "success": False,
+                "error": "No formatter available. Install ruff: pip install ruff",
+            }
+    elif project["project_type"] in ("javascript", "typescript"):
+        return _format_with_prettier(path, check_only)
+    else:
+        return {
+            "success": False,
+            "error": f"No formatter configured for {project['project_type']} projects",
+        }
+
+
+def _format_with_ruff(path: Path, check_only: bool) -> dict[str, Any]:
+    """Format Python code with ruff."""
+    cmd = ["ruff", "format", str(path)]
+
+    if check_only:
+        cmd.append("--check")
+        cmd.append("--diff")
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+
+        # Parse output for changed files
+        files_changed: list[str] = []
+        if check_only and result.stdout:
+            # ruff format --check --diff shows file paths
+            for line in result.stdout.split("\n"):
+                if line.startswith("---") or line.startswith("+++"):
+                    # Extract filename from diff header
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        fname = parts[1].lstrip("a/").lstrip("b/")
+                        if fname not in files_changed:
+                            files_changed.append(fname)
+
+        already_formatted = result.returncode == 0 and not files_changed
+
+        return {
+            "success": True,
+            "formatter": "ruff",
+            "files_changed": files_changed,
+            "already_formatted": already_formatted,
+            "diff": result.stdout if check_only and result.stdout else None,
+            "message": "Already formatted" if already_formatted else (
+                f"{len(files_changed)} file(s) would be changed" if check_only
+                else "Formatted successfully"
+            ),
+        }
+
+    except subprocess.TimeoutExpired:
+        return {"success": False, "error": "Formatting timed out after 120 seconds"}
+    except FileNotFoundError:
+        return {"success": False, "error": "ruff not found. Install with: pip install ruff"}
+    except Exception as e:
+        return {"success": False, "error": f"Formatting failed: {e!s}"}
+
+
+def _format_with_prettier(path: Path, check_only: bool) -> dict[str, Any]:
+    """Format JS/TS code with Prettier."""
+    cmd = ["npx", "prettier", str(path)]
+
+    if check_only:
+        cmd.append("--check")
+    else:
+        cmd.append("--write")
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+
+        # Parse output for changed files
+        files_changed: list[str] = []
+        for line in result.stdout.split("\n"):
+            if line.strip() and Path(line.strip()).exists():
+                files_changed.append(line.strip())
+
+        already_formatted = result.returncode == 0 and "All matched files" not in result.stdout
+
+        return {
+            "success": result.returncode == 0 or check_only,
+            "formatter": "prettier",
+            "files_changed": files_changed,
+            "already_formatted": already_formatted,
+            "message": result.stdout or result.stderr,
+        }
+
+    except subprocess.TimeoutExpired:
+        return {"success": False, "error": "Formatting timed out after 120 seconds"}
+    except FileNotFoundError:
+        return {"success": False, "error": "Prettier not found. Install with: npm install prettier"}
+    except Exception as e:
+        return {"success": False, "error": f"Formatting failed: {e!s}"}
+
+
+def _format_with_gofmt(path: Path, check_only: bool) -> dict[str, Any]:
+    """Format Go code with gofmt."""
+    cmd = ["gofmt"]
+    if not check_only:
+        cmd.append("-w")
+    cmd.append(str(path))
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+
+        return {
+            "success": result.returncode == 0,
+            "formatter": "gofmt",
+            "output": result.stdout or result.stderr,
+            "already_formatted": not result.stdout,
+        }
+
+    except FileNotFoundError:
+        return {"success": False, "error": "gofmt not found. Install Go."}
+    except Exception as e:
+        return {"success": False, "error": f"Formatting failed: {e!s}"}
+
+
+def _format_with_rustfmt(path: Path, check_only: bool) -> dict[str, Any]:
+    """Format Rust code with rustfmt."""
+    cmd = ["rustfmt"]
+    if check_only:
+        cmd.append("--check")
+    cmd.append(str(path))
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+
+        return {
+            "success": result.returncode == 0,
+            "formatter": "rustfmt",
+            "output": result.stdout or result.stderr,
+            "already_formatted": result.returncode == 0,
+        }
+
+    except FileNotFoundError:
+        return {"success": False, "error": "rustfmt not found. Install with: rustup component add rustfmt"}
+    except Exception as e:
+        return {"success": False, "error": f"Formatting failed: {e!s}"}
+
+
+def check_types(
+    path: str = ".",
+    strict: bool = False,
+) -> dict[str, Any]:
+    """Run type checking to detect undefined names, type errors, and missing imports.
+
+    IMPORTANT: Use this tool to catch undefined variables, incorrect function calls,
+    and type mismatches that linting alone cannot detect.
+
+    Args:
+        path: File or directory to check (default: current directory)
+        strict: Enable strict type checking mode (more thorough but noisier)
+
+    Returns:
+        Dictionary with:
+        - success: bool - True if no type errors found
+        - checker: str - Tool used (mypy, pyright, tsc)
+        - errors: list - List of type errors found
+        - summary: str - Human-readable summary
+
+    Detects:
+        - Undefined names and variables
+        - Missing imports
+        - Type mismatches (wrong argument types, return types)
+        - Missing function arguments
+        - Invalid attribute access
+        - Incompatible types in assignments
+    """
+    path = Path(path).resolve()
+    if not path.exists():
+        return {
+            "success": False,
+            "error": f"Path not found: {path}",
+        }
+
+    project = _detect_project_type(path)
+
+    if project["type_checker"] == "mypy":
+        return _check_types_mypy(path, strict)
+    elif project["type_checker"] == "pyright":
+        return _check_types_pyright(path, strict)
+    elif project["type_checker"] == "tsc":
+        return _check_types_tsc(path)
+    elif project["project_type"] == "python":
+        # Try mypy, then pyright
+        try:
+            subprocess.run(["mypy", "--version"], capture_output=True, check=True, timeout=5)
+            return _check_types_mypy(path, strict)
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            try:
+                subprocess.run(["pyright", "--version"], capture_output=True, check=True, timeout=5)
+                return _check_types_pyright(path, strict)
+            except (FileNotFoundError, subprocess.CalledProcessError):
+                return {
+                    "success": False,
+                    "error": "No type checker available. Install mypy: pip install mypy",
+                }
+    elif project["project_type"] == "typescript":
+        return _check_types_tsc(path)
+    else:
+        return {
+            "success": False,
+            "error": f"No type checker configured for {project['project_type']} projects",
+        }
+
+
+def _check_types_mypy(path: Path, strict: bool) -> dict[str, Any]:
+    """Run mypy type checker."""
+    cmd = ["mypy", str(path), "--no-color-output", "--show-column-numbers"]
+
+    if strict:
+        cmd.append("--strict")
+
+    # Add common useful flags
+    cmd.extend([
+        "--show-error-codes",
+        "--no-error-summary",  # We'll generate our own summary
+    ])
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=False,
+        )
+
+        errors: list[dict[str, Any]] = []
+
+        # Parse mypy output: file:line:col: error: message [code]
+        for line in result.stdout.split("\n"):
+            if ": error:" in line or ": note:" in line:
+                parts = line.split(":", 3)
+                if len(parts) >= 4:
+                    error_part = parts[3].strip()
+                    code_match = None
+                    message = error_part
+
+                    # Extract error code if present [code]
+                    import re
+                    code_match = re.search(r"\[([a-z-]+)\]$", error_part)
+                    if code_match:
+                        code = code_match.group(1)
+                        message = error_part[: code_match.start()].strip()
+                    else:
+                        code = "error" if ": error:" in line else "note"
+
+                    errors.append({
+                        "file": parts[0],
+                        "line": int(parts[1]) if parts[1].isdigit() else 0,
+                        "column": int(parts[2]) if parts[2].isdigit() else 0,
+                        "code": code,
+                        "message": message.replace("error: ", "").replace("note: ", ""),
+                    })
+
+        return {
+            "success": len(errors) == 0,
+            "checker": "mypy",
+            "errors": errors,
+            "total_errors": len(errors),
+            "summary": f"{len(errors)} type error(s) found" if errors else "No type errors found",
+            "raw_output": result.stdout if errors else None,
+        }
+
+    except subprocess.TimeoutExpired:
+        return {"success": False, "error": "Type checking timed out after 5 minutes"}
+    except FileNotFoundError:
+        return {"success": False, "error": "mypy not found. Install with: pip install mypy"}
+    except Exception as e:
+        return {"success": False, "error": f"Type checking failed: {e!s}"}
+
+
+def _check_types_pyright(path: Path, strict: bool) -> dict[str, Any]:
+    """Run pyright type checker."""
+    cmd = ["pyright", str(path), "--outputjson"]
+
+    if strict:
+        cmd.append("--strict")
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=False,
+        )
+
+        errors: list[dict[str, Any]] = []
+
+        if result.stdout.strip():
+            try:
+                data = json.loads(result.stdout)
+                for diag in data.get("generalDiagnostics", []):
+                    errors.append({
+                        "file": diag.get("file", ""),
+                        "line": diag.get("range", {}).get("start", {}).get("line", 0),
+                        "column": diag.get("range", {}).get("start", {}).get("character", 0),
+                        "code": diag.get("rule", "error"),
+                        "message": diag.get("message", ""),
+                        "severity": diag.get("severity", "error"),
+                    })
+            except json.JSONDecodeError:
+                errors.append({"message": result.stdout})
+
+        return {
+            "success": len(errors) == 0,
+            "checker": "pyright",
+            "errors": errors,
+            "total_errors": len(errors),
+            "summary": f"{len(errors)} type error(s) found" if errors else "No type errors found",
+        }
+
+    except subprocess.TimeoutExpired:
+        return {"success": False, "error": "Type checking timed out after 5 minutes"}
+    except FileNotFoundError:
+        return {"success": False, "error": "pyright not found. Install with: pip install pyright"}
+    except Exception as e:
+        return {"success": False, "error": f"Type checking failed: {e!s}"}
+
+
+def _check_types_tsc(path: Path) -> dict[str, Any]:
+    """Run TypeScript compiler for type checking."""
+    cmd = ["npx", "tsc", "--noEmit", "--pretty", "false"]
+
+    # If path is a specific file, check just that file
+    if path.is_file():
+        cmd.append(str(path))
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=300,
+            cwd=str(path.parent if path.is_file() else path),
+            check=False,
+        )
+
+        errors: list[dict[str, Any]] = []
+
+        # Parse tsc output: file(line,col): error TSxxxx: message
+        import re
+        for line in result.stdout.split("\n"):
+            match = re.match(r"(.+)\((\d+),(\d+)\):\s+(error|warning)\s+(TS\d+):\s+(.+)", line)
+            if match:
+                errors.append({
+                    "file": match.group(1),
+                    "line": int(match.group(2)),
+                    "column": int(match.group(3)),
+                    "severity": match.group(4),
+                    "code": match.group(5),
+                    "message": match.group(6),
+                })
+
+        return {
+            "success": len(errors) == 0,
+            "checker": "tsc",
+            "errors": errors,
+            "total_errors": len(errors),
+            "summary": f"{len(errors)} type error(s) found" if errors else "No type errors found",
+        }
+
+    except subprocess.TimeoutExpired:
+        return {"success": False, "error": "Type checking timed out after 5 minutes"}
+    except FileNotFoundError:
+        return {"success": False, "error": "TypeScript not found. Install with: npm install typescript"}
+    except Exception as e:
+        return {"success": False, "error": f"Type checking failed: {e!s}"}

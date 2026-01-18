@@ -87,6 +87,27 @@ Examples: `pytest /foo/bar/tests` (good), `cd /foo/bar && pytest tests` (bad)
 
 Always use absolute paths starting with /.
 
+### Code Quality Tools
+
+**IMPORTANT**: Always use these tools after writing or editing code to catch issues early.
+
+- **lint_code**: Find errors, unused imports, undefined variables, security issues
+  - Use after editing code: `lint_code("path/to/file.py")`
+  - Auto-fix issues: `lint_code("path/to/file.py", fix=True)`
+  - Detects: syntax errors, unused imports, undefined names, style violations
+
+- **format_code_file**: Format code using project's configured formatter
+  - Format file: `format_code_file("path/to/file.py")`
+  - Check only (preview): `format_code_file("path/to/file.py", check_only=True)`
+  - Respects: pyproject.toml, .prettierrc, project config
+
+- **check_types**: Detect type errors and undefined references
+  - Check types: `check_types("path/to/file.py")`
+  - Strict mode: `check_types("path/to/file.py", strict=True)`
+  - Detects: undefined names, wrong argument types, missing imports
+
+**Workflow**: After writing code -> `lint_code` -> fix errors -> `format_code_file` -> `check_types` if needed
+
 ### web_search
 
 Search for documentation, error solutions, and code examples.

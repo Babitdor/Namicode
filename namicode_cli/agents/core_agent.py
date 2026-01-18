@@ -297,7 +297,7 @@ def reset_agent(agent_name: str, source_agent: str | None = None) -> None:
 
     agent_dir.mkdir(parents=True, exist_ok=True)
     agent_md = agent_dir / "agent.md"
-    agent_md.write_text(source_content)
+    agent_md.write_text(source_content, encoding="utf-8")
 
     console.print(
         f"✓ Agent '{agent_name}' reset to {action_desc}", style=COLORS["primary"]
@@ -801,8 +801,10 @@ def create_agent_with_config(
     agent_md = settings.get_user_agent_md_path(assistant_id)
 
     if not agent_md.exists():
+        # Ensure parent directory exists before writing
+        agent_md.parent.mkdir(parents=True, exist_ok=True)
         source_content = get_default_coding_instructions()
-        agent_md.write_text(source_content)
+        agent_md.write_text(source_content, encoding="utf-8")
 
     memory_sources.append(str(agent_md))
 

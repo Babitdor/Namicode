@@ -55,6 +55,9 @@ dependencies = [
     "ddgs>=7.0.0",
     # Image generation (Replicate API)
     "replicate>=0.25.0",
+    # Code quality tools (linting, formatting, type checking)
+    "ruff>=0.8.0",
+    "mypy>=1.13.0",
 ]
 
 [project.urls]
