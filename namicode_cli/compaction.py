@@ -7,7 +7,7 @@ by generating an intelligent summary that preserves key context.
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, RemoveMessage, ToolMessage
 
 from namicode_cli.context.context_manager import CompactionResult
 
@@ -114,10 +114,14 @@ async def summarize_conversation(
             conversation_parts.append(f"USER: {content}")
         elif isinstance(msg, AIMessage):
             content = _format_message_content(msg.content)
-            # Truncate very long messages
             if len(content) > 2000:
                 content = content[:2000] + "... [truncated]"
             conversation_parts.append(f"ASSISTANT: {content}")
+        elif isinstance(msg, ToolMessage):
+            content = _format_message_content(msg.content)
+            if len(content) > 500:
+                content = content[:500] + "... [truncated]"
+            conversation_parts.append(f"TOOL({msg.name}): {content}")
 
     conversation_text = "\n\n".join(conversation_parts)
 
@@ -193,19 +197,23 @@ async def compact_conversation(
         # Generate summary
         summary = await summarize_conversation(model, messages, focus_instructions)
 
-        # Create new message with summary
-        summary_message = HumanMessage(
-            content=(
-                f"[Previous conversation summarized]\n\n"
-                f"{summary}\n\n"
-                f"---\n\n"
-                f"The above is a summary of our previous conversation. "
-                f"Please continue from where we left off. "
-                f"If you need more specific details about any topic mentioned, please ask."
+        # Step 1: Remove ALL existing messages using RemoveMessage.
+        # LangGraph's messages reducer uses add_messages semantics — simply
+        # passing a new list would APPEND, not replace. RemoveMessage is the
+        # correct way to delete specific messages from state.
+        remove_ops = [RemoveMessage(id=msg.id) for msg in messages if msg.id]
+        if remove_ops:
+            await agent.aupdate_state(
+                config=config,
+                values={"messages": remove_ops},
             )
-        )
 
-        # Update agent state with compacted history
+        # Step 2: Inject the summary as a single HumanMessage.
+        # This mirrors how Claude Code re-injects summarized context —
+        # as a concise context block, not as a conversational prompt.
+        summary_message = HumanMessage(
+            content=f"[Conversation context — previous session summarized]\n\n{summary}"
+        )
         await agent.aupdate_state(
             config=config,
             values={"messages": [summary_message]},

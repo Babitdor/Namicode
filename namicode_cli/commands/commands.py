@@ -2427,8 +2427,12 @@ async def handle_command(
         return "exit"
 
     if cmd == "clear":
-        # Reset agent conversation state
-        agent.checkpointer = InMemorySaver()
+        # Reset conversation by generating a new thread_id.
+        # The old thread's data remains in the checkpointer but is never
+        # accessed again — this is the correct way to start a fresh session
+        # without touching agent internals.
+        import uuid
+        session_state.thread_id = str(uuid.uuid4())
 
         # Reset token tracking to baseline
         token_tracker.reset()
@@ -2438,7 +2442,7 @@ async def handle_command(
         console.print(NAMI_CODE_ASCII, style=f"bold {COLORS['primary']}")
         console.print()
         console.print(
-            "... Fresh start! Screen cleared and conversation reset.",
+            "... Fresh start! Conversation history cleared.",
             style=COLORS["agent"],
         )
         console.print()

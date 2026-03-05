@@ -20,6 +20,11 @@ from langchain.agents.middleware.types import (
 
 from namicode_cli.config.config import Settings
 
+# Maximum characters to inject per memory source (~3,000 tokens at 4 chars/token).
+# Prevents unbounded prompt growth from large CLAUDE.md / NAMI.md files.
+MAX_MEMORY_CHARS = 12_000
+_MEMORY_TRUNCATION_NOTICE = "\n\n... [memory truncated — use read_file for full content]"
+
 
 class AgentMemoryState(AgentState):
     """State for the agent memory middleware."""
@@ -232,7 +237,10 @@ class AgentMemoryMiddleware(AgentMiddleware):
             user_path = self.settings.get_user_agent_md_path(self.assistant_id)
             if user_path.exists():
                 with contextlib.suppress(OSError, UnicodeDecodeError):
-                    result["user_memory"] = user_path.read_text(encoding='utf-8')
+                    content = user_path.read_text(encoding='utf-8')
+                    if len(content) > MAX_MEMORY_CHARS:
+                        content = content[:MAX_MEMORY_CHARS] + _MEMORY_TRUNCATION_NOTICE
+                    result["user_memory"] = content
 
         # Load project memory from ALL available sources if not already in state
         if "project_memory" not in state:
@@ -246,6 +254,8 @@ class AgentMemoryMiddleware(AgentMiddleware):
             for path in project_paths:
                 with contextlib.suppress(OSError, UnicodeDecodeError):
                     content = path.read_text(encoding='utf-8')
+                    if len(content) > MAX_MEMORY_CHARS:
+                        content = content[:MAX_MEMORY_CHARS] + _MEMORY_TRUNCATION_NOTICE
                     if content.strip():
                         # Add header showing the source file
                         relative_path = (
