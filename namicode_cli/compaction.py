@@ -197,26 +197,18 @@ async def compact_conversation(
         # Generate summary
         summary = await summarize_conversation(model, messages, focus_instructions)
 
-        # Step 1: Remove ALL existing messages using RemoveMessage.
-        # LangGraph's messages reducer uses add_messages semantics — simply
-        # passing a new list would APPEND, not replace. RemoveMessage is the
-        # correct way to delete specific messages from state.
-        remove_ops = [RemoveMessage(id=msg.id) for msg in messages if msg.id]
-        if remove_ops:
-            await agent.aupdate_state(
-                config=config,
-                values={"messages": remove_ops},
-            )
-
-        # Step 2: Inject the summary as a single HumanMessage.
-        # This mirrors how Claude Code re-injects summarized context —
-        # as a concise context block, not as a conversational prompt.
+        # Replace all existing messages with the summary in a single atomic update.
+        # LangGraph's messages reducer uses add_messages semantics — passing
+        # RemoveMessage + new message together ensures the state never passes
+        # through an invalid intermediate (e.g. ToolMessages with no AIMessage),
+        # which would cause langchain's _fetch_last_ai_and_tool_messages to crash.
         summary_message = HumanMessage(
             content=f"[Conversation context — previous session summarized]\n\n{summary}"
         )
+        remove_ops = [RemoveMessage(id=msg.id) for msg in messages if msg.id]
         await agent.aupdate_state(
             config=config,
-            values={"messages": [summary_message]},
+            values={"messages": remove_ops + [summary_message]},
         )
 
         # Estimate new tokens
