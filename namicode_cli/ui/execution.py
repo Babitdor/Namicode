@@ -395,9 +395,6 @@ async def execute_task(  # type: ignore
     tool_call_buffers: dict[str | int, dict] = {}
     # Buffer assistant text so we can render complete markdown segments
     pending_text = ""
-    # Flag to prevent duplicate responses when both streams print same content
-    # Set when updates stream shows a complete AI response
-    response_shown_via_updates = False
     # Track task tool calls for subagent banner display: {tool_call_id: (subagent_type, description)}
     active_subagents: dict[str, tuple[str, str]] = {}
     # Track tool names by tool_call_id for reliable ToolMessage handling
@@ -410,6 +407,8 @@ async def execute_task(  # type: ignore
     tool_call_id_to_ns: dict[str, tuple] = {}
     # Track when each tool call was first displayed (for elapsed-time display)
     tool_call_start_times: dict[str, float] = {}
+    # Track the AI message ID whose text is currently in pending_text (for dedup)
+    current_ai_message_id: str | None = None
     # Track last displayed activity line for each subagent (for in-place updates)
     subagent_last_line: dict[tuple, str] = {}
     # Deferred subagent completion banners — printed together just before main-agent synthesis
@@ -571,14 +570,16 @@ async def execute_task(  # type: ignore
 
     def flush_text_buffer(*, final: bool = False) -> None:
         """Flush accumulated assistant text as rendered markdown when appropriate."""
-        nonlocal pending_text, spinner_active, has_responded, response_shown_via_updates
+        nonlocal pending_text, spinner_active, has_responded, current_ai_message_id
         if not final or not pending_text.strip():
             return
-        # Skip if updates stream already showed the response to avoid duplicates
-        if response_shown_via_updates:
+        # Skip if this specific AI message was already shown via the updates stream.
+        # Use per-message-ID deduplication so subsequent responses in the same turn
+        # (e.g. after tool calls) are NOT suppressed.
+        if current_ai_message_id and current_ai_message_id in seen_message_ids:
             pending_text = ""
+            current_ai_message_id = None
             return
-        response_shown_via_updates = True  # Mark as shown to prevent future duplicates
         # Show all deferred subagent completions together before the synthesis response
         flush_pending_completions()
         if spinner_active:
@@ -591,6 +592,10 @@ async def execute_task(  # type: ignore
         markdown = Markdown(pending_text.rstrip())
         console.print(agent_display_name, style=agent_colors)
         console.print(markdown, justify="full")
+        # Mark this message as shown so the updates stream won't duplicate it
+        if current_ai_message_id:
+            seen_message_ids.add(current_ai_message_id)
+            current_ai_message_id = None
         pending_text = ""
 
     # Stream input - may need to loop if there are interrupts
@@ -602,8 +607,7 @@ async def execute_task(  # type: ignore
             seen_message_ids = set()
             hitl_response: dict[str, HITLResponse] = {}
             suppress_resumed_output = False
-            # Reset per-turn flags and tracking
-            response_shown_via_updates = False
+            # Reset per-turn tracking
             displayed_tool_ids.clear()
             active_subagents.clear()
             tool_call_to_name.clear()
@@ -611,6 +615,7 @@ async def execute_task(  # type: ignore
             subagent_activity_by_ns.clear()
             tool_call_id_to_ns.clear()
             tool_call_start_times.clear()
+            current_ai_message_id = None
             pending_completions.clear()
             # Track all pending interrupts: {interrupt_id: request_data}
             pending_interrupts: dict[str, HITLRequest] = {}
@@ -779,12 +784,20 @@ async def execute_task(  # type: ignore
                                     updates_msg_id = getattr(last_msg, "id", None)
                                     if updates_msg_id and updates_msg_id in seen_message_ids:
                                         continue
-                                    # Also skip if updates stream already showed a response
-                                    if response_shown_via_updates:
-                                        continue
 
                                     if updates_msg_id:
                                         seen_message_ids.add(updates_msg_id)
+
+                                    # Normalize msg_text to a string (Anthropic may return a list
+                                    # of content blocks even for plain-text responses)
+                                    if isinstance(msg_text, list):
+                                        msg_text = " ".join(
+                                            b.get("text", "") if isinstance(b, dict) else str(b)
+                                            for b in msg_text
+                                            if not isinstance(b, dict) or b.get("type") == "text"
+                                        ).strip()
+                                    if not msg_text:
+                                        continue
 
                                     # Flush any deferred subagent completion banners
                                     # before the main agent's synthesis response
@@ -803,7 +816,6 @@ async def execute_task(  # type: ignore
                                         has_responded = True
                                     console.print(agent_display_name, style=agent_colors)
                                     console.print(Markdown(msg_text), justify="full")
-                                    response_shown_via_updates = True  # Your existing flag
 
                 # Handle MESSAGES stream - for content and tool calls
                 elif current_stream_mode == "messages":
@@ -1098,6 +1110,9 @@ async def execute_task(  # type: ignore
                         if block_type == "text":
                             text = block.get("text", "")
                             if text and is_main_agent:
+                                # Track which message owns the buffered text so
+                                # flush_text_buffer can deduplicate against the updates stream
+                                current_ai_message_id = getattr(message, "id", None)
                                 pending_text += text
 
                         # Handle reasoning blocks
