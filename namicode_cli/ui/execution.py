@@ -344,7 +344,16 @@ async def execute_task(  # type: ignore
 
     config = {
         "configurable": {"thread_id": session_state.thread_id},
-        "metadata": {"assistant_id": assistant_id} if assistant_id else {},
+        # Metadata is passed through to LangSmith as filterable run metadata.
+        # thread_id lets you correlate all runs in a session; assistant_id identifies the agent.
+        "metadata": {
+            "thread_id": session_state.thread_id,
+            **({"assistant_id": assistant_id} if assistant_id else {}),
+        },
+        # run_name becomes the trace name in LangSmith (replaces generic "LangGraph").
+        "run_name": assistant_id or "nami-agent",
+        # tags appear as filterable labels on every run in this session.
+        "tags": ["nami", assistant_id] if assistant_id else ["nami"],
     }
 
     # Display agent names properly

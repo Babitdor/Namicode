@@ -434,6 +434,7 @@ def _ls_tool_generator(
         description=tool_description,
         func=sync_ls,
         coroutine=async_ls,
+        tags=["nami:fs"],
     )
 
 
@@ -483,6 +484,7 @@ def _read_file_tool_generator(
         description=tool_description,
         func=sync_read_file,
         coroutine=async_read_file,
+        tags=["nami:fs"],
     )
 
 
@@ -562,6 +564,7 @@ def _write_file_tool_generator(
         description=tool_description,
         func=sync_write_file,
         coroutine=async_write_file,
+        tags=["nami:fs", "nami:write"],
     )
 
 
@@ -649,6 +652,7 @@ def _edit_file_tool_generator(
         description=tool_description,
         func=sync_edit_file,
         coroutine=async_edit_file,
+        tags=["nami:fs", "nami:write"],
     )
 
 
@@ -692,6 +696,7 @@ def _glob_tool_generator(
         description=tool_description,
         func=sync_glob,
         coroutine=async_glob,
+        tags=["nami:fs"],
     )
 
 
@@ -753,6 +758,7 @@ def _grep_tool_generator(
         description=tool_description,
         func=sync_grep,
         coroutine=async_grep,
+        tags=["nami:fs"],
     )
 
 
@@ -871,6 +877,7 @@ def _execute_tool_generator(
         description=tool_description,
         func=sync_execute,
         coroutine=async_execute,
+        tags=["nami:sandbox"],
     )
 
 

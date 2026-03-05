@@ -70,6 +70,10 @@ from namicode_cli.config.config import (
 )
 from namicode_cli.config.model_create import create_model
 from namicode_cli.input import ImageTracker, create_prompt_session
+from namicode_cli.tracking.tracing import auto_configure as _auto_configure_tracing
+
+# Initialize LangSmith tracing from environment variables (no-op when not configured)
+_auto_configure_tracing()
 from namicode_cli.integrations.sandbox_factory import (
     create_sandbox,
     get_default_working_dir,

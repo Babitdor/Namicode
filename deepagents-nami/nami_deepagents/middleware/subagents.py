@@ -558,6 +558,7 @@ def _create_task_tool(
         func=task,
         coroutine=atask,
         description=task_description,
+        tags=["nami:subagent"],
     )
 
 
