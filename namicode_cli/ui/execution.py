@@ -28,6 +28,8 @@ The execution flow:
 import asyncio
 import json
 import sys
+import time
+from pathlib import Path
 
 from langchain.agents.middleware.human_in_the_loop import (
     ActionRequest,
@@ -43,13 +45,17 @@ from pydantic import TypeAdapter, ValidationError
 from rich import box
 from rich.markdown import Markdown
 from rich.panel import Panel
+
 from namicode_cli.config.config import COLORS, console, get_agent_color
-from namicode_cli.errors.handlers import ErrorHandler
-from namicode_cli.file_ops import FileOpTracker, build_approval_preview
-from namicode_cli.input import parse_file_mentions, ImageTracker
-from namicode_cli.image_utils import create_multimodal_content
-from namicode_cli.vision import model_supports_vision, suggest_vision_model
 from namicode_cli.config.model_create import get_current_model_name
+from namicode_cli.errors.handlers import ErrorHandler
+from namicode_cli.file_ops import (
+    build_approval_preview,
+    get_session_file_op_tracker,
+)
+from namicode_cli.image_utils import create_multimodal_content
+from namicode_cli.input import ImageTracker, parse_file_mentions
+from namicode_cli.ui.question_prompt import handle_agent_question
 from namicode_cli.ui.ui_elements import (
     TokenTracker,
     format_tool_display,
@@ -58,9 +64,66 @@ from namicode_cli.ui.ui_elements import (
     render_file_operation,
     render_todo_list,
 )
-from namicode_cli.ui.question_prompt import handle_agent_question
+from namicode_cli.vision import model_supports_vision, suggest_vision_model
 
 _HITL_REQUEST_ADAPTER = TypeAdapter(HITLRequest)
+
+
+# Tool icons for display
+TOOL_ICONS: dict[str, str] = {
+    # File operations
+    "read_file": "📖",
+    "write_file": "✏️",
+    "edit_file": "✂️",
+    "ls": "📁",
+    "glob": "🔍",
+    "grep": "🔎",
+    # Shell
+    "shell": "⚡",
+    "execute": "🔧",
+    # Web
+    "web_search": "🌐",
+    "duckduckgo_search": "🦆",
+    "fetch_url": "🔗",
+    "http_request": "🌐",
+    # Task
+    "task": "🤖",
+    # Todos
+    "write_todos": "📋",
+    # Server management
+    "start_dev_server": "🚀",
+    "stop_server": "🛑",
+    "list_servers": "📋",
+    # Test runner
+    "run_tests": "🧪",
+    # Memory
+    "write_memory": "💾",
+    "read_memory": "📖",
+    "list_memories": "📑",
+    "delete_memory": "🗑️",
+    # Code quality
+    "lint_code": "🔍",
+    "check_types": "🔎",
+    "package_info": "📦",
+    # Question/Plan
+    "ask_question": "❓",
+    "exit_plan_mode": "✅",
+    # Browser
+    "browser_navigate": "🌐",
+    "browser_click": "👆",
+    "browser_type": "⌨️",
+    "browser_screenshot": "📸",
+    "browser_query": "❓",
+    "browser_get_content": "📄",
+    "browser_get_url": "🔗",
+    # Git
+    "git_status": "📊",
+    "git_log": "📜",
+    "git_diff": "📝",
+    "git_blame": "🔍",
+    "git_branch": "🌿",
+    "git_stash": "📦",
+}
 
 
 def prompt_for_tool_approval(
@@ -97,8 +160,7 @@ def prompt_for_tool_approval(
     # Display action info first
     console.print(
         Panel(
-            "[bold yellow]Tool Action Requires Approval[/bold yellow]\n\n"
-            + "\n".join(body_lines),
+            "[bold yellow]Tool Action Requires Approval[/bold yellow]\n\n" + "\n".join(body_lines),
             border_style="yellow",
             box=box.ROUNDED,
             padding=(0, 1),
@@ -148,9 +210,7 @@ def prompt_for_tool_approval(
                             sys.stdout.write("\033[1;31m☑ Reject\033[0m\n")
                         else:
                             # Blue bold with filled checkbox for auto-accept
-                            sys.stdout.write(
-                                "\033[1;34m☑ Auto-accept all going forward\033[0m\n"
-                            )
+                            sys.stdout.write("\033[1;34m☑ Auto-accept all going forward\033[0m\n")
                     elif option == "approve":
                         # Dim with empty checkbox
                         sys.stdout.write("\033[2m☐ Approve\033[0m\n")
@@ -159,9 +219,7 @@ def prompt_for_tool_approval(
                         sys.stdout.write("\033[2m☐ Reject\033[0m\n")
                     else:
                         # Dim with empty checkbox
-                        sys.stdout.write(
-                            "\033[2m☐ Auto-accept all going forward\033[0m\n"
-                        )
+                        sys.stdout.write("\033[2m☐ Auto-accept all going forward\033[0m\n")
 
                 sys.stdout.flush()
 
@@ -277,9 +335,7 @@ async def execute_task(  # type: ignore
                 f"[yellow]Warning: Current model '{current_model}' may not support images.[/yellow]"
             )
             if suggested:
-                console.print(
-                    f"[dim]Consider using a vision model like '{suggested}'[/dim]"
-                )
+                console.print(f"[dim]Consider using a vision model like '{suggested}'[/dim]")
                 console.print("[dim]Use /model to change models.[/dim]")
             console.print()
         message_content = create_multimodal_content(final_input, images_to_send)
@@ -308,6 +364,8 @@ async def execute_task(  # type: ignore
     has_responded = False
     captured_input_tokens = 0
     captured_output_tokens = 0
+    captured_cache_read_tokens = 0
+    captured_cache_creation_tokens = 0
     current_todos = None  # Track current todo list state
 
     status = console.status(
@@ -317,22 +375,8 @@ async def execute_task(  # type: ignore
     status.start()
     spinner_active = True
 
-    tool_icons = {
-        "read_file": "📖",
-        "write_file": "✏️",
-        "edit_file": "✂️",
-        "ls": "📁",
-        "glob": "🔍",
-        "grep": "🔎",
-        "shell": "⚡",
-        "execute": "🔧",
-        "web_search": "🌐",
-        "http_request": "🌍",
-        "task": "🤖",
-        "write_todos": "📋",
-    }
-
-    file_op_tracker = FileOpTracker(assistant_id=assistant_id, backend=backend)
+    # Use session-level tracker so subagent file ops are tracked
+    file_op_tracker = get_session_file_op_tracker(assistant_id=assistant_id, backend=backend)
 
     # Track which tool calls we've displayed to avoid duplicates
     displayed_tool_ids = set()
@@ -343,10 +387,174 @@ async def execute_task(  # type: ignore
     # Flag to prevent duplicate responses when both streams print same content
     # Set when updates stream shows a complete AI response
     response_shown_via_updates = False
-    # Track when a subagent (task tool) is active - skip display in this case
-    # since invoke_subagent handles subagent output
     # Track task tool calls for subagent banner display: {tool_call_id: (subagent_type, description)}
     active_subagents: dict[str, tuple[str, str]] = {}
+    # Track tool names by tool_call_id for reliable ToolMessage handling
+    tool_call_to_name: dict[str, str] = {}
+    # Track subagent nesting for indentation: [(tool_call_id, subagent_type), ...]
+    subagent_stack: list[tuple[str, str]] = []
+    # Track subagent activity by namespace: {namespace_tuple: {"calls": [...], "categories": {...}, ...}}
+    subagent_activity_by_ns: dict[tuple, dict] = {}
+    # Map task tool_call_id to expected subagent namespace
+    tool_call_id_to_ns: dict[str, tuple] = {}
+    # Track last displayed activity line for each subagent (for in-place updates)
+    subagent_last_line: dict[tuple, str] = {}
+    # Deferred subagent completion banners — printed together just before main-agent synthesis
+    pending_completions: list[dict] = []
+
+    # Tool category icons for summary display
+    TOOL_CATEGORY_ICONS: dict[str, str] = {
+        "files_read": "📖",
+        "files_written": "✏️",
+        "search": "🔎",
+        "web": "🌐",
+        "shell": "⚡",
+        "tests": "🧪",
+        "server": "🚀",
+        "git": "📊",
+        "browser": "🌐",
+        "memory": "💾",
+        "other": "🔧",
+    }
+
+    # Tool category mapping for summary categorization
+    TOOL_CATEGORIES: dict[str, str] = {
+        # Files read
+        "read_file": "files_read",
+        "ls": "files_read",
+        "glob": "files_read",
+        "grep": "files_read",
+        # Files written
+        "write_file": "files_written",
+        "edit_file": "files_written",
+        # Search
+        "web_search": "search",
+        "duckduckgo_search": "search",
+        "docs_search": "search",
+        "semantic_search": "search",
+        "find_similar_code": "search",
+        "find_function": "search",
+        # Web
+        "fetch_url": "web",
+        "http_request": "web",
+        # Shell
+        "shell": "shell",
+        "execute": "shell",
+        "execute_bash": "shell",
+        # Tests
+        "run_tests": "tests",
+        # Server
+        "start_dev_server": "server",
+        "stop_server": "server",
+        "list_servers": "server",
+        # Git
+        "git_status": "git",
+        "git_log": "git",
+        "git_diff": "git",
+        "git_blame": "git",
+        "git_branch": "git",
+        "git_stash": "git",
+        # Browser
+        "browser_navigate": "browser",
+        "browser_click": "browser",
+        "browser_screenshot": "browser",
+        "browser_type": "browser",
+        "browser_query": "browser",
+        "browser_fill_form": "browser",
+        "browser_upload": "browser",
+        # Memory
+        "write_memory": "memory",
+        "read_memory": "memory",
+        "list_memories": "memory",
+        "delete_memory": "memory",
+    }
+
+    # Category display order for summary
+    CATEGORY_ORDER = [
+        "files_read",
+        "files_written",
+        "search",
+        "web",
+        "shell",
+        "tests",
+        "server",
+        "git",
+        "browser",
+        "memory",
+    ]
+
+    def get_subagent_indent() -> str:
+        """Get indentation based on current subagent nesting depth."""
+        return "  " * len(subagent_stack)
+
+    def format_condensed_activity(activity: dict, max_items: int = 3) -> str:
+        """Format a condensed activity summary for display.
+
+        Shows key files/operations in a compact format:
+        - File paths: "auth.py, utils.py, +2 more"
+        - Categories: "🔎 3 searches • 🌐 2 web"
+        """
+        parts = []
+
+        # Show file operations with paths (most useful)
+        files_read = activity.get("files_read", [])
+        if files_read:
+            # Get just filenames, not full paths
+            filenames = [Path(f).name for f in files_read[:max_items]]
+            remaining = len(files_read) - max_items
+            if remaining > 0:
+                parts.append(f"📖 {', '.join(filenames)}, +{remaining}")
+            else:
+                parts.append(f"📖 {', '.join(filenames)}")
+
+        files_written = activity.get("files_written", [])
+        if files_written:
+            filenames = [Path(f).name for f in files_written[:max_items]]
+            remaining = len(files_written) - max_items
+            if remaining > 0:
+                parts.append(f"✏️ {', '.join(filenames)}, +{remaining}")
+            else:
+                parts.append(f"✏️ {', '.join(filenames)}")
+
+        # Show other categories as counts
+        categories = activity.get("categories", {})
+        for cat in CATEGORY_ORDER:
+            if cat in ("files_read", "files_written"):
+                continue  # Already handled above
+            count = categories.get(cat, 0)
+            if count > 0:
+                icon = TOOL_CATEGORY_ICONS.get(cat, "🔧")
+                parts.append(f"{icon} {count}")
+
+        # Show errors count
+        errors = activity.get("errors", [])
+        if errors:
+            parts.append(f"❌ {len(errors)}")
+
+        return " • ".join(parts) if parts else "starting..."
+
+    def flush_pending_completions() -> None:
+        """Print all deferred subagent completion banners as one grouped block."""
+        nonlocal spinner_active
+        if not pending_completions:
+            return
+        if spinner_active:
+            status.stop()
+            spinner_active = False
+        console.print()
+        for comp in pending_completions:
+            icon = comp["status_icon"]
+            name = comp["subagent_type"]
+            dur = comp["duration_str"]
+            cond = comp["condensed"]
+            ind = comp["indent"]
+            color = comp["subagent_color"]
+            if cond:
+                console.print(f"{ind}└─ {icon} {name}{dur}: {cond}", style=color)
+            else:
+                console.print(f"{ind}└─ {icon} {name}{dur}", style=color)
+        pending_completions.clear()
+        console.print()
 
     def flush_text_buffer(*, final: bool = False) -> None:
         """Flush accumulated assistant text as rendered markdown when appropriate."""
@@ -358,6 +566,8 @@ async def execute_task(  # type: ignore
             pending_text = ""
             return
         response_shown_via_updates = True  # Mark as shown to prevent future duplicates
+        # Show all deferred subagent completions together before the synthesis response
+        flush_pending_completions()
         if spinner_active:
             status.stop()
             spinner_active = False
@@ -383,6 +593,11 @@ async def execute_task(  # type: ignore
             response_shown_via_updates = False
             displayed_tool_ids.clear()
             active_subagents.clear()
+            tool_call_to_name.clear()
+            subagent_stack.clear()
+            subagent_activity_by_ns.clear()
+            tool_call_id_to_ns.clear()
+            pending_completions.clear()
             # Track all pending interrupts: {interrupt_id: request_data}
             pending_interrupts: dict[str, HITLRequest] = {}
 
@@ -417,23 +632,17 @@ async def execute_task(  # type: ignore
                                     and interrupt_value.get("type") == "question"
                                 ):
                                     # Handle question interrupt immediately
-                                    question_request = interrupt_value.get(
-                                        "request", {}
-                                    )
+                                    question_request = interrupt_value.get("request", {})
 
                                     if spinner_active:
                                         status.stop()
                                         spinner_active = False
 
                                     # Handle the question and get user response
-                                    response = await handle_agent_question(
-                                        question_request
-                                    )
+                                    response = await handle_agent_question(question_request)
 
                                     # Create a question response to resume with
-                                    hitl_response[interrupt_obj.id] = {
-                                        "response": response
-                                    }
+                                    hitl_response[interrupt_obj.id] = {"response": response}
                                     interrupt_occurred = True
 
                                     # Restart spinner
@@ -481,17 +690,11 @@ async def execute_task(  # type: ignore
                                             )
                                         except Exception:
                                             pass
-                                        hitl_response[interrupt_obj.id] = {
-                                            "approved": True
-                                        }
-                                        console.print(
-                                            "[green]Plan approved! Executing...[/green]"
-                                        )
+                                        hitl_response[interrupt_obj.id] = {"approved": True}
+                                        console.print("[green]Plan approved! Executing...[/green]")
                                     else:
                                         # User rejected - stay in plan mode
-                                        hitl_response[interrupt_obj.id] = {
-                                            "approved": False
-                                        }
+                                        hitl_response[interrupt_obj.id] = {"approved": False}
                                         console.print(
                                             "[yellow]Plan rejected. Revise the plan.[/yellow]"
                                         )
@@ -509,14 +712,10 @@ async def execute_task(  # type: ignore
                                 # Interrupt has required fields: value (HITLRequest) and id (str)
                                 # Validate the HITLRequest using TypeAdapter
                                 try:
-                                    validated_request = (
-                                        _HITL_REQUEST_ADAPTER.validate_python(
-                                            interrupt_value
-                                        )
+                                    validated_request = _HITL_REQUEST_ADAPTER.validate_python(
+                                        interrupt_value
                                     )
-                                    pending_interrupts[interrupt_obj.id] = (
-                                        validated_request
-                                    )
+                                    pending_interrupts[interrupt_obj.id] = validated_request
                                     interrupt_occurred = True
                                 except ValidationError as e:
                                     console.print(
@@ -544,8 +743,9 @@ async def execute_task(  # type: ignore
                         # Display AI response from model node (completed message)
                         # Only show the AI's final response after tool execution is complete
                         # Don't show tool call intentions or raw tool results
-                        # Skip if subagent is active - invoke_subagent handles subagent output
-                        if "messages" in chunk_data:
+                        # Only show for main agent — subagent updates come through the same
+                        # updates stream with a non-empty namespace and must be ignored here.
+                        if _namespace == () and "messages" in chunk_data:
                             messages = chunk_data["messages"]
                             # Check if messages is a valid list (not a Rich Overwrite object)
                             if isinstance(messages, list) and messages:
@@ -558,20 +758,23 @@ async def execute_task(  # type: ignore
                                 # Skip tool calls, tool results, and AIMessages with tool_calls
                                 # Only show AI assistant messages without tool_calls (final responses)
                                 # Skip if subagent is active
-                                if (
-                                    msg_text
-                                    and msg_type in ("ai", "assistant")
-                                    and not tool_calls
-                                ):
-                                    # ✅ THEN: Skip ONLY if already seen
-                                    if msg_id and msg_id in seen_message_ids:
+                                if msg_text and msg_type in ("ai", "assistant") and not tool_calls:
+                                    # Deduplicate using the actual ID from THIS updates chunk,
+                                    # not the outer-scope msg_id (which is from the messages stream
+                                    # and may be stale or unset when updates arrives first).
+                                    updates_msg_id = getattr(last_msg, "id", None)
+                                    if updates_msg_id and updates_msg_id in seen_message_ids:
+                                        continue
+                                    # Also skip if updates stream already showed a response
+                                    if response_shown_via_updates:
                                         continue
 
-                                    # ✅ Mark as seen BEFORE printing
-                                    if msg_id:
-                                        seen_message_ids.add(msg_id)
+                                    if updates_msg_id:
+                                        seen_message_ids.add(updates_msg_id)
 
-                                    # ✅ PRINT (first time only)
+                                    # Flush any deferred subagent completion banners
+                                    # before the main agent's synthesis response
+                                    flush_pending_completions()
                                     if spinner_active:
                                         status.stop()
                                         spinner_active = False
@@ -584,20 +787,28 @@ async def execute_task(  # type: ignore
                                             end=" ",
                                         )
                                         has_responded = True
-                                    console.print(
-                                        agent_display_name, style=agent_colors
-                                    )
+                                    console.print(agent_display_name, style=agent_colors)
                                     console.print(Markdown(msg_text), justify="full")
-                                    response_shown_via_updates = (
-                                        True  # Your existing flag
-                                    )
+                                    response_shown_via_updates = True  # Your existing flag
 
                 # Handle MESSAGES stream - for content and tool calls
                 elif current_stream_mode == "messages":
-                    # Only process messages from root namespace to avoid duplicates
-                    # With subgraphs=True, the same content can appear from multiple namespaces
-                    if _namespace != ():
-                        continue
+                    # Determine if this is main agent or subagent
+                    is_main_agent = _namespace == ()
+                    is_subagent = _namespace != ()
+
+                    # Get subagent type from namespace if this is a subagent
+                    subagent_type_for_ns = None
+                    if is_subagent and len(_namespace) > 0:
+                        # Namespace is like ('general-purpose',) or ('code-reviewer',)
+                        subagent_type_for_ns = _namespace[0]
+
+                    # For main agent: process fully for display
+                    # For subagent: track tool calls only (no display), skip reasoning text
+                    if not is_main_agent:
+                        # Subagent: track tool calls but don't display
+                        # We still need to process ToolMessage and tool_call chunks for tracking
+                        pass
 
                     # Messages stream returns (message, metadata) tuples
                     if not isinstance(data, tuple) or len(data) != 2:
@@ -611,6 +822,9 @@ async def execute_task(  # type: ignore
                             continue  # Skip entire message if already processed via updates
 
                     if isinstance(message, HumanMessage):
+                        # Skip subagent human messages
+                        if not is_main_agent:
+                            continue
                         content = message.text
                         if content:
                             flush_text_buffer(final=True)
@@ -619,9 +833,7 @@ async def execute_task(  # type: ignore
                                 spinner_active = False
                             if not has_responded:
                                 console.print()
-                                console.print(
-                                    "●", style=agent_colors, markup=False, end=" "
-                                )
+                                console.print("●", style=agent_colors, markup=False, end=" ")
                                 has_responded = True
                             markdown = Markdown(content)
                             console.print(agent_display_name, style=agent_colors)
@@ -642,70 +854,148 @@ async def execute_task(  # type: ignore
                         if tool_id:
                             seen_message_ids.add(tool_id)
 
-                        tool_name = getattr(message, "name", "")
+                        # Use tracked tool name for reliable lookup (ToolMessage.name is unreliable)
+                        tool_call_id = getattr(message, "tool_call_id", None)
+                        tool_name = tool_call_to_name.get(tool_call_id, "") or getattr(
+                            message, "name", ""
+                        )
                         tool_status = getattr(message, "status", "success")
                         tool_content = format_tool_message_content(message.content)
                         record = file_op_tracker.complete_with_message(message)
-                        # Special handling for task tool completion: display completion banner
-                        tool_call_id = getattr(message, "tool_call_id", None)
+
+                        # Track subagent tool errors for summary
+                        if is_subagent and subagent_type_for_ns:
+                            if tool_status != "success" or (
+                                tool_content and str(tool_content).lower().startswith("error")
+                            ):
+                                activity = subagent_activity_by_ns.get(_namespace)
+                                if activity:
+                                    activity["errors"].append(tool_name)
+
+                        # Special handling for task tool completion: display completion banner with summary
                         if tool_name == "task" and tool_call_id in active_subagents:
                             subagent_type, _ = active_subagents.pop(tool_call_id)
                             subagent_color = get_agent_color(subagent_type)
 
-                            flush_text_buffer(final=True)
-                            if spinner_active:
-                                status.stop()
-                                spinner_active = False
+                            # Pop from stack for indentation
+                            stack_idx = None
+                            for i, (tid, _) in enumerate(subagent_stack):
+                                if tid == tool_call_id:
+                                    stack_idx = i
+                                    break
+                            if stack_idx is not None:
+                                subagent_stack.pop(stack_idx)
 
-                            console.print()
-                            status_icon = "✓" if tool_status == "success" else "✗"
-                            console.print(
-                                f"{status_icon} {subagent_type} completed",
-                                style=f"{subagent_color}",
+                            indent = get_subagent_indent()
+
+                            # Get activity from namespace mapping (more reliable)
+                            expected_ns = tool_call_id_to_ns.pop(tool_call_id, None)
+                            activity = (
+                                subagent_activity_by_ns.pop(expected_ns, None)
+                                if expected_ns
+                                else None
                             )
-                            console.print()
 
-                            if not spinner_active:
+                            # Status icon
+                            status_icon = "✓" if tool_status == "success" else "✗"
+
+                            # Calculate duration
+                            duration_str = ""
+                            if activity and "start_time" in activity:
+                                elapsed = time.time() - activity["start_time"]
+                                if elapsed >= 60:
+                                    mins = int(elapsed // 60)
+                                    secs = int(elapsed % 60)
+                                    duration_str = f" ({mins}m {secs}s)"
+                                else:
+                                    duration_str = f" ({int(elapsed)}s)"
+
+                            # Defer completion banner — all banners print together
+                            # just before the main agent's synthesis response
+                            pending_completions.append({
+                                "status_icon": status_icon,
+                                "subagent_type": subagent_type,
+                                "duration_str": duration_str,
+                                "condensed": format_condensed_activity(activity) if activity else None,
+                                "indent": indent,
+                                "subagent_color": subagent_color,
+                            })
+
+                            # Always update spinner to show aggregation progress,
+                            # including when the last subagent finishes.
+                            remaining = len(active_subagents)
+                            done_count = len(pending_completions)
+                            total_count = done_count + remaining
+                            if remaining > 0:
+                                spinner_msg = (
+                                    f"[bold {COLORS['thinking']}]"
+                                    f"{done_count}/{total_count} subagents done, "
+                                    f"waiting for {remaining} more..."
+                                )
+                            else:
+                                label = "subagent" if done_count == 1 else "subagents"
+                                spinner_msg = (
+                                    f"[bold {COLORS['thinking']}]"
+                                    f"All {done_count} {label} done, synthesizing..."
+                                )
+                            if spinner_active:
+                                status.update(spinner_msg)
+                            else:
                                 status.start()
                                 spinner_active = True
+                                status.update(spinner_msg)
 
-                        # Reset spinner message after tool completes
-                        if spinner_active:
-                            status.update(
-                                f"[bold {COLORS['thinking']}]{agent_display_name} is thinking..."
-                            )
+                        # Reset spinner message after non-task tools complete.
+                        # For task completions the message was already set above.
+                        elif spinner_active:
+                            if pending_completions and active_subagents:
+                                # Still aggregating — keep current progress text
+                                pass
+                            elif pending_completions:
+                                # All subagents done, synthesis imminent
+                                label = "subagent" if len(pending_completions) == 1 else "subagents"
+                                status.update(
+                                    f"[bold {COLORS['thinking']}]"
+                                    f"All {len(pending_completions)} {label} done, synthesizing..."
+                                )
+                            else:
+                                status.update(
+                                    f"[bold {COLORS['thinking']}]{agent_display_name} is thinking..."
+                                )
 
-                        if tool_name == "shell" and tool_status != "success":
-                            flush_text_buffer(final=True)
-                            if tool_content:
-                                if spinner_active:
-                                    status.stop()
-                                    spinner_active = False
-                                console.print()
-                                console.print(tool_content, style="red", markup=False)
-                                console.print()
-                        elif tool_content and isinstance(tool_content, str):
-                            stripped = tool_content.lstrip()
-                            if stripped.lower().startswith("error"):
+                        # Main agent: display errors and file operations
+                        if is_main_agent:
+                            if tool_name == "shell" and tool_status != "success":
+                                flush_text_buffer(final=True)
+                                if tool_content:
+                                    if spinner_active:
+                                        status.stop()
+                                        spinner_active = False
+                                    console.print()
+                                    console.print(tool_content, style="red", markup=False)
+                                    console.print()
+                            elif tool_content and isinstance(tool_content, str):
+                                stripped = tool_content.lstrip()
+                                if stripped.lower().startswith("error"):
+                                    flush_text_buffer(final=True)
+                                    if spinner_active:
+                                        status.stop()
+                                        spinner_active = False
+                                    console.print()
+                                    console.print(tool_content, style="red", markup=False)
+                                    console.print()
+
+                            if record:
                                 flush_text_buffer(final=True)
                                 if spinner_active:
                                     status.stop()
                                     spinner_active = False
                                 console.print()
-                                console.print(tool_content, style="red", markup=False)
+                                render_file_operation(record)
                                 console.print()
-
-                        if record:
-                            flush_text_buffer(final=True)
-                            if spinner_active:
-                                status.stop()
-                                spinner_active = False
-                            console.print()
-                            render_file_operation(record)
-                            console.print()
-                            if not spinner_active:
-                                status.start()
-                                spinner_active = True
+                                if not spinner_active:
+                                    status.start()
+                                    spinner_active = True
 
                         # For all other tools (web_search, http_request, etc.),
                         # results are hidden from user - agent will process and respond
@@ -716,27 +1006,31 @@ async def execute_task(  # type: ignore
                         # Fallback for messages without content_blocks
                         continue
 
-                    # Extract token usage if available
-                    if token_tracker and hasattr(message, "usage_metadata"):
+                    # Extract token usage — only from main agent to avoid subagent contamination
+                    if token_tracker and is_main_agent and hasattr(message, "usage_metadata"):
                         usage = message.usage_metadata
                         if usage:
                             input_toks = usage.get("input_tokens", 0)
                             output_toks = usage.get("output_tokens", 0)
-                            if input_toks or output_toks:
-                                captured_input_tokens = max(
-                                    captured_input_tokens, input_toks
-                                )
-                                captured_output_tokens = max(
-                                    captured_output_tokens, output_toks
-                                )
+                            # Prompt-caching: cached tokens are NOT in input_tokens
+                            # but still occupy the context window. Must add them back.
+                            cache_read = usage.get("cache_read_input_tokens", 0)
+                            cache_create = usage.get("cache_creation_input_tokens", 0)
+                            # Actual context sent = fresh tokens + cached tokens
+                            actual_context = input_toks + cache_read + cache_create
+                            if actual_context or output_toks:
+                                captured_input_tokens = max(captured_input_tokens, actual_context)
+                                captured_output_tokens = max(captured_output_tokens, output_toks)
+                                captured_cache_read_tokens = max(captured_cache_read_tokens, cache_read)
+                                captured_cache_creation_tokens = max(captured_cache_creation_tokens, cache_create)
 
                     # Process content blocks (this is the key fix!)
                     for block in message.content_blocks:
                         block_type = block.get("type")
-                        # Handle text blocks - skip if subagent is active or updates stream already showed
+                        # Handle text blocks - only accumulate for main agent
                         if block_type == "text":
                             text = block.get("text", "")
-                            if text:
+                            if text and is_main_agent:
                                 pending_text += text
 
                         # Handle reasoning blocks
@@ -787,9 +1081,7 @@ async def execute_task(  # type: ignore
                                 buffer["args_parts"] = []
                             elif isinstance(chunk_args, str):
                                 if chunk_args:
-                                    parts: list[str] = buffer.setdefault(
-                                        "args_parts", []
-                                    )
+                                    parts: list[str] = buffer.setdefault("args_parts", [])
                                     if not parts or chunk_args != parts[-1]:
                                         parts.append(chunk_args)
                                     buffer["args"] = "".join(parts)
@@ -822,6 +1114,8 @@ async def execute_task(  # type: ignore
                             if buffer_id is not None:
                                 if buffer_id not in displayed_tool_ids:
                                     displayed_tool_ids.add(buffer_id)
+                                    # Track tool name for reliable ToolMessage lookup
+                                    tool_call_to_name[buffer_id] = buffer_name
                                     file_op_tracker.start_operation(
                                         buffer_name, parsed_args, buffer_id
                                     )
@@ -833,78 +1127,102 @@ async def execute_task(  # type: ignore
                             tool_call_buffers.pop(buffer_key, None)
 
                             if display_needed:
+                                icon = TOOL_ICONS.get(buffer_name, "🔧")
+                                display_str = format_tool_display(buffer_name, parsed_args)
 
-                                icon = tool_icons.get(buffer_name, "🔧")
+                                # Main agent: display tool call
+                                if is_main_agent:
+                                    if spinner_active:
+                                        status.stop()
+                                        spinner_active = False
 
-                                if spinner_active:
-                                    status.stop()
+                                    if has_responded:
+                                        console.print()
 
-                                if has_responded:
-                                    console.print()
+                                    console.print(
+                                        f"  {icon} {display_str}",
+                                        style=f"dim {COLORS['tool']}",
+                                        markup=False,
+                                    )
 
-                                display_str = format_tool_display(
-                                    buffer_name, parsed_args
-                                )
-
-                                console.print(
-                                    f"  {icon} {display_str}",
-                                    style=f"dim {COLORS['tool']}",
-                                    markup=False,
-                                )
-
-                                # Special handling for task tool: display subagent delegation banner
-                                if (
-                                    buffer_name == "task"
-                                    and "subagent_type" in parsed_args
-                                ):
-                                    subagent_type = parsed_args["subagent_type"]
-                                    description = parsed_args.get("description", "")
-
-                                    # Store for completion banner later
-                                    if buffer_id:
-                                        active_subagents[buffer_id] = (
-                                            subagent_type,
-                                            description,
+                                # Subagent: track but don't display
+                                elif is_subagent and subagent_type_for_ns:
+                                    activity = subagent_activity_by_ns.get(_namespace)
+                                    if activity:
+                                        # Track call with category
+                                        category = TOOL_CATEGORIES.get(buffer_name, "other")
+                                        activity["calls"].append((buffer_name, category))
+                                        activity["categories"][category] = (
+                                            activity["categories"].get(category, 0) + 1
                                         )
 
-                                    # Get subagent color if available
+                                        # Track specific paths for file operations
+                                        if category == "files_read":
+                                            path = (
+                                                parsed_args.get("path")
+                                                or parsed_args.get("file_path")
+                                                or "?"
+                                            )
+                                            activity["files_read"].append(path)
+                                        elif category == "files_written":
+                                            path = (
+                                                parsed_args.get("path")
+                                                or parsed_args.get("file_path")
+                                                or "?"
+                                            )
+                                            activity["files_written"].append(path)
+
+                            # Special handling for task tool: display subagent delegation banner
+                            if buffer_name == "task" and "subagent_type" in parsed_args:
+                                subagent_type = parsed_args["subagent_type"]
+                                description = parsed_args.get("description", "")
+
+                                # Store for completion banner later
+                                if buffer_id:
+                                    active_subagents[buffer_id] = (
+                                        subagent_type,
+                                        description,
+                                    )
+                                    # Initialize activity tracking by namespace
+                                    # Namespace will be (subagent_type,) when subagent runs
+                                    expected_ns = (subagent_type,)
+                                    subagent_activity_by_ns[expected_ns] = {
+                                        "name": subagent_type,
+                                        "calls": [],
+                                        "files_read": [],
+                                        "files_written": [],
+                                        "errors": [],
+                                        "categories": {},
+                                        "start_time": time.time(),
+                                    }
+                                    # Map tool_call_id -> namespace for summary lookup
+                                    tool_call_id_to_ns[buffer_id] = expected_ns
+                                    # Track nesting for indentation
+                                    subagent_stack.append((buffer_id, subagent_type))
+
+                                    # Get subagent color (with fallback)
                                     subagent_color = get_agent_color(subagent_type)
 
-                                    # INCREASED: Show 120 chars instead of 60
+                                    # Calculate indentation based on nesting depth
+                                    indent = get_subagent_indent()
                                     desc_preview = (
-                                        description[:300] + "..."
-                                        if len(description) > 300
+                                        description[:100] + "..."
+                                        if len(description) > 100
                                         else description
                                     )
 
-                                    # Display delegation banner
+                                    # Display delegation banner with indentation
                                     console.print()
-                                    banner_text = (
-                                        f"╭─ Delegating to {subagent_type} "
-                                        + "─" * (50 - len(subagent_type))
+                                    banner_text = f"{indent}┌─ {subagent_type} " + "─" * max(
+                                        20, 40 - len(subagent_type) - len(indent)
                                     )
-                                    console.print(
-                                        banner_text, style=f"dim {subagent_color}"
-                                    )
+                                    console.print(banner_text, style=f"dim {subagent_color}")
                                     if desc_preview:
                                         console.print(
-                                            f"│ Task: {desc_preview}",
+                                            f"{indent}│ {desc_preview}",
                                             style=f"dim {subagent_color}",
                                         )
-                                    console.print(
-                                        "╰" + "─" * 60, style=f"dim {subagent_color}"
-                                    )
-                                    console.print()
-
-                                    # NEW: Background running indicator
-                                    console.print(
-                                        f"│ 🟡 {subagent_type} is now running in the background...",
-                                        style=f"dim {subagent_color}",
-                                    )
-                                    console.print(
-                                        "╰" + "─" * 60, style=f"dim {subagent_color}"
-                                    )
-                                    console.print()
+                                    console.print(f"{indent}│", style=f"dim {subagent_color}")
 
                                     # Restart spinner with context about which tool is executing
                                     status.update(
@@ -920,6 +1238,10 @@ async def execute_task(  # type: ignore
 
             # After streaming loop - handle interrupt if it occurred
             flush_text_buffer(final=True)
+            # Safety net: flush any completion banners that weren't printed
+            # (e.g. if the agent responded via updates-stream and flush_text_buffer
+            # was never triggered with pending_text)
+            flush_pending_completions()
 
             # Handle human-in-the-loop after stream completes
             if interrupt_occurred:
@@ -936,9 +1258,7 @@ async def execute_task(  # type: ignore
                                 status.stop()
                                 spinner_active = False
 
-                            description = action_request.get(
-                                "description", "tool action"
-                            )
+                            description = action_request.get("description", "tool action")
                             console.print()
                             console.print(f"  [dim]⚡ {description}[/dim]")
 
@@ -974,9 +1294,7 @@ async def execute_task(  # type: ignore
                                 # Switch to auto-approve mode
                                 session_state.auto_approve = True
                                 console.print()
-                                console.print(
-                                    "[bold blue]✓ Auto-approve mode enabled[/bold blue]"
-                                )
+                                console.print("[bold blue]✓ Auto-approve mode enabled[/bold blue]")
                                 console.print(
                                     "[dim]All future tool actions will be automatically approved.[/dim]"
                                 )
@@ -984,9 +1302,9 @@ async def execute_task(  # type: ignore
 
                                 # Approve this action and all remaining actions in the batch
                                 decisions.append({"type": "approve"})
-                                for _remaining_action in hitl_request[
-                                    "action_requests"
-                                ][action_index + 1 :]:
+                                for _remaining_action in hitl_request["action_requests"][
+                                    action_index + 1 :
+                                ]:
                                     decisions.append({"type": "approve"})
                                 break
                             decisions.append(decision)
@@ -999,9 +1317,7 @@ async def execute_task(  # type: ignore
                                         tool_name, action_request.get("args", {})
                                     )
 
-                        if any(
-                            decision.get("type") == "reject" for decision in decisions
-                        ):
+                        if any(decision.get("type") == "reject" for decision in decisions):
                             any_rejected = True
 
                         hitl_response[interrupt_id] = {"decisions": decisions}
@@ -1038,9 +1354,7 @@ async def execute_task(  # type: ignore
                 config=config,
                 values={
                     "messages": [
-                        HumanMessage(
-                            content="[The previous request was cancelled by the system]"
-                        )
+                        HumanMessage(content="[The previous request was cancelled by the system]")
                     ]
                 },
             )
@@ -1063,9 +1377,7 @@ async def execute_task(  # type: ignore
                 config=config,
                 values={
                     "messages": [
-                        HumanMessage(
-                            content="[User interrupted the previous request with Ctrl+C]"
-                        )
+                        HumanMessage(content="[User interrupted the previous request with Ctrl+C]")
                     ]
                 },
             )
@@ -1074,6 +1386,10 @@ async def execute_task(  # type: ignore
             console.print(f"[red]Warning: Failed to update agent state: {e}[/red]\n")
 
         return
+
+    # Safety flush: show any pending subagent completions that weren't shown yet
+    # (e.g., if the main agent produced no text this turn)
+    flush_pending_completions()
 
     if spinner_active:
         status.stop()
@@ -1086,7 +1402,12 @@ async def execute_task(  # type: ignore
         console.print()
         # Track token usage (display only via /tokens command)
         if token_tracker and (captured_input_tokens or captured_output_tokens):
-            token_tracker.add(captured_input_tokens, captured_output_tokens)
+            token_tracker.add(
+                captured_input_tokens,
+                captured_output_tokens,
+                cache_read_tokens=captured_cache_read_tokens,
+                cache_creation_tokens=captured_cache_creation_tokens,
+            )
         # Track assistant response and tool calls for /context command
         if token_tracker:
             token_tracker.increment_assistant_messages()

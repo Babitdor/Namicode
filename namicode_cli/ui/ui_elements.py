@@ -182,6 +182,97 @@ def format_tool_display(tool_name: str, tool_args: dict) -> str:
             count = len(tool_args["todos"])
             return f"{tool_name}({count} items)"
 
+    elif tool_name == "duckduckgo_search":
+        # DuckDuckGo: show the query string
+        if "query" in tool_args:
+            query = str(tool_args["query"])
+            query = truncate_value(query, 100)
+            return f'{tool_name}("{query}")'
+
+    elif tool_name == "docs_search":
+        # Docs search: show query and optional topic
+        if "query" in tool_args:
+            query = str(tool_args["query"])
+            query = truncate_value(query, 80)
+            topic = tool_args.get("topic", "")
+            if topic:
+                return f'{tool_name}("{query}", topic={topic})'
+            return f'{tool_name}("{query}")'
+
+    elif tool_name in ("git_status", "git_branch", "git_stash"):
+        # Git ops with optional repo path
+        repo = tool_args.get("repo_path", ".")
+        if repo != ".":
+            return f"{tool_name}({abbreviate_path(repo)})"
+        return f"{tool_name}()"
+
+    elif tool_name == "git_log":
+        # Git log: show file_path filter or max_count
+        if tool_args.get("file_path"):
+            path = abbreviate_path(str(tool_args["file_path"]))
+            return f"{tool_name}({path})"
+        max_count = tool_args.get("max_count", 10)
+        author = tool_args.get("author")
+        if author:
+            return f"{tool_name}(n={max_count}, author={author})"
+        return f"{tool_name}(n={max_count})"
+
+    elif tool_name == "git_diff":
+        # Git diff: show file path or commits being compared
+        if tool_args.get("file_path"):
+            path = abbreviate_path(str(tool_args["file_path"]))
+            return f"{tool_name}({path})"
+        if tool_args.get("staged"):
+            return f"{tool_name}(--staged)"
+        c1 = tool_args.get("commit1")
+        c2 = tool_args.get("commit2")
+        if c1 and c2:
+            return f"{tool_name}({c1[:8]}..{c2[:8]})"
+        if c1:
+            return f"{tool_name}({c1[:8]})"
+        return f"{tool_name}()"
+
+    elif tool_name == "git_blame":
+        # Git blame: show file path
+        if "file_path" in tool_args:
+            path = abbreviate_path(str(tool_args["file_path"]))
+            return f"{tool_name}({path})"
+
+    elif tool_name == "run_tests":
+        # Test runner: show command or test path
+        if "command" in tool_args:
+            cmd = truncate_value(str(tool_args["command"]), 80)
+            return f'{tool_name}("{cmd}")'
+        if "test_path" in tool_args:
+            path = abbreviate_path(str(tool_args["test_path"]))
+            return f"{tool_name}({path})"
+        framework = tool_args.get("framework", "")
+        if framework:
+            return f"{tool_name}({framework})"
+        return f"{tool_name}()"
+
+    elif tool_name in ("lint_code", "check_types", "format_code_file"):
+        # Code quality: show file path or directory
+        for key in ("file_path", "path", "directory"):
+            if tool_args.get(key):
+                path = abbreviate_path(str(tool_args[key]))
+                return f"{tool_name}({path})"
+        return f"{tool_name}()"
+
+    elif tool_name.startswith("browser_"):
+        # Browser tools: show URL or selector
+        for key in ("url", "selector", "query", "text"):
+            if tool_args.get(key):
+                val = truncate_value(str(tool_args[key]), 80)
+                return f'{tool_name}("{val}")'
+        return f"{tool_name}()"
+
+    elif tool_name in ("write_memory", "read_memory", "delete_memory"):
+        # Memory tools: show key
+        if "key" in tool_args:
+            key = truncate_value(str(tool_args["key"]), 60)
+            return f'{tool_name}("{key}")'
+
     # Fallback: generic formatting for unknown tools
     # Show all arguments in key=value format
     args_str = ", ".join(
@@ -217,8 +308,15 @@ class TokenTracker:
 
     def __init__(self) -> None:
         self.baseline_context = 0  # Baseline system context (system + agent.md + tools)
-        self.current_context = 0  # Total context including messages
+        self.current_context = 0  # Total context including messages (from API input_tokens)
         self.last_output = 0
+
+        # Prompt-caching breakdown (Anthropic only, 0 for other providers)
+        self.last_cache_read = 0       # tokens read from prompt cache this turn
+        self.last_cache_creation = 0   # tokens written to prompt cache this turn
+
+        # Whether we've received at least one real API response
+        self.has_api_data = False
 
         # Model information for context window calculation
         self.model_name: str | None = None
@@ -253,15 +351,35 @@ class TokenTracker:
         """Reset to baseline (for /clear and /compact commands)."""
         self.current_context = self.baseline_context
         self.last_output = 0
+        self.last_cache_read = 0
+        self.last_cache_creation = 0
+        self.has_api_data = False
         self.user_message_count = 0
         self.assistant_message_count = 0
         self.tool_call_count = 0
 
-    def add(self, input_tokens: int, output_tokens: int) -> None:
-        """Add tokens from a response."""
-        # input_tokens IS the current context size (what was sent to the model)
+    def add(
+        self,
+        input_tokens: int,
+        output_tokens: int,
+        *,
+        cache_read_tokens: int = 0,
+        cache_creation_tokens: int = 0,
+    ) -> None:
+        """Add tokens from an API response.
+
+        Args:
+            input_tokens: Total context sent to the model this turn
+                (already includes cache_read + cache_creation for accurate window accounting).
+            output_tokens: Tokens generated by the model.
+            cache_read_tokens: Tokens served from the prompt cache (Anthropic only).
+            cache_creation_tokens: Tokens written to the prompt cache (Anthropic only).
+        """
         self.current_context = input_tokens
         self.last_output = output_tokens
+        self.last_cache_read = cache_read_tokens
+        self.last_cache_creation = cache_creation_tokens
+        self.has_api_data = True
 
     def increment_user_messages(self) -> None:
         """Increment user message count."""
@@ -351,26 +469,31 @@ class TokenTracker:
         )
 
         breakdown = self.get_breakdown()
+        window = breakdown.context_window_size
 
         console.print()
         console.print("[bold]Context Window Usage[/bold]", style=COLORS["primary"])
+
+        # Data source label
+        if not self.has_api_data:
+            console.print(
+                "  [dim](estimated — will update after first API response)[/dim]"
+            )
         console.print()
 
-        # Determine progress bar color based on usage (red theme)
+        # Progress bar
         usage_pct = breakdown.usage_percentage
         if usage_pct < CONTEXT_WARNING_THRESHOLD * 100:
-            bar_color = COLORS["success"]  # Green for low usage
+            bar_color = COLORS["success"]
         elif usage_pct < CONTEXT_CRITICAL_THRESHOLD * 100:
-            bar_color = COLORS["warning"]  # Orange for medium usage
+            bar_color = COLORS["warning"]
         else:
-            bar_color = COLORS["error"]  # Red for high usage
+            bar_color = COLORS["error"]
 
-        # Create visual progress bar with modern design
         bar_width = 50
         filled = int(bar_width * usage_pct / 100)
         empty = bar_width - filled
         bar = f"[{bar_color}]{'━' * filled}[/{bar_color}][dim]{'─' * empty}[/dim]"
-
         console.print(f"  {bar} [bold {bar_color}]{usage_pct:.1f}%[/bold {bar_color}]")
         console.print()
 
@@ -380,38 +503,71 @@ class TokenTracker:
         table.add_column("Tokens", justify="right")
         table.add_column("Percent", justify="right", style="dim")
 
-        # Baseline row
-        baseline_pct = (breakdown.baseline_tokens / breakdown.context_window_size) * 100
-        table.add_row(
-            "Baseline (system + memory)",
-            f"{breakdown.baseline_tokens:,}",
-            f"{baseline_pct:.1f}%",
-        )
+        def _pct(n: int) -> str:
+            return f"{n / window * 100:.1f}%" if window else "—"
 
-        # Conversation row
-        conv_tokens = breakdown.total_tokens - breakdown.baseline_tokens
-        if conv_tokens < 0:
-            conv_tokens = 0
-        conv_pct = (conv_tokens / breakdown.context_window_size) * 100
-        table.add_row(
-            "Conversation + tools",
-            f"{conv_tokens:,}",
-            f"{conv_pct:.1f}%",
-        )
+        if self.has_api_data:
+            # ── Context sent to API this turn ──────────────────────────────
+            fresh = self.current_context - self.last_cache_read - self.last_cache_creation
+            fresh = max(0, fresh)
+
+            if self.last_cache_read or self.last_cache_creation:
+                # Show caching breakdown
+                table.add_row(
+                    "Context (fresh tokens)",
+                    f"{fresh:,}",
+                    _pct(fresh),
+                )
+                if self.last_cache_read:
+                    table.add_row(
+                        "  ↳ from cache (read)",
+                        f"{self.last_cache_read:,}",
+                        _pct(self.last_cache_read),
+                    )
+                if self.last_cache_creation:
+                    table.add_row(
+                        "  ↳ written to cache",
+                        f"{self.last_cache_creation:,}",
+                        _pct(self.last_cache_creation),
+                    )
+            else:
+                table.add_row(
+                    "Context sent",
+                    f"{self.current_context:,}",
+                    _pct(self.current_context),
+                )
+
+            if self.last_output:
+                table.add_row(
+                    "Generated (last turn)",
+                    f"{self.last_output:,}",
+                    _pct(self.last_output),
+                )
+        else:
+            # Pre-first-call: show estimate with caveat
+            baseline_pct = (breakdown.baseline_tokens / window * 100) if window else 0
+            table.add_row(
+                "Baseline (system + memory) [dim]~est.[/dim]",
+                f"{breakdown.baseline_tokens:,}",
+                f"{baseline_pct:.1f}%",
+            )
+            table.add_row(
+                "[dim]Tools (~est. +5k not yet counted)[/dim]",
+                "~5,000",
+                _pct(5000),
+            )
 
         table.add_section()
 
-        # Total row
+        # Total / remaining
         table.add_row(
-            "[bold]Total Used[/bold]",
+            "[bold]Total context[/bold]",
             f"[bold]{breakdown.total_tokens:,}[/bold]",
             f"[bold]{usage_pct:.1f}%[/bold]",
         )
-
-        # Remaining row
         remaining_pct = 100 - usage_pct
         table.add_row(
-            "Available",
+            "Remaining",
             f"{breakdown.remaining_tokens:,}",
             f"{remaining_pct:.1f}%",
         )
@@ -421,8 +577,8 @@ class TokenTracker:
 
         # Message counts
         console.print(
-            f"  [dim]Messages: {breakdown.user_message_count} user, "
-            f"{breakdown.assistant_message_count} assistant, "
+            f"  [dim]Messages: {breakdown.user_message_count} user · "
+            f"{breakdown.assistant_message_count} assistant · "
             f"{breakdown.tool_call_count} tool calls[/dim]"
         )
         console.print()
@@ -430,12 +586,11 @@ class TokenTracker:
         # Context window info
         model_display = self.model_name or "unknown model"
         console.print(
-            f"  [dim]Context window: {breakdown.context_window_size:,} tokens "
-            f"({model_display})[/dim]"
+            f"  [dim]Window: {window:,} tokens ({model_display})[/dim]"
         )
         console.print()
 
-        # Warnings based on thresholds
+        # Threshold warnings
         if breakdown.is_critical:
             console.print(
                 "  [bold red]⚠ Critical: Context nearly full! "
@@ -443,7 +598,7 @@ class TokenTracker:
             )
         elif breakdown.is_warning:
             console.print(
-                "  [yellow]⚠ Warning: Context usage high. "
+                "  [yellow]⚠ Warning: Context usage is high. "
                 "Consider using /compact soon.[/yellow]"
             )
         console.print()

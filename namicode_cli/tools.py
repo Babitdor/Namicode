@@ -39,9 +39,7 @@ from tavily import TavilyClient
 from namicode_cli.config.config import settings
 
 # Initialize Tavily client if API key is available
-tavily_client = (
-    TavilyClient(api_key=settings.tavily_api_key) if settings.has_tavily else None
-)
+tavily_client = TavilyClient(api_key=settings.tavily_api_key) if settings.has_tavily else None
 
 
 def http_request(
@@ -677,7 +675,9 @@ def package_info(
                     (
                         url
                         for key, url in (info.get("project_urls") or {}).items()
-                        if "source" in key.lower() or "repo" in key.lower() or "github" in key.lower()
+                        if "source" in key.lower()
+                        or "repo" in key.lower()
+                        or "github" in key.lower()
                     ),
                     None,
                 ),
@@ -985,6 +985,43 @@ def format_code(
     except Exception as e:
         return {"success": False, "error": f"Formatting failed: {e!s}"}
 
+
+# =============================================================================
+# Browser Automation Tools (Playwright)
+# =============================================================================
+
+# Import browser tools - requires playwright package
+try:
+    from namicode_cli.browser_tools import (
+        browser_navigate,
+        browser_click,
+        browser_type,
+        browser_screenshot,
+        browser_evaluate,
+        browser_wait,
+        browser_wait_for,
+        browser_query,
+        browser_scroll,
+        browser_fill_form,
+        browser_get_content,
+        browser_select,
+        browser_get_url,
+        browser_go_back,
+        browser_go_forward,
+        browser_refresh,
+        browser_close,
+        browser_run_code,
+        browser_upload,
+        browser_pdf,
+        browser_status,
+        browser_snapshot,
+        BROWSER_TOOLS,
+    )
+
+    BROWSER_TOOLS_AVAILABLE = True
+except ImportError:
+    BROWSER_TOOLS_AVAILABLE = False
+    BROWSER_TOOLS = []
 
 # =============================================================================
 # Image Generation (Replicate API)
@@ -1385,11 +1422,13 @@ def _lint_with_ruff(path: Path, fix: bool, show_fixes: bool) -> dict[str, Any]:
 
         # Check for syntax errors in stderr
         if result.stderr and "SyntaxError" in result.stderr:
-            errors.append({
-                "file": str(path),
-                "code": "E999",
-                "message": result.stderr.strip(),
-            })
+            errors.append(
+                {
+                    "file": str(path),
+                    "code": "E999",
+                    "message": result.stderr.strip(),
+                }
+            )
 
         total_issues = len(errors) + len(warnings)
         summary_parts = []
@@ -1573,8 +1612,11 @@ def _format_with_ruff(path: Path, check_only: bool) -> dict[str, Any]:
             "files_changed": files_changed,
             "already_formatted": already_formatted,
             "diff": result.stdout if check_only and result.stdout else None,
-            "message": "Already formatted" if already_formatted else (
-                f"{len(files_changed)} file(s) would be changed" if check_only
+            "message": "Already formatted"
+            if already_formatted
+            else (
+                f"{len(files_changed)} file(s) would be changed"
+                if check_only
                 else "Formatted successfully"
             ),
         }
@@ -1682,7 +1724,10 @@ def _format_with_rustfmt(path: Path, check_only: bool) -> dict[str, Any]:
         }
 
     except FileNotFoundError:
-        return {"success": False, "error": "rustfmt not found. Install with: rustup component add rustfmt"}
+        return {
+            "success": False,
+            "error": "rustfmt not found. Install with: rustup component add rustfmt",
+        }
     except Exception as e:
         return {"success": False, "error": f"Formatting failed: {e!s}"}
 
@@ -1761,10 +1806,12 @@ def _check_types_mypy(path: Path, strict: bool) -> dict[str, Any]:
         cmd.append("--strict")
 
     # Add common useful flags
-    cmd.extend([
-        "--show-error-codes",
-        "--no-error-summary",  # We'll generate our own summary
-    ])
+    cmd.extend(
+        [
+            "--show-error-codes",
+            "--no-error-summary",  # We'll generate our own summary
+        ]
+    )
 
     try:
         result = subprocess.run(
@@ -1788,6 +1835,7 @@ def _check_types_mypy(path: Path, strict: bool) -> dict[str, Any]:
 
                     # Extract error code if present [code]
                     import re
+
                     code_match = re.search(r"\[([a-z-]+)\]$", error_part)
                     if code_match:
                         code = code_match.group(1)
@@ -1795,13 +1843,15 @@ def _check_types_mypy(path: Path, strict: bool) -> dict[str, Any]:
                     else:
                         code = "error" if ": error:" in line else "note"
 
-                    errors.append({
-                        "file": parts[0],
-                        "line": int(parts[1]) if parts[1].isdigit() else 0,
-                        "column": int(parts[2]) if parts[2].isdigit() else 0,
-                        "code": code,
-                        "message": message.replace("error: ", "").replace("note: ", ""),
-                    })
+                    errors.append(
+                        {
+                            "file": parts[0],
+                            "line": int(parts[1]) if parts[1].isdigit() else 0,
+                            "column": int(parts[2]) if parts[2].isdigit() else 0,
+                            "code": code,
+                            "message": message.replace("error: ", "").replace("note: ", ""),
+                        }
+                    )
 
         return {
             "success": len(errors) == 0,
@@ -1842,14 +1892,16 @@ def _check_types_pyright(path: Path, strict: bool) -> dict[str, Any]:
             try:
                 data = json.loads(result.stdout)
                 for diag in data.get("generalDiagnostics", []):
-                    errors.append({
-                        "file": diag.get("file", ""),
-                        "line": diag.get("range", {}).get("start", {}).get("line", 0),
-                        "column": diag.get("range", {}).get("start", {}).get("character", 0),
-                        "code": diag.get("rule", "error"),
-                        "message": diag.get("message", ""),
-                        "severity": diag.get("severity", "error"),
-                    })
+                    errors.append(
+                        {
+                            "file": diag.get("file", ""),
+                            "line": diag.get("range", {}).get("start", {}).get("line", 0),
+                            "column": diag.get("range", {}).get("start", {}).get("character", 0),
+                            "code": diag.get("rule", "error"),
+                            "message": diag.get("message", ""),
+                            "severity": diag.get("severity", "error"),
+                        }
+                    )
             except json.JSONDecodeError:
                 errors.append({"message": result.stdout})
 
@@ -1891,17 +1943,20 @@ def _check_types_tsc(path: Path) -> dict[str, Any]:
 
         # Parse tsc output: file(line,col): error TSxxxx: message
         import re
+
         for line in result.stdout.split("\n"):
             match = re.match(r"(.+)\((\d+),(\d+)\):\s+(error|warning)\s+(TS\d+):\s+(.+)", line)
             if match:
-                errors.append({
-                    "file": match.group(1),
-                    "line": int(match.group(2)),
-                    "column": int(match.group(3)),
-                    "severity": match.group(4),
-                    "code": match.group(5),
-                    "message": match.group(6),
-                })
+                errors.append(
+                    {
+                        "file": match.group(1),
+                        "line": int(match.group(2)),
+                        "column": int(match.group(3)),
+                        "severity": match.group(4),
+                        "code": match.group(5),
+                        "message": match.group(6),
+                    }
+                )
 
         return {
             "success": len(errors) == 0,
@@ -1914,6 +1969,9 @@ def _check_types_tsc(path: Path) -> dict[str, Any]:
     except subprocess.TimeoutExpired:
         return {"success": False, "error": "Type checking timed out after 5 minutes"}
     except FileNotFoundError:
-        return {"success": False, "error": "TypeScript not found. Install with: npm install typescript"}
+        return {
+            "success": False,
+            "error": "TypeScript not found. Install with: npm install typescript",
+        }
     except Exception as e:
         return {"success": False, "error": f"Type checking failed: {e!s}"}

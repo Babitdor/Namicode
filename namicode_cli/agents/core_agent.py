@@ -221,9 +221,7 @@ def list_agents() -> None:
         )
         return
 
-    console.print(
-        f"\n[bold {COLORS['primary']}]📋 Available Agents[/bold {COLORS['primary']}]\n"
-    )
+    console.print(f"\n[bold {COLORS['primary']}]📋 Available Agents[/bold {COLORS['primary']}]\n")
 
     for agent_name, agent_path, scope in sorted(agents, key=lambda x: (x[2], x[0])):
         # Display scope badge
@@ -291,17 +289,13 @@ def reset_agent(agent_name: str, source_agent: str | None = None) -> None:
 
     if agent_dir.exists():
         shutil.rmtree(agent_dir)
-        console.print(
-            f"Removed existing agent directory: {agent_dir}", style=COLORS["tool"]
-        )
+        console.print(f"Removed existing agent directory: {agent_dir}", style=COLORS["tool"])
 
     agent_dir.mkdir(parents=True, exist_ok=True)
     agent_md = agent_dir / "agent.md"
     agent_md.write_text(source_content, encoding="utf-8")
 
-    console.print(
-        f"✓ Agent '{agent_name}' reset to {action_desc}", style=COLORS["primary"]
-    )
+    console.print(f"✓ Agent '{agent_name}' reset to {action_desc}", style=COLORS["primary"])
     console.print(f"Location: {agent_dir}\n", style=COLORS["dim"])
 
 
@@ -361,24 +355,68 @@ Follow this process **strictly** unless explicitly instructed otherwise:
 
 **Understand → Context → Plan → Execute → Verify**
 
+### Step-by-Step Enforcement
+
+**CRITICAL**: Before ANY code change, explicitly think through:
+
+1. **Understand**: What is the user asking? Are there ambiguities? What's the scope?
+2. **Context**: What files/code are relevant? READ them first (with limit for large files).
+3. **Plan**: What steps are needed? Use `write_todos` for 3+ steps. What could go wrong?
+4. **Execute**: One step at a time. Verify after each change.
+5. **Verify**: Did it work? Run lint/tests. Check for unintended changes.
+
 ### General Rules
 
 * If the task is **ambiguous**, ask clarifying questions *before* acting.
 * If the task requires **3 or more steps**, first create a plan using `write_todos`.
 * If the task involves **new or unfamiliar concepts**, research before implementation.
+* **Read before edit**: ALWAYS read a file before editing it (edit_file requires this).
+* **One change at a time**: Don't make multiple unrelated changes in one edit.
+
+### Code Change Protocol
+
+For ANY code modification:
+
+1. **Read** the file first (with `limit` for large files)
+2. **Understand** existing code and conventions
+3. **Plan** the minimal change needed
+4. **Edit** with `edit_file` (provide unique `old_string`)
+5. **Verify** with `lint_code` immediately
+6. **Test** if functionality changed
+7. **Commit** only if tests pass
+
+### Security-First Mindset
+
+When making any change:
+- **Check for secrets**: Never commit API keys, tokens, passwords
+- **Validate inputs**: User input should be sanitized
+- **Check dependencies**: Vulnerable packages?
+- **Review permissions**: Does this need auth/authorization?
 
 ---
 
 ## Tool Quick Reference
 
-| Task                     | Tool         | Notes                                             |
-| ------------------------ | ------------ | ------------------------------------------------- |
-| Find files by name       | `glob`       | Examples: `**/*.py`, `**/test_*.ts`               |
-| Search code content      | `grep`       | Examples: `function.*auth`, `TODO`                |
-| Read file                | `read_file`  | Use `limit=100` for large files                   |
-| Create or overwrite file | `write_file` | Use only when full replacement is intended        |
-| Targeted edit            | `edit_file`  | Preferred for small changes; preserves formatting |
-| List directory           | `ls`         | One directory at a time                           |
+| Task                     | Tool              | Notes                                             |
+| ------------------------ | ----------------- | ------------------------------------------------- |
+| Find files by name       | `glob`            | Examples: `**/*.py`, `**/test_*.ts`               |
+| Search code content      | `grep`            | Examples: `function.*auth`, `TODO`                |
+| Read file                | `read_file`       | Use `limit=100` for large files                   |
+| Create or overwrite file | `write_file`      | Use only when full replacement is intended        |
+| Targeted edit            | `edit_file`       | Preferred for small changes; preserves formatting |
+| List directory           | `ls`              | One directory at a time                           |
+| Run shell command        | `shell`           | Use `interactive=True` for prompts                |
+| Delegate subtask         | `task`            | Spawn subagent for isolated work                  |
+| Run tests               | `run_tests`       | Auto-detects pytest, npm test, jest, etc.         |
+| Lint code               | `lint_code`       | Use `fix=True` to auto-fix issues                 |
+| Type check              | `check_types`     | mypy/pyright/tsc detection                        |
+| Search web              | `web_search`      | Tavily (requires API key)                         |
+| Free web search         | `duckduckgo_search` | No API key needed                               |
+| Search docs             | `docs_search`     | Official docs only, filtered by topic             |
+| Git status              | `git_status`      | Branch, staged, unstaged, untracked               |
+| Git history             | `git_log`         | Structured commit log                             |
+| Git diff                | `git_diff`        | Compare commits or working tree                   |
+| Git blame               | `git_blame`       | Line-by-line attribution                          |
 
 ---
 
@@ -437,6 +475,23 @@ execute_in_e2b(
   language="python"
 )
 ```
+
+---
+
+## Security Rules for Shell
+
+**BLOCKED** (cannot run):
+- `rm -rf /` or any destructive operation on system directories
+- `sudo` commands (require explicit approval)
+- `chmod 777` or `chmod a+rwx`
+- Commands with pipes from untrusted sources
+- `eval`, `exec` on user-provided strings
+
+**ALWAYS ASK** before:
+- Deleting files or directories
+- Force pushing to git
+- Dropping databases
+- Modifying system configuration
 
 ---
 
@@ -500,34 +555,30 @@ When using the write_todos tool:
 
 The todo list is a planning tool - use it judiciously to avoid overwhelming the user with excessive task tracking.
 
-### Documentation Search Requirement (MANDATORY)
+### Documentation Search (RECOMMENDED)
 
-Before fixing any bug, adding any new feature, modifying APIs, or changing external behavior, you MUST call the `docs_search` tool first.
+When working with external libraries, APIs, or unfamiliar frameworks, use `docs_search` first to find authoritative documentation before implementing.
 
-**This applies to:**
-- Bug fixes
-- New features
-- API usage
-- Configuration changes
+**Recommended for:**
+- External library/API usage
+- Configuration changes for third-party tools
 - Version-specific behavior
-- Security or authentication logic
+- Security or authentication patterns
 
-**You are FORBIDDEN from writing code, suggesting code, or describing implementation details until `docs_search` has been called and at least one official documentation source has been identified.**
-
-If no relevant official documentation is found, you MUST stop and respond exactly with:
-"Cannot proceed: no official documentation found."
-
-**You may skip `docs_search` ONLY when:**
+**You may skip `docs_search` when:**
+- Refactoring internal code without changing external behavior
+- Working with well-known standard library features
+- The topic was already researched earlier in this session
 - The task is purely conceptual (explaining concepts, answering questions)
-- The task is limited to refactoring existing internal code without changing behavior
+- Simple bug fixes in existing code where the issue is clear
 
-**Before implementing, you must explicitly list the documentation sources used.**
+**Best practice**: When using `docs_search`, cite the documentation sources found before implementing.
 
 Example workflow:
 1. User asks to add JWT authentication
 2. Call `docs_search("JWT authentication", topic="python")` or relevant topic
 3. Review results and cite sources: "Based on PyJWT documentation at..."
-4. Only THEN proceed with implementation"""
+4. Then proceed with implementation"""
     )
 
 
@@ -588,9 +639,7 @@ def _format_fetch_url_description(
     return f"URL: {url}\nTimeout: {timeout}s\n\n⚠️  Will fetch and convert web content to markdown"
 
 
-def _format_task_description(
-    tool_call: ToolCall, _state: AgentState, _runtime: Runtime
-) -> str:
+def _format_task_description(tool_call: ToolCall, _state: AgentState, _runtime: Runtime) -> str:
     """Format task (subagent) tool call for approval prompt.
 
     The task tool signature is: task(description: str, subagent_type: str)
@@ -615,18 +664,14 @@ def _format_task_description(
     )
 
 
-def _format_shell_description(
-    tool_call: ToolCall, _state: AgentState, _runtime: Runtime
-) -> str:
+def _format_shell_description(tool_call: ToolCall, _state: AgentState, _runtime: Runtime) -> str:
     """Format shell tool call for approval prompt."""
     args = tool_call["args"]
     command = args.get("command", "N/A")
     return f"Shell Command: {command}\nWorking Directory: {Path.cwd()}"
 
 
-def _format_execute_description(
-    tool_call: ToolCall, _state: AgentState, _runtime: Runtime
-) -> str:
+def _format_execute_description(tool_call: ToolCall, _state: AgentState, _runtime: Runtime) -> str:
     """Format execute tool call for approval prompt."""
     args = tool_call["args"]
     command = args.get("command", "N/A")
@@ -854,9 +899,7 @@ def create_agent_with_config(
     ]
     # Default core-nami-subagents
     default_subagents = retrieve_core_subagents(tools=tools)
-    Nami_SubAgent.extend(
-        default_subagents
-    )  # Use extend to add all subagents individually
+    Nami_SubAgent.extend(default_subagents)  # Use extend to add all subagents individually
 
     # Build named subagents from all available agents
     named_subagents = build_named_subagents(
@@ -867,9 +910,7 @@ def create_agent_with_config(
 
     # Get the system prompt (sandbox-aware and with skills)
     if system_prompt is None:
-        system_prompt = get_system_prompt(
-            assistant_id=assistant_id, sandbox_type=sandbox_type
-        )
+        system_prompt = get_system_prompt(assistant_id=assistant_id, sandbox_type=sandbox_type)
 
     if auto_approve:
         # No interrupts - all tools run automatically
@@ -920,9 +961,7 @@ async def get_agent_plan_mode_state(agent: Pregel, thread_id: str) -> bool:
     return state.values.get("plan_mode_enabled", False)
 
 
-async def set_agent_plan_mode_state(
-    agent: Pregel, thread_id: str, enabled: bool
-) -> None:
+async def set_agent_plan_mode_state(agent: Pregel, thread_id: str, enabled: bool) -> None:
     """Set plan mode state in agent.
 
     Args:

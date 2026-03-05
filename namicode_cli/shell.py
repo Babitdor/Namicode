@@ -140,9 +140,61 @@ LONG_RUNNING_COMMANDS = [
     "docker-compose up",
 ]
 
-# Compiled regex patterns for efficiency
+# Commands that are destructive, irreversible, or enable remote code execution.
+# These are hard-blocked before any subprocess is spawned.
+DANGEROUS_PATTERNS = [
+    # Recursive/forced deletion of root, home, or all files in cwd
+    r"rm\s+(-\w*r\w*f|-\w*f\w*r)\s+[/~]",
+    r"rm\s+(-\w*r\w*f|-\w*f\w*r)\s+\*",
+    # Raw disk writes (data destruction)
+    r"dd\s+.*of\s*=\s*/dev/",
+    r">\s*/dev/(sd|hd|nvme|vd)",
+    r"mkfs\.",
+    r"fdisk\s+/dev/",
+    # Fork bomb
+    r":\(\)\s*\{.*\|",
+    # System control on host machine
+    r"\b(shutdown|reboot|halt|poweroff)\b",
+    # Piped remote-code execution
+    r"(curl|wget)\s+.*\|\s*(bash|sh|python|python3|node|ruby|perl)",
+    # Recursive world-writable permission on /
+    r"chmod\s+(-\w*R|-R\w*)\s+[0-7]*7+\s+/",
+]
+
 _COMPILED_PATTERNS = [re.compile(p, re.IGNORECASE) for p in PROMPT_PATTERNS]
 _COMPILED_SERVER_READY = [re.compile(p, re.IGNORECASE) for p in SERVER_READY_PATTERNS]
+_COMPILED_DANGEROUS = [re.compile(p, re.IGNORECASE) for p in DANGEROUS_PATTERNS]
+
+# Environment variables that can redirect interpreter loading or import resolution.
+# Stripped from the subprocess environment before execution.
+_DANGEROUS_ENV_VARS: frozenset[str] = frozenset(
+    {
+        "PYTHONPATH",
+        "PYTHONSTARTUP",
+        "PYTHONEXECUTABLE",
+        "PYTHONHOME",
+        "COMSPEC",  # Windows command interpreter
+        "LD_PRELOAD",  # Linux dynamic linker injection
+        "LD_LIBRARY_PATH",
+        "DYLD_INSERT_LIBRARIES",  # macOS equivalent of LD_PRELOAD
+        "DYLD_LIBRARY_PATH",
+    }
+)
+
+
+def is_dangerous_command(command: str) -> tuple[bool, str]:
+    """Return (True, pattern) if the command matches a destructive pattern.
+
+    Args:
+        command: The shell command string to inspect.
+
+    Returns:
+        A tuple of (is_dangerous, matched_pattern_string).
+    """
+    for pattern in _COMPILED_DANGEROUS:
+        if pattern.search(command):
+            return True, pattern.pattern
+    return False, ""
 
 
 def is_interactive_prompt(line: str) -> bool:
@@ -222,7 +274,7 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         self._timeout = timeout
         self._max_output_bytes = max_output_bytes
         self._tool_name = "shell"
-        self._env = env if env is not None else os.environ.copy()
+        self._env = ShellMiddleware._sanitize_env(env if env is not None else os.environ.copy())
         self._workspace_root = workspace_root
 
         # Build description with working directory information
@@ -269,6 +321,18 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         self._shell_tool = shell_tool
         self.tools = [self._shell_tool]
 
+    @staticmethod
+    def _sanitize_env(env: dict[str, str]) -> dict[str, str]:
+        """Remove env vars that can redirect interpreter or import resolution.
+
+        Args:
+            env: The environment dict to sanitize.
+
+        Returns:
+            A new dict with dangerous variables removed.
+        """
+        return {k: v for k, v in env.items() if k not in _DANGEROUS_ENV_VARS}
+
     def _run_shell_command(
         self,
         command: str,
@@ -287,6 +351,19 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         if not command or not isinstance(command, str):
             msg = "Shell tool expects a non-empty command string."
             raise ToolException(msg)
+
+        dangerous, reason = is_dangerous_command(command)
+        if dangerous:
+            blocked_msg = (
+                f"Command blocked: matches dangerous pattern `{reason}`. "
+                "If intentional, run it manually in your terminal."
+            )
+            return ToolMessage(
+                content=blocked_msg,
+                tool_call_id=tool_call_id,
+                name=self._tool_name,
+                status="error",
+            )
 
         try:
             result = subprocess.run(  # noqa: S602
@@ -360,6 +437,19 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         if not command or not isinstance(command, str):
             msg = "Shell tool expects a non-empty command string."
             raise ToolException(msg)
+
+        dangerous, reason = is_dangerous_command(command)
+        if dangerous:
+            blocked_msg = (
+                f"Command blocked: matches dangerous pattern `{reason}`. "
+                "If intentional, run it manually in your terminal."
+            )
+            return ToolMessage(
+                content=blocked_msg,
+                tool_call_id=tool_call_id,
+                name=self._tool_name,
+                status="error",
+            )
 
         # Run the async implementation in an event loop
         try:
@@ -615,6 +705,19 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
             msg = "Shell tool expects a non-empty command string."
             raise ToolException(msg)
 
+        dangerous, reason = is_dangerous_command(command)
+        if dangerous:
+            blocked_msg = (
+                f"Command blocked: matches dangerous pattern `{reason}`. "
+                "If intentional, run it manually in your terminal."
+            )
+            return ToolMessage(
+                content=blocked_msg,
+                tool_call_id=tool_call_id,
+                name=self._tool_name,
+                status="error",
+            )
+
         # Run the async implementation in an event loop
         try:
             try:
@@ -830,7 +933,9 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
 
 
 __all__ = [
+    "DANGEROUS_PATTERNS",
     "ShellMiddleware",
+    "is_dangerous_command",
     "is_interactive_prompt",
     "is_long_running_command",
     "is_server_ready",

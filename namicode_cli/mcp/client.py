@@ -37,12 +37,20 @@ def build_mcp_server_config(
         )
     elif config.transport == "http":
         # langchain-mcp-adapters uses "sse" for HTTP/SSE transport
+        # Protected headers that must not be overridden via config
+        _protected_headers = {"content-length", "transfer-encoding", "host", "connection"}
         headers: dict[str, Any] | None = None
         if config.env:
             headers = {}
             for key, value in config.env.items():
                 if key.startswith("HTTP_HEADER_"):
                     header_name = key[12:].replace("_", "-")
+                    # Skip protected headers to prevent request smuggling
+                    if header_name.lower() in _protected_headers:
+                        continue
+                    # Skip header values with newlines to prevent header injection
+                    if "\n" in value or "\r" in value:
+                        continue
                     headers[header_name] = value
             if not headers:
                 headers = None

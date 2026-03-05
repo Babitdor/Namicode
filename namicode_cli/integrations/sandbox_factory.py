@@ -12,6 +12,10 @@ from nami_deepagents.backends.protocol import SandboxBackendProtocol
 
 from namicode_cli.config.config import console
 
+# Only these env vars are allowed in setup script template substitution.
+# Prevents accidental leakage of API keys and secrets.
+_ALLOWED_SETUP_VARS = {"HOME", "USER", "PATH", "SHELL", "LANG", "LC_ALL", "TERM"}
+
 
 def _run_sandbox_setup(backend: SandboxBackendProtocol, setup_script_path: str) -> None:
     """Run users setup script in sandbox with env var expansion.
@@ -20,7 +24,15 @@ def _run_sandbox_setup(backend: SandboxBackendProtocol, setup_script_path: str) 
         backend: Sandbox backend instance
         setup_script_path: Path to setup script file
     """
-    script_path = Path(setup_script_path)
+    script_path = Path(setup_script_path).resolve()
+
+    # Prevent path traversal - script must be under current working directory or home
+    cwd = Path.cwd().resolve()
+    home = Path.home().resolve()
+    if not (script_path.is_relative_to(cwd) or script_path.is_relative_to(home)):
+        msg = f"Setup script must be under working directory or home: {setup_script_path}"
+        raise ValueError(msg)
+
     if not script_path.exists():
         msg = f"Setup script not found: {setup_script_path}"
         raise FileNotFoundError(msg)
@@ -30,9 +42,10 @@ def _run_sandbox_setup(backend: SandboxBackendProtocol, setup_script_path: str) 
     # Read script content
     script_content = script_path.read_text()
 
-    # Expand ${VAR} syntax using local environment
+    # Expand ${VAR} syntax using only allowlisted environment variables
     template = string.Template(script_content)
-    expanded_script = template.safe_substitute(os.environ)
+    safe_env = {k: v for k, v in os.environ.items() if k in _ALLOWED_SETUP_VARS}
+    expanded_script = template.safe_substitute(safe_env)
 
     # Execute in sandbox with 5-minute timeout
     result = backend.execute(f"bash -c {shlex.quote(expanded_script)}")

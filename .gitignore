@@ -99,3 +99,8 @@ dmypy.json
 
 # Claude Related files 
 .claude
+
+# LangSmith traces (temporary)
+traces/
+error_traces/
+langsmith.json

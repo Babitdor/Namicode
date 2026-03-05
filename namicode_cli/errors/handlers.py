@@ -227,6 +227,235 @@ class CommandNotFoundRecovery:
         )
 
 
+class ImportErrorRecovery:
+    """Recover from import errors."""
+
+    def can_handle(self, error: RecoverableError) -> bool:
+        """Check if this is an import error."""
+        return error.category == ErrorCategory.IMPORT_ERROR
+
+    async def recover(self, error: RecoverableError) -> RecoveryResult:
+        """Suggest installing missing packages or fixing imports.
+
+        Args:
+            error: The import error
+
+        Returns:
+            Recovery result with installation suggestions
+        """
+        module = error.context.get("module", "")
+        import_line = error.context.get("import_line", "")
+
+        suggestion = (
+            f"Module not found: {module}\n\n"
+            "Possible fixes:\n"
+            f"1. Install the package: `pip install {module}`\n"
+            "2. Check if you're in the correct virtual environment\n"
+            "3. Verify the import statement spelling\n"
+            "4. Check if the module is in the same directory"
+        )
+
+        return RecoveryResult(
+            success=False,
+            message=f"Import error: {module}",
+            suggestion=suggestion,
+        )
+
+
+class TypeErrorRecovery:
+    """Recover from type errors."""
+
+    def can_handle(self, error: RecoverableError) -> bool:
+        """Check if this is a type error."""
+        return error.category == ErrorCategory.TYPE_ERROR
+
+    async def recover(self, error: RecoverableError) -> RecoveryResult:
+        """Suggest fixing type mismatches.
+
+        Args:
+            error: The type error
+
+        Returns:
+            Recovery result with type fix suggestions
+        """
+        expected_type = error.context.get("expected_type", "")
+        actual_type = error.context.get("actual_type", "")
+        function_name = error.context.get("function", "")
+
+        suggestion = (
+            f"Type mismatch: expected {expected_type}, got {actual_type}\n\n"
+            "To fix:\n"
+            "1. Check function signature for expected argument types\n"
+            "2. Convert the value to the correct type\n"
+            "3. Use type hints to understand expected types\n"
+            "4. Run type checker: `check_types(path)`"
+        )
+
+        return RecoveryResult(
+            success=False,
+            message=f"Type error in {function_name}" if function_name else "Type error",
+            suggestion=suggestion,
+        )
+
+
+class TestFailureRecovery:
+    """Recover from test failures."""
+
+    def can_handle(self, error: RecoverableError) -> bool:
+        """Check if this is a test failure."""
+        return error.category == ErrorCategory.TEST_FAILURE
+
+    async def recover(self, error: RecoverableError) -> RecoveryResult:
+        """Analyze test failure and suggest fixes.
+
+        Args:
+            error: The test failure
+
+        Returns:
+            Recovery result with test fix suggestions
+        """
+        test_name = error.context.get("test_name", "")
+        assertion = error.context.get("assertion", "")
+
+        suggestion = (
+            f"Test failed: {test_name}\n\n"
+            f"Assertion: {assertion}\n\n"
+            "To fix:\n"
+            "1. Read the test file to understand expected behavior\n"
+            "2. Check the assertion message for details\n"
+            "3. Compare expected vs actual values\n"
+            "4. Fix the underlying code, not the test (unless test is wrong)"
+        )
+
+        return RecoveryResult(
+            success=False,
+            message=f"Test failure: {test_name}",
+            suggestion=suggestion,
+        )
+
+
+class DependencyErrorRecovery:
+    """Recover from dependency errors."""
+
+    def can_handle(self, error: RecoverableError) -> bool:
+        """Check if this is a dependency error."""
+        return error.category == ErrorCategory.DEPENDENCY_ERROR
+
+    async def recover(self, error: RecoverableError) -> RecoveryResult:
+        """Suggest resolving dependency issues.
+
+        Args:
+            error: The dependency error
+
+        Returns:
+            Recovery result with dependency resolution suggestions
+        """
+        package = error.context.get("package", "")
+        version_conflict = error.context.get("version_conflict", False)
+
+        if version_conflict:
+            suggestion = (
+                f"Version conflict for {package}\n\n"
+                "To fix:\n"
+                "1. Check current versions: `pip list | grep {package}`\n"
+                "2. Update package: `pip install --upgrade {package}`\n"
+                "3. Reinstall dependencies: `pip install -r requirements.txt --force-reinstall`\n"
+                "4. Use virtual environment to isolate dependencies"
+            )
+        else:
+            suggestion = (
+                f"Missing dependency: {package}\n\n"
+                "To fix:\n"
+                f"1. Install missing dependency: `pip install {package}`\n"
+                "2. Or install all dependencies: `pip install -r requirements.txt`"
+            )
+
+        return RecoveryResult(
+            success=False,
+            message=f"Dependency error: {package}",
+            suggestion=suggestion,
+        )
+
+
+class ConfigurationErrorRecovery:
+    """Recover from configuration errors."""
+
+    def can_handle(self, error: RecoverableError) -> bool:
+        """Check if this is a configuration error."""
+        return error.category == ErrorCategory.CONFIGURATION_ERROR
+
+    async def recover(self, error: RecoverableError) -> RecoveryResult:
+        """Suggest fixing configuration issues.
+
+        Args:
+            error: The configuration error
+
+        Returns:
+            Recovery result with configuration fix suggestions
+        """
+        config_file = error.context.get("config_file", "")
+        env_var = error.context.get("env_var", "")
+
+        if env_var:
+            suggestion = (
+                f"Missing environment variable: {env_var}\n\n"
+                "To fix:\n"
+                f"1. Set the environment variable: `export {env_var}=value`\n"
+                "2. Or add to .env file: `echo '{env_var}=value' >> .env`\n"
+                "3. Or run: `nami secrets set {env_var.lower()}`"
+            )
+        else:
+            suggestion = (
+                f"Configuration error in {config_file}\n\n"
+                "To fix:\n"
+                "1. Check configuration file syntax\n"
+                "2. Verify required fields are present\n"
+                "3. Check file permissions\n"
+                "4. Look for example configuration files"
+            )
+
+        return RecoveryResult(
+            success=False,
+            message=f"Configuration error: {env_var or config_file}",
+            suggestion=suggestion,
+        )
+
+
+class TimeoutErrorRecovery:
+    """Recover from timeout errors."""
+
+    def can_handle(self, error: RecoverableError) -> bool:
+        """Check if this is a timeout error."""
+        return error.category == ErrorCategory.TIMEOUT_ERROR
+
+    async def recover(self, error: RecoverableError) -> RecoveryResult:
+        """Suggest handling timeouts.
+
+        Args:
+            error: The timeout error
+
+        Returns:
+            Recovery result with timeout handling suggestions
+        """
+        operation = error.context.get("operation", "operation")
+
+        suggestion = (
+            f"Operation timed out: {operation}\n\n"
+            "To fix:\n"
+            "1. Increase timeout if the operation legitimately needs more time\n"
+            "2. Break the operation into smaller chunks\n"
+            "3. Use pagination for large data operations\n"
+            "4. Check for infinite loops or performance issues\n"
+            "5. Consider async/parallel processing"
+        )
+
+        return RecoveryResult(
+            success=False,
+            message=f"Timeout: {operation}",
+            suggestion=suggestion,
+        )
+
+
 class ErrorHandler:
     """Central error handler with recovery strategies.
 
@@ -242,6 +471,12 @@ class ErrorHandler:
             NetworkErrorRecovery(),
             PermissionDeniedRecovery(),
             CommandNotFoundRecovery(),
+            ImportErrorRecovery(),
+            TypeErrorRecovery(),
+            TestFailureRecovery(),
+            DependencyErrorRecovery(),
+            ConfigurationErrorRecovery(),
+            TimeoutErrorRecovery(),
         ]
 
     def classify_error(self, error: Exception, context: dict | None = None) -> RecoverableError:
@@ -288,8 +523,47 @@ class ErrorHandler:
                 user_message=f"Command not found: {context.get('command', 'unknown')}",
             )
 
+        # Import errors
+        if "import" in error_str and ("not found" in error_str or "no module" in error_str):
+            return RecoverableError(
+                category=ErrorCategory.IMPORT_ERROR,
+                original_error=error,
+                context=context,
+                recovery_suggestion="Install missing package or fix import statement",
+                user_message=f"Import error: {context.get('module', 'unknown module')}",
+            )
+
+        # Type errors
+        if "type" in error_str and ("error" in error_str or "mismatch" in error_str):
+            return RecoverableError(
+                category=ErrorCategory.TYPE_ERROR,
+                original_error=error,
+                context=context,
+                recovery_suggestion="Check function signature and argument types",
+                user_message=f"Type error: {error}",
+            )
+
+        # Test failures
+        if "assertion" in error_str or "test failed" in error_str:
+            return RecoverableError(
+                category=ErrorCategory.TEST_FAILURE,
+                original_error=error,
+                context=context,
+                recovery_suggestion="Read test output and fix underlying code",
+                user_message=f"Test failure: {context.get('test_name', 'unknown test')}",
+            )
+
         # Network errors
         if any(x in error_str for x in ["timeout", "connection", "network", "unreachable"]):
+            # Distinguish timeout from other network errors
+            if "timeout" in error_str:
+                return RecoverableError(
+                    category=ErrorCategory.TIMEOUT_ERROR,
+                    original_error=error,
+                    context=context,
+                    recovery_suggestion="Increase timeout or optimize operation",
+                    user_message=f"Operation timed out: {context.get('operation', 'unknown')}",
+                )
             return RecoverableError(
                 category=ErrorCategory.NETWORK_ERROR,
                 original_error=error,
@@ -316,6 +590,26 @@ class ErrorHandler:
                 context=context,
                 recovery_suggestion="Check code syntax and fix issues",
                 user_message=f"Syntax error: {error}",
+            )
+
+        # Dependency errors
+        if "dependency" in error_str or "version" in error_str and "conflict" in error_str:
+            return RecoverableError(
+                category=ErrorCategory.DEPENDENCY_ERROR,
+                original_error=error,
+                context=context,
+                recovery_suggestion="Resolve dependency version conflicts",
+                user_message=f"Dependency error: {context.get('package', 'unknown package')}",
+            )
+
+        # Configuration errors
+        if "config" in error_str or "environment" in error_str and "variable" in error_str:
+            return RecoverableError(
+                category=ErrorCategory.CONFIGURATION_ERROR,
+                original_error=error,
+                context=context,
+                recovery_suggestion="Check configuration and environment variables",
+                user_message=f"Configuration error: {context.get('config_file', context.get('env_var', 'unknown'))}",
             )
 
         # Generic tool error

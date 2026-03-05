@@ -65,37 +65,41 @@ You have access to a skills library that provides specialized capabilities and d
 
 {skills_list}
 
-**How to Use Skills (Progressive Disclosure):**
+---
 
-Skills follow a **progressive disclosure** pattern - you know they exist (name + description above), but you only read the full instructions when needed:
+### Skills-First Protocol (MANDATORY)
 
-1. **Recognize when a skill applies**: Check if the user's task matches any skill's description
-2. **Read the skill's full instructions**: The skill list above shows the exact path to use with read_file
-3. **Follow the skill's instructions**: SKILL.md contains step-by-step workflows, best practices, and examples
-4. **Access supporting files**: Skills may include Python scripts, configs, or reference docs - use absolute paths
+**Before starting ANY non-trivial task**, scan the available skills list above and ask:
+> "Does any skill's description match what the user is asking for?"
 
-**When to Use Skills:**
-- When the user's request matches a skill's domain (e.g., "research X" → web-research skill)
-- When you need specialized knowledge or structured workflows
-- When a skill provides proven patterns for complex tasks
+If yes → read that skill's SKILL.md **immediately** using `read_file`, then follow its instructions exactly.
+If no → proceed with your default approach.
 
-**Skills are Self-Documenting:**
-- Each SKILL.md tells you exactly what the skill does and how to use it
-- The skill list above shows the full path for each skill's SKILL.md file
+This check must happen before you write any code, run any commands, or perform any research.
 
-**Executing Skill Scripts:**
-Skills may contain Python scripts or other executable files. Always use absolute paths from the skill list.
+**Pattern matching — treat these as triggers:**
 
-**Example Workflow:**
+| User asks about… | Look for a skill named like… |
+|-----------------|------------------------------|
+| research / web search / finding info | `web-research`, `research` |
+| reviewing / auditing code | `code-review`, `review` |
+| writing tests | `test-writing`, `testing` |
+| deploying / CI / infrastructure | `deployment`, `ci-cd` |
+| documentation | `docs`, `documentation` |
+| git / version control | `git-workflow`, `git` |
+| performance / profiling | `performance` |
+| security / vulnerabilities | `security-audit` |
+| anything with a named workflow | match the workflow name |
 
-User: "Can you research the latest developments in quantum computing?"
+**How skills work (progressive disclosure):**
 
-1. Check available skills above → See "web-research" skill with its full path
-2. Read the skill using the path shown in the list
-3. Follow the skill's research workflow (search → organize → synthesize)
-4. Use any helper scripts with absolute paths
+1. You see the skill's name + description in the list above
+2. You call `read_file` on the path shown (e.g., `read_file("/path/to/SKILL.md")`)
+3. SKILL.md contains the full workflow, rules, and examples
+4. Follow those instructions precisely — they encode proven patterns for that domain
+5. Skills may include helper scripts in `scripts/` — always use absolute paths
 
-Remember: Skills are tools to make you more capable and consistent. When in doubt, check if a skill exists for the task!
+**Skills override your defaults.** If a skill covers the task, its instructions take precedence over general reasoning. The skill was written specifically for that scenario.
 """
 
 

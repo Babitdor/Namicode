@@ -1,6 +1,8 @@
 """Path approval system for controlling access to directories."""
 
 import json
+import os
+import warnings
 from pathlib import Path
 from typing import Optional
 
@@ -19,22 +21,65 @@ class PathApprovalManager:
         self.config_file = self.config_dir / "approved_paths.json"
         self._approved_paths = self._load_approved_paths()
 
+    def _check_file_permissions(self) -> bool:
+        """Check if config file has secure permissions.
+
+        Returns:
+            True if permissions are secure, False otherwise
+        """
+        if not self.config_file.exists():
+            return True
+
+        try:
+            mode = os.stat(self.config_file).st_mode
+            # Check if group or others have any permissions
+            if mode & 0o077:
+                return False
+        except OSError:
+            pass
+        return True
+
     def _load_approved_paths(self) -> dict:
         """Load approved paths from config file."""
         if not self.config_file.exists():
             return {}
 
+        # Check file permissions
+        if not self._check_file_permissions():
+            warnings.warn(
+                f"{self.config_file} has insecure permissions (group/other readable). "
+                "Run 'chmod 600' to fix.",
+                UserWarning,
+            )
+
         try:
             with open(self.config_file, "r") as f:
-                return json.load(f)
+                data = json.load(f)
+                # Validate loaded paths
+                validated = {}
+                for path_str, config in data.items():
+                    try:
+                        path = Path(path_str)
+                        if path.exists():
+                            validated[path_str] = config
+                    except Exception:
+                        # Skip invalid paths
+                        continue
+                return validated
         except Exception:
             return {}
 
     def _save_approved_paths(self) -> None:
-        """Save approved paths to config file."""
+        """Save approved paths to config file with secure permissions."""
         self.config_dir.mkdir(parents=True, exist_ok=True)
         with open(self.config_file, "w") as f:
             json.dump(self._approved_paths, f, indent=2)
+
+        # Set secure permissions (owner read/write only)
+        try:
+            os.chmod(self.config_file, 0o600)
+        except OSError:
+            pass  # Windows doesn't support Unix permissions
 
     def is_path_approved(self, path: Path) -> bool:
         """Check if a path is approved for access.

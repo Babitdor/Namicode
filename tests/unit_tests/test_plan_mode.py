@@ -29,8 +29,9 @@ class TestPlanModeMiddleware:
         middleware = PlanModeMiddleware()
         assert middleware.enabled_by_default is False
         assert middleware.include_system_prompt is True
-        assert len(middleware.tools) == 1
-        assert middleware.tools[0].name == "ask_question"
+        assert len(middleware.tools) == 2
+        tool_names = {t.name for t in middleware.tools}
+        assert tool_names == {"ask_question", "exit_plan_mode"}
 
     def test_middleware_initialization_enabled(self):
         """Test middleware can start with plan mode enabled."""
@@ -109,7 +110,11 @@ class TestModifyRequest:
 
         request.override.assert_called_once()
         call_kwargs = request.override.call_args
-        system_prompt = call_kwargs.kwargs.get("system_prompt") or call_kwargs.args[0] if call_kwargs.args else None
+        system_prompt = (
+            call_kwargs.kwargs.get("system_prompt") or call_kwargs.args[0]
+            if call_kwargs.args
+            else None
+        )
 
         # The system_prompt should contain ASK_QUESTION_SYSTEM_PROMPT
         if system_prompt is None:
@@ -146,9 +151,7 @@ class TestQuestionPromptUI:
     @pytest.mark.asyncio
     async def test_handle_agent_question_routes_structured(self):
         """Test routing to structured question handler."""
-        with patch(
-            "namicode_cli.ui.question_prompt.prompt_for_structured_question"
-        ) as mock:
+        with patch("namicode_cli.ui.question_prompt.prompt_for_structured_question") as mock:
             mock.return_value = QuestionResponse(answer="Option A", selected_index=0)
 
             result = await handle_agent_question(
@@ -166,9 +169,7 @@ class TestQuestionPromptUI:
     @pytest.mark.asyncio
     async def test_handle_agent_question_routes_open_ended(self):
         """Test routing to open-ended question handler."""
-        with patch(
-            "namicode_cli.ui.question_prompt.prompt_for_open_question"
-        ) as mock:
+        with patch("namicode_cli.ui.question_prompt.prompt_for_open_question") as mock:
             mock.return_value = QuestionResponse(answer="My answer", selected_index=None)
 
             result = await handle_agent_question(
@@ -185,9 +186,7 @@ class TestQuestionPromptUI:
     @pytest.mark.asyncio
     async def test_handle_agent_question_defaults_to_open_ended(self):
         """Test defaults to open-ended when no type specified."""
-        with patch(
-            "namicode_cli.ui.question_prompt.prompt_for_open_question"
-        ) as mock:
+        with patch("namicode_cli.ui.question_prompt.prompt_for_open_question") as mock:
             mock.return_value = QuestionResponse(answer="Answer", selected_index=None)
 
             result = await handle_agent_question(
@@ -201,9 +200,7 @@ class TestQuestionPromptUI:
     @pytest.mark.asyncio
     async def test_handle_agent_question_structured_without_options(self):
         """Test structured question without options falls back to open-ended."""
-        with patch(
-            "namicode_cli.ui.question_prompt.prompt_for_open_question"
-        ) as mock:
+        with patch("namicode_cli.ui.question_prompt.prompt_for_open_question") as mock:
             mock.return_value = QuestionResponse(answer="Answer", selected_index=None)
 
             result = await handle_agent_question(
@@ -283,5 +280,104 @@ class TestSystemPrompts:
     def test_ask_question_prompt_content(self):
         """Test ask_question prompt has expected content."""
         assert "ask_question" in ASK_QUESTION_SYSTEM_PROMPT
-        assert "Structured" in ASK_QUESTION_SYSTEM_PROMPT or "structured" in ASK_QUESTION_SYSTEM_PROMPT
-        assert "Open-ended" in ASK_QUESTION_SYSTEM_PROMPT or "open-ended" in ASK_QUESTION_SYSTEM_PROMPT
+        assert (
+            "Structured" in ASK_QUESTION_SYSTEM_PROMPT or "structured" in ASK_QUESTION_SYSTEM_PROMPT
+        )
+        assert (
+            "Open-ended" in ASK_QUESTION_SYSTEM_PROMPT or "open-ended" in ASK_QUESTION_SYSTEM_PROMPT
+        )
+
+
+class TestComplexityAnalysis:
+    """Tests for complexity analysis."""
+
+    def test_simple_task_no_planning(self):
+        """Simple tasks should not trigger planning."""
+        from nami_deepagents.middleware.planning import analyze_complexity
+
+        result = analyze_complexity("Fix the bug in main.py")
+        assert result.should_plan is False
+        assert result.score == 0.0
+
+    def test_complex_task_triggers_planning(self):
+        """Complex tasks should trigger planning."""
+        from nami_deepagents.middleware.planning import analyze_complexity
+
+        result = analyze_complexity("Implement user authentication and add tests")
+        assert result.should_plan is True
+        assert result.score > 0.0
+
+    def test_keyword_detection(self):
+        """Keywords should increase complexity score."""
+        from nami_deepagents.middleware.planning import analyze_complexity
+
+        result = analyze_complexity("Implement a new feature")
+        assert "implement" in result.factors[0].lower()
+        assert result.score > 0.0
+
+    def test_step_detection(self):
+        """Multiple steps should increase complexity score."""
+        from nami_deepagents.middleware.planning import analyze_complexity
+
+        result = analyze_complexity("First read the file, then modify it, and finally test it")
+        assert any("step" in f.lower() for f in result.factors)
+
+    def test_file_mentions(self):
+        """Multiple file mentions should increase complexity."""
+        from nami_deepagents.middleware.planning import analyze_complexity
+
+        result = analyze_complexity("Update main.py, config.yaml, and utils.py")
+        assert any("file" in f.lower() for f in result.factors)
+
+    def test_refactor_keyword(self):
+        """Refactor keyword should trigger planning."""
+        from nami_deepagents.middleware.planning import analyze_complexity
+
+        result = analyze_complexity("Refactor the authentication module")
+        assert result.should_plan is True
+
+    def test_short_simple_request(self):
+        """Short simple requests should not trigger planning."""
+        from nami_deepagents.middleware.planning import analyze_complexity
+
+        result = analyze_complexity("Read the file")
+        assert result.should_plan is False
+
+
+class TestToolBlocking:
+    """Tests for tool blocking in plan mode."""
+
+    def test_blocked_tools_const(self):
+        """Test blocked tools constant is defined."""
+        from nami_deepagents.middleware.planning import BLOCKED_TOOLS_IN_PLAN_MODE
+
+        assert "write_file" in BLOCKED_TOOLS_IN_PLAN_MODE
+        assert "edit_file" in BLOCKED_TOOLS_IN_PLAN_MODE
+        assert "execute_bash" in BLOCKED_TOOLS_IN_PLAN_MODE
+        assert "run_tests" in BLOCKED_TOOLS_IN_PLAN_MODE
+
+    def test_allowed_tools_const(self):
+        """Test allowed tools constant is defined."""
+        from nami_deepagents.middleware.planning import ALLOWED_TOOLS_IN_PLAN_MODE
+
+        assert "read_file" in ALLOWED_TOOLS_IN_PLAN_MODE
+        assert "ls" in ALLOWED_TOOLS_IN_PLAN_MODE
+        assert "glob" in ALLOWED_TOOLS_IN_PLAN_MODE
+        assert "write_todos" in ALLOWED_TOOLS_IN_PLAN_MODE
+        assert "ask_question" in ALLOWED_TOOLS_IN_PLAN_MODE
+
+    def test_no_overlap_blocked_allowed(self):
+        """Test no overlap between blocked and allowed tools."""
+        from nami_deepagents.middleware.planning import (
+            BLOCKED_TOOLS_IN_PLAN_MODE,
+            ALLOWED_TOOLS_IN_PLAN_MODE,
+        )
+
+        overlap = BLOCKED_TOOLS_IN_PLAN_MODE & ALLOWED_TOOLS_IN_PLAN_MODE
+        assert len(overlap) == 0, f"Found overlap: {overlap}"
+
+    def test_middleware_has_exit_plan_mode_tool(self):
+        """Test middleware provides exit_plan_mode tool."""
+        middleware = PlanModeMiddleware()
+        tool_names = {t.name for t in middleware.tools}
+        assert "exit_plan_mode" in tool_names

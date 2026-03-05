@@ -4,7 +4,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, NotRequired, TypedDict, cast
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import HumanInTheLoopMiddleware, InterruptOnConfig
+from langchain.agents.middleware import InterruptOnConfig
 from langchain.agents.middleware.types import (
     AgentMiddleware,
     ModelRequest,
@@ -72,16 +72,16 @@ class CompiledSubAgent(TypedDict):
 _subagent_colors: dict[str, str] = {}
 
 
-def get_subagent_color(name: str) -> str | None:
+def get_subagent_color(name: str) -> str:
     """Get the color for a subagent by name.
 
     Args:
         name: The name of the subagent.
 
     Returns:
-        The color string (hex or name), or None if not set.
+        The color string (hex or name). Returns gray (#888888) if not set.
     """
-    return _subagent_colors.get(name)
+    return _subagent_colors.get(name, "#888888")
 
 
 def set_subagent_color(name: str, color: str) -> None:
@@ -112,6 +112,9 @@ DEFAULT_SUBAGENT_PROMPT = "In order to complete the objective that the user asks
 
 # State keys that should be excluded when passing state to subagents
 _EXCLUDED_STATE_KEYS = ("messages", "todos")
+
+# Maximum content length for subagent response truncation
+_MAX_SUBAGENT_CONTENT_LENGTH = 2000
 
 TASK_TOOL_DESCRIPTION = """Launch an ephemeral subagent to handle complex, multi-step independent tasks with isolated context windows.
 
@@ -227,29 +230,33 @@ TASK_SYSTEM_PROMPT = """## `task` (subagent spawner)
 
 You have access to a `task` tool to launch short-lived subagents that handle isolated tasks. These agents are ephemeral — they live only for the duration of the task and return a single result.
 
-When to use the task tool:
-- When a task is complex and multi-step, and can be fully delegated in isolation
-- When a task is independent of other tasks and can run in parallel
-- When a task requires focused reasoning or heavy token/context usage that would bloat the orchestrator thread
-- When sandboxing improves reliability (e.g. code execution, structured searches, data formatting)
-- When you only care about the output of the subagent, and not the intermediate steps (ex. performing a lot of research and then returned a synthesized report, performing a series of computations or lookups to achieve a concise, relevant answer.)
+**Default stance: lean toward delegation.** If a task has 3+ steps, involves multiple files, or matches a specialist agent's domain, delegate it rather than doing it inline. The cost of spawning a subagent is low; chaining dozens of intermediate tool calls in the main thread is expensive and degrades response quality.
+
+When to use the task tool (strongly prefer these):
+- **Codebase exploration**: Any research task requiring 3+ searches or 3+ file reads — use a subagent instead of chaining glob/grep/read yourself
+- **Complex multi-step work**: Bug diagnosis, feature implementation, test writing, security audit — anything with 5+ steps
+- **Parallel independent tasks**: Two or more tasks that don't share state — spawn them simultaneously
+- **Context isolation**: Research that would flood the main thread with intermediate results
+- **Specialist work**: When a named specialist agent covers the domain exactly
 
 Subagent lifecycle:
-1. **Spawn** → Provide clear role, instructions, and expected output
+1. **Spawn** → Provide clear role, complete context, and exact expected output format
 2. **Run** → The subagent completes the task autonomously
 3. **Return** → The subagent provides a single structured result
-4. **Reconcile** → Incorporate or synthesize the result into the main thread
+4. **Reconcile** → You integrate the result and synthesize the final response
 
 When NOT to use the task tool:
-- If you need to see the intermediate reasoning or steps after the subagent has completed (the task tool hides them)
-- If the task is trivial (a few tool calls or simple lookup)
-- If delegating does not reduce token usage, complexity, or context switching
-- If splitting would add latency without benefit
+- The task is completable in 1–2 tool calls (simple lookup, reading one file, one-line fix)
+- You already have all needed context in the current conversation
+- Steps are sequentially dependent and can't be parallelized
 
-## Important Task Tool Usage Notes to Remember
-- Whenever possible, parallelize the work that you do. This is true for both tool_calls, and for tasks. Whenever you have independent steps to complete - make tool_calls, or kick off tasks (subagents) in parallel to accomplish them faster. This saves time for the user, which is incredibly important.
-- Remember to use the `task` tool to silo independent tasks within a multi-part objective.
-- You should use the `task` tool whenever you have a complex task that will take multiple steps, and is independent from other tasks that the agent needs to complete. These agents are highly competent and efficient."""  # noqa: E501
+## Critical parallelism rule
+**Whenever you have independent steps — always spawn them in parallel.** This is non-negotiable. Parallel subagents complete in the same wall time as one, saving the user significant time.
+
+Correct: spawn all independent subagents in a single `task` batch call.
+Wrong: spawn one, wait for it, spawn the next.
+
+Subagents are highly capable and will produce thorough, well-structured results. Trust them with complex work."""  # noqa: E501
 
 
 DEFAULT_GENERAL_PURPOSE_DESCRIPTION = "General-purpose agent for researching complex questions, searching for files and content, and executing multi-step tasks. When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries use this agent to perform the search for you. This agent has access to all tools as the main agent."  # noqa: E501
@@ -260,7 +267,7 @@ def _get_subagents(
     default_model: str | BaseChatModel,
     default_tools: Sequence[BaseTool | Callable | dict[str, Any]],
     default_middleware: list[AgentMiddleware] | None,
-    default_interrupt_on: dict[str, bool | InterruptOnConfig] | None,
+    _default_interrupt_on: dict[str, bool | InterruptOnConfig] | None,  # Deprecated: subagents auto-approve
     subagents: list[SubAgent | CompiledSubAgent],
     general_purpose_agent: bool,
 ) -> tuple[dict[str, Any], list[str]]:
@@ -271,8 +278,7 @@ def _get_subagents(
         default_tools: Default tools for subagents that don't specify tools.
         default_middleware: Middleware to apply to all subagents. If `None`,
             no default middleware is applied.
-        default_interrupt_on: The tool configs to use for the default general-purpose subagent. These
-            are also the fallback for any subagents that don't specify their own tool configs.
+        _default_interrupt_on: Deprecated - subagents always auto-approve. Kept for API compatibility.
         subagents: List of agent specifications or pre-compiled agents.
         general_purpose_agent: Whether to include a general-purpose subagent.
 
@@ -287,22 +293,17 @@ def _get_subagents(
     subagent_descriptions = []
 
     # Create general-purpose agent if enabled
+    # NOTE: Subagents never have HITL middleware - they auto-approve all operations
+    # The main agent handles user approvals; subagents execute autonomously
     if general_purpose_agent:
-        general_purpose_middleware = [*default_subagent_middleware]
-        if default_interrupt_on:
-            general_purpose_middleware.append(
-                HumanInTheLoopMiddleware(interrupt_on=default_interrupt_on)
-            )
         general_purpose_subagent = create_agent(
             default_model,
             system_prompt=DEFAULT_SUBAGENT_PROMPT,
             tools=default_tools,
-            middleware=general_purpose_middleware,
+            middleware=[*default_subagent_middleware],  # No HITL for subagents
         )
         agents["general-purpose"] = general_purpose_subagent
-        subagent_descriptions.append(
-            f"- general-purpose: {DEFAULT_GENERAL_PURPOSE_DESCRIPTION}"
-        )
+        subagent_descriptions.append(f"- general-purpose: {DEFAULT_GENERAL_PURPOSE_DESCRIPTION}")
         # Register default color for general-purpose agent
         set_subagent_color("general-purpose", "#30c3f0")  # Default cyan/blue
 
@@ -320,15 +321,9 @@ def _get_subagents(
 
         subagent_model = agent_.get("model", default_model)
 
-        _middleware = (
-            [*default_subagent_middleware, *agent_["middleware"]]
-            if "middleware" in agent_
-            else [*default_subagent_middleware]
-        )
-
-        interrupt_on = agent_.get("interrupt_on", default_interrupt_on)
-        if interrupt_on:
-            _middleware.append(HumanInTheLoopMiddleware(interrupt_on=interrupt_on))
+        # NOTE: Subagents never have HITL middleware - they auto-approve all operations
+        _middleware = [*default_subagent_middleware, *agent_["middleware"]] if "middleware" in agent_ else [*default_subagent_middleware]
+        # interrupt_on config is ignored for subagents - they always auto-approve
 
         agents[agent_["name"]] = create_agent(
             subagent_model,
@@ -344,7 +339,7 @@ def _create_task_tool(
     default_model: str | BaseChatModel,
     default_tools: Sequence[BaseTool | Callable | dict[str, Any]],
     default_middleware: list[AgentMiddleware] | None,
-    default_interrupt_on: dict[str, bool | InterruptOnConfig] | None,
+    default_interrupt_on: dict[str, bool | InterruptOnConfig] | None,  # Deprecated: subagents auto-approve
     subagents: list[SubAgent | CompiledSubAgent],
     general_purpose_agent: bool,
     task_description: str | None = None,
@@ -355,8 +350,7 @@ def _create_task_tool(
         default_model: Default model for subagents.
         default_tools: Default tools for subagents.
         default_middleware: Middleware to apply to all subagents.
-        default_interrupt_on: The tool configs to use for the default general-purpose subagent. These
-            are also the fallback for any subagents that don't specify their own tool configs.
+        default_interrupt_on: Deprecated - subagents always auto-approve. Kept for API compatibility.
         subagents: List of subagent specifications.
         general_purpose_agent: Whether to include general-purpose agent.
         task_description: Custom description for the task tool. If `None`,
@@ -369,47 +363,165 @@ def _create_task_tool(
         default_model=default_model,
         default_tools=default_tools,
         default_middleware=default_middleware,
-        default_interrupt_on=default_interrupt_on,
+        _default_interrupt_on=default_interrupt_on,  # Deprecated: subagents auto-approve
         subagents=subagents,
         general_purpose_agent=general_purpose_agent,
     )
     subagent_description_str = "\n".join(subagent_descriptions)
 
     def _return_command_with_state_update(result: dict, tool_call_id: str) -> Command:
-        state_update = {
-            k: v for k, v in result.items() if k not in _EXCLUDED_STATE_KEYS
-        }
+        """Return a Command with state update and ToolMessage from subagent result.
+
+        Handles edge cases:
+        - Empty messages list
+        - Last message not having text attribute
+        - AIMessage with empty text (reasoning-only, tool-calls-only)
+        - Missing messages key
+
+        Args:
+            result: The subagent result dict containing messages and state.
+            tool_call_id: The tool call ID for the ToolMessage.
+
+        Returns:
+            Command with state update and ToolMessage.
+        """
+        state_update = {k: v for k, v in result.items() if k not in _EXCLUDED_STATE_KEYS}
+
+        # Extract messages safely
+        messages = result.get("messages", [])
+
+        if not messages:
+            # No messages at all - return placeholder
+            text_content = "[Subagent completed but returned no response]"
+        else:
+            # Use the last message (same as original behavior)
+            last_message = messages[-1]
+
+            # Try to get text content from the message
+            # AIMessage and HumanMessage have .text property
+            # ToolMessage has .content attribute
+            if hasattr(last_message, "text"):
+                text_content = last_message.text
+
+                # If AIMessage text is empty, check for content_blocks
+                if not text_content and hasattr(last_message, "content_blocks"):
+                    text_parts = [block.get("text", "") for block in last_message.content_blocks if block.get("type") == "text"]
+                    text_content = " ".join(text_parts)
+
+                # If still empty, check for tool_calls as indicator
+                if not text_content:
+                    if hasattr(last_message, "tool_calls") and last_message.tool_calls:
+                        text_content = "[Subagent made tool calls but provided no text response]"
+                    else:
+                        text_content = "[Subagent returned empty response]"
+            elif hasattr(last_message, "content"):
+                # ToolMessage or other message with content attribute
+                text_content = str(last_message.content)
+                # Truncate large content
+                if len(text_content) > _MAX_SUBAGENT_CONTENT_LENGTH:
+                    text_content = text_content[:_MAX_SUBAGENT_CONTENT_LENGTH] + "...[truncated]"
+            else:
+                # Fallback to string representation
+                text_content = str(last_message)
+
         return Command(
             update={
                 **state_update,
-                "messages": [
-                    ToolMessage(result["messages"][-1].text, tool_call_id=tool_call_id)
-                ],
+                "messages": [ToolMessage(text_content, tool_call_id=tool_call_id)],
             }
         )
 
-    def _validate_and_prepare_state(
-        subagent_type: str, description: str, runtime: ToolRuntime
-    ) -> tuple[Runnable, dict]:
+    subagent_description_str = "\n".join(subagent_descriptions)
+
+    def _return_command_with_state_update(result: dict, tool_call_id: str) -> Command:
+        """Return a Command with state update and ToolMessage from subagent result.
+
+        Handles edge cases:
+        - Empty messages list
+        - Last message not being AIMessage (could be ToolMessage)
+        - AIMessage with empty text (reasoning-only, tool-calls-only)
+        - Missing messages key
+
+        Args:
+            result: The subagent result dict containing messages and state.
+            tool_call_id: The tool call ID for the ToolMessage.
+
+        Returns:
+            Command with state update and ToolMessage.
+        """
+        state_update = {k: v for k, v in result.items() if k not in _EXCLUDED_STATE_KEYS}
+
+        # Extract messages safely
+        messages = result.get("messages", [])
+
+        # Find the last AIMessage (not ToolMessage, HumanMessage, etc.)
+        # The subagent should end with an AIMessage containing its final response
+        last_ai_message = None
+        for msg in reversed(messages):
+            if hasattr(msg, "type") and msg.type == "ai":
+                last_ai_message = msg
+                break
+
+        if last_ai_message is not None:
+            # Extract text from AIMessage
+            # .text property concatenates all text blocks, ignoring reasoning/tool blocks
+            text_content = last_ai_message.text
+
+            # If text is empty but content_blocks exist, try to extract from them
+            # This handles cases like reasoning-only responses or empty content
+            if not text_content and hasattr(last_ai_message, "content_blocks"):
+                text_parts = [block.get("text", "") for block in last_ai_message.content_blocks if block.get("type") == "text"]
+                text_content = " ".join(text_parts)
+
+            # If still empty, check for tool_calls as a fallback indicator
+            if not text_content:
+                # Check if there were tool calls but no text response
+                if hasattr(last_ai_message, "tool_calls") and last_ai_message.tool_calls:
+                    text_content = "[Subagent made tool calls but provided no text response]"
+                else:
+                    text_content = "[Subagent returned empty response]"
+        elif messages:
+            # Fallback: use last message if no AIMessage found
+            # This could happen if subagent ended with a ToolMessage
+            last_message = messages[-1]
+            if hasattr(last_message, "type") and last_message.type == "tool":
+                # Last message is a ToolMessage - extract its content
+                text_content = getattr(last_message, "content", str(last_message))
+                # Only use if content is meaningful
+                if isinstance(text_content, str) and text_content:
+                    text_content = text_content[:1000]  # Truncate large tool results
+                else:
+                    text_content = "[Subagent completed but returned no summary]"
+            else:
+                # Try to get text from any message type
+                text_content = getattr(last_message, "text", str(last_message))
+                if not text_content or text_content == str(last_message):
+                    text_content = "[Subagent completed but returned no summary]"
+        else:
+            # No messages at all - return error message
+            text_content = "[Subagent completed but returned no response]"
+
+        return Command(
+            update={
+                **state_update,
+                "messages": [ToolMessage(text_content, tool_call_id=tool_call_id)],
+            }
+        )
+
+    def _validate_and_prepare_state(subagent_type: str, description: str, runtime: ToolRuntime) -> tuple[Runnable, dict]:
         """Prepare state for invocation."""
         subagent = subagent_graphs[subagent_type]
         # Create a new state dict to avoid mutating the original
-        subagent_state = {
-            k: v for k, v in runtime.state.items() if k not in _EXCLUDED_STATE_KEYS
-        }
+        subagent_state = {k: v for k, v in runtime.state.items() if k not in _EXCLUDED_STATE_KEYS}
         subagent_state["messages"] = [HumanMessage(content=description)]
         return subagent, subagent_state
 
     # Use custom description if provided, otherwise use default template
     if task_description is None:
-        task_description = TASK_TOOL_DESCRIPTION.format(
-            available_agents=subagent_description_str
-        )
+        task_description = TASK_TOOL_DESCRIPTION.format(available_agents=subagent_description_str)
     elif "{available_agents}" in task_description:
         # If custom description has placeholder, format with agent descriptions
-        task_description = task_description.format(
-            available_agents=subagent_description_str
-        )
+        task_description = task_description.format(available_agents=subagent_description_str)
 
     def task(
         description: str,
@@ -419,9 +531,7 @@ def _create_task_tool(
         if subagent_type not in subagent_graphs:
             allowed_types = ", ".join([f"`{k}`" for k in subagent_graphs])
             return f"We cannot invoke subagent {subagent_type} because it does not exist, the only allowed types are {allowed_types}"
-        subagent, subagent_state = _validate_and_prepare_state(
-            subagent_type, description, runtime
-        )
+        subagent, subagent_state = _validate_and_prepare_state(subagent_type, description, runtime)
         result = subagent.invoke(subagent_state)
         if not runtime.tool_call_id:
             value_error_msg = "Tool call ID is required for subagent invocation"
@@ -436,9 +546,7 @@ def _create_task_tool(
         if subagent_type not in subagent_graphs:
             allowed_types = ", ".join([f"`{k}`" for k in subagent_graphs])
             return f"We cannot invoke subagent {subagent_type} because it does not exist, the only allowed types are {allowed_types}"
-        subagent, subagent_state = _validate_and_prepare_state(
-            subagent_type, description, runtime
-        )
+        subagent, subagent_state = _validate_and_prepare_state(subagent_type, description, runtime)
         result = await subagent.ainvoke(subagent_state)
         if not runtime.tool_call_id:
             value_error_msg = "Tool call ID is required for subagent invocation"
@@ -547,11 +655,7 @@ class SubAgentMiddleware(AgentMiddleware):
     ) -> ModelResponse:
         """Update the system prompt to include instructions on using subagents."""
         if self.system_prompt is not None:
-            system_prompt = (
-                request.system_prompt + "\n\n" + self.system_prompt
-                if request.system_prompt
-                else self.system_prompt
-            )
+            system_prompt = request.system_prompt + "\n\n" + self.system_prompt if request.system_prompt else self.system_prompt
             return handler(request.override(system_prompt=system_prompt))
         return handler(request)
 
@@ -562,10 +666,6 @@ class SubAgentMiddleware(AgentMiddleware):
     ) -> ModelResponse:
         """(async) Update the system prompt to include instructions on using subagents."""
         if self.system_prompt is not None:
-            system_prompt = (
-                request.system_prompt + "\n\n" + self.system_prompt
-                if request.system_prompt
-                else self.system_prompt
-            )
-            return await handler(request.override(system_prompt=system_prompt)) # type: ignore
+            system_prompt = request.system_prompt + "\n\n" + self.system_prompt if request.system_prompt else self.system_prompt
+            return await handler(request.override(system_prompt=system_prompt))  # type: ignore
         return await handler(request)

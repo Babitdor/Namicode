@@ -7,6 +7,7 @@ workflow for first-time setup.
 import json
 import os
 import stat
+from contextlib import contextmanager
 from getpass import getpass
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,20 @@ API_KEY_NAMES = {
     "e2b": "e2b_api_key",
     "replicate": "replicate_api_key",
 }
+
+
+@contextmanager
+def _temporary_env(key: str, value: str):
+    """Temporarily set an environment variable, restoring the original on exit."""
+    old = os.environ.get(key)
+    os.environ[key] = value
+    try:
+        yield
+    finally:
+        if old is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = old
 
 
 class SecretManager:
@@ -66,8 +81,17 @@ class SecretManager:
         """Create secrets.json with secure permissions if it doesn't exist."""
         if not self.FALLBACK_FILE.exists():
             self.FALLBACK_FILE.parent.mkdir(parents=True, exist_ok=True)
-            self.FALLBACK_FILE.write_text("{}", encoding="utf-8")
-            # Set restrictive permissions (owner read/write only)
+            if hasattr(os, "umask"):
+                # Set restrictive umask before creation to prevent brief
+                # window where file is world-readable (TOCTOU fix)
+                old_umask = os.umask(0o077)
+                try:
+                    self.FALLBACK_FILE.write_text("{}", encoding="utf-8")
+                finally:
+                    os.umask(old_umask)
+            else:
+                self.FALLBACK_FILE.write_text("{}", encoding="utf-8")
+            # Ensure restrictive permissions even if umask was bypassed
             if hasattr(os, "chmod"):
                 os.chmod(self.FALLBACK_FILE, stat.S_IRUSR | stat.S_IWUSR)
 
@@ -405,15 +429,14 @@ class OnboardingWizard:
             # For cloud providers, try to create model instance
             console.print(f"  → Testing {provider} connection... ", end="")
             try:
-                # Temporarily set API key in environment for testing
                 api_key = provider_config["api_key"]
-                os.environ[f"{provider.upper()}_API_KEY"] = api_key
+                env_key = f"{provider.upper()}_API_KEY"
+                with _temporary_env(env_key, api_key):
+                    # Try to create model using ModelManager
+                    from namicode_cli.config.model_manager import ModelManager
 
-                # Try to create model using ModelManager
-                from namicode_cli.config.model_manager import ModelManager
-
-                model_manager = ModelManager()
-                _ = model_manager.create_model_for_provider(provider)
+                    model_manager = ModelManager()
+                    _ = model_manager.create_model_for_provider(provider)
 
                 console.print("[green]✓[/green]")
             except Exception as e:  # noqa: BLE001
@@ -458,12 +481,11 @@ class OnboardingWizard:
             try:
                 import replicate
 
-                # Set the API token temporarily
-                os.environ["REPLICATE_API_TOKEN"] = replicate_key
-                # Test by listing models (lightweight API call)
-                client = replicate.Client(api_token=replicate_key)
-                # Just verify the client can be created with the token
-                # A full model run would cost credits
+                with _temporary_env("REPLICATE_API_TOKEN", replicate_key):
+                    # Test by listing models (lightweight API call)
+                    client = replicate.Client(api_token=replicate_key)
+                    # Just verify the client can be created with the token
+                    # A full model run would cost credits
                 console.print("[green]✓[/green]")
             except Exception as e:  # noqa: BLE001
                 console.print(f"[red]✗ ({e})[/red]")

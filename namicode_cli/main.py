@@ -24,8 +24,8 @@ Key Functions:
 """
 
 # Suppress transformer warnings before any imports that might trigger them
-import warnings
 import os
+import warnings
 
 # Suppress "None of PyTorch, TensorFlow >= 2.0, or Flax have been found" warning
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"
@@ -46,8 +46,9 @@ import signal
 import sys
 import time
 from pathlib import Path
-from langgraph.store.memory import InMemoryStore
+
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.store.memory import InMemoryStore
 from nami_deepagents.backends.protocol import SandboxBackendProtocol
 
 from namicode_cli.agents.core_agent import (
@@ -55,7 +56,11 @@ from namicode_cli.agents.core_agent import (
     list_agents,
     reset_agent,
 )
-from namicode_cli.commands.commands import execute_bash_command, handle_command
+from namicode_cli.commands.commands import (
+    execute_bash_command,
+    execute_skills_command,
+    handle_command,
+)
 from namicode_cli.config.config import (
     COLORS,
     HOME_DIR,
@@ -64,19 +69,18 @@ from namicode_cli.config.config import (
     settings,
 )
 from namicode_cli.config.model_create import create_model
-from namicode_cli.states.Session import SessionState
-from namicode_cli.ui.execution import execute_task
-from namicode_cli.input import create_prompt_session, ImageTracker
-from namicode_cli.migrate import check_migration_status, migrate_agents
+from namicode_cli.input import ImageTracker, create_prompt_session
 from namicode_cli.integrations.sandbox_factory import (
     create_sandbox,
     get_default_working_dir,
 )
-from namicode_cli.path_approval import check_path_approval, PathApprovalManager
-from namicode_cli.commands.commands import execute_skills_command
-from namicode_cli.skills.skill_creation import setup_skills_parser
 from namicode_cli.mcp.commands import execute_mcp_command, setup_mcp_parser
+from namicode_cli.migrate import check_migration_status, migrate_agents
+from namicode_cli.path_approval import PathApprovalManager, check_path_approval
+from namicode_cli.skills.skill_creation import setup_skills_parser
+from namicode_cli.states.Session import SessionState
 from namicode_cli.tools import (
+    BROWSER_TOOLS_AVAILABLE,
     check_types,
     convert_format,
     docs_search,
@@ -91,13 +95,39 @@ from namicode_cli.tools import (
     package_info,
     web_search,
 )
+from namicode_cli.ui.execution import execute_task
+
+if BROWSER_TOOLS_AVAILABLE:
+    from namicode_cli.browser_tools import BROWSER_TOOLS
+
+# Semantic search (optional, requires sentence-transformers)
+try:
+    from namicode_cli.semantic_search import (
+        find_function,
+        find_similar_code,
+        semantic_search,
+    )
+
+    SEMANTIC_SEARCH_AVAILABLE = True
+except ImportError:
+    SEMANTIC_SEARCH_AVAILABLE = False
+
+# Git tools (always available)
+from namicode_cli.git_tools import (
+    git_blame,
+    git_branch,
+    git_diff,
+    git_log,
+    git_stash,
+    git_status,
+)
+from namicode_cli.process_manager import ProcessManager
 from namicode_cli.server_runner.dev_server import (
     list_servers_tool,
     start_dev_server_tool,
     stop_server_tool,
 )
 from namicode_cli.server_runner.test_runner import run_tests_tool
-from namicode_cli.process_manager import ProcessManager
 from namicode_cli.ui.ui_elements import TokenTracker, show_help
 
 # Auto-save configuration
@@ -321,11 +351,6 @@ def parse_args():
         help="Show the version number and exit",
     )
     parser.add_argument(
-        "--tui",
-        action="store_true",
-        help="Launch Textual-based TUI interface instead of CLI",
-    )
-    parser.add_argument(
         "-h", "--help", action="help", help="Show this help message and exit"
     )
 
@@ -509,11 +534,11 @@ async def simple_cli(
             return False
 
         try:
-            from namicode_cli.tracking.workspace_anchoring import scan_workspace
             from namicode_cli.session.session_summarization import (
                 should_trigger_summarization,
                 summarize_messages_to_memory,
             )
+            from namicode_cli.tracking.workspace_anchoring import scan_workspace
 
             config = {"configurable": {"thread_id": session_state.thread_id}}
             state = await agent.aget_state(config)
@@ -623,7 +648,7 @@ async def simple_cli(
         nonlocal shutdown_requested
         shutdown_requested = True
         # Re-raise as KeyboardInterrupt to trigger normal cleanup path
-        raise KeyboardInterrupt()
+        raise KeyboardInterrupt
 
     # Register signal handlers (Unix-only, Windows doesn't support all signals)
     if sys.platform != "win32":
@@ -667,7 +692,9 @@ async def simple_cli(
                     console.print(
                         "[cyan]Plan Mode Enabled[/cyan] - Agent will create a plan before executing"
                     )
-                    console.print("[dim]Press Shift+Tab when ready to review and approve the plan[/dim]")
+                    console.print(
+                        "[dim]Press Shift+Tab when ready to review and approve the plan[/dim]"
+                    )
                     console.print()
             except Exception:
                 pass
@@ -704,8 +731,8 @@ async def simple_cli(
             break
 
         # Check for @agent mentions
-        from namicode_cli.input import parse_agent_mentions
         from namicode_cli.commands.commands import invoke_subagent
+        from namicode_cli.input import parse_agent_mentions
 
         agent_name, query = parse_agent_mentions(user_input, settings)
         if agent_name:
@@ -799,9 +826,24 @@ async def _run_agent_session(
         docs_search,
         # Image generation (Replicate API - 50 free/month)
         generate_image,
+        # Git tools (structured git operations)
+        git_status,
+        git_log,
+        git_diff,
+        git_blame,
+        git_branch,
+        git_stash,
     ]
     if settings.has_tavily:
         tools.append(web_search)
+
+    # Add browser automation tools if available (requires playwright)
+    if BROWSER_TOOLS_AVAILABLE:
+        tools.extend(BROWSER_TOOLS)
+
+    # Add semantic search tools if available (requires sentence-transformers)
+    if SEMANTIC_SEARCH_AVAILABLE:
+        tools.extend([semantic_search, find_similar_code, find_function])
 
     agent, composite_backend = create_agent_with_config(
         model,
@@ -826,6 +868,7 @@ async def _run_agent_session(
 
     # Calculate baseline token count for accurate token tracking
     from namicode_cli.agents.core_agent import get_system_prompt
+
     from .token_utils import calculate_baseline_tokens
 
     agent_dir = settings.get_agent_dir(assistant_id)
@@ -888,13 +931,13 @@ async def main(
 
     # Handle session continuation
     if continue_session:
-        from namicode_cli.tracking.workspace_anchoring import (
-            scan_workspace,
-            detect_drift,
-        )
         from namicode_cli.session.session_prompt_builder import (
             build_continuation_prompt,
             load_nami_md,
+        )
+        from namicode_cli.tracking.workspace_anchoring import (
+            detect_drift,
+            scan_workspace,
         )
 
         project_root = Path.cwd()
@@ -1020,237 +1063,6 @@ async def main(
                 store=store,
                 checkpointer=checkpointer,
                 restored_session_data=restored_session_data,
-            )
-        except KeyboardInterrupt:
-            console.print("\n\n[yellow]Interrupted[/yellow]")
-            sys.exit(0)
-        except Exception as e:
-            console.print(f"\n[bold red]Error:[/bold red] {e}\n")
-            console.print_exception()
-            sys.exit(1)
-
-
-async def main_tui(
-    assistant_id: str,
-    session_state,
-    sandbox_type: str = "none",
-    sandbox_id: str | None = None,
-    setup_script_path: str | None = None,
-    continue_session: bool | str = False,
-) -> None:
-    """Main entry point for TUI mode with conditional sandbox support.
-
-    Args:
-        assistant_id: Agent identifier for memory storage
-        session_state: Session state with auto-approve settings
-        sandbox_type: Type of sandbox ("none", "modal", "runloop", "daytona")
-        sandbox_id: Optional existing sandbox ID to reuse
-        setup_script_path: Optional path to setup script to run in sandbox
-        continue_session: If True, continue last session. If string, use as session ID.
-    """
-    from namicode_cli.session.session_persistence import SessionManager
-    from namicode_cli.session.session_restore import restore_session
-    from namicode_cli.app import run_textual_app
-    from namicode_cli.config.config import settings as app_settings
-
-    model = create_model()
-    store = InMemoryStore()
-    checkpointer = InMemorySaver()
-    session_manager = SessionManager()
-    initial_messages: list | None = None
-
-    # Handle session continuation
-    if continue_session:
-        from namicode_cli.tracking.workspace_anchoring import (
-            scan_workspace,
-            detect_drift,
-        )
-        from namicode_cli.session.session_prompt_builder import (
-            build_continuation_prompt,
-            load_nami_md,
-        )
-
-        project_root = Path.cwd()
-        session_id = continue_session if isinstance(continue_session, str) else None
-
-        result = restore_session(session_manager, session_id, project_root)
-        if result:
-            session_data, warnings = result
-
-            # Load only recent messages for context
-            recent_messages = session_manager.load_recent_messages(
-                session_data.meta.session_id
-            )
-
-            # Scan current workspace and detect drift
-            current_workspace = scan_workspace(project_root)
-            if session_data.workspace_state:
-                drift_warnings = detect_drift(
-                    session_data.workspace_state, current_workspace
-                )
-                warnings.extend(drift_warnings)
-
-            # Load NAMI.md for continuation prompt
-            nami_md_content = load_nami_md(project_root)
-
-            # Build continuation messages with proper prompt structure
-            session_data_with_recent = session_data
-            session_data_with_recent.messages = recent_messages
-
-            # Get base system prompt
-            from namicode_cli.config.config import get_default_coding_instructions
-
-            base_system_prompt = get_default_coding_instructions()
-
-            # Build continuation prompt with correct order
-            initial_messages = build_continuation_prompt(
-                session_data=session_data_with_recent,
-                system_prompt=base_system_prompt,
-                nami_md_content=nami_md_content,
-                workspace_state=current_workspace,
-            )
-
-            # Restore session state
-            session_state.session_id = session_data.meta.session_id
-            session_state.thread_id = session_data.meta.thread_id
-            session_state.is_continued = True
-
-            # Restore todos if available
-            if session_data.todos:
-                session_state.todos = session_data.todos
-        else:
-            console.print()
-            console.print("[yellow]No previous session found.[/yellow]")
-            console.print("[dim]Starting new session.[/dim]")
-            console.print()
-
-    # Create agent with tools
-    tools = [
-        http_request,
-        fetch_url,
-        execute_in_e2b,
-        run_tests_tool,
-        start_dev_server_tool,
-        stop_server_tool,
-        list_servers_tool,
-        # Utility tools
-        package_info,
-        convert_format,
-        format_code,
-        # Code quality tools (linting, formatting, type checking)
-        lint_code,
-        format_code_file,
-        check_types,
-        # Web search (always available, no API key needed)
-        duckduckgo_search,
-        docs_search,
-        # Image generation (Replicate API - 50 free/month)
-        generate_image,
-    ]
-    if settings.has_tavily:
-        tools.append(web_search)
-
-    # Branch 1: User wants a sandbox
-    if sandbox_type != "none":
-        try:
-            console.print()
-            with create_sandbox(
-                sandbox_type, sandbox_id=sandbox_id, setup_script_path=setup_script_path
-            ) as sandbox_backend:
-                console.print(
-                    f"[yellow]⚡ Remote execution enabled ({sandbox_type})[/yellow]"
-                )
-                console.print()
-
-                agent, composite_backend = create_agent_with_config(
-                    model,
-                    assistant_id,
-                    tools,
-                    sandbox=sandbox_backend,
-                    sandbox_type=sandbox_type,
-                    store=store,
-                    checkpointer=checkpointer,
-                )
-
-                # Inject initial messages if continuing a session
-                if initial_messages:
-                    config = {"configurable": {"thread_id": session_state.thread_id}}
-                    await agent.aupdate_state(
-                        config=config,
-                        values={"messages": initial_messages},
-                    )
-
-                # Get model name for context window calculation
-                model_name = getattr(model, "model_name", None) or getattr(
-                    model, "model", "unknown"
-                )
-
-                await run_textual_app(
-                    agent=agent,
-                    assistant_id=assistant_id,
-                    backend=composite_backend,
-                    auto_approve=session_state.auto_approve,
-                    cwd=Path.cwd(),
-                    thread_id=session_state.thread_id,
-                    session_state=session_state,
-                    session_manager=session_manager,
-                    store=store,
-                    checkpointer=checkpointer,
-                    model_name=model_name,
-                    settings=app_settings,
-                )
-        except (ImportError, ValueError, RuntimeError, NotImplementedError) as e:
-            console.print()
-            console.print("[red]❌ Sandbox creation failed[/red]")
-            console.print(f"[dim]{e}[/dim]")
-            sys.exit(1)
-        except KeyboardInterrupt:
-            console.print("\n\n[yellow]Interrupted[/yellow]")
-            sys.exit(0)
-        except Exception as e:
-            console.print(f"\n[bold red]Error:[/bold red] {e}\n")
-            console.print_exception()
-            sys.exit(1)
-
-    # Branch 2: User wants local mode (none or default)
-    else:
-        try:
-            agent, composite_backend = create_agent_with_config(
-                model,
-                assistant_id,
-                tools,
-                sandbox=None,
-                sandbox_type=None,
-                store=store,
-                checkpointer=checkpointer,
-            )
-
-            # Inject initial messages if continuing a session
-            if initial_messages:
-                config = {"configurable": {"thread_id": session_state.thread_id}}
-                await agent.aupdate_state(
-                    config=config,
-                    values={"messages": initial_messages},
-                )
-
-            # Get model name for context window calculation
-            model_name = getattr(model, "model_name", None) or getattr(
-                model, "model", "unknown"
-            )
-
-            await run_textual_app(
-                agent=agent,
-                assistant_id=assistant_id,
-                backend=composite_backend,
-                auto_approve=session_state.auto_approve,
-                cwd=Path.cwd(),
-                thread_id=session_state.thread_id,
-                session_state=session_state,
-                session_manager=session_manager,
-                store=store,
-                checkpointer=checkpointer,
-                model_name=model_name,
-                settings=app_settings,
             )
         except KeyboardInterrupt:
             console.print("\n\n[yellow]Interrupted[/yellow]")
@@ -1426,8 +1238,9 @@ def _execute_config_command(args) -> None:
 
 def _execute_secrets_command(args) -> None:
     """Execute secrets command to manage API keys."""
-    from namicode_cli.onboarding import SecretManager
     from prompt_toolkit import prompt
+
+    from namicode_cli.onboarding import SecretManager
 
     secret_manager = SecretManager()
     command = args.secrets_command
@@ -1463,11 +1276,11 @@ def _execute_secrets_command(args) -> None:
         if api_key:
             if secret_manager.store_secret(args.key, api_key):
                 console.print()
-                console.print(f"[green]✓ API key saved to system keychain[/green]")
+                console.print("[green]✓ API key saved to system keychain[/green]")
                 console.print()
             else:
                 console.print()
-                console.print(f"[red]✗ Failed to save API key[/red]")
+                console.print("[red]✗ Failed to save API key[/red]")
                 console.print()
         else:
             console.print()
@@ -1494,7 +1307,7 @@ def _execute_secrets_command(args) -> None:
                 console.print()
             else:
                 console.print()
-                console.print(f"[red]✗ Failed to delete API key[/red]")
+                console.print("[red]✗ Failed to delete API key[/red]")
                 console.print()
         else:
             console.print()
@@ -1587,30 +1400,17 @@ def cli_main() -> None:
                 auto_approve=args.auto_approve, no_splash=args.no_splash
             )
 
-            # Check if TUI mode is requested
-            if getattr(args, "tui", False):
-                asyncio.run(
-                    main_tui(
-                        args.agent,
-                        session_state,
-                        args.sandbox,
-                        args.sandbox_id,
-                        args.sandbox_setup,
-                        args.continue_session,
-                    )
+            # API key validation happens in create_model()
+            asyncio.run(
+                main(
+                    args.agent,
+                    session_state,
+                    args.sandbox,
+                    args.sandbox_id,
+                    args.sandbox_setup,
+                    args.continue_session,
                 )
-            else:
-                # API key validation happens in create_model()
-                asyncio.run(
-                    main(
-                        args.agent,
-                        session_state,
-                        args.sandbox,
-                        args.sandbox_id,
-                        args.sandbox_setup,
-                        args.continue_session,
-                    )
-                )
+            )
     except KeyboardInterrupt:
         # Clean exit on Ctrl+C - suppress ugly traceback
         console.print("\n\n[yellow]Interrupted[/yellow]")

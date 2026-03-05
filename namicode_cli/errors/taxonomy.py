@@ -16,6 +16,12 @@ class ErrorCategory(Enum):
     CONTEXT_OVERFLOW = "context_overflow"  # Context limit issues
     TOOL_ERROR = "tool_error"  # Tool execution failures
     SYSTEM_ERROR = "system_error"  # Internal errors
+    IMPORT_ERROR = "import_error"  # Missing imports, module not found
+    TYPE_ERROR = "type_error"  # Type mismatches, wrong argument types
+    TEST_FAILURE = "test_failure"  # Test assertions failed
+    DEPENDENCY_ERROR = "dependency_error"  # Missing packages, version conflicts
+    CONFIGURATION_ERROR = "configuration_error"  # Config issues, missing env vars
+    TIMEOUT_ERROR = "timeout_error"  # Operation exceeded time limit
 
 
 @dataclass

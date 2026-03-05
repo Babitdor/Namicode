@@ -1,34 +1,29 @@
 import os
 from pathlib import Path
 
-from nami_deepagents import create_deep_agent
-from nami_deepagents.backends import CompositeBackend
-from nami_deepagents.backends.filesystem import FilesystemBackend
-from nami_deepagents.backends.sandbox import SandboxBackendProtocol
-from langgraph.store.memory import InMemoryStore
 from langchain.tools import BaseTool
 from langchain_core.language_models import BaseChatModel
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.pregel import Pregel
-from namicode_cli.shell import ShellMiddleware
-from nami_deepagents.middleware import SkillsMiddleware, MemoryMiddleware
-import os
-from namicode_cli.config.config import (
-    config,
-)
-from namicode_cli.agents.core_agent import _add_interrupt_on
-from namicode_cli.shell import ShellMiddleware
+from langgraph.store.memory import InMemoryStore
+from nami_deepagents import create_deep_agent
+from nami_deepagents.backends import CompositeBackend
+from nami_deepagents.backends.filesystem import FilesystemBackend
+from nami_deepagents.backends.sandbox import SandboxBackendProtocol
+from nami_deepagents.middleware import MemoryMiddleware, SkillsMiddleware
+
+from namicode_cli.config.config import Settings, config
 from namicode_cli.mcp import get_shared_mcp_middleware
 from namicode_cli.memory.shared_memory import SharedMemoryMiddleware
+from namicode_cli.shell import ShellMiddleware
 from namicode_cli.tracking.file_tracker import (
     FileTrackerMiddleware,
     get_session_tracker,
 )
 from namicode_cli.tracking.tracing import (
-    is_tracing_enabled,
     get_tracing_config,
+    is_tracing_enabled,
 )
-from namicode_cli.config.config import Settings
 
 
 def create_subagent(
@@ -38,23 +33,26 @@ def create_subagent(
     *,
     sandbox: SandboxBackendProtocol | None = None,
     sandbox_type: str | None = None,
-    auto_approve: bool = False,
+    auto_approve: bool = False,  # Deprecated: subagents always auto-approve
     settings: Settings,
     checkpointer: InMemorySaver | None = None,
     store: InMemoryStore | None = None,
 ) -> tuple[Pregel, CompositeBackend]:
-    """Create and configure an agent with the specified model and tools.
+    """Create and configure a subagent with the specified model and tools.
+
+    Subagents ALWAYS auto-approve - no HITL interrupts. The main agent handles
+    all user approvals; subagents execute autonomously without pausing.
 
     Args:
         agent_name: Name of the agent to create
         model: LLM model to use
         tools: Additional tools to provide to agent
-        backend: Optional composite backend for execution
+        sandbox: Optional sandbox backend for remote execution
+        sandbox_type: Type of sandbox (unused, kept for compatibility)
+        auto_approve: Deprecated - subagents always auto-approve
         settings: Settings object for configuration
-        store: Optional InMemoryStore. If None and use_shared_store is True,
-               uses the module-level shared store from agent.py.
-        use_shared_store: If True and store is None, use the shared store.
-               Set to False to create an isolated store.
+        checkpointer: Optional checkpointer for state persistence
+        store: Optional InMemoryStore for shared memory
 
     Returns:
         2-tuple of (graph, backend)
@@ -184,12 +182,9 @@ Your writes will be attributed as 'subagent:{agent_name}'."""
     )
     final_checkpointer = checkpointer if checkpointer is not None else InMemorySaver()
 
-    if auto_approve:
-        # No interrupts - all tools run automatically
-        interrupt_on = {}
-    else:
-        # Full HITL for destructive operations
-        interrupt_on = _add_interrupt_on()
+    # Subagents always auto-approve - no HITL interrupts
+    # The main agent handles approvals; subagents execute autonomously
+    interrupt_on = {}
 
     subagent = create_deep_agent(
         name=agent_name,

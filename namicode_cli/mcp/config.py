@@ -21,7 +21,18 @@ import json
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+# Environment variables that could be used for code injection
+_DANGEROUS_ENV_VARS = {
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "DYLD_INSERT_LIBRARIES",
+    "PYTHONPATH",
+}
+
+# Shell metacharacters that indicate command injection
+_SHELL_METACHARACTERS = set("`$|;&")
 
 
 class MCPServerConfig(BaseModel):
@@ -33,6 +44,39 @@ class MCPServerConfig(BaseModel):
     args: list[str] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)
     description: str | None = None
+
+    @field_validator("command")
+    @classmethod
+    def validate_command(cls, v: str | None) -> str | None:
+        """Reject commands containing shell metacharacters or path traversal."""
+        if v is not None:
+            if any(c in v for c in _SHELL_METACHARACTERS):
+                msg = "Shell metacharacters not allowed in command"
+                raise ValueError(msg)
+            if ".." in v:
+                msg = "Path traversal not allowed in command"
+                raise ValueError(msg)
+        return v
+
+    @field_validator("args")
+    @classmethod
+    def validate_args(cls, v: list[str]) -> list[str]:
+        """Reject args containing shell metacharacters."""
+        for arg in v:
+            if any(c in arg for c in _SHELL_METACHARACTERS):
+                msg = f"Shell metacharacters not allowed in args: {arg}"
+                raise ValueError(msg)
+        return v
+
+    @field_validator("env")
+    @classmethod
+    def validate_env(cls, v: dict[str, str]) -> dict[str, str]:
+        """Reject dangerous environment variables."""
+        for key in v:
+            if key in _DANGEROUS_ENV_VARS:
+                msg = f"Dangerous environment variable not allowed: {key}"
+                raise ValueError(msg)
+        return v
 
     @model_validator(mode="after")
     def validate_transport_requirements(self) -> "MCPServerConfig":

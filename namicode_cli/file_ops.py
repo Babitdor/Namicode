@@ -290,7 +290,7 @@ class FileOpTracker:
         if tool_name in {"write_file", "edit_file"}:
             if self.backend and path_str:
                 try:
-                    responses = self.backend.download_files([path_str]) # type: ignore
+                    responses = self.backend.download_files([path_str])  # type: ignore
                     if (
                         responses
                         and responses[0].content is not None
@@ -321,7 +321,7 @@ class FileOpTracker:
                 record.physical_path = resolve_physical_path(path_str, self.assistant_id)
                 if self.backend:
                     try:
-                        responses = self.backend.download_files([path_str]) # type: ignore
+                        responses = self.backend.download_files([path_str])  # type: ignore
                         if (
                             responses
                             and responses[0].content is not None
@@ -444,7 +444,7 @@ class FileOpTracker:
             try:
                 file_path = record.args.get("file_path") or record.args.get("path")
                 if file_path:
-                    responses = self.backend.download_files([file_path]) # type: ignore
+                    responses = self.backend.download_files([file_path])  # type: ignore
                     if (
                         responses
                         and responses[0].content is not None
@@ -467,3 +467,42 @@ class FileOpTracker:
     def _finalize(self, record: FileOperationRecord) -> None:
         self.completed.append(record)
         self.active.pop(record.tool_call_id, None)
+
+
+# ============================================================================
+# Session-Level FileOpTracker (shared between main agent and subagents)
+# ============================================================================
+
+_session_file_op_tracker: FileOpTracker | None = None
+
+
+def get_session_file_op_tracker(
+    assistant_id: str | None = None,
+    backend: BACKEND_TYPES | None = None,
+) -> FileOpTracker:
+    """Get or create the session-level FileOpTracker.
+
+    This ensures the main agent and all subagents share the same tracker,
+    so file operations from subagents are properly tracked and displayed.
+
+    Args:
+        assistant_id: Optional assistant ID for the tracker.
+        backend: Optional backend for file operations.
+
+    Returns:
+        The session-level FileOpTracker instance.
+    """
+    global _session_file_op_tracker
+    if _session_file_op_tracker is None:
+        _session_file_op_tracker = FileOpTracker(assistant_id=assistant_id, backend=backend)
+    return _session_file_op_tracker
+
+
+def reset_session_file_op_tracker() -> None:
+    """Reset the session-level FileOpTracker.
+
+    Should be called at the start of a new session to clear
+    any previous file operation history.
+    """
+    global _session_file_op_tracker
+    _session_file_op_tracker = None
