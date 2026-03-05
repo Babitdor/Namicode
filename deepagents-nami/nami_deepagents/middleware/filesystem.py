@@ -272,11 +272,12 @@ Examples:
 - `*.txt` - Find all text files in root
 - `/subdir/**/*.md` - Find all markdown files under /subdir"""
 
-GREP_TOOL_DESCRIPTION = """Search for a pattern in files.
+GREP_TOOL_DESCRIPTION = """Search for a regex pattern in files.
 
 Usage:
-- The grep tool searches for text patterns across files
-- The pattern parameter is the text to search for (literal string, not regex)
+- The grep tool searches for text patterns across files using regular expressions
+- The pattern parameter is a regex (e.g., "TODO", "def \\w+", "error|warning", "^import")
+- For literal strings with special chars, escape them (e.g., "re\\.compile" to find "re.compile")
 - The path parameter filters which directory to search in (default is the current working directory)
 - The glob parameter accepts a glob pattern to filter which files to search (e.g., `*.py`)
 - The output_mode parameter controls the output format:
@@ -287,7 +288,9 @@ Usage:
 Examples:
 - Search all files: `grep(pattern="TODO")`
 - Search Python files only: `grep(pattern="import", glob="*.py")`
-- Show matching lines: `grep(pattern="error", output_mode="content")`"""
+- Show matching lines: `grep(pattern="error", output_mode="content")`
+- Regex search: `grep(pattern="def \\w+_handler", glob="*.py", output_mode="content")`
+- Word boundary: `grep(pattern="\\berror\\b", output_mode="content")`"""
 
 EXECUTE_TOOL_DESCRIPTION = """Executes a given command in the sandbox environment with proper handling and security measures.
 

@@ -520,8 +520,18 @@ class FilesystemBackend(BackendProtocol):
             for filename in filenames
         )
         for fp in walk_iter:
-            if include_glob and not wcglob.globmatch(fp.name, include_glob, flags=wcglob.BRACE):
-                continue
+            if include_glob:
+                # Match against both filename and relative path so patterns like
+                # "src/**/*.py" work correctly, not just simple "*.py" patterns.
+                try:
+                    rel = str(fp.relative_to(root)).replace("\\", "/")
+                except ValueError:
+                    rel = fp.name
+                if not (
+                    wcglob.globmatch(fp.name, include_glob, flags=wcglob.BRACE)
+                    or wcglob.globmatch(rel, include_glob, flags=wcglob.BRACE | wcglob.GLOBSTAR)
+                ):
+                    continue
             try:
                 if fp.stat().st_size > self.max_file_size_bytes:
                     continue

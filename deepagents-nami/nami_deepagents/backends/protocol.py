@@ -233,12 +233,14 @@ class BackendProtocol(abc.ABC):
         path: str | None = None,
         glob: str | None = None,
     ) -> list["GrepMatch"] | str:
-        """Search for a literal text pattern in files.
+        """Search for a regex pattern in files.
 
         Args:
-            pattern: Literal string to search for (NOT regex).
-                     Performs exact substring matching within file content.
+            pattern: Regular expression to search for.
+                     Supports full Python regex syntax (re module / ripgrep).
+                     For literal special chars, escape them (e.g. "re\\.compile").
                      Example: "TODO" matches any line containing "TODO"
+                     Example: "def \\w+" matches any function definition
 
             path: Optional directory path to search in.
                   If None, searches in current working directory.
