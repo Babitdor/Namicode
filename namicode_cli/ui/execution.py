@@ -1001,9 +1001,28 @@ async def execute_task(  # type: ignore
                         # results are hidden from user - agent will process and respond
                         continue
 
-                    # Check if this is an AIMessageChunk
-                    if not hasattr(message, "content_blocks"):
-                        # Fallback for messages without content_blocks
+                    # Build a normalized blocks list that works for all model families:
+                    # - Anthropic: content_blocks is a list of typed dicts
+                    # - Ollama / OpenAI / Gemini: content is a plain string, tool calls in tool_call_chunks
+                    if hasattr(message, "content_blocks"):
+                        blocks: list[dict] = message.content_blocks
+                    else:
+                        # Synthesize blocks from flat content + tool_call_chunks
+                        blocks = []
+                        raw_content = getattr(message, "content", "")
+                        if isinstance(raw_content, str) and raw_content:
+                            blocks.append({"type": "text", "text": raw_content})
+                        elif isinstance(raw_content, list):
+                            for item in raw_content:
+                                if isinstance(item, dict):
+                                    blocks.append(item)
+                                elif isinstance(item, str) and item:
+                                    blocks.append({"type": "text", "text": item})
+                        for tc in getattr(message, "tool_call_chunks", []) or []:
+                            if isinstance(tc, dict):
+                                blocks.append({"type": "tool_call_chunk", **tc})
+
+                    if not blocks:
                         continue
 
                     # Extract token usage — only from main agent to avoid subagent contamination
@@ -1024,8 +1043,8 @@ async def execute_task(  # type: ignore
                                 captured_cache_read_tokens = max(captured_cache_read_tokens, cache_read)
                                 captured_cache_creation_tokens = max(captured_cache_creation_tokens, cache_create)
 
-                    # Process content blocks (this is the key fix!)
-                    for block in message.content_blocks:
+                    # Process normalized content blocks
+                    for block in blocks:
                         block_type = block.get("type")
                         # Handle text blocks - only accumulate for main agent
                         if block_type == "text":
