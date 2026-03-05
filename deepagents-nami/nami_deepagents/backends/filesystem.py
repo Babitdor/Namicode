@@ -512,6 +512,8 @@ class FilesystemBackend(BackendProtocol):
 
         results: dict[str, list[tuple[int, str]]] = {}
         root = base_full if base_full.is_dir() else base_full.parent
+        total_matches = 0
+        MAX_MATCHES = 1000  # Stop after this many matches to avoid blocking the event loop
 
         # Security: followlinks=False prevents circular-symlink DoS and sandbox escape
         walk_iter = (
@@ -520,6 +522,8 @@ class FilesystemBackend(BackendProtocol):
             for filename in filenames
         )
         for fp in walk_iter:
+            if total_matches >= MAX_MATCHES:
+                break
             if include_glob:
                 # Match against both filename and relative path so patterns like
                 # "src/**/*.py" work correctly, not just simple "*.py" patterns.
@@ -542,6 +546,8 @@ class FilesystemBackend(BackendProtocol):
             except (UnicodeDecodeError, PermissionError, OSError):
                 continue
             for line_num, line in enumerate(content.splitlines(), 1):
+                if total_matches >= MAX_MATCHES:
+                    break
                 if regex.search(line):
                     if self.virtual_mode:
                         try:
@@ -553,6 +559,7 @@ class FilesystemBackend(BackendProtocol):
                     else:
                         virt_path = str(fp)
                     results.setdefault(virt_path, []).append((line_num, line))
+                    total_matches += 1
 
         return results
 
