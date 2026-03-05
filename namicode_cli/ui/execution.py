@@ -45,6 +45,7 @@ from pydantic import TypeAdapter, ValidationError
 from rich import box
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.text import Text
 
 from namicode_cli.config.config import COLORS, console, get_agent_color
 from namicode_cli.config.model_create import get_current_model_name
@@ -60,6 +61,7 @@ from namicode_cli.ui.ui_elements import (
     TokenTracker,
     format_tool_display,
     format_tool_message_content,
+    format_tool_result_preview,
     render_diff_block,
     render_file_operation,
     render_todo_list,
@@ -406,6 +408,8 @@ async def execute_task(  # type: ignore
     subagent_activity_by_ns: dict[tuple, dict] = {}
     # Map task tool_call_id to expected subagent namespace
     tool_call_id_to_ns: dict[str, tuple] = {}
+    # Track when each tool call was first displayed (for elapsed-time display)
+    tool_call_start_times: dict[str, float] = {}
     # Track last displayed activity line for each subagent (for in-place updates)
     subagent_last_line: dict[tuple, str] = {}
     # Deferred subagent completion banners — printed together just before main-agent synthesis
@@ -606,6 +610,7 @@ async def execute_task(  # type: ignore
             subagent_stack.clear()
             subagent_activity_by_ns.clear()
             tool_call_id_to_ns.clear()
+            tool_call_start_times.clear()
             pending_completions.clear()
             # Track all pending interrupts: {interrupt_id: request_data}
             pending_interrupts: dict[str, HITLRequest] = {}
@@ -1005,9 +1010,43 @@ async def execute_task(  # type: ignore
                                 if not spinner_active:
                                     status.start()
                                     spinner_active = True
+                            elif tool_call_id in displayed_tool_ids:
+                                # Show a one-line result preview for every other tool the user
+                                # saw announced (grep, ls, glob, execute, web_search, …).
+                                # Errors that were already printed above are skipped.
+                                already_printed_error = (
+                                    (tool_name == "shell" and tool_status != "success")
+                                    or (
+                                        tool_content
+                                        and isinstance(tool_content, str)
+                                        and tool_content.lstrip().lower().startswith("error")
+                                    )
+                                )
+                                if not already_printed_error:
+                                    elapsed = None
+                                    start = tool_call_start_times.pop(tool_call_id, None)
+                                    if start is not None:
+                                        elapsed = time.time() - start
+                                    preview = format_tool_result_preview(
+                                        tool_name, tool_content, tool_status, elapsed
+                                    )
+                                    if preview:
+                                        flush_text_buffer(final=True)
+                                        if spinner_active:
+                                            status.stop()
+                                            spinner_active = False
+                                        is_err = preview.startswith("✗")
+                                        sty = "red" if is_err else f"dim {COLORS['tool']}"
+                                        detail = Text()
+                                        detail.append("  ⎿  ", style=sty)
+                                        detail.append(preview, style=sty)
+                                        console.print(detail)
+                                        if not spinner_active:
+                                            status.start()
+                                            spinner_active = True
 
                         # For all other tools (web_search, http_request, etc.),
-                        # results are hidden from user - agent will process and respond
+                        # results are shown via the preview above; agent will also process them
                         continue
 
                     # Build a normalized blocks list that works for all model families:
@@ -1144,6 +1183,8 @@ async def execute_task(  # type: ignore
                                     displayed_tool_ids.add(buffer_id)
                                     # Track tool name for reliable ToolMessage lookup
                                     tool_call_to_name[buffer_id] = buffer_name
+                                    # Record start time for elapsed-time display
+                                    tool_call_start_times[buffer_id] = time.time()
                                     file_op_tracker.start_operation(
                                         buffer_name, parsed_args, buffer_id
                                     )

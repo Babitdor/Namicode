@@ -299,6 +299,112 @@ def format_tool_message_content(content: Any) -> str:
     return str(content)
 
 
+def format_tool_result_preview(
+    tool_name: str,
+    content: str,
+    status: str,
+    elapsed_s: float | None = None,
+) -> str | None:
+    """Return a one-line result summary for a completed tool call.
+
+    Used to give the user observability into what the agent saw back from
+    each tool without dumping the full content.  Returns None for tools
+    whose results are already rendered elsewhere (file operations).
+    """
+    # File ops have their own rich render_file_operation — skip them
+    if tool_name in ("read_file", "write_file", "edit_file"):
+        return None
+
+    duration = f" · {elapsed_s:.1f}s" if elapsed_s is not None and elapsed_s >= 1.0 else ""
+
+    content_str = content if isinstance(content, str) else str(content or "")
+    is_error = status not in ("success", None) or content_str.lstrip().lower().startswith("error")
+
+    if is_error:
+        first_line = content_str.splitlines()[0][:100] if content_str else "error"
+        return f"✗ {first_line}{duration}"
+
+    if tool_name in ("execute", "execute_bash", "shell"):
+        # Parse "[Command succeeded/failed with exit code N]" suffix
+        m = re.search(r"\[Command (?:succeeded|failed) with exit code (\d+)\]", content_str)
+        exit_code = int(m.group(1)) if m else None
+        output_lines = [
+            l for l in content_str.splitlines()
+            if l.strip() and not l.startswith("[Command") and not l.startswith("[Output was truncated")
+        ]
+        line_count = len(output_lines)
+        if exit_code is not None:
+            if exit_code == 0:
+                return f"exit 0 · {line_count} line{'s' if line_count != 1 else ''}{duration}"
+            else:
+                snippet = output_lines[0][:80] if output_lines else ""
+                return (f"✗ exit {exit_code} · {snippet}{duration}" if snippet
+                        else f"✗ exit {exit_code}{duration}")
+        return f"{line_count} line{'s' if line_count != 1 else ''}{duration}"
+
+    elif tool_name == "grep":
+        if not content_str or "no matches" in content_str.lower() or content_str.strip() in ("[]", ""):
+            return f"no matches{duration}"
+        lines = [l for l in content_str.splitlines() if l.strip()]
+        count = len(lines)
+        return f"{count} match{'es' if count != 1 else ''}{duration}"
+
+    elif tool_name in ("ls", "glob"):
+        if not content_str or content_str.strip() in ("[]", ""):
+            return f"0 items{duration}"
+        try:
+            import ast
+            items = ast.literal_eval(content_str)
+            if isinstance(items, list):
+                count = len(items)
+                return f"{count} item{'s' if count != 1 else ''}{duration}"
+        except Exception:
+            pass
+        lines = [l for l in content_str.splitlines() if l.strip()]
+        return f"{len(lines)} item{'s' if len(lines) != 1 else ''}{duration}"
+
+    elif tool_name in ("web_search", "duckduckgo_search", "docs_search"):
+        try:
+            data = json.loads(content_str)
+            if isinstance(data, list):
+                count = len(data)
+                return f"{count} result{'s' if count != 1 else ''}{duration}"
+        except Exception:
+            pass
+        lines = [l for l in content_str.splitlines() if l.strip()]
+        return f"{len(lines)} results{duration}"
+
+    elif tool_name in ("fetch_url", "http_request"):
+        size = len(content_str.encode("utf-8"))
+        size_str = f"{size // 1024}KB" if size >= 1024 else f"{size}B"
+        return f"{size_str}{duration}"
+
+    elif tool_name in ("git_status", "git_log", "git_diff", "git_blame", "git_branch", "git_stash"):
+        lines = [l for l in content_str.splitlines() if l.strip()]
+        if not lines:
+            return f"no output{duration}"
+        return f"{len(lines)} line{'s' if len(lines) != 1 else ''}{duration}"
+
+    elif tool_name in ("run_tests",):
+        # Surface pass/fail from test output
+        lower = content_str.lower()
+        if "passed" in lower or "ok" in lower:
+            # Try to extract e.g. "5 passed"
+            m = re.search(r"(\d+) passed", lower)
+            if m:
+                return f"✓ {m.group(1)} passed{duration}"
+            return f"✓ passed{duration}"
+        if "failed" in lower or "error" in lower:
+            lines = [l for l in content_str.splitlines() if l.strip()]
+            first = lines[0][:80] if lines else "test failed"
+            return f"✗ {first}{duration}"
+        lines = [l for l in content_str.splitlines() if l.strip()]
+        return f"{len(lines)} line{'s' if len(lines) != 1 else ''}{duration}"
+
+    # Generic: ✓ with duration only if something took notable time
+    return f"✓{duration}"
+
+
 class TokenTracker:
     """Track token usage across the conversation.
 
