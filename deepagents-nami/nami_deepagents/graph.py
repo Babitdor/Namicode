@@ -134,7 +134,7 @@ def create_deep_agent(
         keep = ("fraction", 0.10)
     else:
         trigger = ("tokens", 40000)
-        keep = ("fraction", 0.15)
+        keep = ("tokens", 6000)
 
     # Build middleware stack for subagents (includes skills if provided)
     subagent_middleware: list[AgentMiddleware] = [
