@@ -1,7 +1,9 @@
 """Tests for tools module."""
 
-import requests
-import responses
+import pytest
+
+requests = pytest.importorskip("requests")
+responses = pytest.importorskip("responses")
 
 from namicode_cli.tools import fetch_url
 

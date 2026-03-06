@@ -138,17 +138,14 @@ def detect_drift(
     saved_branch = saved_state.get("git_branch")
     current_branch = current_state.get("git_branch")
     if saved_branch and current_branch and saved_branch != current_branch:
-        warnings.append(
-            f"Git branch changed: {saved_branch} -> {current_branch}"
-        )
+        warnings.append(f"Git branch changed: {saved_branch} -> {current_branch}")
 
     # Check HEAD commit change
     saved_head = saved_state.get("git_head")
     current_head = current_state.get("git_head")
     if saved_head and current_head and saved_head != current_head:
         warnings.append(
-            f"Git HEAD changed: {saved_head} -> {current_head}. "
-            "New commits may have been added."
+            f"Git HEAD changed: {saved_head} -> {current_head}. New commits may have been added."
         )
 
     # Check for new uncommitted changes

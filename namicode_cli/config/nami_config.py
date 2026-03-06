@@ -4,7 +4,6 @@ Manages persistent settings stored in ~/.nami/nami.config.json
 """
 
 import json
-from pathlib import Path
 from typing import Any
 
 from namicode_cli.config.config import Settings

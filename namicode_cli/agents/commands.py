@@ -1,15 +1,9 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
 from namicode_cli.config.config import console
 
-if TYPE_CHECKING:
-    from langchain_core.language_models import BaseChatModel
 
-
-async def _generate_agent_system_prompt(
-    agent_name: str, description: str
-) -> str | None:
+async def _generate_agent_system_prompt(agent_name: str, description: str) -> str | None:
     """Generate a full system prompt for a custom agent using the configured LLM.
 
     Args:
@@ -122,7 +116,7 @@ Generate the system prompt now:"""
             content = response.content
             if isinstance(content, str):
                 return content
-            elif isinstance(content, list):
+            if isinstance(content, list):
                 # Handle list of content blocks
                 return "".join(str(c) for c in content)
         return str(response)

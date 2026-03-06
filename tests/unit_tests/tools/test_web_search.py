@@ -2,8 +2,6 @@
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 
 class TestWebSearchNoApiKey:
     """Test web_search when Tavily API key is not configured."""

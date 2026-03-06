@@ -1,6 +1,5 @@
 """Tests for context_manager module."""
 
-import pytest
 
 from namicode_cli.context.context_manager import (
     CONTEXT_CRITICAL_THRESHOLD,

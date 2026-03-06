@@ -26,37 +26,31 @@ The agent is built using LangGraph's Pregel architecture with:
 import os
 import shutil
 from pathlib import Path
-from typing import Generator
 
-from nami_deepagents import create_deep_agent
-from nami_deepagents.backends import CompositeBackend
-from nami_deepagents.backends.filesystem import FilesystemBackend
-from nami_deepagents.backends.sandbox import SandboxBackendProtocol
-from nami_deepagents.middleware.subagents import SubAgent
-from langgraph.checkpoint.base import BaseCheckpointSaver
-from langgraph.store.memory import InMemoryStore
 from langchain.agents.middleware import (
     InterruptOnConfig,
 )
-from namicode_cli.agents.default_subagents.subagents import retrieve_core_subagents
 from langchain.agents.middleware.types import AgentState
 from langchain.messages import ToolCall
 from langchain.tools import BaseTool
 from langchain_core.language_models import BaseChatModel
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.pregel import Pregel
 from langgraph.runtime import Runtime
+from langgraph.store.memory import InMemoryStore
+from nami_deepagents import create_deep_agent
+from nami_deepagents.backends import CompositeBackend
+from nami_deepagents.backends.filesystem import FilesystemBackend
+from nami_deepagents.backends.sandbox import SandboxBackendProtocol
 from nami_deepagents.middleware import (
-    SkillsMiddleware,
     MemoryMiddleware,
     PlanModeMiddleware,
+    SkillsMiddleware,
 )
+from nami_deepagents.middleware.subagents import SubAgent
 
-from namicode_cli.tracking.file_tracker import (
-    FileTrackerMiddleware,
-    get_session_tracker,
-    reset_session_tracker,
-)
+from namicode_cli.agents.default_subagents.subagents import retrieve_core_subagents
 from namicode_cli.config.config import (
     COLORS,
     config,
@@ -67,19 +61,20 @@ from namicode_cli.config.config import (
     settings,
 )
 from namicode_cli.integrations.sandbox_factory import get_default_working_dir
-from namicode_cli.shell import ShellMiddleware
 from namicode_cli.mcp import get_shared_mcp_middleware
 from namicode_cli.memory.shared_memory import (
     SharedMemoryMiddleware,
     reset_shared_memory_store,
 )
-from namicode_cli.tracking.tracing import (
-    configure_tracing,
-    is_tracing_enabled,
-    get_tracing_config,
-    wrap_openai_client,
+from namicode_cli.shell import ShellMiddleware
+from namicode_cli.tracking.file_tracker import (
+    FileTrackerMiddleware,
+    reset_session_tracker,
 )
-
+from namicode_cli.tracking.tracing import (
+    get_tracing_config,
+    is_tracing_enabled,
+)
 
 # Module-level shared store for agent/subagent memory sharing
 _shared_store: InMemoryStore | None = None
@@ -257,7 +252,7 @@ def list_agents() -> None:
             if desc:
                 console.print(f"    [dim]{desc}[/dim]")
         else:
-            console.print(f"    [yellow]⚠️  (incomplete - no agent.md)[/yellow]")
+            console.print("    [yellow]⚠️  (incomplete - no agent.md)[/yellow]")
 
         console.print()
 
@@ -853,9 +848,9 @@ def create_agent_with_config(
 
     memory_sources.append(str(agent_md))
 
-    # Project NAMI.md
-    project_memory = settings.get_project_agent_md_paths()
-    memory_sources.append(str(project_memory))
+    # Project NAMI.md / CLAUDE.md (all found files)
+    project_memory_paths = settings.get_project_agent_md_paths()
+    memory_sources.extend(str(p) for p in project_memory_paths)
 
     # Skills directory - global (shared across all agents at ~/.nami/skills/)
     skills_dir = settings.ensure_user_skills_dir()

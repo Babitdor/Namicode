@@ -1,66 +1,50 @@
 """Command handlers for slash commands and bash execution."""
 
-import asyncio
+import argparse
 import os
 import subprocess
 from pathlib import Path
 
 from langgraph.checkpoint.memory import InMemorySaver
-
-from langchain.agents.middleware.human_in_the_loop import (
-    ActionRequest,
-    ApproveDecision,
-    Decision,
-    HITLRequest,
-    HITLResponse,
-    RejectDecision,
-)
-import argparse
-from langgraph.store.memory import InMemoryStore
 from langgraph.pregel import Pregel
+from langgraph.store.memory import InMemoryStore
+from nami_deepagents.backends import CompositeBackend
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
-from pydantic import TypeAdapter, ValidationError
 
+from namicode_cli.agents.named_agents import create_subagent
 from namicode_cli.config.config import (
     COLORS,
     NAMI_CODE_ASCII,
     Settings,
-    TOOL_ICONS,
     console,
+)
+from namicode_cli.config.model_manager import (
+    MODEL_PRESETS,
+    ModelManager,
+    get_ollama_models,
+)
+from namicode_cli.mcp import presets as mcp_presets
+from namicode_cli.mcp.config import MCPConfig, MCPServerConfig
+from namicode_cli.process_manager import ProcessManager
+from namicode_cli.server_runner.dev_server import list_servers, stop_server
+from namicode_cli.server_runner.test_runner import (
+    detect_test_framework,
+    get_default_test_command,
+    run_tests,
+)
+from namicode_cli.skills.skill_creation import (
+    _create,
+    _generate_skill,
+    _info,
+    _list,
+    _validate_name,
 )
 from namicode_cli.ui.execution import execute_task
 from namicode_cli.ui.ui_elements import (
     TokenTracker,
     show_interactive_help,
-)
-from langgraph.types import Command, Interrupt
-from namicode_cli.mcp.config import MCPConfig, MCPServerConfig
-from namicode_cli.mcp import presets as mcp_presets
-from namicode_cli.config.model_manager import (
-    ModelManager,
-    MODEL_PRESETS,
-    get_ollama_models,
-)
-from namicode_cli.process_manager import ProcessManager
-
-from namicode_cli.server_runner.dev_server import list_servers, stop_server
-from nami_deepagents.backends import CompositeBackend
-from namicode_cli.server_runner.test_runner import (
-    run_tests,
-    detect_test_framework,
-    get_default_test_command,
-)
-from namicode_cli.agents.named_agents import create_subagent
-from namicode_cli.skills.skill_creation import (
-    _ask_scope,
-    _info,
-    _list,
-    _create,
-    _validate_name,
-    _generate_skill,
-    _get_static_template,
 )
 
 
@@ -233,9 +217,7 @@ Please start exploring now and create the NAMI.md file."""
     # Show status
     console.print("🤖 ", style=COLORS["primary"], end="")
     console.print("[bold]Starting AI exploration...[/bold]")
-    console.print(
-        "   [dim]The agent will automatically explore and document your codebase[/dim]"
-    )
+    console.print("   [dim]The agent will automatically explore and document your codebase[/dim]")
     console.print()
 
     # Temporarily enable auto-approve for this operation since user explicitly requested /init
@@ -287,9 +269,7 @@ Please start exploring now and create the NAMI.md file."""
                 info_lines.append(
                     "💡 Tip: The NAMI.md file helps AI assistants understand your project"
                 )
-                info_lines.append(
-                    "   It will be automatically loaded in future sessions"
-                )
+                info_lines.append("   It will be automatically loaded in future sessions")
 
                 panel = Panel(
                     "\n".join(info_lines),
@@ -370,9 +350,7 @@ async def _handle_mcp_command() -> bool:
             console.print(f"     {preset['description']}", style=COLORS["dim"])
 
         console.print()
-        preset_choice = (
-            await session.prompt_async("Choose preset number (or 'cancel'): ")
-        ).strip()
+        preset_choice = (await session.prompt_async("Choose preset number (or 'cancel'): ")).strip()
 
         if preset_choice.lower() != "cancel":
             try:
@@ -385,23 +363,17 @@ async def _handle_mcp_command() -> bool:
                     user_inputs = {}
 
                     if "setup_prompt" in preset:
-                        value = (
-                            await session.prompt_async(f"{preset['setup_prompt']} ")
-                        ).strip()
+                        value = (await session.prompt_async(f"{preset['setup_prompt']} ")).strip()
                         user_inputs[preset["setup_key"]] = value
 
                     if "setup_secondary_prompt" in preset:
                         value = (
-                            await session.prompt_async(
-                                f"{preset['setup_secondary_prompt']} "
-                            )
+                            await session.prompt_async(f"{preset['setup_secondary_prompt']} ")
                         ).strip()
                         user_inputs[preset["setup_secondary_key"]] = value
 
                     # Create config from preset
-                    config = mcp_presets.create_config_from_preset(
-                        preset_id, user_inputs
-                    )
+                    config = mcp_presets.create_config_from_preset(preset_id, user_inputs)
 
                     if config:
                         # Save to MCP config
@@ -418,9 +390,7 @@ async def _handle_mcp_command() -> bool:
                             style=COLORS["dim"],
                         )
                         console.print()
-                        console.print(
-                            "[dim]Restart your session for changes to take effect.[/dim]"
-                        )
+                        console.print("[dim]Restart your session for changes to take effect.[/dim]")
                 else:
                     console.print()
                     console.print("[yellow]Invalid choice[/yellow]")
@@ -434,9 +404,7 @@ async def _handle_mcp_command() -> bool:
         console.print("[bold]Add Custom MCP[/bold]", style=COLORS["primary"])
         console.print()
 
-        name = (
-            await session.prompt_async("Server name (e.g., my-custom-mcp): ")
-        ).strip()
+        name = (await session.prompt_async("Server name (e.g., my-custom-mcp): ")).strip()
         if not name:
             console.print("[yellow]Cancelled[/yellow]")
             return True
@@ -445,9 +413,7 @@ async def _handle_mcp_command() -> bool:
         console.print("Transport type:")
         console.print("  1. stdio (local command)")
         console.print("  2. HTTP (remote server)")
-        transport_choice = (
-            await session.prompt_async("Choose (1 or 2): ", default="1")
-        ).strip()
+        transport_choice = (await session.prompt_async("Choose (1 or 2): ", default="1")).strip()
 
         transport = "stdio" if transport_choice == "1" else "http"
 
@@ -456,9 +422,7 @@ async def _handle_mcp_command() -> bool:
                 await session.prompt_async("Command to run (e.g., npx, python, node): ")
             ).strip()
             args_input = (
-                await session.prompt_async(
-                    "Arguments (space-separated, optional): ", default=""
-                )
+                await session.prompt_async("Arguments (space-separated, optional): ", default="")
             ).strip()
             args = args_input.split() if args_input else []
 
@@ -520,9 +484,7 @@ async def _handle_mcp_command() -> bool:
 
         console.print()
         if servers:
-            console.print(
-                "[bold]Configured MCP Servers:[/bold]", style=COLORS["primary"]
-            )
+            console.print("[bold]Configured MCP Servers:[/bold]", style=COLORS["primary"])
             console.print()
             for name, config in servers.items():
                 console.print(f"  • [bold]{name}[/bold]", style=COLORS["primary"])
@@ -532,9 +494,7 @@ async def _handle_mcp_command() -> bool:
                 elif config.transport == "stdio":
                     console.print(f"    Command: {config.command}", style=COLORS["dim"])
                     if config.args:
-                        console.print(
-                            f"    Args: {' '.join(config.args)}", style=COLORS["dim"]
-                        )
+                        console.print(f"    Args: {' '.join(config.args)}", style=COLORS["dim"])
                 if config.description:
                     console.print(f"    {config.description}", style=COLORS["dim"])
                 console.print()
@@ -558,9 +518,7 @@ async def _handle_mcp_command() -> bool:
             console.print(f"  {i}. {name}")
 
         console.print()
-        remove_choice = (
-            await session.prompt_async("Choose MCP to remove (or 'cancel'): ")
-        ).strip()
+        remove_choice = (await session.prompt_async("Choose MCP to remove (or 'cancel'): ")).strip()
 
         if remove_choice.lower() != "cancel":
             try:
@@ -575,9 +533,7 @@ async def _handle_mcp_command() -> bool:
                             style=COLORS["primary"],
                         )
                         console.print()
-                        console.print(
-                            "[dim]Restart your session for changes to take effect.[/dim]"
-                        )
+                        console.print("[dim]Restart your session for changes to take effect.[/dim]")
                 else:
                     console.print()
                     console.print("[yellow]Invalid choice[/yellow]")
@@ -640,13 +596,9 @@ async def _handle_model_command() -> bool:
         else:
             for provider_id, preset in available:
                 icon = "✓" if current and preset["name"] == current[0] else " "
-                console.print(
-                    f"  {icon} [bold]{preset['name']}[/bold]", style=COLORS["primary"]
-                )
+                console.print(f"  {icon} [bold]{preset['name']}[/bold]", style=COLORS["primary"])
                 console.print(f"    {preset['description']}", style=COLORS["dim"])
-                console.print(
-                    f"    Default model: {preset['default_model']}", style=COLORS["dim"]
-                )
+                console.print(f"    Default model: {preset['default_model']}", style=COLORS["dim"])
                 console.print()
 
     elif choice == "2":
@@ -685,9 +637,9 @@ async def _handle_model_command() -> bool:
                         ].lower()  # e.g., OPENAI_API_KEY -> openai_api_key
 
                         # Check if API key exists in keyring or environment
-                        api_key = secret_manager.get_secret(
-                            api_key_name
-                        ) or os.environ.get(preset["api_key_var"])
+                        api_key = secret_manager.get_secret(api_key_name) or os.environ.get(
+                            preset["api_key_var"]
+                        )
 
                         if not api_key:
                             # Prompt user to provide API key
@@ -696,11 +648,9 @@ async def _handle_model_command() -> bool:
                                 f"[yellow]⚠ {preset['name']} requires an API key to proceed[/yellow]"
                             )
                             console.print()
+                            console.print(f"[bold]Enter {preset['name']} API key:[/bold]")
                             console.print(
-                                f"[bold]Enter {preset['name']} API key:[/bold]"
-                            )
-                            console.print(
-                                f"[dim]This will be stored securely in your system keychain[/dim]"
+                                "[dim]This will be stored securely in your system keychain[/dim]"
                             )
                             console.print()
 
@@ -713,9 +663,7 @@ async def _handle_model_command() -> bool:
 
                             if not new_api_key:
                                 console.print()
-                                console.print(
-                                    "[yellow]⚠ No API key provided, cancelled[/yellow]"
-                                )
+                                console.print("[yellow]⚠ No API key provided, cancelled[/yellow]")
                                 console.print()
                                 return True
 
@@ -724,9 +672,7 @@ async def _handle_model_command() -> bool:
                                 # Also set in environment for immediate use
                                 os.environ[preset["api_key_var"]] = new_api_key
                                 console.print()
-                                console.print(
-                                    f"[green]✓ API key saved to system keychain[/green]"
-                                )
+                                console.print("[green]✓ API key saved to system keychain[/green]")
                                 console.print()
                             else:
                                 console.print()
@@ -752,9 +698,7 @@ async def _handle_model_command() -> bool:
                         models_list = preset["models"]
 
                     for i, model in enumerate(models_list, 1):
-                        default_marker = (
-                            " (default)" if model == preset["default_model"] else ""
-                        )
+                        default_marker = " (default)" if model == preset["default_model"] else ""
                         console.print(f"  {i}. {model}{default_marker}")
 
                     console.print()
@@ -809,9 +753,7 @@ async def _handle_model_command() -> bool:
                 f"[bold]Current Provider:[/bold] {provider_name}",
                 style=COLORS["primary"],
             )
-            console.print(
-                f"[bold]Current Model:[/bold] {model_name}", style=COLORS["primary"]
-            )
+            console.print(f"[bold]Current Model:[/bold] {model_name}", style=COLORS["primary"])
             console.print()
 
             # Find preset info
@@ -822,9 +764,7 @@ async def _handle_model_command() -> bool:
                     console.print("[bold]Available models:[/bold]")
                     for model in preset["models"]:
                         current_marker = " (current)" if model == model_name else ""
-                        console.print(
-                            f"  • {model}{current_marker}", style=COLORS["dim"]
-                        )
+                        console.print(f"  • {model}{current_marker}", style=COLORS["dim"])
                     break
         else:
             console.print("[yellow]No provider currently active[/yellow]")
@@ -857,6 +797,7 @@ async def _handle_sessions_command(session_state) -> bool:
         True (command always handled)
     """
     from prompt_toolkit import PromptSession
+
     from namicode_cli.session.session_persistence import SessionManager
     from namicode_cli.session.session_restore import format_session_age
 
@@ -894,9 +835,7 @@ async def _handle_sessions_command(session_state) -> bool:
             console.print()
             for meta in sessions:
                 age = format_session_age(meta.last_active)
-                project = (
-                    Path(meta.project_root).name if meta.project_root else "no project"
-                )
+                project = Path(meta.project_root).name if meta.project_root else "no project"
                 model = meta.model_name or "unknown model"
 
                 # Mark current session
@@ -930,15 +869,11 @@ async def _handle_sessions_command(session_state) -> bool:
         console.print("[bold]Select session to delete:[/bold]", style=COLORS["primary"])
         for i, meta in enumerate(sessions, 1):
             age = format_session_age(meta.last_active)
-            project = (
-                Path(meta.project_root).name if meta.project_root else "no project"
-            )
+            project = Path(meta.project_root).name if meta.project_root else "no project"
             console.print(f"  {i}. {meta.session_id[:8]} - {project} ({age})")
 
         console.print()
-        delete_choice = (
-            await ps.prompt_async("Choose session number (or 'cancel'): ")
-        ).strip()
+        delete_choice = (await ps.prompt_async("Choose session number (or 'cancel'): ")).strip()
 
         if delete_choice.lower() != "cancel":
             try:
@@ -1044,7 +979,7 @@ async def _handle_save_command(
             style=COLORS["primary"],
         )
         console.print(f"  [dim]{len(messages)} messages saved[/dim]")
-        console.print(f"  [dim]Use 'nami --continue' to resume this session[/dim]")
+        console.print("  [dim]Use 'nami --continue' to resume this session[/dim]")
 
     except Exception as e:
         console.print(f"[red]Failed to save session: {e}[/red]")
@@ -1094,9 +1029,7 @@ async def _handle_compact_command(
         console.print()
 
         # Show statistics
-        console.print(
-            f"  [dim]Messages: {result.messages_before} → {result.messages_after}[/dim]"
-        )
+        console.print(f"  [dim]Messages: {result.messages_before} → {result.messages_after}[/dim]")
         console.print(f"  [dim]Tokens saved: ~{result.tokens_saved:,}[/dim]")
         console.print()
 
@@ -1128,8 +1061,9 @@ async def _handle_servers_command(session_state) -> bool:
     Returns:
         True (command always handled)
     """
-    from prompt_toolkit import PromptSession
     import webbrowser
+
+    from prompt_toolkit import PromptSession
 
     ps = PromptSession()
 
@@ -1184,9 +1118,7 @@ async def _handle_servers_command(session_state) -> bool:
             console.print(f"[green]✓ Opened {servers[0].url} in browser[/green]")
         else:
             console.print()
-            console.print(
-                "[bold]Select server to open:[/bold]", style=COLORS["primary"]
-            )
+            console.print("[bold]Select server to open:[/bold]", style=COLORS["primary"])
             for i, server in enumerate(servers, 1):
                 console.print(f"  {i}. {server.name} ({server.url})")
             console.print()
@@ -1195,9 +1127,7 @@ async def _handle_servers_command(session_state) -> bool:
                 idx = int(server_choice) - 1
                 if 0 <= idx < len(servers):
                     webbrowser.open(servers[idx].url)
-                    console.print(
-                        f"[green]✓ Opened {servers[idx].url} in browser[/green]"
-                    )
+                    console.print(f"[green]✓ Opened {servers[idx].url} in browser[/green]")
                 else:
                     console.print("[yellow]Invalid choice[/yellow]")
             except ValueError:
@@ -1215,9 +1145,7 @@ async def _handle_servers_command(session_state) -> bool:
                 console.print("[red]Failed to stop server[/red]")
         else:
             console.print()
-            console.print(
-                "[bold]Select server to stop:[/bold]", style=COLORS["primary"]
-            )
+            console.print("[bold]Select server to stop:[/bold]", style=COLORS["primary"])
             for i, server in enumerate(servers, 1):
                 console.print(f"  {i}. {server.name} (PID: {server.pid})")
             console.print()
@@ -1227,9 +1155,7 @@ async def _handle_servers_command(session_state) -> bool:
                 if 0 <= idx < len(servers):
                     result = await stop_server(pid=servers[idx].pid)
                     if result:
-                        console.print(
-                            f"[green]✓ Stopped server '{servers[idx].name}'[/green]"
-                        )
+                        console.print(f"[green]✓ Stopped server '{servers[idx].name}'[/green]")
                     else:
                         console.print("[red]Failed to stop server[/red]")
                 else:
@@ -1270,9 +1196,7 @@ async def _handle_tests_command(session_state, cmd_args: str | None = None) -> b
 
         if not command:
             console.print("[yellow]Could not auto-detect test framework[/yellow]")
-            console.print(
-                "[dim]Specify a command: /tests pytest or /tests npm test[/dim]"
-            )
+            console.print("[dim]Specify a command: /tests pytest or /tests npm test[/dim]")
             console.print()
             return True
 
@@ -1401,9 +1325,7 @@ async def _handle_kill_command(session_state, cmd_args: str | None = None) -> bo
             info = processes[idx]
             result = await manager.stop_process(info.pid)
             if result:
-                console.print(
-                    f"[green]✓ Killed '{info.name}' (PID: {info.pid})[/green]"
-                )
+                console.print(f"[green]✓ Killed '{info.name}' (PID: {info.pid})[/green]")
             else:
                 console.print("[red]Failed to kill process[/red]")
         else:
@@ -1426,7 +1348,7 @@ async def _handle_skills_command(cmd_args: str | None, assistant_id: str) -> boo
         True (command always handled)
     """
     from prompt_toolkit import PromptSession
-    from namicode_cli.skills.load import list_skills
+
 
     settings = Settings.from_environment()
     ps = PromptSession()
@@ -1530,19 +1452,13 @@ async def _skills_list_interactive(ps, settings, assistant_id: str) -> bool:
     if scope == "global":
         skills = list_skills(user_skills_dir=user_skills_dir, project_skills_dir=None)
     elif scope == "project":
-        skills = list_skills(
-            user_skills_dir=None, project_skills_dir=project_skills_dir
-        )
+        skills = list_skills(user_skills_dir=None, project_skills_dir=project_skills_dir)
     else:
-        skills = list_skills(
-            user_skills_dir=user_skills_dir, project_skills_dir=project_skills_dir
-        )
+        skills = list_skills(user_skills_dir=user_skills_dir, project_skills_dir=project_skills_dir)
 
     if not skills:
         console.print("[yellow]No skills found.[/yellow]")
-        console.print(
-            "[dim]Use '/skills create' or '/skills' → 1 to create a new skill.[/dim]"
-        )
+        console.print("[dim]Use '/skills create' or '/skills' → 1 to create a new skill.[/dim]")
         console.print()
         return True
 
@@ -1697,9 +1613,7 @@ async def _agents_create_interactive(ps, settings) -> bool:
     console.print("[bold]Create New Agent[/bold]", style=COLORS["primary"])
     console.print()
 
-    console.print(
-        "[dim]Agents are specialized AI assistants with custom system prompts.[/dim]"
-    )
+    console.print("[dim]Agents are specialized AI assistants with custom system prompts.[/dim]")
     console.print(
         "[dim]They have full access to: file operations, shell commands, web search,[/dim]"
     )
@@ -1710,17 +1624,11 @@ async def _agents_create_interactive(ps, settings) -> bool:
         "  • [cyan]code-reviewer[/cyan] - Reviews code for quality, security, best practices"
     )
     console.print("  • [cyan]debugger[/cyan] - Diagnoses and fixes bugs systematically")
-    console.print(
-        "  • [cyan]architect[/cyan] - Designs system architecture and patterns"
-    )
+    console.print("  • [cyan]architect[/cyan] - Designs system architecture and patterns")
     console.print("  • [cyan]test-writer[/cyan] - Creates comprehensive test suites")
-    console.print(
-        "  • [cyan]refactor-assistant[/cyan] - Improves code structure and readability"
-    )
+    console.print("  • [cyan]refactor-assistant[/cyan] - Improves code structure and readability")
     console.print("  • [cyan]api-designer[/cyan] - Designs RESTful/GraphQL APIs")
-    console.print(
-        "  • [cyan]security-auditor[/cyan] - Identifies security vulnerabilities"
-    )
+    console.print("  • [cyan]security-auditor[/cyan] - Identifies security vulnerabilities")
     console.print("  • [cyan]performance-optimizer[/cyan] - Optimizes code performance")
     console.print()
 
@@ -1735,9 +1643,7 @@ async def _agents_create_interactive(ps, settings) -> bool:
     # Validate agent name
     if not settings._is_valid_agent_name(agent_name):
         console.print("[red]Invalid agent name.[/red]")
-        console.print(
-            "[dim]Use only letters, numbers, hyphens, underscores, and spaces.[/dim]"
-        )
+        console.print("[dim]Use only letters, numbers, hyphens, underscores, and spaces.[/dim]")
         console.print()
         return True
 
@@ -1751,9 +1657,7 @@ async def _agents_create_interactive(ps, settings) -> bool:
         console.print("  1. Global (available in all projects)")
         console.print("  2. Project (only available in this project)")
         console.print()
-        scope_choice = (
-            await ps.prompt_async("Scope (1-2, default=1): ")
-        ).strip() or "1"
+        scope_choice = (await ps.prompt_async("Scope (1-2, default=1): ")).strip() or "1"
         use_project = scope_choice == "2"
 
     # Determine target directory based on scope
@@ -1771,9 +1675,7 @@ async def _agents_create_interactive(ps, settings) -> bool:
 
     # Check if agent already exists in the chosen scope
     if agent_dir.exists():
-        console.print(
-            f"[yellow]Agent '{agent_name}' already exists at {agent_dir}[/yellow]"
-        )
+        console.print(f"[yellow]Agent '{agent_name}' already exists at {agent_dir}[/yellow]")
         console.print()
         return True
 
@@ -1845,9 +1747,7 @@ async def _agents_create_interactive(ps, settings) -> bool:
     for i, (hex_code, name) in enumerate(color_options, 1):
         console.print(f"  [{hex_code}]■[/{hex_code}] {i:2d}. {name} ({hex_code})")
     console.print()
-    color_choice = (
-        await ps.prompt_async("Color (1-12, or hex code, default=7): ")
-    ).strip() or "7"
+    color_choice = (await ps.prompt_async("Color (1-12, or hex code, default=7): ")).strip() or "7"
 
     # Parse color choice
     if color_choice.startswith("#"):
@@ -1864,9 +1764,7 @@ async def _agents_create_interactive(ps, settings) -> bool:
 
     # Generate system prompt using LLM
     console.print()
-    console.print(
-        "[dim]Generating comprehensive system prompt with tool guidelines...[/dim]"
-    )
+    console.print("[dim]Generating comprehensive system prompt with tool guidelines...[/dim]")
 
     system_prompt = await _generate_agent_system_prompt(agent_name, description)
 
@@ -1908,18 +1806,12 @@ description: {description}
     agent_md.write_text(final_content, encoding="utf-8")
 
     console.print()
-    console.print(
-        f"[green]✓ Agent '{agent_name}' created successfully! ({scope_label})[/green]"
-    )
+    console.print(f"[green]✓ Agent '{agent_name}' created successfully! ({scope_label})[/green]")
     console.print(f"[dim]Location: {agent_dir}[/dim]")
     console.print()
     console.print("[bold]How to use:[/bold]")
-    console.print(
-        f"  • Type [cyan]@{agent_name} <your query>[/cyan] to invoke this agent"
-    )
-    console.print(
-        f"  • Run [cyan]nami --agent {agent_name}[/cyan] to start with this agent"
-    )
+    console.print(f"  • Type [cyan]@{agent_name} <your query>[/cyan] to invoke this agent")
+    console.print(f"  • Run [cyan]nami --agent {agent_name}[/cyan] to start with this agent")
     console.print(f"  • Edit [cyan]{agent_md}[/cyan] to customize the prompt")
     console.print()
     return True
@@ -1950,12 +1842,8 @@ async def _agents_delete_interactive(ps, settings) -> bool:
         return True
 
     # Separate by scope for display
-    project_agents = [
-        (name, path) for name, path, scope in all_agents if scope == "project"
-    ]
-    global_agents = [
-        (name, path) for name, path, scope in all_agents if scope == "global"
-    ]
+    project_agents = [(name, path) for name, path, scope in all_agents if scope == "project"]
+    global_agents = [(name, path) for name, path, scope in all_agents if scope == "global"]
 
     # Build a combined list with scope labels
     agents_list: list[tuple[str, Path, str]] = []
@@ -1980,9 +1868,7 @@ async def _agents_delete_interactive(ps, settings) -> bool:
             idx += 1
         console.print()
 
-    choice = (
-        await ps.prompt_async("Choose agent number to delete (or 'cancel'): ")
-    ).strip()
+    choice = (await ps.prompt_async("Choose agent number to delete (or 'cancel'): ")).strip()
 
     if choice.lower() == "cancel":
         console.print("[dim]Cancelled[/dim]")
@@ -2053,20 +1939,21 @@ def invoke_subagent(
     Returns:
         Agent's response/result as string
     """
-
     from namicode_cli.config.config import (
         parse_agent_color,
         set_agent_color,
+    )
+    from namicode_cli.config.config import (
         settings as global_settings,
     )
     from namicode_cli.config.model_create import create_model
-    from namicode_cli.tools import fetch_url, http_request, web_search
     from namicode_cli.server_runner.dev_server import (
         list_servers_tool,
         start_dev_server_tool,
         stop_server_tool,
     )
     from namicode_cli.server_runner.test_runner import run_tests_tool
+    from namicode_cli.tools import fetch_url, http_request, web_search
 
     # Load and register agent color from agent.md frontmatter
     agent_location = settings.find_agent(agent_name)
@@ -2100,9 +1987,7 @@ def invoke_subagent(
     return subagent, subagent_backend
 
 
-async def _generate_agent_system_prompt(
-    agent_name: str, description: str
-) -> str | None:
+async def _generate_agent_system_prompt(agent_name: str, description: str) -> str | None:
     """Generate a full system prompt for a custom agent using the configured LLM.
 
     Args:
@@ -2215,7 +2100,7 @@ Generate the system prompt now:"""
             content = response.content
             if isinstance(content, str):
                 return content
-            elif isinstance(content, list):
+            if isinstance(content, list):
                 # Handle list of content blocks
                 return "".join(str(c) for c in content)
         return str(response)
@@ -2225,9 +2110,7 @@ Generate the system prompt now:"""
         return None
 
 
-async def _handle_agents_command(
-    cmd_args: str | None, assistant_id: str
-) -> bool:  # noqa: ARG001
+async def _handle_agents_command(cmd_args: str | None, assistant_id: str) -> bool:  # noqa: ARG001
     """Handle the /agents command with interactive menu.
 
     Args:
@@ -2287,9 +2170,9 @@ async def _handle_agents_command(
     # Handle actions
     if action == "view":
         return await _agents_list(settings)
-    elif action == "create":
+    if action == "create":
         return await _agents_create_interactive(ps, settings)
-    elif action == "delete":
+    if action == "delete":
         return await _agents_delete_interactive(ps, settings)
 
     return True
@@ -2318,9 +2201,7 @@ async def _skills_create_interactive(
         console.print(
             "[dim]Skills are reusable workflows that guide the agent for specific tasks.[/dim]"
         )
-        console.print(
-            "[dim]Examples: web-research, code-review, docker-deploy, api-testing[/dim]"
-        )
+        console.print("[dim]Examples: web-research, code-review, docker-deploy, api-testing[/dim]")
         console.print()
         skill_name = (await ps.prompt_async("Skill name: ")).strip()
 
@@ -2351,9 +2232,7 @@ async def _skills_create_interactive(
         console.print("  1. Global (available in all projects)")
         console.print("  2. Project (only in this project)")
         console.print()
-        scope_choice = (
-            await ps.prompt_async("Scope (1-2, default=1): ")
-        ).strip() or "1"
+        scope_choice = (await ps.prompt_async("Scope (1-2, default=1): ")).strip() or "1"
         use_project = scope_choice == "2"
     else:
         use_project = False
@@ -2367,9 +2246,7 @@ async def _skills_create_interactive(
     skill_dir = base_dir / skill_name
 
     if skill_dir.exists():
-        console.print(
-            f"[yellow]Skill '{skill_name}' already exists at {skill_dir}[/yellow]"
-        )
+        console.print(f"[yellow]Skill '{skill_name}' already exists at {skill_dir}[/yellow]")
         console.print()
         return True
 
@@ -2391,17 +2268,13 @@ async def _skills_create_interactive(
 
     # Success message
     scope_label = "project" if use_project else "global"
-    console.print(
-        f"[green]✓ Skill '{skill_name}' created successfully! ({scope_label})[/green]"
-    )
+    console.print(f"[green]✓ Skill '{skill_name}' created successfully! ({scope_label})[/green]")
     console.print(f"[dim]Location: {skill_dir}[/dim]")
     console.print()
 
     # Since the agent already created SKILL.md and any supporting files,
     # we just confirm success without listing files.
-    console.print(
-        "[dim]The skill was generated using AI. Review and customize as needed.[/dim]"
-    )
+    console.print("[dim]The skill was generated using AI. Review and customize as needed.[/dim]")
     console.print()
 
     return True
@@ -2432,6 +2305,7 @@ async def handle_command(
         # accessed again — this is the correct way to start a fresh session
         # without touching agent internals.
         import uuid
+
         session_state.thread_id = str(uuid.uuid4())
 
         # Reset token tracking to baseline
@@ -2485,9 +2359,7 @@ async def handle_command(
     if cmd == "init":
         # Run the async init command
         try:
-            await _handle_init_command(
-                agent, session_state, assistant_id, token_tracker
-            )
+            await _handle_init_command(agent, session_state, assistant_id, token_tracker)
         except Exception as e:
             console.print(f"[red]Error running /init command: {e}[/red]")
             import traceback
@@ -2682,15 +2554,13 @@ async def _handle_files_command() -> bool:
     console.print()
 
     # Stats summary
-    console.print(f"[bold]Statistics:[/bold]")
+    console.print("[bold]Statistics:[/bold]")
     console.print(f"  • Files read: [cyan]{len(tracker.files_read)}[/cyan]")
     console.print(f"  • Files modified: [cyan]{len(tracker.files_written)}[/cyan]")
     console.print(f"  • Total read operations: [dim]{tracker.total_reads}[/dim]")
     console.print(f"  • Total write operations: [dim]{tracker.total_writes}[/dim]")
     if tracker.rejected_edits > 0:
-        console.print(
-            f"  • [red]Rejected edits (unread files): {tracker.rejected_edits}[/red]"
-        )
+        console.print(f"  • [red]Rejected edits (unread files): {tracker.rejected_edits}[/red]")
     console.print()
 
     # Files read
@@ -2707,18 +2577,12 @@ async def _handle_files_command() -> bool:
             display_path = path
             if len(display_path) > 60:
                 display_path = "..." + display_path[-57:]
-            time_str = (
-                record.read_at.split("T")[1][:8]
-                if "T" in record.read_at
-                else record.read_at
-            )
+            time_str = record.read_at.split("T")[1][:8] if "T" in record.read_at else record.read_at
             table.add_row(display_path, str(record.line_count), time_str)
 
         console.print(table)
         if len(tracker.read_order) > 15:
-            console.print(
-                f"  [dim]... and {len(tracker.read_order) - 15} more files[/dim]"
-            )
+            console.print(f"  [dim]... and {len(tracker.read_order) - 15} more files[/dim]")
         console.print()
     else:
         console.print("[dim]No files read in this session.[/dim]")
@@ -2747,9 +2611,7 @@ async def _handle_files_command() -> bool:
 
         console.print(table)
         if len(tracker.write_order) > 15:
-            console.print(
-                f"  [dim]... and {len(tracker.write_order) - 15} more files[/dim]"
-            )
+            console.print(f"  [dim]... and {len(tracker.write_order) - 15} more files[/dim]")
         console.print()
     else:
         console.print("[dim]No files modified in this session.[/dim]")
@@ -2861,7 +2723,7 @@ async def _handle_images_command(args: str | None, image_tracker) -> bool:
         console.print()
         return True
 
-    elif subcmd == "clear":
+    if subcmd == "clear":
         count = image_tracker.count
         if count == 0:
             console.print("[dim]No images to clear.[/dim]")
@@ -2871,14 +2733,13 @@ async def _handle_images_command(args: str | None, image_tracker) -> bool:
         console.print()
         return True
 
-    else:
-        console.print("[red]Unknown subcommand. Usage:[/red]")
-        console.print("  /images          - List all images")
-        console.print("  /images list     - List all images")
-        console.print("  /images remove <id> - Remove an image")
-        console.print("  /images clear    - Clear all images")
-        console.print()
-        return True
+    console.print("[red]Unknown subcommand. Usage:[/red]")
+    console.print("  /images          - List all images")
+    console.print("  /images list     - List all images")
+    console.print("  /images remove <id> - Remove an image")
+    console.print("  /images clear    - Clear all images")
+    console.print()
+    return True
 
 
 async def _handle_plan_command(agent, session_state, args: str | None = None) -> bool:
@@ -2898,11 +2759,12 @@ async def _handle_plan_command(agent, session_state, args: str | None = None) ->
     Returns:
         True (always handled).
     """
+    from rich import box
+
     from namicode_cli.agents.core_agent import (
         get_agent_plan_mode_state,
         set_agent_plan_mode_state,
     )
-    from rich import box
 
     # Get current plan mode state from agent
     try:
@@ -2967,7 +2829,7 @@ async def _handle_plan_command(agent, session_state, args: str | None = None) ->
         console.print()
         return True
 
-    elif arg == "off":
+    if arg == "off":
         # Show plan approval before exiting plan mode
         from namicode_cli.ui.question_prompt import prompt_for_plan_approval
 
@@ -2987,17 +2849,16 @@ async def _handle_plan_command(agent, session_state, args: str | None = None) ->
         console.print()
         return True
 
-    elif arg == "status":
+    if arg == "status":
         status = "enabled" if current_state else "disabled"
         color = "cyan" if current_state else "yellow"
         console.print(f"[{color}]Plan Mode: {status}[/{color}]")
         console.print()
         return True
 
-    else:
-        console.print("[red]Invalid argument. Use: /plan [on|off|status][/red]")
-        console.print()
-        return True
+    console.print("[red]Invalid argument. Use: /plan [on|off|status][/red]")
+    console.print()
+    return True
 
 
 async def _handle_trace_command(cmd_args: list[str]) -> bool:
@@ -3011,13 +2872,11 @@ async def _handle_trace_command(cmd_args: list[str]) -> bool:
     """
     from namicode_cli.tracking.tracing import (
         configure_tracing,
-        get_tracing_status,
-        is_tracing_enabled,
-        get_tracing_config,
-        list_projects,
         get_traces,
+        get_tracing_config,
+        get_tracing_status,
+        list_projects,
     )
-    from namicode_cli.config.config import settings
 
     console.print()
 
@@ -3050,11 +2909,11 @@ async def _handle_trace_command(cmd_args: list[str]) -> bool:
             else:
                 console.print(
                     Panel(
-                        f"⚠️  LangSmith tracing is [bold]NOT CONFIGURED[/bold]\n\n"
-                        f"To enable tracing:\n"
-                        f"1. Set LANGSMITH_API_KEY environment variable\n"
-                        f"2. Set LANGSMITH_TRACING=true\n"
-                        f"3. Optionally set LANGSMITH_PROJECT for custom project name",
+                        "⚠️  LangSmith tracing is [bold]NOT CONFIGURED[/bold]\n\n"
+                        "To enable tracing:\n"
+                        "1. Set LANGSMITH_API_KEY environment variable\n"
+                        "2. Set LANGSMITH_TRACING=true\n"
+                        "3. Optionally set LANGSMITH_PROJECT for custom project name",
                         title=header,
                         border_style=COLORS["warning"],
                         padding=(1, 2),
@@ -3091,12 +2950,12 @@ async def _handle_trace_command(cmd_args: list[str]) -> bool:
 
         if config.is_configured():
             console.print(
-                f"✅ [bold]LangSmith tracing enabled[/bold]",
+                "✅ [bold]LangSmith tracing enabled[/bold]",
                 style=COLORS["success"],
             )
             console.print(f"   Project: {config.project_name}")
             console.print(
-                f"   [dim]Configure LANGSMITH_API_KEY in .env for persistent settings[/dim]"
+                "   [dim]Configure LANGSMITH_API_KEY in .env for persistent settings[/dim]"
             )
         else:
             console.print(
@@ -3110,9 +2969,7 @@ async def _handle_trace_command(cmd_args: list[str]) -> bool:
         import os
 
         os.environ["LANGSMITH_TRACING"] = "false"
-        console.print(
-            "✅ [bold]LangSmith tracing disabled[/bold]", style=COLORS["success"]
-        )
+        console.print("✅ [bold]LangSmith tracing disabled[/bold]", style=COLORS["success"])
         console.print(
             "   [dim]This only affects the current session. "
             "Remove or set LANGSMITH_TRACING=false in .env for persistent effect.[/dim]"
@@ -3160,9 +3017,7 @@ async def _handle_trace_command(cmd_args: list[str]) -> bool:
 
         header = Text()
         header.append("🧵 ", style="bold")
-        header.append(
-            f"Recent Traces (last {limit})", style=f"bold {COLORS['primary']}"
-        )
+        header.append(f"Recent Traces (last {limit})", style=f"bold {COLORS['primary']}")
 
         if traces:
             from rich.table import Table
@@ -3288,9 +3143,7 @@ def execute_skills_command(args: argparse.Namespace) -> None:
     if args.agent:
         is_valid, error_msg = _validate_name(args.agent)
         if not is_valid:
-            console.print(
-                f"[bold red]Error:[/bold red] Invalid agent name: {error_msg}"
-            )
+            console.print(f"[bold red]Error:[/bold red] Invalid agent name: {error_msg}")
             console.print(
                 "[dim]Agent names must only contain letters, numbers, hyphens, and underscores.[/dim]",
                 style=COLORS["dim"],
@@ -3319,9 +3172,7 @@ def execute_skills_command(args: argparse.Namespace) -> None:
         )
     else:
         # No subcommand provided, show help
-        console.print(
-            "[yellow]Please specify a skills subcommand: list, create, or info[/yellow]"
-        )
+        console.print("[yellow]Please specify a skills subcommand: list, create, or info[/yellow]")
         console.print("\n[bold]Usage:[/bold]", style=COLORS["primary"])
         console.print("  nami skills <command> [options]\n")
         console.print("[bold]Available commands:[/bold]", style=COLORS["primary"])
@@ -3332,7 +3183,5 @@ def execute_skills_command(args: argparse.Namespace) -> None:
         console.print("  nami skills list")
         console.print("  nami skills create web-research")
         console.print("  nami skills info web-research")
-        console.print(
-            "\n[dim]For more help on a specific command:[/dim]", style=COLORS["dim"]
-        )
+        console.print("\n[dim]For more help on a specific command:[/dim]", style=COLORS["dim"])
         console.print("  nami skills <command> --help", style=COLORS["dim"])

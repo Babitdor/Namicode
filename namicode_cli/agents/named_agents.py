@@ -72,9 +72,9 @@ def create_subagent(
     except Exception as e:
         return f"Error reading agent configuration: {e}"  # type: ignore
 
-    # NAMI.md Project memory
-    project_memory = settings.get_project_agent_md_paths()
-    memory_sources.append(str(project_memory))
+    # NAMI.md / CLAUDE.md Project memory (all found files)
+    project_memory_paths = settings.get_project_agent_md_paths()
+    memory_sources.extend(str(p) for p in project_memory_paths)
 
     # Setup tracing if LangSmith is configured
     tracing_enabled = False

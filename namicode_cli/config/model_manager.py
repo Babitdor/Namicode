@@ -168,16 +168,15 @@ class ModelManager:
         if self.settings.has_openai:
             model = os.environ.get("OPENAI_MODEL", "gpt-5-mini")
             return ("OpenAI", model)
-        elif self.settings.has_anthropic:
+        if self.settings.has_anthropic:
             model = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-5-20250929")
             return ("Anthropic", model)
-        elif self.settings.has_google:
+        if self.settings.has_google:
             model = os.environ.get("GOOGLE_MODEL", "gemini-3-pro-preview")
             return ("Google", model)
-        else:
-            # Default to Ollama (always available, no API key needed)
-            model = os.environ.get("OLLAMA_MODEL", "qwen3-coder:480b-cloud")
-            return ("Ollama", model)
+        # Default to Ollama (always available, no API key needed)
+        model = os.environ.get("OLLAMA_MODEL", "qwen3-coder:480b-cloud")
+        return ("Ollama", model)
 
     def create_model_for_provider(
         self, provider: ProviderType, model_name: str | None = None
@@ -206,9 +205,7 @@ class ModelManager:
         if preset["requires_api_key"]:
             api_key_var = preset["api_key_var"]
             if not os.environ.get(api_key_var):
-                raise ValueError(
-                    f"{preset['name']} requires {api_key_var} environment variable"
-                )
+                raise ValueError(f"{preset['name']} requires {api_key_var} environment variable")
 
         # Create the appropriate model
         if provider == "openai":
@@ -216,7 +213,7 @@ class ModelManager:
 
             return ChatOpenAI(model=model_name)  # type: ignore
 
-        elif provider == "anthropic":
+        if provider == "anthropic":
             from langchain_anthropic import ChatAnthropic
 
             return ChatAnthropic(
@@ -224,7 +221,7 @@ class ModelManager:
                 max_tokens=20_000,  # type: ignore[arg-type]
             )
 
-        elif provider == "ollama":
+        if provider == "ollama":
             from langchain_ollama import ChatOllama
 
             return ChatOllama(
@@ -235,7 +232,7 @@ class ModelManager:
                 num_ctx=200000,
             )
 
-        elif provider == "google":
+        if provider == "google":
             from langchain_google_genai import ChatGoogleGenerativeAI
 
             return ChatGoogleGenerativeAI(
@@ -246,9 +243,7 @@ class ModelManager:
 
         raise ValueError(f"Provider {provider} not implemented")
 
-    def set_provider(
-        self, provider: ProviderType, model_name: str | None = None
-    ) -> None:
+    def set_provider(self, provider: ProviderType, model_name: str | None = None) -> None:
         """Set the current provider and model.
 
         Saves configuration to nami.config.json for persistence across sessions.

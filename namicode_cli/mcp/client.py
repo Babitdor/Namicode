@@ -112,9 +112,7 @@ def create_mcp_client(
     return MultiServerMCPClient(config_dict)
 
 
-async def check_server_connection(
-    name: str, config: MCPServerConfig
-) -> tuple[bool, str]:
+async def check_server_connection(name: str, config: MCPServerConfig) -> tuple[bool, str]:
     """Check connection to an MCP server.
 
     This function tests whether a connection can be established to the given

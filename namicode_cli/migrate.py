@@ -71,7 +71,9 @@ def migrate_agents() -> None:
         console.print("[green]✓ No migration needed. Directory structure is up to date.[/green]")
         return
 
-    console.print(f"\n[yellow]⚠ Found {len(old_agents)} agent(s) using old directory structure:[/yellow]\n")
+    console.print(
+        f"\n[yellow]⚠ Found {len(old_agents)} agent(s) using old directory structure:[/yellow]\n"
+    )
 
     for old_agent_dir in old_agents:
         agent_name = old_agent_dir.name
@@ -133,14 +135,16 @@ def migrate_agents() -> None:
                 if global_skill_dir.exists():
                     console.print(
                         f"  ⚠ Skill '{skill_name}' already exists in global skills. Skipping.",
-                        style=COLORS["tool"]
+                        style=COLORS["tool"],
                     )
                     skills_conflicts.append((agent_name, skill_name))
                     continue
 
                 # Move skill to global
                 shutil.copytree(skill_dir, global_skill_dir)
-                console.print(f"  ✓ Moved skill '{skill_name}' to global skills", style=COLORS["dim"])
+                console.print(
+                    f"  ✓ Moved skill '{skill_name}' to global skills", style=COLORS["dim"]
+                )
 
         # 3. Remove old agent directory (after confirming everything is copied)
         console.print(f"  ✓ Cleaning up old directory: {old_agent_dir}", style=COLORS["dim"])
@@ -156,13 +160,15 @@ def migrate_agents() -> None:
 
     if skills_conflicts:
         console.print("[yellow]⚠ Skills Conflicts Detected:[/yellow]")
-        console.print("The following skills were skipped because they already exist in global skills:")
+        console.print(
+            "The following skills were skipped because they already exist in global skills:"
+        )
         for agent_name, skill_name in skills_conflicts:
             console.print(f"  • {skill_name} (from agent '{agent_name}')")
         console.print()
         console.print("To manually migrate these skills:")
-        console.print(f"  1. Review the existing skill in {global_skills_dir}/{skill_name}/") # type: ignore
-        console.print(f"  2. Manually merge or rename conflicting skills as needed")
+        console.print(f"  1. Review the existing skill in {global_skills_dir}/{skill_name}/")  # type: ignore
+        console.print("  2. Manually merge or rename conflicting skills as needed")
         console.print()
 
 

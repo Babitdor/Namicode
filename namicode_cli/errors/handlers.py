@@ -593,7 +593,7 @@ class ErrorHandler:
             )
 
         # Dependency errors
-        if "dependency" in error_str or "version" in error_str and "conflict" in error_str:
+        if "dependency" in error_str or ("version" in error_str and "conflict" in error_str):
             return RecoverableError(
                 category=ErrorCategory.DEPENDENCY_ERROR,
                 original_error=error,
@@ -603,7 +603,7 @@ class ErrorHandler:
             )
 
         # Configuration errors
-        if "config" in error_str or "environment" in error_str and "variable" in error_str:
+        if "config" in error_str or ("environment" in error_str and "variable" in error_str):
             return RecoverableError(
                 category=ErrorCategory.CONFIGURATION_ERROR,
                 original_error=error,

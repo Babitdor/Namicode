@@ -122,9 +122,7 @@ class MCPConfig:
                 data = json.load(f)
 
             servers = data.get("mcpServers", {})
-            return {
-                name: MCPServerConfig(**config) for name, config in servers.items()
-            }
+            return {name: MCPServerConfig(**config) for name, config in servers.items()}
         except (json.JSONDecodeError, ValueError) as e:
             msg = f"Failed to load MCP config from {self.config_path}: {e}"
             raise RuntimeError(msg) from e
@@ -137,8 +135,7 @@ class MCPConfig:
         """
         data = {
             "mcpServers": {
-                name: config.model_dump(exclude_none=True)
-                for name, config in servers.items()
+                name: config.model_dump(exclude_none=True) for name, config in servers.items()
             }
         }
 

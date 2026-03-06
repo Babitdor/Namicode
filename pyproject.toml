@@ -56,6 +56,8 @@ dependencies = [
     # Code quality tools (linting, formatting, type checking)
     "ruff>=0.8.0",
     "mypy>=1.13.0",
+    # Local deep-agent framework (path source defined in [tool.uv.sources])
+    "nami-deepagents",
 ]
 
 [project.urls]
@@ -115,6 +117,15 @@ ignore-var-parameters = true
 
 [tool.pytest.ini_options]
 timeout = 10  # Default timeout for all tests (can be overridden per-test)
+timeout_method = "thread"  # Forcefully interrupt hung tests on Windows
+asyncio_mode = "auto"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "pytest-timeout>=2.3",
+]
 
 [tool.mypy]
 strict = true

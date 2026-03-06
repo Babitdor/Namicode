@@ -850,9 +850,7 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
                         # Check if this line indicates server is ready
                         if is_server_ready(line):
                             server_ready = True
-                            sys.stdout.write(
-                                "\n\033[1;32m✓ Server is ready!\033[0m\n"
-                            )
+                            sys.stdout.write("\n\033[1;32m✓ Server is ready!\033[0m\n")
                             sys.stdout.flush()
                             break
 
@@ -909,10 +907,7 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
             )
             status = "success"
         elif process.returncode is not None:
-            output = (
-                f"{output}\n\n"
-                f"✗ Process exited with code {process.returncode}"
-            )
+            output = f"{output}\n\n✗ Process exited with code {process.returncode}"
             status = "error"
         else:
             # Timeout without server ready signal

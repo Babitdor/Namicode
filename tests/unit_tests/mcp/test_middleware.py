@@ -6,19 +6,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from namicode_cli.mcp.config import MCPConfig, MCPServerConfig
-from namicode_cli.mcp.middleware import MCPMiddleware, MCPState
+from namicode_cli.mcp.middleware import MCPMiddleware
 
 
 class TestMCPMiddlewareInit:
     """Test MCPMiddleware initialization."""
 
-    def test_init_default_config_path(self):
-        """Test initialization with default config path."""
-        with patch.object(MCPConfig, "_ensure_config_dir"):
-            middleware = MCPMiddleware()
-            assert middleware.mcp_config is not None
-            assert middleware.clients == {}
-            assert middleware._tools_cache == []
+    def test_init_default_config_path(self, tmp_path: Path):
+        """Test initialization with empty config — tools_cache should be empty."""
+        config_path = tmp_path / "mcp.json"
+        middleware = MCPMiddleware(config_path=config_path)
+        assert middleware.mcp_config is not None
+        # .clients was removed; use ._client (MultiServerMCPClient) instead
+        assert middleware._tools_cache == []
 
     def test_init_custom_config_path(self, tmp_path: Path):
         """Test initialization with custom config path."""
@@ -132,9 +132,7 @@ class TestMCPMiddlewareWrapModelCall:
 
         mock_request = MagicMock()
         mock_request.state = {
-            "mcp_tools": [
-                {"name": "search", "description": "Search docs", "server": "test"}
-            ]
+            "mcp_tools": [{"name": "search", "description": "Search docs", "server": "test"}]
         }
         mock_request.system_prompt = "Original prompt"
 
@@ -184,9 +182,7 @@ class TestMCPMiddlewareWrapModelCall:
 
         mock_request = MagicMock()
         mock_request.state = {
-            "mcp_tools": [
-                {"name": "fetch", "description": "Fetch page", "server": "test"}
-            ]
+            "mcp_tools": [{"name": "fetch", "description": "Fetch page", "server": "test"}]
         }
         mock_request.system_prompt = "Base prompt"
 
@@ -201,6 +197,7 @@ class TestMCPMiddlewareWrapModelCall:
         assert result == "async response"
 
 
+@pytest.mark.skip(reason="create_mcp_tools() and .clients were removed — now uses MultiServerMCPClient")
 class TestMCPMiddlewareCreateMCPTools:
     """Test create_mcp_tools method."""
 
@@ -272,6 +269,7 @@ class TestMCPMiddlewareCreateMCPTools:
         # but we've verified the tool metadata is correctly bound
 
 
+@pytest.mark.skip(reason=".clients was removed — tool calling now uses MultiServerMCPClient")
 class TestMCPMiddlewareToolCaller:
     """Test _create_mcp_tool_caller method."""
 
@@ -292,9 +290,7 @@ class TestMCPMiddlewareToolCaller:
         result = await caller(query="test query")
 
         # Verify correct client and tool were called
-        mock_client.call_tool.assert_called_once_with(
-            "search", arguments={"query": "test query"}
-        )
+        mock_client.call_tool.assert_called_once_with("search", arguments={"query": "test query"})
         assert result == {"result": "success"}
 
     @pytest.mark.asyncio
@@ -334,12 +330,8 @@ class TestMCPMiddlewareToolCaller:
         result2 = await caller2(arg="value2")
 
         # Verify each caller used the correct server and tool
-        mock_client1.call_tool.assert_called_once_with(
-            "tool_a", arguments={"arg": "value1"}
-        )
-        mock_client2.call_tool.assert_called_once_with(
-            "tool_b", arguments={"arg": "value2"}
-        )
+        mock_client1.call_tool.assert_called_once_with("tool_a", arguments={"arg": "value1"})
+        mock_client2.call_tool.assert_called_once_with("tool_b", arguments={"arg": "value2"})
 
         assert result1 == {"from": "server1"}
         assert result2 == {"from": "server2"}

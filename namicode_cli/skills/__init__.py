@@ -9,6 +9,7 @@ All other components are internal implementation details.
 """
 
 from namicode_cli.skills.middleware import SkillsMiddleware
+
 __all__ = [
     "SkillsMiddleware",
 ]

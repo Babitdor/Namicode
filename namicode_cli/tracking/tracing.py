@@ -40,8 +40,9 @@ Usage:
 """
 
 import os
+from collections.abc import Callable
 from functools import wraps
-from typing import Any, Callable
+from typing import Any
 
 from langchain_openai import ChatOpenAI
 
@@ -75,7 +76,7 @@ class TracingConfig:
         self.project_name = project_name
         self.workspace_id = workspace_id
         self.endpoint = endpoint
-        self._client: Client | None = None # type: ignore
+        self._client: Client | None = None  # type: ignore
 
     def is_configured(self) -> bool:
         """Check if tracing is properly configured."""
@@ -138,7 +139,7 @@ def configure_tracing(
     env_endpoint = os.environ.get("LANGSMITH_ENDPOINT")
 
     _tracing_config = TracingConfig(
-        enabled=enable and (env_tracing == "true" or (api_key or env_api_key)), # type: ignore
+        enabled=enable and (env_tracing == "true" or (api_key or env_api_key)),  # type: ignore
         api_key=api_key or env_api_key,
         project_name=project_name or env_project,
         workspace_id=workspace_id or env_workspace,
@@ -147,9 +148,8 @@ def configure_tracing(
 
     if _tracing_config.is_configured():
         _setup_langsmith_env()
-    else:
-        if not enable:
-            os.environ["LANGSMITH_TRACING"] = "false"
+    elif not enable:
+        os.environ["LANGSMITH_TRACING"] = "false"
 
     return _tracing_config
 
@@ -169,7 +169,7 @@ def _setup_langsmith_env() -> None:
         os.environ["LANGSMITH_ENDPOINT"] = _tracing_config.endpoint
 
 
-def get_client() -> Client | None: # type: ignore
+def get_client() -> Client | None:  # type: ignore
     """Get the LangSmith client if configured.
 
     Returns:
@@ -179,9 +179,9 @@ def get_client() -> Client | None: # type: ignore
         return None
 
     if _tracing_config._client is None:
-        _tracing_config._client = Client( # type: ignore
+        _tracing_config._client = Client(  # type: ignore
             api_key=_tracing_config.api_key,
-            endpoint=_tracing_config.endpoint, # type: ignore
+            endpoint=_tracing_config.endpoint,  # type: ignore
         )
 
     return _tracing_config._client
@@ -209,7 +209,7 @@ def wrap_openai_client(model: ChatOpenAI) -> ChatOpenAI:
     if not _TRACING_AVAILABLE or not _tracing_config.is_configured():
         return model
 
-    return _wrap_openai(model) # type: ignore
+    return _wrap_openai(model)  # type: ignore
 
 
 def trace(
@@ -245,11 +245,15 @@ def trace(
         def wrapper(*args, **kwargs):  # type: ignore[no-untyped-def]
             return func(*args, **kwargs)
 
-        return traceable(
-            name=name,
-            tags=tags,
-            metadata=metadata,
-        )(func) if callable(func) else func # type: ignore
+        return (
+            traceable(
+                name=name,
+                tags=tags,
+                metadata=metadata,
+            )(func)
+            if callable(func)
+            else func
+        )  # type: ignore
 
     return decorator
 
@@ -282,11 +286,15 @@ async def atrace(
         return lambda func: func
 
     def decorator(func: Callable) -> Callable:
-        return traceable(
-            name=name,
-            tags=tags,
-            metadata=metadata,
-        )(func) if callable(func) else func # type: ignore
+        return (
+            traceable(
+                name=name,
+                tags=tags,
+                metadata=metadata,
+            )(func)
+            if callable(func)
+            else func
+        )  # type: ignore
 
     return decorator
 
@@ -346,7 +354,7 @@ def create_project(
     name = project_name or _tracing_config.project_name
 
     try:
-        project = client.create_project(project_name=name, description=description) # type: ignore
+        project = client.create_project(project_name=name, description=description)  # type: ignore
         return {
             "id": project.id,
             "name": project.name,
@@ -405,7 +413,7 @@ def get_traces(
         return [
             {
                 "id": str(t.id),
-                "name": t.name or "Unnamed", # type: ignore
+                "name": t.name or "Unnamed",  # type: ignore
                 "created_at": str(t.created_at) if t.created_at else None,
                 "inputs": t.inputs or {},
                 "outputs": t.outputs or {},
@@ -453,12 +461,7 @@ def log_to_project(
     name = project_name or _tracing_config.project_name
 
     try:
-        client.create_run(
-            name="custom-log",
-            inputs=data,
-            project_name=name,
-            run_type="llm"
-        )
+        client.create_run(name="custom-log", inputs=data, project_name=name, run_type="llm")
         return True
     except Exception:
         return False
@@ -495,18 +498,18 @@ def auto_configure() -> TracingConfig:
 
 # Convenience exports
 __all__ = [
+    "atrace",
+    "auto_configure",
     "configure_tracing",
-    "is_tracing_enabled",
+    "create_project",
+    "get_client",
+    "get_traces",
     "get_tracing_config",
     "get_tracing_status",
-    "wrap_openai_client",
-    "trace",
-    "atrace",
-    "trace_context",
-    "create_project",
+    "is_tracing_enabled",
     "list_projects",
-    "get_traces",
     "log_to_project",
-    "auto_configure",
-    "get_client",
+    "trace",
+    "trace_context",
+    "wrap_openai_client",
 ]

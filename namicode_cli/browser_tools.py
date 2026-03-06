@@ -23,11 +23,15 @@ All browser operations use a shared browser instance that persists across calls
 within a session, enabling complex multi-step workflows.
 """
 
+import concurrent.futures
+import functools
 import os
 import tempfile
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Callable, Literal, TypeVar
+
+_F = TypeVar("_F", bound=Callable[..., Any])
 
 # Global browser state
 _browser_instance = None
@@ -1263,28 +1267,28 @@ def browser_wait_for(
 
 # List of all browser tools for easy export
 __all__ = [
-    "browser_navigate",
     "browser_click",
-    "browser_type",
-    "browser_screenshot",
+    "browser_close",
     "browser_evaluate",
-    "browser_wait",
-    "browser_wait_for",
-    "browser_query",
-    "browser_scroll",
     "browser_fill_form",
     "browser_get_content",
-    "browser_select",
     "browser_get_url",
     "browser_go_back",
     "browser_go_forward",
-    "browser_refresh",
-    "browser_close",
-    "browser_run_code",
-    "browser_upload",
+    "browser_navigate",
     "browser_pdf",
-    "browser_status",
+    "browser_query",
+    "browser_refresh",
+    "browser_run_code",
+    "browser_screenshot",
+    "browser_scroll",
+    "browser_select",
     "browser_snapshot",
+    "browser_status",
+    "browser_type",
+    "browser_upload",
+    "browser_wait",
+    "browser_wait_for",
 ]
 
 
@@ -1342,6 +1346,52 @@ def browser_pdf(
         }
 
 
+# ---------------------------------------------------------------------------
+# Thread-safety: Playwright's sync API uses greenlets that are bound to the
+# OS thread that created them. LangGraph calls sync tools via a thread pool,
+# which can use different threads across calls, causing:
+#   greenlet.error: Cannot switch to a different thread
+#
+# Fix: route ALL Playwright calls through a single dedicated thread so that
+# every greenlet switch always happens on the same OS thread.
+# ---------------------------------------------------------------------------
+_BROWSER_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="nami-browser"
+)
+
+
+def _on_browser_thread(fn: _F) -> _F:
+    """Wrap a browser function so it always runs on the dedicated browser thread."""
+
+    @functools.wraps(fn)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        return _BROWSER_EXECUTOR.submit(fn, *args, **kwargs).result(timeout=120)
+
+    return wrapper  # type: ignore[return-value]
+
+
+browser_navigate = _on_browser_thread(browser_navigate)
+browser_click = _on_browser_thread(browser_click)
+browser_type = _on_browser_thread(browser_type)
+browser_screenshot = _on_browser_thread(browser_screenshot)
+browser_evaluate = _on_browser_thread(browser_evaluate)
+browser_wait = _on_browser_thread(browser_wait)
+browser_wait_for = _on_browser_thread(browser_wait_for)
+browser_query = _on_browser_thread(browser_query)
+browser_scroll = _on_browser_thread(browser_scroll)
+browser_fill_form = _on_browser_thread(browser_fill_form)
+browser_get_content = _on_browser_thread(browser_get_content)
+browser_select = _on_browser_thread(browser_select)
+browser_get_url = _on_browser_thread(browser_get_url)
+browser_go_back = _on_browser_thread(browser_go_back)
+browser_go_forward = _on_browser_thread(browser_go_forward)
+browser_refresh = _on_browser_thread(browser_refresh)
+browser_close = _on_browser_thread(browser_close)
+browser_run_code = _on_browser_thread(browser_run_code)
+browser_upload = _on_browser_thread(browser_upload)
+browser_pdf = _on_browser_thread(browser_pdf)
+browser_status = _on_browser_thread(browser_status)
+browser_snapshot = _on_browser_thread(browser_snapshot)
 # List of all browser tools for easy import
 BROWSER_TOOLS = [
     browser_navigate,

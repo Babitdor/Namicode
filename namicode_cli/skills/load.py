@@ -23,10 +23,10 @@ description: Structured approach to conducting thorough web research
 
 from __future__ import annotations
 
-import re
-from typing import TYPE_CHECKING, TypedDict
-from nami_deepagents.middleware.skills import SkillMetadata
+from typing import TYPE_CHECKING
+
 from nami_deepagents.backends.filesystem import FilesystemBackend
+from nami_deepagents.middleware.skills import SkillMetadata
 from nami_deepagents.middleware.skills import _list_skills as list_skills_from_backend
 
 if TYPE_CHECKING:
@@ -79,9 +79,7 @@ def list_skills(
     # Load project skills second (override/augment)
     if project_skills_dir and project_skills_dir.exists():
         project_backend = FilesystemBackend(root_dir=str(project_skills_dir))
-        project_skills = list_skills_from_backend(
-            backend=project_backend, source_path="."
-        )
+        project_skills = list_skills_from_backend(backend=project_backend, source_path=".")
         for skill in project_skills:
             # Add source field for CLI display
             extended_skill: ExtendedSkillMetadata = {**skill, "source": "project"}

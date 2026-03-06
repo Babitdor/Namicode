@@ -11,11 +11,12 @@ import atexit
 import os
 import signal
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 
 class ProcessStatus(Enum):
@@ -241,9 +242,7 @@ class ProcessManager:
 
             # Start output streaming task (non-blocking)
             if output_callback:
-                asyncio.create_task(
-                    self._stream_output(process, info, output_callback)
-                )
+                asyncio.create_task(self._stream_output(process, info, output_callback))
 
             return info
 
@@ -305,7 +304,7 @@ class ProcessManager:
 
                 try:
                     await asyncio.wait_for(info._process.wait(), timeout=timeout)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     # Force kill if graceful termination timed out
                     info._process.kill()
                     await info._process.wait()
@@ -422,14 +421,13 @@ class ProcessManager:
             try:
                 import aiohttp
 
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(
-                        info.health_check_url, timeout=aiohttp.ClientTimeout(total=5)
-                    ) as resp:
-                        if resp.status < 400:
-                            info.status = ProcessStatus.HEALTHY
-                        else:
-                            info.status = ProcessStatus.UNHEALTHY
+                async with aiohttp.ClientSession() as session, session.get(
+                    info.health_check_url, timeout=aiohttp.ClientTimeout(total=5)
+                ) as resp:
+                    if resp.status < 400:
+                        info.status = ProcessStatus.HEALTHY
+                    else:
+                        info.status = ProcessStatus.UNHEALTHY
             except Exception:
                 info.status = ProcessStatus.UNHEALTHY
         else:
@@ -496,7 +494,7 @@ async def stream_subprocess_output(
     try:
         await asyncio.wait_for(read_stream(), timeout=timeout)
         await process.wait()
-    except asyncio.TimeoutError:
+    except TimeoutError:
         process.kill()
         await process.wait()
         raise

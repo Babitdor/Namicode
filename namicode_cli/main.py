@@ -49,6 +49,13 @@ from pathlib import Path
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.store.memory import InMemoryStore
+
+try:
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver as _AsyncSqliteSaver
+
+    _SQLITE_CHECKPOINTER_AVAILABLE = True
+except ImportError:
+    _SQLITE_CHECKPOINTER_AVAILABLE = False
 from nami_deepagents.backends.protocol import SandboxBackendProtocol
 
 from namicode_cli.agents.core_agent import (
@@ -191,9 +198,7 @@ def parse_args():
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
 
     # Init command - interactive configuration setup
-    init_parser = subparsers.add_parser(
-        "init", help="Initialize project or global configuration"
-    )
+    init_parser = subparsers.add_parser("init", help="Initialize project or global configuration")
     init_parser.add_argument(
         "--scope",
         choices=["project", "global"],
@@ -230,9 +235,7 @@ def parse_args():
     setup_mcp_parser(subparsers)
 
     # Config command - view/edit configuration
-    config_parser = subparsers.add_parser(
-        "config", help="View or edit configuration (non-secret)"
-    )
+    config_parser = subparsers.add_parser("config", help="View or edit configuration (non-secret)")
     config_parser.add_argument(
         "config_command",
         nargs="?",
@@ -272,9 +275,7 @@ def parse_args():
         "paths",
         help="Manage approved file system paths",
     )
-    paths_subparsers = paths_parser.add_subparsers(
-        dest="paths_command", help="Paths command"
-    )
+    paths_subparsers = paths_parser.add_subparsers(dest="paths_command", help="Paths command")
 
     # paths list
     paths_subparsers.add_parser(
@@ -354,9 +355,7 @@ def parse_args():
         version=f"{settings.version} (NamiCode)",
         help="Show the version number and exit",
     )
-    parser.add_argument(
-        "-h", "--help", action="help", help="Show this help message and exit"
-    )
+    parser.add_argument("-h", "--help", action="help", help="Show this help message and exit")
 
     return parser.parse_args()
 
@@ -400,9 +399,7 @@ async def simple_cli(
             "[red]Cannot start nami without path approval.[/red]",
             style=COLORS["dim"],
         )
-        console.print(
-            "[dim]Path approval is required to ensure safe file system access.[/dim]"
-        )
+        console.print("[dim]Path approval is required to ensure safe file system access.[/dim]")
         console.print()
         sys.exit(1)
 
@@ -424,9 +421,7 @@ async def simple_cli(
 
     # Display sandbox info persistently (survives console.clear())
     if sandbox_type and sandbox_id:
-        console.print(
-            f"[yellow]⚡ {sandbox_type.capitalize()} sandbox: {sandbox_id}[/yellow]"
-        )
+        console.print(f"[yellow]⚡ {sandbox_type.capitalize()} sandbox: {sandbox_id}[/yellow]")
         if setup_script_path:
             console.print(
                 f"[green]✓ Setup script ({setup_script_path}) completed successfully[/green]"
@@ -438,12 +433,8 @@ async def simple_cli(
             "[yellow]⚠ Web search disabled:[/yellow] TAVILY_API_KEY not found.",
             style=COLORS["dim"],
         )
-        console.print(
-            "  To enable web search, set your Tavily API key:", style=COLORS["dim"]
-        )
-        console.print(
-            "    export TAVILY_API_KEY=your_api_key_here", style=COLORS["dim"]
-        )
+        console.print("  To enable web search, set your Tavily API key:", style=COLORS["dim"])
+        console.print("    export TAVILY_API_KEY=your_api_key_here", style=COLORS["dim"])
         console.print(
             "  Or add it to your .env file. Get your key at: https://tavily.com",
             style=COLORS["dim"],
@@ -465,15 +456,16 @@ async def simple_cli(
         has_user_memory = user_agent_md.exists()
     else:
         has_user_memory = False
-    project_agent_md = settings.get_project_agent_md_paths()
-    has_project_memory = project_agent_md.exists() if project_agent_md else False
+    project_agent_mds = settings.get_project_agent_md_paths()
+    has_project_memory = bool(project_agent_mds)
 
     if has_user_memory or has_project_memory:
         memory_parts = []
         if has_user_memory:
             memory_parts.append(f"(~/.nami/agents/{assistant_id}/agent.md)")
         if has_project_memory:
-            memory_parts.append("Project: (.nami/NAMI.md)")
+            names = ", ".join(p.name for p in project_agent_mds)
+            memory_parts.append(f"Project: ({names})")
         console.print(f"  [dim]Memory: {', '.join(memory_parts)}[/dim]")
     else:
         console.print("  [dim]Memory: none (use /init to create project memory)[/dim]")
@@ -553,9 +545,7 @@ async def simple_cli(
             if messages:
                 # Scan current workspace state
                 workspace_state = (
-                    scan_workspace(settings.project_root)
-                    if settings.project_root
-                    else None
+                    scan_workspace(settings.project_root) if settings.project_root else None
                 )
 
                 # Extract current task from session state (if available)
@@ -582,9 +572,7 @@ async def simple_cli(
                         )
                     except Exception as e:
                         if not silent:
-                            console.print(
-                                f"[dim]Could not generate memory summary: {e}[/dim]"
-                            )
+                            console.print(f"[dim]Could not generate memory summary: {e}[/dim]")
 
                 session_manager.save_session(
                     session_id=session_state.session_id or session_state.thread_id,
@@ -615,9 +603,7 @@ async def simple_cli(
             manager = ProcessManager.get_instance()
             stopped_count = await manager.stop_all()
             if stopped_count > 0:
-                console.print(
-                    f"[dim]Stopped {stopped_count} managed process(es).[/dim]"
-                )
+                console.print(f"[dim]Stopped {stopped_count} managed process(es).[/dim]")
         except Exception as e:
             console.print(f"[dim]Could not stop processes: {e}[/dim]")
 
@@ -876,17 +862,11 @@ async def _run_agent_session(
     from .token_utils import calculate_baseline_tokens
 
     agent_dir = settings.get_agent_dir(assistant_id)
-    system_prompt = get_system_prompt(
-        assistant_id=assistant_id, sandbox_type=sandbox_type
-    )
-    baseline_tokens = calculate_baseline_tokens(
-        model, agent_dir, system_prompt, assistant_id
-    )
+    system_prompt = get_system_prompt(assistant_id=assistant_id, sandbox_type=sandbox_type)
+    baseline_tokens = calculate_baseline_tokens(model, agent_dir, system_prompt, assistant_id)
 
     # Extract model name for context window calculation
-    model_name = getattr(model, "model_name", None) or getattr(
-        model, "model", "unknown"
-    )
+    model_name = getattr(model, "model_name", None) or getattr(model, "model", "unknown")
 
     await simple_cli(
         agent,
@@ -903,6 +883,19 @@ async def _run_agent_session(
         checkpointer=checkpointer,
         restored_session_data=restored_session_data,
     )
+
+
+def _cleanup_old_checkpoints(checkpoints_dir: Path, max_age_days: int = 30) -> None:
+    """Remove checkpoint database files older than max_age_days."""
+    import time
+
+    cutoff = time.time() - max_age_days * 86400
+    for db_file in checkpoints_dir.glob("*.db"):
+        try:
+            if db_file.stat().st_mtime < cutoff:
+                db_file.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 async def main(
@@ -928,7 +921,21 @@ async def main(
 
     model = create_model()
     store = InMemoryStore()
-    checkpointer = InMemorySaver()
+
+    # Use SQLite-backed checkpointer for cross-restart session continuity when available.
+    # Falls back to InMemorySaver if langgraph-checkpoint-sqlite is not installed.
+    if _SQLITE_CHECKPOINTER_AVAILABLE:
+        checkpoints_dir = settings.nami_dir / "checkpoints"
+        checkpoints_dir.mkdir(parents=True, exist_ok=True)
+        # Clean up checkpoint DBs older than 30 days to prevent unbounded growth
+        _cleanup_old_checkpoints(checkpoints_dir, max_age_days=30)
+        checkpointer = _AsyncSqliteSaver.from_conn_string(
+            str(checkpoints_dir / "nami_checkpoints.db")
+        )
+        await checkpointer.setup()
+    else:
+        checkpointer = InMemorySaver()
+
     # Initialize session manager for persistence
     session_manager = SessionManager()
     initial_messages: list | None = None
@@ -953,16 +960,12 @@ async def main(
 
             # Load only recent messages for context (not all messages)
             # The continuation prompt builder will handle the full context
-            recent_messages = session_manager.load_recent_messages(
-                session_data.meta.session_id
-            )
+            recent_messages = session_manager.load_recent_messages(session_data.meta.session_id)
 
             # Scan current workspace and detect drift
             current_workspace = scan_workspace(project_root)
             if session_data.workspace_state:
-                drift_warnings = detect_drift(
-                    session_data.workspace_state, current_workspace
-                )
+                drift_warnings = detect_drift(session_data.workspace_state, current_workspace)
                 warnings.extend(drift_warnings)
 
             # Load NAMI.md for continuation prompt
@@ -1022,9 +1025,7 @@ async def main(
             with create_sandbox(
                 sandbox_type, sandbox_id=sandbox_id, setup_script_path=setup_script_path
             ) as sandbox_backend:
-                console.print(
-                    f"[yellow]⚡ Remote execution enabled ({sandbox_type})[/yellow]"
-                )
+                console.print(f"[yellow]⚡ Remote execution enabled ({sandbox_type})[/yellow]")
                 console.print()
 
                 await _run_agent_session(
@@ -1123,9 +1124,7 @@ def _execute_paths_command(args) -> None:
 
         console.print()
         console.print("[yellow]⚠ This will clear ALL approved paths.[/yellow]")
-        console.print(
-            "[dim]You'll need to re-approve paths when you next run nami.[/dim]"
-        )
+        console.print("[dim]You'll need to re-approve paths when you next run nami.[/dim]")
         console.print()
 
         confirm = prompt("Are you sure? (yes/no): ").strip().lower()
@@ -1143,9 +1142,7 @@ def _execute_paths_command(args) -> None:
             console.print()
     else:
         console.print()
-        console.print(
-            "[yellow]Please specify a subcommand: list, revoke, or clear[/yellow]"
-        )
+        console.print("[yellow]Please specify a subcommand: list, revoke, or clear[/yellow]")
         console.print()
         console.print("[bold]Usage:[/bold]", style=COLORS["primary"])
         console.print("  nami paths list         List all approved paths")
@@ -1268,9 +1265,7 @@ def _execute_secrets_command(args) -> None:
         # Set API key
         if not args.key:
             console.print("[red]✗ Key name required for 'set' command[/red]")
-            console.print(
-                "[dim]Usage: nami secrets set <key> (e.g., 'openai_api_key')[/dim]"
-            )
+            console.print("[dim]Usage: nami secrets set <key> (e.g., 'openai_api_key')[/dim]")
             return
 
         console.print()
@@ -1295,9 +1290,7 @@ def _execute_secrets_command(args) -> None:
         # Delete API key
         if not args.key:
             console.print("[red]✗ Key name required for 'delete' command[/red]")
-            console.print(
-                "[dim]Usage: nami secrets delete <key> (e.g., 'openai_api_key')[/dim]"
-            )
+            console.print("[dim]Usage: nami secrets delete <key> (e.g., 'openai_api_key')[/dim]")
             return
 
         console.print()
@@ -1361,9 +1354,7 @@ def cli_main() -> None:
                 from namicode_cli.onboarding import OnboardingWizard
 
                 console.print()
-                console.print(
-                    "[yellow]⚠ This will overwrite your current configuration.[/yellow]"
-                )
+                console.print("[yellow]⚠ This will overwrite your current configuration.[/yellow]")
                 from prompt_toolkit import prompt
 
                 confirm = prompt("Continue? [y/N]: ").strip().lower()
@@ -1400,9 +1391,7 @@ def cli_main() -> None:
             sys.exit(run_doctor())
         else:
             # Create session state from args
-            session_state = SessionState(
-                auto_approve=args.auto_approve, no_splash=args.no_splash
-            )
+            session_state = SessionState(auto_approve=args.auto_approve, no_splash=args.no_splash)
 
             # API key validation happens in create_model()
             asyncio.run(

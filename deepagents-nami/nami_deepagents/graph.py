@@ -131,10 +131,12 @@ def create_deep_agent(
         and isinstance(model.profile["max_input_tokens"], int)
     ):
         trigger = ("fraction", 0.85)
-        keep = ("fraction", 0.10)
+        keep = ("fraction", 0.25)
+        trim_tokens_to_summarize: int | None = int(model.profile["max_input_tokens"] * 0.70)
     else:
         trigger = ("tokens", 40000)
-        keep = ("tokens", 6000)
+        keep = ("tokens", 12000)
+        trim_tokens_to_summarize = 35000
 
     # Build middleware stack for subagents (includes skills if provided)
     subagent_middleware: list[AgentMiddleware] = [
@@ -152,7 +154,7 @@ def create_deep_agent(
                 model=model,
                 trigger=trigger,
                 keep=keep,
-                trim_tokens_to_summarize=None,
+                trim_tokens_to_summarize=trim_tokens_to_summarize,
             ),
             AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"),
             PatchToolCallsMiddleware(),
@@ -182,7 +184,7 @@ def create_deep_agent(
                 model=model,
                 trigger=trigger,
                 keep=keep,
-                trim_tokens_to_summarize=None,
+                trim_tokens_to_summarize=trim_tokens_to_summarize,
             ),
             AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"),
             PatchToolCallsMiddleware(),

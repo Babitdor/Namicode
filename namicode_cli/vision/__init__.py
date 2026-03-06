@@ -10,15 +10,15 @@ Components:
 """
 
 from namicode_cli.vision.models import (
-    model_supports_vision,
-    get_vision_models,
-    suggest_vision_model,
     VISION_CAPABLE_MODELS,
+    get_vision_models,
+    model_supports_vision,
+    suggest_vision_model,
 )
 
 __all__ = [
-    "model_supports_vision",
-    "get_vision_models",
-    "suggest_vision_model",
     "VISION_CAPABLE_MODELS",
+    "get_vision_models",
+    "model_supports_vision",
+    "suggest_vision_model",
 ]

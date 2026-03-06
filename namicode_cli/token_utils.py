@@ -8,9 +8,7 @@ from langchain_core.messages import SystemMessage
 from namicode_cli.config.config import console, settings
 
 
-def calculate_baseline_tokens(
-    model, agent_dir: Path, system_prompt: str, assistant_id: str
-) -> int:
+def calculate_baseline_tokens(model, agent_dir: Path, system_prompt: str, assistant_id: str) -> int:
     """Calculate baseline context tokens using the model's official tokenizer.
 
     This uses the model's get_num_tokens_from_messages() method to get
@@ -65,9 +63,7 @@ def calculate_baseline_tokens(
     )
 
     # Combine all parts in the same order as the middleware
-    full_system_prompt = (
-        memory_section + "\n\n" + system_prompt + "\n\n" + memory_system_prompt
-    )
+    full_system_prompt = memory_section + "\n\n" + system_prompt + "\n\n" + memory_system_prompt
 
     # Count tokens using the model's official method
     messages = [SystemMessage(content=full_system_prompt)]
@@ -84,9 +80,7 @@ def calculate_baseline_tokens(
             return model.get_num_tokens_from_messages(messages)
     except Exception as e:
         # Fallback if token counting fails
-        console.print(
-            f"[yellow]Warning: Could not calculate baseline tokens: {e}[/yellow]"
-        )
+        console.print(f"[yellow]Warning: Could not calculate baseline tokens: {e}[/yellow]")
         return 0
 
 

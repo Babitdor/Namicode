@@ -7,7 +7,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from namicode_cli.dev_server import (
+from namicode_cli.process_manager import ProcessManager, ProcessStatus
+from namicode_cli.server_runner.dev_server import (
     ServerInfo,
     extract_port_from_command,
     find_available_port,
@@ -15,7 +16,6 @@ from namicode_cli.dev_server import (
     list_servers,
     validate_server_command,
 )
-from namicode_cli.process_manager import ProcessManager, ProcessStatus
 
 
 class TestServerInfo:
@@ -143,7 +143,9 @@ class TestExtractPortFromCommand:
     def test_python_http_server(self) -> None:
         """Test python http server port detection."""
         assert extract_port_from_command("python -m http.server") == 8000
-        assert extract_port_from_command("python -m http.server 9000") == 8000  # Uses pattern default
+        assert (
+            extract_port_from_command("python -m http.server 9000") == 8000
+        )  # Uses pattern default
 
 
 class TestValidateServerCommand:
@@ -283,7 +285,7 @@ class TestServerLifecycle:
         """Test stopping server by PID."""
         import sys
 
-        from namicode_cli.dev_server import stop_server
+        from namicode_cli.server_runner.dev_server import stop_server
 
         manager = ProcessManager.get_instance()
 
@@ -308,7 +310,7 @@ class TestServerLifecycle:
         """Test stopping server by name."""
         import sys
 
-        from namicode_cli.dev_server import stop_server
+        from namicode_cli.server_runner.dev_server import stop_server
 
         manager = ProcessManager.get_instance()
 
@@ -331,7 +333,7 @@ class TestServerLifecycle:
     @pytest.mark.asyncio
     async def test_stop_server_not_found(self) -> None:
         """Test stopping a nonexistent server."""
-        from namicode_cli.dev_server import stop_server
+        from namicode_cli.server_runner.dev_server import stop_server
 
         result = await stop_server(pid=99999)
         assert result is False
@@ -342,7 +344,7 @@ class TestServerLifecycle:
     @pytest.mark.asyncio
     async def test_stop_server_no_args(self) -> None:
         """Test stop_server with no arguments returns False."""
-        from namicode_cli.dev_server import stop_server
+        from namicode_cli.server_runner.dev_server import stop_server
 
         result = await stop_server()
         assert result is False
@@ -361,7 +363,7 @@ class TestListServersTool:
 
     def test_list_servers_tool_empty(self) -> None:
         """Test list_servers_tool with no servers."""
-        from namicode_cli.dev_server import list_servers_tool
+        from namicode_cli.server_runner.dev_server import list_servers_tool
 
         result = list_servers_tool()
 
@@ -374,7 +376,7 @@ class TestListServersTool:
         """Test list_servers_tool with running servers."""
         import sys
 
-        from namicode_cli.dev_server import list_servers_tool
+        from namicode_cli.server_runner.dev_server import list_servers_tool
 
         manager = ProcessManager.get_instance()
 

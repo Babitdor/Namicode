@@ -126,9 +126,7 @@ def create_modal_sandbox(
         finally:
             if should_cleanup:
                 try:
-                    console.print(
-                        f"[dim]Terminating Modal sandbox {sandbox_id}...[/dim]"
-                    )
+                    console.print(f"[dim]Terminating Modal sandbox {sandbox_id}...[/dim]")
                     sandbox.terminate()
                     console.print(f"[dim]✓ Modal sandbox {sandbox_id} terminated[/dim]")
                 except Exception as e:
@@ -200,9 +198,7 @@ def create_runloop_sandbox(
     finally:
         if should_cleanup:
             try:
-                console.print(
-                    f"[dim]Shutting down Runloop devbox {sandbox_id}...[/dim]"
-                )
+                console.print(f"[dim]Shutting down Runloop devbox {sandbox_id}...[/dim]")
                 client.devboxes.shutdown(id=devbox.id)
                 console.print(f"[dim]✓ Runloop devbox {sandbox_id} terminated[/dim]")
             except Exception as e:
@@ -321,9 +317,7 @@ def create_docker_sandbox(
     try:
         if sandbox_id:
             # Reuse existing container
-            console.print(
-                f"[dim]Connecting to existing container {sandbox_id}...[/dim]"
-            )
+            console.print(f"[dim]Connecting to existing container {sandbox_id}...[/dim]")
             container = client.containers.get(sandbox_id)
             should_cleanup = False  # Don't cleanup reused containers
 
@@ -381,15 +375,11 @@ def create_docker_sandbox(
 
     finally:
         if container and should_cleanup:
-            console.print(
-                f"[dim]Stopping Docker container {container.id[:12]}...[/dim]"
-            )
+            console.print(f"[dim]Stopping Docker container {container.id[:12]}...[/dim]")
             try:
                 container.stop(timeout=10)
                 container.remove()
-                console.print(
-                    f"[dim]✓ Docker container {container.id[:12]} terminated[/dim]"
-                )
+                console.print(f"[dim]✓ Docker container {container.id[:12]} terminated[/dim]")
             except Exception as e:
                 console.print(f"[yellow]⚠ Cleanup failed: {e}[/yellow]")
 
@@ -441,9 +431,7 @@ def create_sandbox(
 
     sandbox_provider = _SANDBOX_PROVIDERS[provider]
 
-    with sandbox_provider(
-        sandbox_id=sandbox_id, setup_script_path=setup_script_path
-    ) as backend:
+    with sandbox_provider(sandbox_id=sandbox_id, setup_script_path=setup_script_path) as backend:
         yield backend
 
 

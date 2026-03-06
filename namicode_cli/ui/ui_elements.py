@@ -44,7 +44,7 @@ from rich.text import Text
 
 from namicode_cli.context.context_manager import ContextBreakdown
 
-from ..config.config import COLORS, COMMANDS, NAMI_CODE_ASCII, MAX_ARG_LENGTH, console
+from ..config.config import COLORS, COMMANDS, MAX_ARG_LENGTH, NAMI_CODE_ASCII, console
 from ..file_ops import FileOperationRecord
 
 
@@ -173,8 +173,7 @@ def format_tool_display(tool_name: str, tool_args: dict) -> str:
             desc = str(tool_args["description"])
             desc = truncate_value(desc, 80)
             return f'{tool_name}[{subagent_type}]("{desc}")'
-        else:
-            return f'{tool_name}[{subagent_type}]'
+        return f"{tool_name}[{subagent_type}]"
 
     elif tool_name == "write_todos":
         # Todos: show count of items
@@ -275,9 +274,7 @@ def format_tool_display(tool_name: str, tool_args: dict) -> str:
 
     # Fallback: generic formatting for unknown tools
     # Show all arguments in key=value format
-    args_str = ", ".join(
-        f"{k}={truncate_value(str(v), 50)}" for k, v in tool_args.items()
-    )
+    args_str = ", ".join(f"{k}={truncate_value(str(v), 50)}" for k, v in tool_args.items())
     return f"{tool_name}({args_str})"
 
 
@@ -329,31 +326,41 @@ def format_tool_result_preview(
         m = re.search(r"\[Command (?:succeeded|failed) with exit code (\d+)\]", content_str)
         exit_code = int(m.group(1)) if m else None
         output_lines = [
-            l for l in content_str.splitlines()
-            if l.strip() and not l.startswith("[Command") and not l.startswith("[Output was truncated")
+            l
+            for l in content_str.splitlines()
+            if l.strip()
+            and not l.startswith("[Command")
+            and not l.startswith("[Output was truncated")
         ]
         line_count = len(output_lines)
         if exit_code is not None:
             if exit_code == 0:
                 return f"exit 0 · {line_count} line{'s' if line_count != 1 else ''}{duration}"
-            else:
-                snippet = output_lines[0][:80] if output_lines else ""
-                return (f"✗ exit {exit_code} · {snippet}{duration}" if snippet
-                        else f"✗ exit {exit_code}{duration}")
+            snippet = output_lines[0][:80] if output_lines else ""
+            return (
+                f"✗ exit {exit_code} · {snippet}{duration}"
+                if snippet
+                else f"✗ exit {exit_code}{duration}"
+            )
         return f"{line_count} line{'s' if line_count != 1 else ''}{duration}"
 
-    elif tool_name == "grep":
-        if not content_str or "no matches" in content_str.lower() or content_str.strip() in ("[]", ""):
+    if tool_name == "grep":
+        if (
+            not content_str
+            or "no matches" in content_str.lower()
+            or content_str.strip() in ("[]", "")
+        ):
             return f"no matches{duration}"
         lines = [l for l in content_str.splitlines() if l.strip()]
         count = len(lines)
         return f"{count} match{'es' if count != 1 else ''}{duration}"
 
-    elif tool_name in ("ls", "glob"):
+    if tool_name in ("ls", "glob"):
         if not content_str or content_str.strip() in ("[]", ""):
             return f"0 items{duration}"
         try:
             import ast
+
             items = ast.literal_eval(content_str)
             if isinstance(items, list):
                 count = len(items)
@@ -363,7 +370,7 @@ def format_tool_result_preview(
         lines = [l for l in content_str.splitlines() if l.strip()]
         return f"{len(lines)} item{'s' if len(lines) != 1 else ''}{duration}"
 
-    elif tool_name in ("web_search", "duckduckgo_search", "docs_search"):
+    if tool_name in ("web_search", "duckduckgo_search", "docs_search"):
         try:
             data = json.loads(content_str)
             if isinstance(data, list):
@@ -374,18 +381,18 @@ def format_tool_result_preview(
         lines = [l for l in content_str.splitlines() if l.strip()]
         return f"{len(lines)} results{duration}"
 
-    elif tool_name in ("fetch_url", "http_request"):
+    if tool_name in ("fetch_url", "http_request"):
         size = len(content_str.encode("utf-8"))
         size_str = f"{size // 1024}KB" if size >= 1024 else f"{size}B"
         return f"{size_str}{duration}"
 
-    elif tool_name in ("git_status", "git_log", "git_diff", "git_blame", "git_branch", "git_stash"):
+    if tool_name in ("git_status", "git_log", "git_diff", "git_blame", "git_branch", "git_stash"):
         lines = [l for l in content_str.splitlines() if l.strip()]
         if not lines:
             return f"no output{duration}"
         return f"{len(lines)} line{'s' if len(lines) != 1 else ''}{duration}"
 
-    elif tool_name in ("run_tests",):
+    if tool_name in ("run_tests",):
         # Surface pass/fail from test output
         lower = content_str.lower()
         if "passed" in lower or "ok" in lower:
@@ -418,8 +425,8 @@ class TokenTracker:
         self.last_output = 0
 
         # Prompt-caching breakdown (Anthropic only, 0 for other providers)
-        self.last_cache_read = 0       # tokens read from prompt cache this turn
-        self.last_cache_creation = 0   # tokens written to prompt cache this turn
+        self.last_cache_read = 0  # tokens read from prompt cache this turn
+        self.last_cache_creation = 0  # tokens written to prompt cache this turn
 
         # Whether we've received at least one real API response
         self.has_api_data = False
@@ -509,8 +516,7 @@ class TokenTracker:
 
         # Calculate conversation tokens
         conversation_tokens = self.current_context - self.baseline_context
-        if conversation_tokens < 0:
-            conversation_tokens = 0
+        conversation_tokens = max(conversation_tokens, 0)
 
         return ContextBreakdown(
             system_prompt_tokens=self.baseline_context,
@@ -526,9 +532,7 @@ class TokenTracker:
         if self.last_output and self.last_output >= 1000:
             console.print(f"  Generated: {self.last_output:,} tokens", style="dim")
         if self.current_context:
-            console.print(
-                f"  Current context: {self.current_context:,} tokens", style="dim"
-            )
+            console.print(f"  Current context: {self.current_context:,} tokens", style="dim")
 
     def display_session(self) -> None:
         """Display current context size."""
@@ -556,9 +560,7 @@ class TokenTracker:
                 style=COLORS["dim"],
             )
 
-        console.print(
-            f"  Total: {self.current_context:,} tokens", style="bold " + COLORS["dim"]
-        )
+        console.print(f"  Total: {self.current_context:,} tokens", style="bold " + COLORS["dim"])
         console.print()
 
     def display_context(self) -> None:
@@ -582,9 +584,7 @@ class TokenTracker:
 
         # Data source label
         if not self.has_api_data:
-            console.print(
-                "  [dim](estimated — will update after first API response)[/dim]"
-            )
+            console.print("  [dim](estimated — will update after first API response)[/dim]")
         console.print()
 
         # Progress bar
@@ -691,9 +691,7 @@ class TokenTracker:
 
         # Context window info
         model_display = self.model_name or "unknown model"
-        console.print(
-            f"  [dim]Window: {window:,} tokens ({model_display})[/dim]"
-        )
+        console.print(f"  [dim]Window: {window:,} tokens ({model_display})[/dim]")
         console.print()
 
         # Threshold warnings
@@ -704,8 +702,7 @@ class TokenTracker:
             )
         elif breakdown.is_warning:
             console.print(
-                "  [yellow]⚠ Warning: Context usage is high. "
-                "Consider using /compact soon.[/yellow]"
+                "  [yellow]⚠ Warning: Context usage is high. Consider using /compact soon.[/yellow]"
             )
         console.print()
 
@@ -762,9 +759,7 @@ class StreamingOutputRenderer:
         """
         if self._line_count >= self.max_lines:
             if not self._truncated:
-                console.print(
-                    f"[yellow]... output truncated (max {self.max_lines} lines)[/yellow]"
-                )
+                console.print(f"[yellow]... output truncated (max {self.max_lines} lines)[/yellow]")
                 self._truncated = True
             return
 
@@ -926,9 +921,7 @@ def _wrap_diff_line(
 
     if len(code) <= available_width:
         if line_num is not None:
-            return [
-                f"[dim]{line_num:>{width}}[/dim] [{color}]{marker}  {code}[/{color}]"
-            ]
+            return [f"[dim]{line_num:>{width}}[/dim] [{color}]{marker}  {code}[/{color}]"]
         return [f"{' ' * width} [{color}]{marker}  {code}[/{color}]"]
 
     lines = []
@@ -959,9 +952,7 @@ def _wrap_diff_line(
                 remaining = remaining[available_width:]
 
         if first and line_num is not None:
-            lines.append(
-                f"[dim]{line_num:>{width}}[/dim] [{color}]{marker}  {chunk}[/{color}]"
-            )
+            lines.append(f"[dim]{line_num:>{width}}[/dim] [{color}]{marker}  {chunk}[/{color}]")
             first = False
         else:
             lines.append(f"{' ' * width} [{color}]{marker}  {chunk}[/{color}]")
@@ -1014,23 +1005,17 @@ def format_diff_rich(diff_lines: list[str]) -> str:
             old_num, new_num = int(m.group(1)), int(m.group(2))
         elif line.startswith("-"):
             formatted_lines.extend(
-                _wrap_diff_line(
-                    line[1:], "-", deletion_color, old_num, width, term_width
-                )
+                _wrap_diff_line(line[1:], "-", deletion_color, old_num, width, term_width)
             )
             old_num += 1
         elif line.startswith("+"):
             formatted_lines.extend(
-                _wrap_diff_line(
-                    line[1:], "+", addition_color, new_num, width, term_width
-                )
+                _wrap_diff_line(line[1:], "+", addition_color, new_num, width, term_width)
             )
             new_num += 1
         elif line.startswith(" "):
             formatted_lines.extend(
-                _wrap_diff_line(
-                    line[1:], " ", context_color, old_num, width, term_width
-                )
+                _wrap_diff_line(line[1:], " ", context_color, old_num, width, term_width)
             )
             old_num += 1
             new_num += 1
@@ -1047,9 +1032,7 @@ def render_diff_block(diff: str, title: str) -> None:
 
         # Print with a simple header
         console.print()
-        console.print(
-            f"[bold {COLORS['primary']}]═══ {title} ═══[/bold {COLORS['primary']}]"
-        )
+        console.print(f"[bold {COLORS['primary']}]═══ {title} ═══[/bold {COLORS['primary']}]")
         console.print(formatted_diff)
         console.print()
     except (ValueError, AttributeError, IndexError, OSError):
@@ -1092,9 +1075,7 @@ def show_interactive_help() -> None:
         "  @filename       Type @ to auto-complete files and inject content",
         style=COLORS["dim"],
     )
-    console.print(
-        "  /command        Type / to see available commands", style=COLORS["dim"]
-    )
+    console.print("  /command        Type / to see available commands", style=COLORS["dim"])
     console.print(
         "  !command        Type ! to run bash commands (e.g., !ls, !git status)",
         style=COLORS["dim"],
@@ -1124,32 +1105,20 @@ def show_help() -> None:
     console.print()
 
     console.print("[bold]Usage:[/bold]", style=COLORS["primary"])
-    console.print(
-        "  nami [OPTIONS]                           Start interactive session"
-    )
-    console.print(
-        "  nami list                                List all available agents"
-    )
-    console.print(
-        "  nami reset --agent AGENT                 Reset agent to default prompt"
-    )
-    console.print(
-        "  nami reset --agent AGENT --target SOURCE Reset agent to copy of another agent"
-    )
+    console.print("  nami [OPTIONS]                           Start interactive session")
+    console.print("  nami list                                List all available agents")
+    console.print("  nami reset --agent AGENT                 Reset agent to default prompt")
+    console.print("  nami reset --agent AGENT --target SOURCE Reset agent to copy of another agent")
     console.print("  nami help                                Show this help message")
     console.print()
 
     console.print("[bold]Options:[/bold]", style=COLORS["primary"])
     console.print("  --agent NAME                  Agent identifier (default: agent)")
-    console.print(
-        "  --auto-approve                Auto-approve tool usage without prompting"
-    )
+    console.print("  --auto-approve                Auto-approve tool usage without prompting")
     console.print(
         "  --sandbox TYPE                Remote sandbox for execution (modal, runloop, daytona)"
     )
-    console.print(
-        "  --sandbox-id ID               Reuse existing sandbox (skips creation/cleanup)"
-    )
+    console.print("  --sandbox-id ID               Reuse existing sandbox (skips creation/cleanup)")
     console.print()
 
     console.print("[bold]Examples:[/bold]", style=COLORS["primary"])
@@ -1177,9 +1146,7 @@ def show_help() -> None:
         "  nami --sandbox runloop --sandbox-id dbx_123  # Reuse existing sandbox",
         style=COLORS["dim"],
     )
-    console.print(
-        "  nami list                         # List all agents", style=COLORS["dim"]
-    )
+    console.print("  nami list                         # List all agents", style=COLORS["dim"])
     console.print(
         "  nami reset --agent mybot          # Reset mybot to default",
         style=COLORS["dim"],
@@ -1196,19 +1163,13 @@ def show_help() -> None:
         style=COLORS["dim"],
     )
     console.print("  Memory includes:", style=COLORS["dim"])
-    console.print(
-        "  - Persistent agent.md file with your instructions", style=COLORS["dim"]
-    )
-    console.print(
-        "  - /memories/ folder for storing context across sessions", style=COLORS["dim"]
-    )
+    console.print("  - Persistent agent.md file with your instructions", style=COLORS["dim"])
+    console.print("  - /memories/ folder for storing context across sessions", style=COLORS["dim"])
     console.print()
 
     console.print("[bold]Agent Storage:[/bold]", style=COLORS["primary"])
     console.print("  Agents are stored in: ~/.nami/AGENT_NAME/", style=COLORS["dim"])
-    console.print(
-        "  Each agent has an agent.md file containing its prompt", style=COLORS["dim"]
-    )
+    console.print("  Each agent has an agent.md file containing its prompt", style=COLORS["dim"])
     console.print()
 
     console.print("[bold]Interactive Features:[/bold]", style=COLORS["primary"])
@@ -1231,31 +1192,17 @@ def show_help() -> None:
     console.print()
 
     console.print("[bold]Interactive Commands:[/bold]", style=COLORS["primary"])
-    console.print(
-        "  /help           Show available commands and features", style=COLORS["dim"]
-    )
-    console.print(
-        "  /clear          Clear screen and reset conversation", style=COLORS["dim"]
-    )
-    console.print(
-        "  /tokens         Show token usage for current session", style=COLORS["dim"]
-    )
-    console.print(
-        "  /context        Show detailed context window usage", style=COLORS["dim"]
-    )
-    console.print(
-        "  /compact        Summarize conversation to free context", style=COLORS["dim"]
-    )
+    console.print("  /help           Show available commands and features", style=COLORS["dim"])
+    console.print("  /clear          Clear screen and reset conversation", style=COLORS["dim"])
+    console.print("  /tokens         Show token usage for current session", style=COLORS["dim"])
+    console.print("  /context        Show detailed context window usage", style=COLORS["dim"])
+    console.print("  /compact        Summarize conversation to free context", style=COLORS["dim"])
     console.print(
         "  /init           Explore codebase and create NAMI.MD file",
         style=COLORS["dim"],
     )
-    console.print(
-        "  /sessions       List and manage saved sessions", style=COLORS["dim"]
-    )
-    console.print(
-        "  /save           Manually save current session", style=COLORS["dim"]
-    )
+    console.print("  /sessions       List and manage saved sessions", style=COLORS["dim"])
+    console.print("  /save           Manually save current session", style=COLORS["dim"])
     console.print("  /quit, /exit    Exit the session", style=COLORS["dim"])
     console.print(
         "  quit, exit, q   Exit the session (just type and press Enter)",

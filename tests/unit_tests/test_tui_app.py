@@ -7,8 +7,15 @@ Tests for the Textual-based TUI including:
 - Subagent invocation routing
 """
 
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+# The Textual TUI (NamiCodeApp, StatusBar, ChatInput, etc.) was removed.
+# These tests need rewriting for the current CLI-based UI.
+import pytest
+
+pytest.skip(
+    "Textual TUI (namicode_cli.widgets, namicode_cli.app) was removed — tests need rewriting",
+    allow_module_level=True,
+)
+
 
 import pytest
 
@@ -225,10 +232,10 @@ class TestAppImports:
     def test_message_widgets_import(self):
         """Test that message widgets can be imported."""
         from namicode_cli.widgets.messages import (
-            UserMessage,
             AssistantMessage,
-            ToolCallMessage,
             SystemMessage,
+            ToolCallMessage,
+            UserMessage,
         )
 
         assert UserMessage is not None
@@ -252,8 +259,9 @@ class TestMainTUIFunction:
 
     def test_main_tui_signature(self):
         """Test main_tui has correct parameters."""
-        from namicode_cli.main import main_tui
         import inspect
+
+        from namicode_cli.main import main_tui
 
         sig = inspect.signature(main_tui)
         params = list(sig.parameters.keys())

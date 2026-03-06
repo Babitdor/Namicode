@@ -1,29 +1,24 @@
 """Tests for vision module including model detection and image utilities."""
 
-import base64
-import io
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
-from namicode_cli.vision import (
-    model_supports_vision,
-    get_vision_models,
-    suggest_vision_model,
-    VISION_CAPABLE_MODELS,
-)
 from namicode_cli.image_utils import (
+    SUPPORTED_FORMATS,
     ImageData,
-    load_image_from_path,
+    ImageProcessor,
     create_multimodal_content,
     is_image_file,
-    ImageProcessor,
-    SUPPORTED_FORMATS,
-    MAX_IMAGE_SIZE_BYTES,
-    MAX_IMAGE_DIMENSION,
+    load_image_from_path,
 )
 from namicode_cli.input import ImageTracker
+from namicode_cli.vision import (
+    VISION_CAPABLE_MODELS,
+    get_vision_models,
+    model_supports_vision,
+    suggest_vision_model,
+)
 
 
 class TestVisionModelDetection:

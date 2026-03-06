@@ -1,7 +1,7 @@
 """Unit tests for SkillsMiddleware functionality."""
 
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -79,7 +79,7 @@ class TestSkillsMiddlewareProperties:
         )
 
         display = middleware.skills_dir_display
-        assert "~/.deepagents/my-agent/skills" == display
+        assert display == "~/.nami/my-agent/skills"
 
     def test_skills_dir_absolute(self, tmp_path: Path) -> None:
         """Test skills_dir_absolute returns absolute path string."""

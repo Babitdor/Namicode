@@ -12,7 +12,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, Remove
 from namicode_cli.context.context_manager import CompactionResult
 
 # Summarization prompt template
-SUMMARIZATION_PROMPT = '''You are summarizing a conversation between a user and an AI coding assistant.
+SUMMARIZATION_PROMPT = """You are summarizing a conversation between a user and an AI coding assistant.
 
 Create a concise summary that preserves:
 1. **Key decisions made** - architectural choices, design patterns selected
@@ -42,15 +42,19 @@ Format the summary as:
 ### Important Context
 - [Key information that should be preserved for future reference]
 
-Be concise but complete. This summary will replace the full conversation history.
-Keep it under 2000 tokens while preserving all critical information.
+### User Preferences & Conventions
+- [Any user preferences, coding style, naming conventions, or workflow patterns established]
+- [Active working directory and key file paths referenced]
+
+Be thorough but concise. This summary will replace the full conversation history.
+Keep it under 5000 tokens. Prioritize completeness for Files Modified and Outstanding Items.
 
 ---
 
 CONVERSATION TO SUMMARIZE:
 
 {conversation}
-'''
+"""
 
 
 def _format_message_content(content: Any) -> str:
@@ -186,13 +190,16 @@ async def compact_conversation(
 
         messages_before = len(messages)
 
-        # Estimate original tokens (rough approximation: ~4 chars per token)
+        # Count original tokens using the model's tokenizer when available,
+        # falling back to the rough 4-chars-per-token approximation.
         original_text = " ".join(
-            _format_message_content(msg.content)
-            for msg in messages
-            if hasattr(msg, "content")
+            _format_message_content(msg.content) for msg in messages if hasattr(msg, "content")
         )
-        original_tokens = len(original_text) // 4
+        try:
+            _orig = model.get_num_tokens_from_messages([HumanMessage(content=original_text)])
+            original_tokens = _orig if isinstance(_orig, int) else len(original_text) // 4
+        except Exception:
+            original_tokens = len(original_text) // 4
 
         # Generate summary
         summary = await summarize_conversation(model, messages, focus_instructions)
@@ -211,8 +218,12 @@ async def compact_conversation(
             values={"messages": remove_ops + [summary_message]},
         )
 
-        # Estimate new tokens
-        new_tokens = len(summary) // 4
+        # Count new tokens using the model's tokenizer when available.
+        try:
+            _new = model.get_num_tokens_from_messages([HumanMessage(content=summary)])
+            new_tokens = _new if isinstance(_new, int) else len(summary) // 4
+        except Exception:
+            new_tokens = len(summary) // 4
 
         return CompactionResult(
             success=True,

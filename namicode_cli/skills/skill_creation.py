@@ -1,18 +1,16 @@
 import argparse
-import json
 import re
 from pathlib import Path
 from typing import Any
 
-from namicode_cli.config.config import COLORS, Settings, console
-from namicode_cli.skills.load import list_skills
-from namicode_cli.config.model_create import create_model
-from nami_deepagents.graph import create_deep_agent
-from namicode_cli.tools import web_search
-from nami_deepagents.backends import CompositeBackend
 from nami_deepagents.backends.filesystem import FilesystemBackend
+from nami_deepagents.graph import create_deep_agent
+
+from namicode_cli.config.config import COLORS, Settings, console
+from namicode_cli.config.model_create import create_model
+from namicode_cli.skills.load import list_skills
 from namicode_cli.skills.skill_system_prompt import SKILL_CREATION
-from typing import Optional
+from namicode_cli.tools import web_search
 
 
 def _get_skill_query(
@@ -29,7 +27,6 @@ def _get_skill_query(
     Returns:
         Complete prompt string for the LLM.
     """
-
     description_hint = ""
     if description:
         description_hint = f"""
@@ -47,10 +44,9 @@ Use this to guide the skill's purpose and content.
 async def _generate_skill(
     skill_name: str,
     base_dir: Path,
-    description: Optional[str] = None,
+    description: str | None = None,
 ) -> str | None:
     """Generate skill content using the configured LLM and return SKILL.md content."""
-
     try:
         console.print(
             "[dim]Generating comprehensive skill content...[/dim]",
@@ -79,9 +75,7 @@ async def _generate_skill(
             # Now read the actual SKILL.md file
             skill_file = skill_dir / "SKILL.md"
             if not skill_file.exists():
-                console.print(
-                    "[yellow]Warning: SKILL.md was not created by the agent.[/yellow]"
-                )
+                console.print("[yellow]Warning: SKILL.md was not created by the agent.[/yellow]")
                 return None
 
             skill_content = skill_file.read_text(encoding="utf-8").strip()
@@ -106,8 +100,7 @@ async def _generate_skill(
             )
             return skill_content
 
-        else:
-            return "Skill creation failed"
+        return "Skill creation failed"
 
     except Exception as e:
         console.print(
@@ -316,9 +309,7 @@ def _create(
     skill_md = skill_dir / "SKILL.md"
     skill_md.write_text(content, encoding="utf-8")
 
-    console.print(
-        f"✓ Skill '{skill_name}' created successfully!", style=COLORS["primary"]
-    )
+    console.print(f"✓ Skill '{skill_name}' created successfully!", style=COLORS["primary"])
     console.print(f"Location: {skill_dir}\n", style=COLORS["dim"])
 
     if used_llm:
@@ -389,9 +380,7 @@ def _ask_scope(operation: str = "use", allow_both: bool = False) -> str | None:
     settings = Settings.from_environment()
     in_project = settings.project_root is not None
 
-    console.print(
-        f"\nWhere do you want to {operation} skills?", style=COLORS["primary"]
-    )
+    console.print(f"\nWhere do you want to {operation} skills?", style=COLORS["primary"])
 
     if in_project:
         console.print("  1. Project-specific (current project only)")
@@ -402,28 +391,21 @@ def _ask_scope(operation: str = "use", allow_both: bool = False) -> str | None:
 
         max_choice = "3" if allow_both else "2"
         default_choice = "3" if allow_both else "1"
-        choice = (
-            input(f"Choose (1-{max_choice}) [{default_choice}]: ").strip()
-            or default_choice
-        )
+        choice = input(f"Choose (1-{max_choice}) [{default_choice}]: ").strip() or default_choice
 
         if choice == "1":
             return "project"
-        elif choice == "2":
+        if choice == "2":
             return "global"
-        elif choice == "3" and allow_both:
+        if choice == "3" and allow_both:
             return "both"
-        else:
-            return "project" if not allow_both else "both"
-    else:
-        console.print(
-            "[yellow]Not in a project directory. Using global skills.[/yellow]"
-        )
-        console.print(
-            "[dim]Project skills require a .git directory in the project root.[/dim]",
-            style=COLORS["dim"],
-        )
-        return "global"
+        return "project" if not allow_both else "both"
+    console.print("[yellow]Not in a project directory. Using global skills.[/yellow]")
+    console.print(
+        "[dim]Project skills require a .git directory in the project root.[/dim]",
+        style=COLORS["dim"],
+    )
+    return "global"
 
 
 def _validate_name(name: str) -> tuple[bool, str]:
@@ -515,9 +497,7 @@ def _list(
             )
             return
 
-        skills = list_skills(
-            user_skills_dir=None, project_skills_dir=project_skills_dir
-        )
+        skills = list_skills(user_skills_dir=None, project_skills_dir=project_skills_dir)
         console.print("\n[bold]Project Skills:[/bold]\n", style=COLORS["primary"])
     elif show_scope == "global":
         # Load only global skills
@@ -525,9 +505,7 @@ def _list(
         console.print("\n[bold]Global Skills:[/bold]\n", style=COLORS["primary"])
     else:
         # Load both user and project skills
-        skills = list_skills(
-            user_skills_dir=user_skills_dir, project_skills_dir=project_skills_dir
-        )
+        skills = list_skills(user_skills_dir=user_skills_dir, project_skills_dir=project_skills_dir)
 
         if not skills:
             console.print("[yellow]No skills found.[/yellow]")
@@ -576,9 +554,7 @@ def _list(
     if project_skills_list and show_scope in ["project", "both"]:
         if show_scope == "both" and user_skills:
             console.print()
-        console.print(
-            "[bold green]Project Skills:[/bold green]", style=COLORS["primary"]
-        )
+        console.print("[bold green]Project Skills:[/bold green]", style=COLORS["primary"])
         for skill in project_skills_list:
             skill_path = Path(skill["path"])
             console.print(f"  • [bold]{skill['name']}[/bold]", style=COLORS["primary"])
@@ -633,15 +609,11 @@ def _info(
         if not project_skills_dir:
             console.print("[bold red]Error:[/bold red] Not in a project directory.")
             return
-        skills = list_skills(
-            user_skills_dir=None, project_skills_dir=project_skills_dir
-        )
+        skills = list_skills(user_skills_dir=None, project_skills_dir=project_skills_dir)
     elif search_scope == "global":
         skills = list_skills(user_skills_dir=user_skills_dir, project_skills_dir=None)
     else:
-        skills = list_skills(
-            user_skills_dir=user_skills_dir, project_skills_dir=project_skills_dir
-        )
+        skills = list_skills(user_skills_dir=user_skills_dir, project_skills_dir=project_skills_dir)
 
     # Find the skill
     skill = next((s for s in skills if s["name"] == skill_name), None)
@@ -665,9 +637,7 @@ def _info(
         f"\n[bold]Skill: {skill['name']}[/bold] [bold {source_color}]({source_label})[/bold {source_color}]\n",
         style=COLORS["primary"],
     )
-    console.print(
-        f"[bold]Description:[/bold] {skill['description']}\n", style=COLORS["dim"]
-    )
+    console.print(f"[bold]Description:[/bold] {skill['description']}\n", style=COLORS["dim"])
     console.print(f"[bold]Location:[/bold] {skill_path.parent}/\n", style=COLORS["dim"])
 
     # List supporting files
@@ -695,9 +665,7 @@ def setup_skills_parser(
         help="Manage agent skills",
         description="Manage agent skills - create, list, and view skill information",
     )
-    skills_subparsers = skills_parser.add_subparsers(
-        dest="skills_command", help="Skills command"
-    )
+    skills_subparsers = skills_parser.add_subparsers(dest="skills_command", help="Skills command")
 
     # Skills list
     list_parser = skills_subparsers.add_parser(
@@ -728,9 +696,7 @@ def setup_skills_parser(
         help="Create a new skill",
         description="Create a new skill with a template SKILL.md file",
     )
-    create_parser.add_argument(
-        "name", help="Name of the skill to create (e.g., web-research)"
-    )
+    create_parser.add_argument("name", help="Name of the skill to create (e.g., web-research)")
     create_parser.add_argument(
         "--agent",
         default="nami-agent",

@@ -1,24 +1,22 @@
 """Unit tests for plan mode middleware and question handling."""
 
-import pytest
-from unittest.mock import Mock, AsyncMock, patch
+from unittest.mock import Mock, patch
 
+import pytest
 from nami_deepagents.middleware.planning import (
+    ASK_QUESTION_SYSTEM_PROMPT,
+    PLAN_MODE_SYSTEM_PROMPT,
     PlanModeMiddleware,
     PlanModeState,
-    PlanModeStateUpdate,
     QuestionRequest,
-    _ask_question,
     _create_ask_question_tool,
-    PLAN_MODE_SYSTEM_PROMPT,
-    ASK_QUESTION_SYSTEM_PROMPT,
 )
-from namicode_cli.ui.question_prompt import (
-    prompt_for_structured_question,
-    handle_agent_question,
-    QuestionResponse,
-)
+
 from namicode_cli.states.Session import SessionState
+from namicode_cli.ui.question_prompt import (
+    QuestionResponse,
+    handle_agent_question,
+)
 
 
 class TestPlanModeMiddleware:
@@ -369,8 +367,8 @@ class TestToolBlocking:
     def test_no_overlap_blocked_allowed(self):
         """Test no overlap between blocked and allowed tools."""
         from nami_deepagents.middleware.planning import (
-            BLOCKED_TOOLS_IN_PLAN_MODE,
             ALLOWED_TOOLS_IN_PLAN_MODE,
+            BLOCKED_TOOLS_IN_PLAN_MODE,
         )
 
         overlap = BLOCKED_TOOLS_IN_PLAN_MODE & ALLOWED_TOOLS_IN_PLAN_MODE

@@ -9,8 +9,9 @@ These commands are registered with the CLI via main.py:
 
 import argparse
 import sys
-from typing import Any
 from pathlib import Path
+from typing import Any
+
 from namicode_cli.config.config import COLORS, console
 from namicode_cli.mcp.config import MCPConfig, MCPServerConfig
 
@@ -375,9 +376,7 @@ def execute_mcp_command(args: argparse.Namespace) -> None:
         )
         console.print("  nami mcp list")
         console.print("  nami mcp remove docs-langchain")
-        console.print(
-            "\n[dim]For more help on a specific command:[/dim]", style=COLORS["dim"]
-        )
+        console.print("\n[dim]For more help on a specific command:[/dim]", style=COLORS["dim"])
         console.print("  nami mcp <command> --help", style=COLORS["dim"])
 
 

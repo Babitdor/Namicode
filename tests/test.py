@@ -1,6 +1,7 @@
 from nami_deepagents import create_deep_agent
-from namicode_cli.config.model_create import create_model
 from nami_deepagents.backends.filesystem import FilesystemBackend
+
+from namicode_cli.config.model_create import create_model
 
 skill_creation_agent = create_deep_agent(
     name="Skill-Creation-Agent",
@@ -10,7 +11,7 @@ skill_creation_agent = create_deep_agent(
 )
 
 response = skill_creation_agent.invoke(
-            {"messages": [{"role": "user", "content": "Can you help ? "}]}
-        )
+    {"messages": [{"role": "user", "content": "Can you help ? "}]}
+)
 
 print(response)

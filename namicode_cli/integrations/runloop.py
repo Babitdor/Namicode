@@ -105,9 +105,7 @@ class RunloopBackend(BaseSandbox):
             # devboxes.download_file returns a BinaryAPIResponse which exposes .read()
             resp = self._client.devboxes.download_file(self._devbox_id, path=path)
             content = resp.read()
-            responses.append(
-                FileDownloadResponse(path=path, content=content, error=None)
-            )
+            responses.append(FileDownloadResponse(path=path, content=content, error=None))
 
         return responses
 

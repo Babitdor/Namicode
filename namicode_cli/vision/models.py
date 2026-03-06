@@ -15,18 +15,15 @@ VISION_CAPABLE_MODELS: dict[str, bool] = {
     "claude-3-5-sonnet-20240620": True,
     "claude-3-5-haiku-20241022": True,
     "claude-3-opus-20240229": True,
-
     # OpenAI models
     "gpt-4o": True,
     "gpt-4o-mini": True,
     "gpt-4-turbo": True,
     "gpt-4-vision-preview": True,
-
     # Google Gemini models
     "gemini-1.5-pro": True,
     "gemini-1.5-flash": True,
     "gemini-2.0-flash-exp": True,
-
     # Ollama vision models
     "qwen3-vl": True,
     "qwen3-vl:235b-cloud": True,
@@ -109,7 +106,7 @@ def get_vision_models(provider: Literal["anthropic", "openai", "google", "ollama
     prefix = provider_models.get(provider, [])
 
     vision_models = []
-    for model_name in VISION_CAPABLE_MODELS.keys():
+    for model_name in VISION_CAPABLE_MODELS:
         if any(model_name.startswith(p) for p in prefix):
             vision_models.append(model_name)
 

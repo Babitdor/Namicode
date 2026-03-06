@@ -5,9 +5,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-import pytest
-
-from namicode_cli.test_runner import (
+from namicode_cli.server_runner.test_runner import (
     TestFramework,
     TestResult,
     detect_test_framework,

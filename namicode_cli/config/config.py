@@ -27,12 +27,10 @@ Environment Configuration:
 import os
 import re
 import sys
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
 import dotenv
-from langchain_core.language_models import BaseChatModel
 from rich.console import Console
 
 dotenv.load_dotenv()
@@ -228,9 +226,7 @@ config = {"recursion_limit": 1000}
 if sys.platform == "win32":
     import io
 
-    console = Console(
-        highlight=False, file=io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
-    )
+    console = Console(highlight=False, file=io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8"))
 else:
     console = Console(highlight=False)
 
@@ -284,41 +280,32 @@ def _find_project_root(start_path: Path | None = None) -> Path | None:
     return None
 
 
-def _find_project_agent_md(project_root: Path) -> Path | None:
-    """Find project-specific CLAUDE.md and NAMI.md file(s).
+def _find_project_agent_md(project_root: Path) -> list[Path]:
+    """Find ALL project-specific CLAUDE.md and NAMI.md files.
 
-    Checks multiple locations and returns one that exist (in priority order):
-    1. project_root/.claude/CLAUDE.md (Claude Code primary)
-    2. project_root/CLAUDE.md (Claude Code fallback)
-    3. project_root/.nami/NAMI.md (Nami primary)
-    4. project_root/NAMI.md (Nami fallback - created by /init command)
+    Returns every memory file that exists, ordered from most general to most
+    specific (matching Claude Code's hierarchical loading behavior). All found
+    files are combined so later entries take higher precedence.
+
+    Load order (general → specific):
+    1. project_root/NAMI.md       (Nami root — created by /init)
+    2. project_root/.nami/NAMI.md (Nami directory)
+    3. project_root/CLAUDE.md     (Claude Code root)
+    4. project_root/.claude/CLAUDE.md (Claude Code directory — highest precedence)
 
     Args:
         project_root: Path to the project root directory.
 
     Returns:
-        paths to project config files.
+        List of existing paths (may be empty if no memory files found).
     """
-
-    # Priority 1: .claude/CLAUDE.md (Claude Code style)
-    claude_dir_md = project_root / ".claude" / "CLAUDE.md"
-    if claude_dir_md.exists():
-        return claude_dir_md
-
-    # Priority 2: CLAUDE.md in root (Claude Code fallback)
-    root_claude_md = project_root / "CLAUDE.md"
-    if root_claude_md.exists():
-        return root_claude_md
-
-    # Priority 3: .nami/NAMI.md (Nami primary)
-    nami_dir_md = project_root / ".nami" / "NAMI.md"
-    if nami_dir_md.exists():
-        return nami_dir_md
-
-    # Priority 4: NAMI.md in root (created by /init command)
-    root_nami_md = project_root / "NAMI.md"
-    if root_nami_md.exists():
-        return root_nami_md
+    candidates = [
+        project_root / "NAMI.md",
+        project_root / ".nami" / "NAMI.md",
+        project_root / "CLAUDE.md",
+        project_root / ".claude" / "CLAUDE.md",
+    ]
+    return [p for p in candidates if p.exists()]
 
 
 def get_default_coding_instructions() -> str:
@@ -400,18 +387,18 @@ class Settings:
             openai_key = secret_manager.get_secret("openai_api_key") or os.environ.get(
                 "OPENAI_API_KEY"
             )
-            anthropic_key = secret_manager.get_secret(
-                "anthropic_api_key"
-            ) or os.environ.get("ANTHROPIC_API_KEY")
+            anthropic_key = secret_manager.get_secret("anthropic_api_key") or os.environ.get(
+                "ANTHROPIC_API_KEY"
+            )
             google_key = secret_manager.get_secret("google_api_key") or os.environ.get(
                 "GOOGLE_API_KEY"
             )
             tavily_key = secret_manager.get_secret("tavily_api_key") or os.environ.get(
                 "TAVILY_API_KEY"
             )
-            replicate_key = secret_manager.get_secret(
-                "replicate_api_key"
-            ) or os.environ.get("REPLICATE_API_TOKEN")
+            replicate_key = secret_manager.get_secret("replicate_api_key") or os.environ.get(
+                "REPLICATE_API_TOKEN"
+            )
         else:
             openai_key = os.environ.get("OPENAI_API_KEY")
             anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -501,7 +488,7 @@ class Settings:
 
                 config = json.loads(config_file.read_text(encoding="utf-8"))
                 return config.get("onboarding_completed", False)
-            except Exception:  # noqa: BLE001, S110
+            except Exception:  # noqa: BLE001
                 return False
 
         return False
@@ -656,23 +643,18 @@ class Settings:
             return None
         return self.project_root / ".nami" / "NAMI.md"
 
-    def get_project_agent_md_paths(self) -> Path | None:
+    def get_project_agent_md_paths(self) -> list[Path]:
         """Get all project-level memory file paths (CLAUDE.md, NAMI.md).
 
-        Finds all existing memory files and returns them in priority order.
-        All found files will be loaded and combined hierarchically.
-
-        Search locations (in order):
-        1. {project_root}/.claude/CLAUDE.md (Claude Code primary)
-        2. {project_root}/CLAUDE.md (Claude Code fallback)
-        3. {project_root}/.nami/NAMI.md (Nami primary)
-        4. {project_root}/NAMI.md (Nami fallback - created by /init command)
+        Returns every memory file that exists at the project root, ordered from
+        most general to most specific — matching Claude Code's hierarchical
+        loading behavior where all found files are combined.
 
         Returns:
-            List of existing paths (may be empty if not in a project or no files found)
+            List of existing paths (empty if not in a project or no files found).
         """
         if not self.project_root:
-            return None
+            return []
         return _find_project_agent_md(self.project_root)
 
     @staticmethod

@@ -938,14 +938,18 @@ async def execute_task(  # type: ignore
 
                             # Defer completion banner — all banners print together
                             # just before the main agent's synthesis response
-                            pending_completions.append({
-                                "status_icon": status_icon,
-                                "subagent_type": subagent_type,
-                                "duration_str": duration_str,
-                                "condensed": format_condensed_activity(activity) if activity else None,
-                                "indent": indent,
-                                "subagent_color": subagent_color,
-                            })
+                            pending_completions.append(
+                                {
+                                    "status_icon": status_icon,
+                                    "subagent_type": subagent_type,
+                                    "duration_str": duration_str,
+                                    "condensed": format_condensed_activity(activity)
+                                    if activity
+                                    else None,
+                                    "indent": indent,
+                                    "subagent_color": subagent_color,
+                                }
+                            )
 
                             # Always update spinner to show aggregation progress,
                             # including when the last subagent finishes.
@@ -1027,12 +1031,11 @@ async def execute_task(  # type: ignore
                                 # saw announced (grep, ls, glob, execute, web_search, …).
                                 # Errors that were already printed above are skipped.
                                 already_printed_error = (
-                                    (tool_name == "shell" and tool_status != "success")
-                                    or (
-                                        tool_content
-                                        and isinstance(tool_content, str)
-                                        and tool_content.lstrip().lower().startswith("error")
-                                    )
+                                    tool_name == "shell" and tool_status != "success"
+                                ) or (
+                                    tool_content
+                                    and isinstance(tool_content, str)
+                                    and tool_content.lstrip().lower().startswith("error")
                                 )
                                 if not already_printed_error:
                                     elapsed = None
@@ -1100,8 +1103,12 @@ async def execute_task(  # type: ignore
                             if actual_context or output_toks:
                                 captured_input_tokens = max(captured_input_tokens, actual_context)
                                 captured_output_tokens = max(captured_output_tokens, output_toks)
-                                captured_cache_read_tokens = max(captured_cache_read_tokens, cache_read)
-                                captured_cache_creation_tokens = max(captured_cache_creation_tokens, cache_create)
+                                captured_cache_read_tokens = max(
+                                    captured_cache_read_tokens, cache_read
+                                )
+                                captured_cache_creation_tokens = max(
+                                    captured_cache_creation_tokens, cache_create
+                                )
 
                     # Process normalized content blocks
                     for block in blocks:

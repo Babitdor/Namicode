@@ -4,12 +4,11 @@ import json
 import os
 import warnings
 from pathlib import Path
-from typing import Optional
 
 from rich.panel import Panel
 from rich.text import Text
 
-from .config.config import COLORS, console
+from .config.config import console
 
 
 class PathApprovalManager:
@@ -53,7 +52,7 @@ class PathApprovalManager:
             )
 
         try:
-            with open(self.config_file, "r") as f:
+            with open(self.config_file) as f:
                 data = json.load(f)
                 # Validate loaded paths
                 validated = {}
@@ -167,11 +166,11 @@ class PathApprovalManager:
         # Create header
         header = Text()
         header.append("🔒 ", style="yellow")
-        header.append("Path Access Request", style=f"bold yellow")
+        header.append("Path Access Request", style="bold yellow")
 
         # Create message
         message_lines = [
-            f"Nami is requesting access to:",
+            "Nami is requesting access to:",
             "",
             f"  📁 {path}",
             "",
@@ -214,21 +213,20 @@ class PathApprovalManager:
                     console.print("[green]Access granted (including subdirectories)[/green]")
                     console.print()
                     return True
-                elif choice in ["o", "only"]:
+                if choice in ["o", "only"]:
                     self.approve_path(path, recursive=False)
                     console.print()
                     console.print("✅ ", style="green", end="")
                     console.print("[green]Access granted (this directory only)[/green]")
                     console.print()
                     return True
-                elif choice in ["n", "no"]:
+                if choice in ["n", "no"]:
                     console.print()
                     console.print("❌ ", style="red", end="")
                     console.print("[red]Access denied[/red]")
                     console.print()
                     return False
-                else:
-                    console.print("[yellow]Invalid choice. Please enter y, o, or n.[/yellow]")
+                console.print("[yellow]Invalid choice. Please enter y, o, or n.[/yellow]")
             except (EOFError, KeyboardInterrupt):
                 console.print()
                 console.print("❌ ", style="red", end="")
@@ -237,7 +235,7 @@ class PathApprovalManager:
                 return False
 
 
-async def check_path_approval(path: Optional[Path] = None) -> bool:
+async def check_path_approval(path: Path | None = None) -> bool:
     """Check if the current path is approved, prompting if needed.
 
     Args:

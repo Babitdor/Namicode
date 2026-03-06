@@ -7,7 +7,7 @@ from typing import TypedDict, cast
 try:
     from typing import NotRequired
 except ImportError:
-    from typing_extensions import NotRequired
+    from typing import NotRequired
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
@@ -17,7 +17,6 @@ from langchain.agents.middleware.types import (
 )
 
 # from langgraph.runtime import Runtime
-
 from namicode_cli.config.config import Settings
 
 # Maximum characters to inject per memory source (~3,000 tokens at 4 chars/token).
@@ -210,7 +209,7 @@ class AgentMemoryMiddleware(AgentMiddleware):
         # Track which project memory files were loaded (for display in prompt)
         self.loaded_project_memory_sources: list[str] = []
 
-    def before_agent( # type: ignore
+    def before_agent(  # type: ignore
         self,
         state: AgentMemoryState,
         # runtime: Runtime,
@@ -237,35 +236,28 @@ class AgentMemoryMiddleware(AgentMiddleware):
             user_path = self.settings.get_user_agent_md_path(self.assistant_id)
             if user_path.exists():
                 with contextlib.suppress(OSError, UnicodeDecodeError):
-                    content = user_path.read_text(encoding='utf-8')
+                    content = user_path.read_text(encoding="utf-8")
                     if len(content) > MAX_MEMORY_CHARS:
                         content = content[:MAX_MEMORY_CHARS] + _MEMORY_TRUNCATION_NOTICE
                     result["user_memory"] = content
 
         # Load project memory from ALL available sources if not already in state
         if "project_memory" not in state:
-            project_path = self.settings.get_project_agent_md_paths()
+            project_paths = self.settings.get_project_agent_md_paths()
             combined_memories: list[str] = []
             self.loaded_project_memory_sources = []
 
-            # Convert single path to list for iteration
-            project_paths = [project_path] if project_path else []
-
             for path in project_paths:
                 with contextlib.suppress(OSError, UnicodeDecodeError):
-                    content = path.read_text(encoding='utf-8')
+                    content = path.read_text(encoding="utf-8")
                     if len(content) > MAX_MEMORY_CHARS:
                         content = content[:MAX_MEMORY_CHARS] + _MEMORY_TRUNCATION_NOTICE
                     if content.strip():
                         # Add header showing the source file
                         relative_path = (
-                            path.relative_to(self.project_root)
-                            if self.project_root
-                            else path.name
+                            path.relative_to(self.project_root) if self.project_root else path.name
                         )
-                        combined_memories.append(
-                            f"<!-- Source: {relative_path} -->\n{content}"
-                        )
+                        combined_memories.append(f"<!-- Source: {relative_path} -->\n{content}")
                         self.loaded_project_memory_sources.append(str(relative_path))
 
             if combined_memories:
@@ -293,9 +285,7 @@ class AgentMemoryMiddleware(AgentMiddleware):
             sources_list = ", ".join(self.loaded_project_memory_sources)
             project_memory_info = f"`{self.project_root}` (loaded: {sources_list})"
         elif self.project_root:
-            project_memory_info = (
-                f"`{self.project_root}` (no CLAUDE.md or NAMI.md found)"
-            )
+            project_memory_info = f"`{self.project_root}` (no CLAUDE.md or NAMI.md found)"
         else:
             project_memory_info = "None (not in a git project)"
 
@@ -308,17 +298,13 @@ class AgentMemoryMiddleware(AgentMiddleware):
             else:
                 project_deepagents_dir = "[project-root]/(.claude or .nami not found)"
         else:
-            project_deepagents_dir = (
-                "[project-root]/(.claude or .nami not in a project)"
-            )
+            project_deepagents_dir = "[project-root]/(.claude or .nami not in a project)"
 
         # Format memory section with both memories
         memory_section = self.system_prompt_template.format(
             user_memory=user_memory if user_memory else "(No user agent.md)",
             project_memory=(
-                project_memory
-                if project_memory
-                else "(No project CLAUDE.md or NAMI.md)"
+                project_memory if project_memory else "(No project CLAUDE.md or NAMI.md)"
             ),
         )
 
@@ -351,7 +337,7 @@ class AgentMemoryMiddleware(AgentMiddleware):
             The model response from the handler.
         """
         system_prompt = self._build_system_prompt(request)
-        return handler(request.override(system_prompt=system_prompt)) # type: ignore
+        return handler(request.override(system_prompt=system_prompt))  # type: ignore
 
     async def awrap_model_call(
         self,
@@ -368,4 +354,4 @@ class AgentMemoryMiddleware(AgentMiddleware):
             The model response from the handler.
         """
         system_prompt = self._build_system_prompt(request)
-        return await handler(request.override(system_prompt=system_prompt)) # type: ignore
+        return await handler(request.override(system_prompt=system_prompt))  # type: ignore

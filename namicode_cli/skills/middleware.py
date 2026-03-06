@@ -25,7 +25,7 @@ Example structure:
 
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any, NotRequired, TypedDict, cast
+from typing import NotRequired, TypedDict, cast
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
@@ -231,11 +231,22 @@ class SkillsMiddleware(AgentMiddleware):
         """
         # We re-load skills on every new interaction with the agent to capture
         # any changes in the skills directories.
-        skills = list_skills(
-            user_skills_dir=self.skills_dir,
-            project_skills_dir=self.project_skills_dir,
-            project_skills_dirs=self.project_skills_dirs if self.project_skills_dirs else None,
-        )
+        # list_skills accepts only one project dir at a time; for multiple dirs
+        # merge incrementally so later dirs take precedence.
+        if self.project_skills_dirs:
+            merged: dict[str, object] = {
+                s["name"]: s  # type: ignore[index]
+                for s in list_skills(user_skills_dir=self.skills_dir, project_skills_dir=None)
+            }
+            for proj_dir in self.project_skills_dirs:
+                for s in list_skills(user_skills_dir=None, project_skills_dir=proj_dir):
+                    merged[s["name"]] = s  # type: ignore[index]
+            skills = list(merged.values())  # type: ignore[assignment]
+        else:
+            skills = list_skills(
+                user_skills_dir=self.skills_dir,
+                project_skills_dir=self.project_skills_dir,
+            )
         return SkillsStateUpdate(skills_metadata=skills)
 
     def wrap_model_call(
@@ -272,7 +283,7 @@ class SkillsMiddleware(AgentMiddleware):
         else:
             system_prompt = skills_section
 
-        return handler(request.override(system_prompt=system_prompt)) # type: ignore
+        return handler(request.override(system_prompt=system_prompt))  # type: ignore
 
     async def awrap_model_call(
         self,
@@ -308,4 +319,4 @@ class SkillsMiddleware(AgentMiddleware):
         else:
             system_prompt = skills_section
 
-        return await handler(request.override(system_prompt=system_prompt)) # type: ignore
+        return await handler(request.override(system_prompt=system_prompt))  # type: ignore

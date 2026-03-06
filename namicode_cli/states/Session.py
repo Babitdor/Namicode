@@ -1,4 +1,3 @@
-from pathlib import Path
 import uuid
 
 
@@ -29,5 +28,3 @@ class SessionState:
         """Toggle plan mode and return new state."""
         self.plan_mode_enabled = not self.plan_mode_enabled
         return self.plan_mode_enabled
-
-

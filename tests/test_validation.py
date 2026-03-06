@@ -3,12 +3,10 @@ import sys
 
 # Set up DEBUG logging
 logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(levelname)s:%(name)s:%(message)s',
-    stream=sys.stderr
+    level=logging.DEBUG, format="%(levelname)s:%(name)s:%(message)s", stream=sys.stderr
 )
 
-from nami_deepagents.middleware.skills import _parse_skill_metadata, _validate_skill_name
+from nami_deepagents.middleware.skills import _validate_skill_name
 
 # Test with a simple example
 name = "algorithmic-art"

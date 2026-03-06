@@ -1,10 +1,14 @@
 """Unit tests for MCP client functionality."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
-
+# MCPClient wrapper was removed; the MCP layer now uses MultiServerMCPClient
+# directly from langchain_mcp_adapters. These tests need rewriting.
 import pytest
 
-from namicode_cli.mcp.client import MCPClient, check_server_connection
+pytest.skip("MCPClient class was removed — tests need rewriting", allow_module_level=True)
+
+from unittest.mock import AsyncMock, MagicMock, patch  # noqa: E402
+
+from namicode_cli.mcp.client import MCPClient, check_server_connection  # noqa: E402
 from namicode_cli.mcp.config import MCPServerConfig
 
 
@@ -96,14 +100,10 @@ class TestMCPClientConnect:
                 mock_read = MagicMock()
                 mock_write = MagicMock()
 
-                mock_stdio.return_value.__aenter__ = AsyncMock(
-                    return_value=(mock_read, mock_write)
-                )
+                mock_stdio.return_value.__aenter__ = AsyncMock(return_value=(mock_read, mock_write))
                 mock_stdio.return_value.__aexit__ = AsyncMock(return_value=None)
 
-                mock_session_class.return_value.__aenter__ = AsyncMock(
-                    return_value=mock_session
-                )
+                mock_session_class.return_value.__aenter__ = AsyncMock(return_value=mock_session)
                 mock_session_class.return_value.__aexit__ = AsyncMock(return_value=None)
 
                 async with client.connect() as session:
@@ -129,14 +129,10 @@ class TestMCPClientConnect:
                 mock_read = MagicMock()
                 mock_write = MagicMock()
 
-                mock_sse.return_value.__aenter__ = AsyncMock(
-                    return_value=(mock_read, mock_write)
-                )
+                mock_sse.return_value.__aenter__ = AsyncMock(return_value=(mock_read, mock_write))
                 mock_sse.return_value.__aexit__ = AsyncMock(return_value=None)
 
-                mock_session_class.return_value.__aenter__ = AsyncMock(
-                    return_value=mock_session
-                )
+                mock_session_class.return_value.__aenter__ = AsyncMock(return_value=mock_session)
                 mock_session_class.return_value.__aexit__ = AsyncMock(return_value=None)
 
                 async with client.connect() as session:
@@ -170,14 +166,10 @@ class TestMCPClientConnect:
                 mock_read = MagicMock()
                 mock_write = MagicMock()
 
-                mock_sse.return_value.__aenter__ = AsyncMock(
-                    return_value=(mock_read, mock_write)
-                )
+                mock_sse.return_value.__aenter__ = AsyncMock(return_value=(mock_read, mock_write))
                 mock_sse.return_value.__aexit__ = AsyncMock(return_value=None)
 
-                mock_session_class.return_value.__aenter__ = AsyncMock(
-                    return_value=mock_session
-                )
+                mock_session_class.return_value.__aenter__ = AsyncMock(return_value=mock_session)
                 mock_session_class.return_value.__aexit__ = AsyncMock(return_value=None)
 
                 async with client.connect():
@@ -187,7 +179,10 @@ class TestMCPClientConnect:
                 call_kwargs = mock_sse.call_args[1]
                 headers = call_kwargs.get("headers", {})
                 assert "X-API-KEY" in headers or "X-Api-Key" in headers
-                assert headers.get("X-API-KEY") == "secret-key" or headers.get("X-Api-Key") == "secret-key"
+                assert (
+                    headers.get("X-API-KEY") == "secret-key"
+                    or headers.get("X-Api-Key") == "secret-key"
+                )
 
 
 class TestMCPClientListTools:
@@ -321,10 +316,12 @@ class TestCheckServerConnection:
 
         with patch("namicode_cli.mcp.client.MCPClient") as mock_client_class:
             mock_client = AsyncMock()
-            mock_client.list_tools = AsyncMock(return_value=[
-                {"name": "tool1"},
-                {"name": "tool2"},
-            ])
+            mock_client.list_tools = AsyncMock(
+                return_value=[
+                    {"name": "tool1"},
+                    {"name": "tool2"},
+                ]
+            )
             mock_client_class.return_value = mock_client
 
             success, message = await check_server_connection("test-server", config)
@@ -340,9 +337,7 @@ class TestCheckServerConnection:
 
         with patch("namicode_cli.mcp.client.MCPClient") as mock_client_class:
             mock_client = AsyncMock()
-            mock_client.list_tools = AsyncMock(
-                side_effect=RuntimeError("Connection refused")
-            )
+            mock_client.list_tools = AsyncMock(side_effect=RuntimeError("Connection refused"))
             mock_client_class.return_value = mock_client
 
             success, message = await check_server_connection("test-server", config)

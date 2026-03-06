@@ -6,13 +6,13 @@ command validation, and framework detection.
 
 from __future__ import annotations
 
-import asyncio
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from namicode_cli.process_manager import stream_subprocess_output
 
@@ -398,7 +398,7 @@ async def run_tests(
             callback=output_callback,
             timeout=float(timeout),
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         duration = time.time() - start_time
         return TestResult(
             success=False,

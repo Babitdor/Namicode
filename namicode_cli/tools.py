@@ -687,7 +687,7 @@ def package_info(
                 "classifiers": info.get("classifiers", [])[:10],  # Limit classifiers
             }
 
-        elif registry == "npm":
+        if registry == "npm":
             url = f"https://registry.npmjs.org/{name}"
             response = requests.get(url, timeout=10)
 
@@ -725,8 +725,7 @@ def package_info(
                 "engines": latest_data.get("engines"),
             }
 
-        else:
-            return {"error": f"Unknown registry: {registry}. Use 'pypi' or 'npm'"}
+        return {"error": f"Unknown registry: {registry}. Use 'pypi' or 'npm'"}
 
     except requests.exceptions.Timeout:
         return {"error": f"Request timed out while fetching {registry} package info", "name": name}
@@ -963,13 +962,12 @@ def format_code(
                         "formatter": "prettier",
                         "changed": result.stdout != original,
                     }
-                else:
-                    # Prettier failed or not available, provide basic formatting
-                    return {
-                        "success": False,
-                        "error": f"Prettier formatting failed: {result.stderr or 'Unknown error'}",
-                        "hint": "Install Prettier globally: npm install -g prettier",
-                    }
+                # Prettier failed or not available, provide basic formatting
+                return {
+                    "success": False,
+                    "error": f"Prettier formatting failed: {result.stderr or 'Unknown error'}",
+                    "hint": "Install Prettier globally: npm install -g prettier",
+                }
             except FileNotFoundError:
                 return {
                     "success": False,
@@ -993,29 +991,29 @@ def format_code(
 # Import browser tools - requires playwright package
 try:
     from namicode_cli.browser_tools import (
-        browser_navigate,
+        BROWSER_TOOLS,
         browser_click,
-        browser_type,
-        browser_screenshot,
+        browser_close,
         browser_evaluate,
-        browser_wait,
-        browser_wait_for,
-        browser_query,
-        browser_scroll,
         browser_fill_form,
         browser_get_content,
-        browser_select,
         browser_get_url,
         browser_go_back,
         browser_go_forward,
-        browser_refresh,
-        browser_close,
-        browser_run_code,
-        browser_upload,
+        browser_navigate,
         browser_pdf,
-        browser_status,
+        browser_query,
+        browser_refresh,
+        browser_run_code,
+        browser_screenshot,
+        browser_scroll,
+        browser_select,
         browser_snapshot,
-        BROWSER_TOOLS,
+        browser_status,
+        browser_type,
+        browser_upload,
+        browser_wait,
+        browser_wait_for,
     )
 
     BROWSER_TOOLS_AVAILABLE = True
@@ -1356,9 +1354,9 @@ def lint_code(
 
     if project["linter"] == "ruff":
         return _lint_with_ruff(path, fix, show_fixes)
-    elif project["linter"] == "eslint":
+    if project["linter"] == "eslint":
         return _lint_with_eslint(path, fix)
-    elif project["project_type"] == "python":
+    if project["project_type"] == "python":
         # Try ruff anyway, it might be installed globally
         try:
             subprocess.run(["ruff", "--version"], capture_output=True, check=True, timeout=5)
@@ -1549,13 +1547,13 @@ def format_code_file(
 
     if project["formatter"] == "ruff":
         return _format_with_ruff(path, check_only)
-    elif project["formatter"] == "prettier":
+    if project["formatter"] == "prettier":
         return _format_with_prettier(path, check_only)
-    elif project["formatter"] == "gofmt":
+    if project["formatter"] == "gofmt":
         return _format_with_gofmt(path, check_only)
-    elif project["formatter"] == "rustfmt":
+    if project["formatter"] == "rustfmt":
         return _format_with_rustfmt(path, check_only)
-    elif project["project_type"] == "python":
+    if project["project_type"] == "python":
         # Try ruff format anyway
         try:
             subprocess.run(["ruff", "--version"], capture_output=True, check=True, timeout=5)
@@ -1771,11 +1769,11 @@ def check_types(
 
     if project["type_checker"] == "mypy":
         return _check_types_mypy(path, strict)
-    elif project["type_checker"] == "pyright":
+    if project["type_checker"] == "pyright":
         return _check_types_pyright(path, strict)
-    elif project["type_checker"] == "tsc":
+    if project["type_checker"] == "tsc":
         return _check_types_tsc(path)
-    elif project["project_type"] == "python":
+    if project["project_type"] == "python":
         # Try mypy, then pyright
         try:
             subprocess.run(["mypy", "--version"], capture_output=True, check=True, timeout=5)

@@ -12,7 +12,7 @@ This module builds prompts in the correct order as specified in Task.md:
 from pathlib import Path
 from typing import Any
 
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import BaseMessage, SystemMessage
 
 from namicode_cli.session.session_persistence import SessionData
 from namicode_cli.tracking.workspace_anchoring import format_workspace_state_for_prompt
@@ -103,10 +103,20 @@ def build_continuation_prompt(
     messages: list[BaseMessage] = [SystemMessage(content=full_system_message)]
 
     # 7. Add recent messages from conversation (if any)
-    # Filter out system messages from recent history (we have a new system message)
-    for msg in session_data.messages:
-        if not isinstance(msg, SystemMessage):
-            messages.append(msg)
+    # Filter out system messages from recent history (we have a new system message).
+    # Apply a token-budget guard to avoid exceeding context limits when tool outputs
+    # or file reads are large — always prefer the most recent messages.
+    MAX_RECENT_TOKENS = 30_000
+    non_system = [msg for msg in session_data.messages if not isinstance(msg, SystemMessage)]
+    budget_messages: list[BaseMessage] = []
+    token_count = 0
+    for msg in reversed(non_system):
+        est = len(str(msg.content)) // 3
+        if token_count + est > MAX_RECENT_TOKENS:
+            break
+        budget_messages.insert(0, msg)
+        token_count += est
+    messages.extend(budget_messages)
 
     return messages
 

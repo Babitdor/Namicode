@@ -241,11 +241,15 @@ class TestMCPConfig:
         """Test loading invalid config structure raises RuntimeError."""
         config_path = tmp_path / "mcp.json"
         # Valid JSON but invalid config (missing required fields)
-        config_path.write_text(json.dumps({
-            "mcpServers": {
-                "bad-server": {"transport": "http"}  # Missing URL
-            }
-        }))
+        config_path.write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "bad-server": {"transport": "http"}  # Missing URL
+                    }
+                }
+            )
+        )
 
         config = MCPConfig(config_path)
         with pytest.raises(RuntimeError) as exc_info:

@@ -20,8 +20,9 @@ from prompt_toolkit.enums import EditingMode
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.output.vt100 import Vt100_Output
-from namicode_cli.image_utils import ImageData, get_clipboard_image
+
 from namicode_cli.config.config import COLORS, COMMANDS, Settings, console
+from namicode_cli.image_utils import ImageData, get_clipboard_image
 from namicode_cli.states.Session import SessionState
 
 # Regex patterns for context-aware completion
@@ -145,9 +146,7 @@ class FilePathCompleter(Completer):
         unescaped_fragment = unescaped_fragment.removesuffix("\\")
 
         # Create temporary document for the unescaped path fragment
-        temp_doc = Document(
-            text=unescaped_fragment, cursor_position=len(unescaped_fragment)
-        )
+        temp_doc = Document(text=unescaped_fragment, cursor_position=len(unescaped_fragment))
 
         # Get completions from PathCompleter and use its start_position
         # PathCompleter returns suffix text with start_position=0 (insert at cursor)
@@ -186,9 +185,7 @@ class CommandCompleter(Completer):
             if cmd_name.startswith(command_fragment.lower()):
                 yield Completion(
                     text=cmd_name,
-                    start_position=-len(
-                        command_fragment
-                    ),  # Fixed position for original document
+                    start_position=-len(command_fragment),  # Fixed position for original document
                     display=cmd_name,
                     display_meta=cmd_desc,
                 )
@@ -282,9 +279,7 @@ def parse_file_mentions(text: str) -> tuple[str, list[Path]]:
     return text, files
 
 
-def parse_agent_mentions(
-    text: str, settings: Settings | None = None
-) -> tuple[str | None, str]:
+def parse_agent_mentions(text: str, settings: Settings | None = None) -> tuple[str | None, str]:
     """Parse @agent_name mentions at the start of input.
 
     Returns:
@@ -378,10 +373,7 @@ def create_prompt_session(
         app = event.app
         now = time.monotonic()
 
-        if (
-            session_state.exit_hint_until is not None
-            and now < session_state.exit_hint_until
-        ):
+        if session_state.exit_hint_until is not None and now < session_state.exit_hint_until:
             handle = session_state.exit_hint_handle
             if handle:
                 handle.cancel()
@@ -536,9 +528,7 @@ def create_prompt_session(
         message=HTML(f'<style fg="{COLORS["user"]}">></style> '),
         multiline=True,  # Keep multiline support but Enter submits
         key_bindings=kb,
-        completer=merge_completers(
-            [CommandCompleter(), AgentCompleter(), FilePathCompleter()]
-        ),
+        completer=merge_completers([CommandCompleter(), AgentCompleter(), FilePathCompleter()]),
         editing_mode=EditingMode.EMACS,
         complete_while_typing=True,  # Show completions as you type
         complete_in_thread=True,  # Async completion prevents menu freezing

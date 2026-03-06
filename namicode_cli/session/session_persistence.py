@@ -7,7 +7,7 @@ including conversation history, todos, and tool state.
 import hashlib
 import json
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -151,7 +151,7 @@ class SessionManager:
         session_dir = self.sessions_dir / session_id
         session_dir.mkdir(parents=True, exist_ok=True)
 
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
         # Load existing meta to preserve created_at
         meta_path = session_dir / "meta.json"
@@ -164,9 +164,7 @@ class SessionManager:
 
         # Compute hashes
         repo_hash = self._compute_repo_hash(project_root) if project_root else None
-        nami_md_checksum = (
-            self._compute_nami_md_checksum(project_root) if project_root else None
-        )
+        nami_md_checksum = self._compute_nami_md_checksum(project_root) if project_root else None
 
         # Create metadata
         meta = SessionMeta(
@@ -191,27 +189,22 @@ class SessionManager:
             json.dump(meta.to_dict(), f, indent=2)
 
         # Split messages into recent and archive
-        recent_messages, archive_messages = self._split_messages(
-            messages, recent_limit=8
-        )
+        recent_messages, archive_messages = self._split_messages(messages, recent_limit=20)
 
         # Save recent messages (for context)
         recent_path = session_dir / "recent.jsonl"
         with open(recent_path, "w", encoding="utf-8") as f:
-            for msg in recent_messages:
-                f.write(json.dumps(self._serialize_message(msg)) + "\n")
+            f.writelines(json.dumps(self._serialize_message(msg)) + "\n" for msg in recent_messages)
 
         # Save archive messages (full history, not injected into context)
         archive_path = session_dir / "archive.jsonl"
         with open(archive_path, "w", encoding="utf-8") as f:
-            for msg in archive_messages:
-                f.write(json.dumps(self._serialize_message(msg)) + "\n")
+            f.writelines(json.dumps(self._serialize_message(msg)) + "\n" for msg in archive_messages)
 
         # Also save full conversation for backward compatibility (deprecated)
         conversation_path = session_dir / "conversation.jsonl"
         with open(conversation_path, "w", encoding="utf-8") as f:
-            for msg in messages:
-                f.write(json.dumps(self._serialize_message(msg)) + "\n")
+            f.writelines(json.dumps(self._serialize_message(msg)) + "\n" for msg in messages)
 
         # Save todos if provided
         if todos is not None:
@@ -390,9 +383,7 @@ class SessionManager:
 
         return sessions[:limit]
 
-    def get_latest_session(
-        self, project_root: Path | None = None
-    ) -> SessionMeta | None:
+    def get_latest_session(self, project_root: Path | None = None) -> SessionMeta | None:
         """Get the most recent session, optionally filtered by project.
 
         Args:

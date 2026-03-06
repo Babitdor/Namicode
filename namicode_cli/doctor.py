@@ -4,7 +4,6 @@ Validates configuration, API keys, and connections to services.
 """
 
 import json
-from pathlib import Path
 
 import requests
 from rich.console import Console
@@ -59,9 +58,7 @@ def run_doctor() -> int:
             results.append(("✓", f"{display_key} API key set", ""))
     else:
         results.append(("⚠", "No API keys found", ""))
-        results.append(
-            ("ℹ", "Run 'nami secrets set <provider>_api_key' to add keys", "")
-        )
+        results.append(("ℹ", "Run 'nami secrets set <provider>_api_key' to add keys", ""))
 
     # Check 3: LLM provider connection
     if config_file.exists():
@@ -71,15 +68,11 @@ def run_doctor() -> int:
 
             if provider == "ollama":
                 # Test Ollama connection
-                ollama_host = config.get("ollama", {}).get(
-                    "host", "http://localhost:11434"
-                )
+                ollama_host = config.get("ollama", {}).get("host", "http://localhost:11434")
                 try:
                     response = requests.get(f"{ollama_host}/api/tags", timeout=5)
                     if response.status_code == 200:  # noqa: PLR2004
-                        results.append(
-                            ("✓", "Ollama connection successful", ollama_host)
-                        )
+                        results.append(("✓", "Ollama connection successful", ollama_host))
                     else:
                         results.append(
                             (
@@ -97,13 +90,9 @@ def run_doctor() -> int:
                 try:
                     settings = Settings.from_environment()
                     _ = create_model()
-                    results.append(
-                        ("✓", f"{provider.title()} connection successful", "")
-                    )
+                    results.append(("✓", f"{provider.title()} connection successful", ""))
                 except Exception as e:  # noqa: BLE001
-                    results.append(
-                        ("✗", f"{provider.title()} connection failed: {e}", "")
-                    )
+                    results.append(("✗", f"{provider.title()} connection failed: {e}", ""))
                     all_passed = False
 
         except Exception as e:  # noqa: BLE001
@@ -147,9 +136,7 @@ def run_doctor() -> int:
             results.append(("✗", f"E2B sandbox test failed: {e}", ""))
             all_passed = False
     else:
-        results.append(
-            ("ℹ", "E2B not configured (optional)", "For secure code execution")
-        )
+        results.append(("ℹ", "E2B not configured (optional)", "For secure code execution"))
 
     # Check 6: File permissions on secrets.json (if using fallback)
     secrets_file = SecretManager.FALLBACK_FILE

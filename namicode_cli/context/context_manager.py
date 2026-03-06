@@ -6,7 +6,6 @@ including model-specific context window sizes and detailed token breakdowns.
 
 from dataclasses import dataclass
 
-
 # Model context window sizes (input tokens)
 # These are approximate and may vary by version
 MODEL_CONTEXT_WINDOWS: dict[str, int] = {
@@ -133,11 +132,7 @@ class ContextBreakdown:
 
         This includes user messages, assistant messages, and tool results.
         """
-        return (
-            self.user_message_tokens
-            + self.assistant_message_tokens
-            + self.tool_result_tokens
-        )
+        return self.user_message_tokens + self.assistant_message_tokens + self.tool_result_tokens
 
     @property
     def remaining_tokens(self) -> int:

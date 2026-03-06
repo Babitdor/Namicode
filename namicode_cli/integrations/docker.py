@@ -15,7 +15,6 @@ from nami_deepagents.backends.protocol import (
 from nami_deepagents.backends.sandbox import BaseSandbox
 
 if TYPE_CHECKING:
-    import docker
     from docker.models.containers import Container
 
 

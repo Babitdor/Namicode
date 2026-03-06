@@ -137,8 +137,7 @@ class TestShellMiddleware:
 
         # Use a command that will fail
         result = middleware._run_shell_command(
-            "exit 1" if sys.platform != "win32" else "cmd /c exit 1",
-            tool_call_id="test"
+            "exit 1" if sys.platform != "win32" else "cmd /c exit 1", tool_call_id="test"
         )
 
         assert result.status == "error"

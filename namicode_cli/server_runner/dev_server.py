@@ -10,12 +10,11 @@ import asyncio
 import re
 import socket
 import webbrowser
+from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
-from namicode_cli.process_manager import ProcessInfo, ProcessManager, ProcessStatus
-
+from namicode_cli.process_manager import ProcessManager, ProcessStatus
 
 # Common dev server commands and their default ports
 DEV_SERVER_PATTERNS: dict[str, int] = {
@@ -93,9 +92,7 @@ def find_available_port(start_port: int = 3000, max_attempts: int = 100) -> int:
                 return port
             except OSError:
                 continue
-    raise RuntimeError(
-        f"No available ports in range {start_port}-{start_port + max_attempts}"
-    )
+    raise RuntimeError(f"No available ports in range {start_port}-{start_port + max_attempts}")
 
 
 def is_port_in_use(port: int) -> bool:
@@ -323,16 +320,14 @@ async def start_dev_server(
         # Auto-open browser if requested
         if auto_open_browser:
             open_browser(url)
+    # Check if process is still alive
+    elif info.is_alive:
+        info.status = ProcessStatus.UNHEALTHY
     else:
-        # Check if process is still alive
-        if info.is_alive:
-            info.status = ProcessStatus.UNHEALTHY
-        else:
-            info.status = ProcessStatus.FAILED
-            raise RuntimeError(
-                f"Server process exited with code {info.exit_code}. "
-                f"Check output for errors."
-            )
+        info.status = ProcessStatus.FAILED
+        raise RuntimeError(
+            f"Server process exited with code {info.exit_code}. Check output for errors."
+        )
 
     return ServerInfo(
         pid=info.pid,
@@ -361,10 +356,9 @@ async def stop_server(
 
     if pid is not None:
         return await manager.stop_process(pid)
-    elif name is not None:
+    if name is not None:
         return await manager.stop_by_name(name)
-    else:
-        return False
+    return False
 
 
 def list_servers() -> list[ServerInfo]:
@@ -394,6 +388,7 @@ def list_servers() -> list[ServerInfo]:
 
 
 # Tool definitions for agent use
+
 
 def start_dev_server_tool(
     command: str,

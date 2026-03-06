@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from namicode_cli.skills.commands import _validate_name, _validate_skill_path
+from namicode_cli.skills.skill_creation import _validate_name, _validate_skill_path
 
 
 class TestValidateSkillName:

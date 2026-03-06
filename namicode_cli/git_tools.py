@@ -15,8 +15,6 @@ All tools return structured dictionaries instead of raw git output.
 """
 
 import subprocess
-from datetime import datetime
-from pathlib import Path
 from typing import Any, Literal
 
 

@@ -11,12 +11,12 @@ Uses similar patterns to prompt_for_tool_approval in execution.py.
 import sys
 from typing import TypedDict
 
-from rich import box
-from rich.panel import Panel
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import HTML
+from rich import box
+from rich.panel import Panel
 
-from namicode_cli.config.config import COLORS, console
+from namicode_cli.config.config import console
 
 
 class QuestionResponse(TypedDict):
@@ -219,8 +219,7 @@ async def handle_agent_question(
 
     if question_type == "structured" and options:
         return prompt_for_structured_question(question, options, context)
-    else:
-        return await prompt_for_open_question(question, context)
+    return await prompt_for_open_question(question, context)
 
 
 class PlanApprovalResult(TypedDict):
@@ -323,7 +322,9 @@ def prompt_for_plan_approval(
                         elif i == 1:
                             sys.stdout.write(f"\033[1;31m\u25cf {option}\033[0m\n")  # Red for no
                         else:
-                            sys.stdout.write(f"\033[1;33m\u25cf {option}\033[0m\n")  # Yellow for edit
+                            sys.stdout.write(
+                                f"\033[1;33m\u25cf {option}\033[0m\n"
+                            )  # Yellow for edit
                     else:
                         sys.stdout.write(f"\033[2m\u25cb {option}\033[0m\n")
 
@@ -392,21 +393,20 @@ def prompt_for_plan_approval(
         console.print("[green]✓ Plan approved - proceeding with execution[/green]")
         console.print()
         return PlanApprovalResult(approved=True, action="proceed")
-    elif selected == 1:
+    if selected == 1:
         console.print("[yellow]✗ Plan rejected - staying in plan mode[/yellow]")
         console.print()
         return PlanApprovalResult(approved=False, action="reject")
-    else:
-        console.print("[cyan]↻ Continuing to edit plan[/cyan]")
-        console.print()
-        return PlanApprovalResult(approved=False, action="edit")
+    console.print("[cyan]↻ Continuing to edit plan[/cyan]")
+    console.print()
+    return PlanApprovalResult(approved=False, action="edit")
 
 
 __all__ = [
-    "prompt_for_structured_question",
-    "prompt_for_open_question",
-    "handle_agent_question",
-    "QuestionResponse",
     "PlanApprovalResult",
+    "QuestionResponse",
+    "handle_agent_question",
+    "prompt_for_open_question",
     "prompt_for_plan_approval",
+    "prompt_for_structured_question",
 ]

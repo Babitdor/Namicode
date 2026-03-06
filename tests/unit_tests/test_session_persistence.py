@@ -1,19 +1,16 @@
 """Tests for session persistence module."""
 
-import json
 import tempfile
+from datetime import UTC
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
-import pytest
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from namicode_cli.session_persistence import (
-    SessionData,
+from namicode_cli.session.session_persistence import (
     SessionManager,
     SessionMeta,
 )
-from namicode_cli.session_restore import (
+from namicode_cli.session.session_restore import (
     build_session_summary_message,
     format_session_age,
     format_session_summary,
@@ -307,9 +304,9 @@ class TestSessionRestore:
 
     def test_format_session_age_just_now(self) -> None:
         """Test formatting age for recent timestamp."""
-        from datetime import datetime, timezone
+        from datetime import datetime
 
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         result = format_session_age(now)
         assert result == "just now"
 

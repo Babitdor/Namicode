@@ -98,8 +98,8 @@ Generate the memory.md content following the format specified in your instructio
 
     try:
         response = model.invoke(summary_messages)
-        memory_content = response.content if hasattr(response, 'content') else str(response)
-        return memory_content.strip() # type: ignore
+        memory_content = response.content if hasattr(response, "content") else str(response)
+        return memory_content.strip()  # type: ignore
     except Exception as e:
         # Fallback to basic summary if LLM fails
         return f"""# Session Memory
@@ -137,21 +137,21 @@ def _build_conversation_summary(messages: list[BaseMessage], max_length: int = 1
 
         # Format based on message type
         if msg_type == "HumanMessage":
-            lines.append(f"[{i+1}] User: {content}")
+            lines.append(f"[{i + 1}] User: {content}")
         elif msg_type == "AIMessage":
             # Check for tool calls
-            if hasattr(msg, 'tool_calls') and msg.tool_calls: # type: ignore
-                tool_names = [tc.get('name', 'unknown') for tc in msg.tool_calls] # type: ignore
-                lines.append(f"[{i+1}] Assistant: (called tools: {', '.join(tool_names)})")
+            if hasattr(msg, "tool_calls") and msg.tool_calls:  # type: ignore
+                tool_names = [tc.get("name", "unknown") for tc in msg.tool_calls]  # type: ignore
+                lines.append(f"[{i + 1}] Assistant: (called tools: {', '.join(tool_names)})")
             if content and not content.startswith("[") and len(content) > 10:
-                lines.append(f"[{i+1}] Assistant: {content}")
+                lines.append(f"[{i + 1}] Assistant: {content}")
         elif msg_type == "ToolMessage":
-            tool_name = getattr(msg, 'name', 'unknown')
+            tool_name = getattr(msg, "name", "unknown")
             # Include tool result if it's not too long
             if len(content) < 200:
-                lines.append(f"[{i+1}] Tool({tool_name}): {content}")
+                lines.append(f"[{i + 1}] Tool({tool_name}): {content}")
             else:
-                lines.append(f"[{i+1}] Tool({tool_name}): (output length: {len(content)} chars)")
+                lines.append(f"[{i + 1}] Tool({tool_name}): (output length: {len(content)} chars)")
 
     summary = "\n".join(lines)
 

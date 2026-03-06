@@ -28,9 +28,7 @@ def validate_session_compatibility(
     # Check project root match
     if meta.project_root and current_project_root:
         if meta.project_root != str(current_project_root):
-            warnings.append(
-                f"Session was created in different project: {meta.project_root}"
-            )
+            warnings.append(f"Session was created in different project: {meta.project_root}")
 
     # Check repo hash (git commit) - only warn, don't block
     if meta.project_root and meta.repo_hash and current_project_root:
@@ -109,8 +107,7 @@ def format_session_summary(meta: SessionMeta) -> str:
     msg_count = meta.message_count
 
     return (
-        f"[bold]{meta.session_id[:8]}[/bold] - {project} ({model})\n"
-        f"  {msg_count} messages, {age}"
+        f"[bold]{meta.session_id[:8]}[/bold] - {project} ({model})\n  {msg_count} messages, {age}"
     )
 
 

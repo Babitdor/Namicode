@@ -9,7 +9,7 @@ persistent connections for stateful MCP servers.
 
 import asyncio
 import contextlib
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict
 
@@ -179,9 +179,7 @@ class MCPMiddleware(AgentMiddleware):
         # Load tools from each server with proper attribution
         # Prioritize Docker-based servers first (they have issues with Windows async)
         server_names = list(servers.keys())
-        docker_servers = [
-            name for name in server_names if servers[name].command == "docker"
-        ]
+        docker_servers = [name for name in server_names if servers[name].command == "docker"]
         other_servers = [name for name in server_names if name not in docker_servers]
         ordered_servers = docker_servers + other_servers
 
@@ -347,7 +345,7 @@ class MCPMiddleware(AgentMiddleware):
             else:
                 system_prompt = mcp_section
 
-            updated_request = updated_request.override(system_prompt=system_prompt) # type: ignore
+            updated_request = updated_request.override(system_prompt=system_prompt)  # type: ignore
 
         return handler(updated_request)
 
@@ -392,7 +390,7 @@ class MCPMiddleware(AgentMiddleware):
             else:
                 system_prompt = mcp_section
 
-            updated_request = updated_request.override(system_prompt=system_prompt) # type: ignore
+            updated_request = updated_request.override(system_prompt=system_prompt)  # type: ignore
 
         return await handler(updated_request)
 

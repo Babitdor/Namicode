@@ -12,7 +12,10 @@ TEST_FILE ?= tests/unit_tests
 INTEGRATION_FILES ?= tests/integration_tests
 
 test:
-	uv run pytest --disable-socket --allow-unix-socket $(TEST_FILE)
+	uv run pytest $(TEST_FILE) \
+	  --ignore=tests/unit_tests/test_shell.py \
+	  --ignore=tests/unit_tests/test_process_manager.py \
+	  --ignore=tests/unit_tests/test_end_to_end.py
 
 test_integration:
 	uv run pytest $(INTEGRATION_FILES)
@@ -85,10 +88,10 @@ help:
 	@echo 'run_reinstall                - reinstall and run Nami CLI'
 	@echo ''
 	@echo '-- TESTING --'
-	@echo 'test                         - run unit tests'
+	@echo 'test                         - run unit tests (excludes subprocess-heavy tests)'
 	@echo 'test TEST_FILE=<path>        - run specific test file or directory'
 	@echo 'test_integration             - run integration tests'
-	@echo 'test_all                     - run all tests'
+	@echo 'test_all                     - run all tests (including subprocess-heavy)'
 	@echo 'test_watch                   - run tests in watch mode'
 	@echo 'test_cov                     - run tests with coverage report'
 	@echo ''

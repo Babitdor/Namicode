@@ -52,9 +52,9 @@ def get_clipboard_image() -> ImageData | None:
     """
     if sys.platform == "darwin":
         return _get_macos_clipboard_image()
-    elif sys.platform == "win32":
+    if sys.platform == "win32":
         return _get_windows_clipboard_image()
-    elif sys.platform.startswith("linux"):
+    if sys.platform.startswith("linux"):
         return _get_linux_clipboard_image()
     return None
 
@@ -351,8 +351,7 @@ def load_image_from_path(image_path: Path) -> ImageData:
     suffix = image_path.suffix.lower()
     if suffix not in SUPPORTED_FORMATS:
         raise ValueError(
-            f"Unsupported image format: {suffix}. "
-            f"Supported: {', '.join(sorted(SUPPORTED_FORMATS))}"
+            f"Unsupported image format: {suffix}. Supported: {', '.join(sorted(SUPPORTED_FORMATS))}"
         )
 
     # Check file size
@@ -456,10 +455,12 @@ class ImageProcessor:
         save_kwargs: dict = {"optimize": True}
 
         if output_format == "jpeg":
-            save_kwargs.update({
-                "quality": ImageProcessor.TARGET_QUALITY,
-                "progressive": True,
-            })
+            save_kwargs.update(
+                {
+                    "quality": ImageProcessor.TARGET_QUALITY,
+                    "progressive": True,
+                }
+            )
             image.save(buffer, format="JPEG", **save_kwargs)
         else:
             save_kwargs.update({"compress_level": 6})

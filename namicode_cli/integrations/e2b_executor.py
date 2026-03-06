@@ -4,7 +4,6 @@ This module provides integration with E2B Code Interpreter for running
 Python, Node.js, and Bash code in isolated cloud sandboxes.
 """
 
-import json
 import time
 from dataclasses import dataclass
 
@@ -128,9 +127,7 @@ class E2BExecutor:
             else:
                 # For bash/shell, write code to file and execute
                 sandbox.files.write("/tmp/script.sh", code)
-                result = sandbox.commands.run(
-                    f"{runtime} /tmp/script.sh", timeout=timeout
-                )
+                result = sandbox.commands.run(f"{runtime} /tmp/script.sh", timeout=timeout)
 
                 stdout = result.stdout if result.stdout else ""
                 stderr = result.stderr if result.stderr else ""
@@ -234,8 +231,6 @@ def format_e2b_result(result: ExecuteResult) -> str:
     output_parts.append(f"Execution time: {result.execution_time:.2f}s")
 
     if result.truncated:
-        output_parts.append(
-            f"\n[Output truncated - exceeded {MAX_OUTPUT_SIZE:,} character limit]"
-        )
+        output_parts.append(f"\n[Output truncated - exceeded {MAX_OUTPUT_SIZE:,} character limit]")
 
     return "\n\n".join(output_parts)

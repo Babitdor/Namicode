@@ -9,14 +9,13 @@ import os
 import stat
 from contextlib import contextmanager
 from getpass import getpass
-from pathlib import Path
 from typing import Any
 
 import requests
 from rich.console import Console
 from rich.panel import Panel
 
-from namicode_cli.config.config import HOME_DIR, Settings
+from namicode_cli.config.config import HOME_DIR
 from namicode_cli.config.nami_config import NamiConfig
 
 console = Console()
@@ -72,9 +71,7 @@ class SecretManager:
             pass
 
         if not self.use_keyring:
-            console.print(
-                "[yellow]⚠ OS keychain not available, using file-based storage[/yellow]"
-            )
+            console.print("[yellow]⚠ OS keychain not available, using file-based storage[/yellow]")
             self._ensure_fallback_file()
 
     def _ensure_fallback_file(self) -> None:
@@ -114,9 +111,7 @@ class SecretManager:
                 if self.FALLBACK_FILE.exists():
                     secrets = json.loads(self.FALLBACK_FILE.read_text(encoding="utf-8"))
                 secrets[key] = value
-                self.FALLBACK_FILE.write_text(
-                    json.dumps(secrets, indent=2), encoding="utf-8"
-                )
+                self.FALLBACK_FILE.write_text(json.dumps(secrets, indent=2), encoding="utf-8")
             return True
         except Exception as e:  # noqa: BLE001
             console.print(f"[red]✗ Failed to store secret: {e}[/red]")
@@ -139,7 +134,7 @@ class SecretManager:
                 secrets = json.loads(self.FALLBACK_FILE.read_text(encoding="utf-8"))
                 return secrets.get(key)
             return None
-        except Exception:  # noqa: BLE001, S110
+        except Exception:  # noqa: BLE001
             return None
 
     def delete_secret(self, key: str) -> bool:
@@ -158,14 +153,11 @@ class SecretManager:
                 except self.keyring.errors.PasswordDeleteError:
                     # Key doesn't exist, that's ok
                     pass
-            else:
-                # Fallback: JSON file
-                if self.FALLBACK_FILE.exists():
-                    secrets = json.loads(self.FALLBACK_FILE.read_text(encoding="utf-8"))
-                    secrets.pop(key, None)
-                    self.FALLBACK_FILE.write_text(
-                        json.dumps(secrets, indent=2), encoding="utf-8"
-                    )
+            # Fallback: JSON file
+            elif self.FALLBACK_FILE.exists():
+                secrets = json.loads(self.FALLBACK_FILE.read_text(encoding="utf-8"))
+                secrets.pop(key, None)
+                self.FALLBACK_FILE.write_text(json.dumps(secrets, indent=2), encoding="utf-8")
             return True
         except Exception as e:  # noqa: BLE001
             console.print(f"[red]✗ Failed to delete secret: {e}[/red]")
@@ -189,7 +181,7 @@ class SecretManager:
             try:
                 secrets = json.loads(self.FALLBACK_FILE.read_text(encoding="utf-8"))
                 return list(secrets.keys())
-            except Exception:  # noqa: BLE001, S110
+            except Exception:  # noqa: BLE001
                 return []
         return []
 
@@ -277,9 +269,7 @@ class OnboardingWizard:
         if self.secret_manager.use_keyring:
             console.print("[dim]API keys stored in system keychain[/dim]")
         else:
-            console.print(
-                f"[dim]API keys stored in {self.secret_manager.FALLBACK_FILE}[/dim]"
-            )
+            console.print(f"[dim]API keys stored in {self.secret_manager.FALLBACK_FILE}[/dim]")
         console.print()
         console.print("[bold cyan]You're ready to go![/bold cyan]\"")
 
@@ -379,7 +369,9 @@ class OnboardingWizard:
         console.print()
         console.print("[bold]Image generation provider (Replicate):[/bold]")
         console.print("  [dim]Required for AI image generation. 50 free images/month.[/dim]")
-        console.print("  [dim]Get your free API key at: https://replicate.com/account/api-tokens[/dim]")
+        console.print(
+            "  [dim]Get your free API key at: https://replicate.com/account/api-tokens[/dim]"
+        )
         console.print("  [dim]Press Enter to skip.[/dim]")
         replicate_key = getpass("  Replicate API key: ")
 
@@ -541,17 +533,11 @@ class OnboardingWizard:
                 # No models installed
                 model_name = "minimax-m2.1:cloud"  # Set as default anyway
                 console.print()
-                console.print(
-                    "[yellow]⚠ No Ollama models found on your system[/yellow]"
-                )
+                console.print("[yellow]⚠ No Ollama models found on your system[/yellow]")
                 console.print()
                 console.print("[bold]To install Ollama models:[/bold]")
-                console.print(
-                    "  1. Install a model: [cyan]ollama pull minimax-m2.1:cloud[/cyan]"
-                )
-                console.print(
-                    "  2. Or browse models: [cyan]https://ollama.com/library[/cyan]"
-                )
+                console.print("  1. Install a model: [cyan]ollama pull minimax-m2.1:cloud[/cyan]")
+                console.print("  2. Or browse models: [cyan]https://ollama.com/library[/cyan]")
                 console.print()
                 console.print(
                     "[dim]After installing models, use the [bold]/model[/bold] command to configure them[/dim]"

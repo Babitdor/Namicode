@@ -1,21 +1,15 @@
 import os
-import re
 import sys
-import uuid
-from dataclasses import dataclass
-from pathlib import Path
 
-import dotenv
 from langchain_core.language_models import BaseChatModel
 from rich.console import Console
+
 from namicode_cli.config.config import settings
 
 if sys.platform == "win32":
     import io
 
-    console = Console(
-        highlight=False, file=io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
-    )
+    console = Console(highlight=False, file=io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8"))
 else:
     console = Console(highlight=False)
 
@@ -56,7 +50,7 @@ def create_model() -> BaseChatModel:
                 num_ctx=200000,
             )
 
-        elif provider == "openai":
+        if provider == "openai":
             from langchain_openai import ChatOpenAI
 
             # Verify API key is available
@@ -132,9 +126,7 @@ def create_model() -> BaseChatModel:
     from langchain_ollama import ChatOllama
 
     model_name = os.environ.get("OLLAMA_MODEL", "qwen3-coder:480b-cloud")
-    console.print(
-        f"[dim]No API keys configured. Defaulting to Ollama model: {model_name}[/dim]"
-    )
+    console.print(f"[dim]No API keys configured. Defaulting to Ollama model: {model_name}[/dim]")
     return ChatOllama(
         model=model_name,
         temperature=0,
@@ -244,13 +236,12 @@ def get_vision_model_suggestion(current_model: str) -> str | None:
     # Suggest best available model based on configured providers
     if settings.has_anthropic:
         return "claude-sonnet-4-5-20250929"
-    elif settings.has_openai:
+    if settings.has_openai:
         return "gpt-4o"
-    elif settings.has_google:
+    if settings.has_google:
         return "gemini-1.5-pro"
-    else:
-        # Default to Ollama vision model
-        return "qwen3-vl:235b-cloud"
+    # Default to Ollama vision model
+    return "qwen3-vl:235b-cloud"
 
 
 def get_current_model_name() -> str:
@@ -270,9 +261,8 @@ def get_current_model_name() -> str:
     # Check environment variables
     if settings.has_openai:
         return os.environ.get("OPENAI_MODEL", "gpt-5-mini")
-    elif settings.has_anthropic:
+    if settings.has_anthropic:
         return os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-5-20250929")
-    elif settings.has_google:
+    if settings.has_google:
         return os.environ.get("GOOGLE_MODEL", "gemini-3-pro-preview")
-    else:
-        return os.environ.get("OLLAMA_MODEL", "qwen3-coder:480b-cloud")
+    return os.environ.get("OLLAMA_MODEL", "qwen3-coder:480b-cloud")

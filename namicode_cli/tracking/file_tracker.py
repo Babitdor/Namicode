@@ -10,8 +10,8 @@ This middleware provides:
 import hashlib
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, NotRequired, TypedDict
+from datetime import UTC, datetime
+from typing import NotRequired
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
@@ -23,7 +23,6 @@ from langchain.tools import BaseTool
 from langchain.tools.tool_node import ToolCallRequest
 from langchain_core.messages import ToolMessage
 from langgraph.types import Command
-
 
 # ============================================================================
 # Data Structures
@@ -131,7 +130,7 @@ class SessionFileTracker:
             content_hash=content_hash,
             line_count=len(lines),
             char_count=len(content),
-            read_at=datetime.now(timezone.utc).isoformat(),
+            read_at=datetime.now(UTC).isoformat(),
             offset=offset,
             limit=limit,
             content_preview=content[:500] if content else "",
@@ -156,17 +155,13 @@ class SessionFileTracker:
     ) -> FileWriteRecord:
         """Record a file write operation."""
         content_hash = hashlib.sha256(content.encode()).hexdigest()[:16]
-        old_hash = (
-            hashlib.sha256(old_content.encode()).hexdigest()[:16]
-            if old_content
-            else None
-        )
+        old_hash = hashlib.sha256(old_content.encode()).hexdigest()[:16] if old_content else None
 
         record = FileWriteRecord(
             path=path,
             operation=operation,
             content_hash=content_hash,
-            written_at=datetime.now(timezone.utc).isoformat(),
+            written_at=datetime.now(UTC).isoformat(),
             old_content_hash=old_hash,
             lines_changed=lines_changed,
         )
@@ -457,7 +452,11 @@ class FileTrackerMiddleware(AgentMiddleware):
             return result
 
         # Track read_file operations
-        if tool_name == "read_file" and isinstance(content, str) and not content.startswith("Error"):
+        if (
+            tool_name == "read_file"
+            and isinstance(content, str)
+            and not content.startswith("Error")
+        ):
             file_path = args.get("file_path") or args.get("path", "")
             offset = args.get("offset", 0)
             limit = args.get("limit")
@@ -489,7 +488,7 @@ class FileTrackerMiddleware(AgentMiddleware):
                 return ToolMessage(
                     content=truncated_content,
                     tool_call_id=result.tool_call_id,
-                    name=result.name if hasattr(result, 'name') else None,
+                    name=result.name if hasattr(result, "name") else None,
                 )
 
         return result
@@ -557,16 +556,16 @@ def was_file_read(path: str) -> bool:
 
 
 __all__ = [
-    "FileTrackerMiddleware",
-    "SessionFileTracker",
+    "RESULT_LIMITS",
     "FileReadRecord",
+    "FileTrackerMiddleware",
     "FileWriteRecord",
+    "SessionFileTracker",
+    "get_files_summary",
+    "get_modified_files",
+    "get_recently_read_files",
     "get_session_tracker",
     "reset_session_tracker",
-    "get_files_summary",
-    "get_recently_read_files",
-    "get_modified_files",
-    "was_file_read",
     "truncate_tool_result",
-    "RESULT_LIMITS",
+    "was_file_read",
 ]

@@ -1,40 +1,41 @@
-
-import sys
 import os
-from pathlib import Path
+import sys
 
 # Add project root to sys.path
 sys.path.append(os.getcwd())
 
 import asyncio
+
 from rich.console import Console
 
 console = Console()
 
+
 async def verify_screens():
     console.print("[bold]Verifying Textual Screens...[/bold]")
-    
+
     try:
         # Import App
-        from namicode_cli.app import NamiCodeApp
+
         console.print("[green]✓ Imported NamiCodeApp[/green]")
-        
+
         # Import Screens
         from namicode_cli.widgets.screens import (
-            ModelSelectionModal,
-            MCPScreen,
-            SkillsScreen,
-            AgentsScreen,
             AgentCreateModal,
+            AgentsScreen,
+            MCPScreen,
+            ModelSelectionModal,
+            ServersScreen,
             SessionsScreen,
-            ServersScreen
+            SkillsScreen,
         )
+
         console.print("[green]✓ Imported screen classes[/green]")
-        
+
         # Instantiate Screens (Mocking app/dependencies if needed)
         # Note: Screens usually require binding to an app, but we just check instantiation logic
         # Some might fail if they access `self.app` in __init__, but Textual widgets usually don't until mount.
-        
+
         # MCPScreen
         mcp_screen = MCPScreen()
         console.print(f"[green]✓ Instantiated MCPScreen: {mcp_screen}[/green]")
@@ -49,6 +50,7 @@ async def verify_screens():
 
         # SessionsScreen
         from namicode_cli.app import TextualSessionState
+
         dummy_state = TextualSessionState()
         sessions_screen = SessionsScreen(session_state=dummy_state)
         console.print(f"[green]✓ Instantiated SessionsScreen: {sessions_screen}[/green]")
@@ -72,8 +74,10 @@ async def verify_screens():
     except Exception as e:
         console.print(f"\n[bold red]Verification Failed:[/bold red] {e}")
         import traceback
+
         traceback.print_exc()
         return False
+
 
 if __name__ == "__main__":
     success = asyncio.run(verify_screens())

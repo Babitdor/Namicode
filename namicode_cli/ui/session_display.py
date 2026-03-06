@@ -4,19 +4,16 @@ This module provides CLI display functions for showing restored session history
 in a Claude Code style format with proper formatting and warnings.
 """
 
-from datetime import datetime
-from pathlib import Path
+from datetime import UTC, datetime
 
 from langchain_core.messages import (
+    AIMessage,
     BaseMessage,
     HumanMessage,
-    AIMessage,
     SystemMessage,
     ToolMessage,
 )
-from rich import box
 from rich.markdown import Markdown
-from rich.panel import Panel
 
 from namicode_cli.config.config import COLORS, console
 from namicode_cli.session.session_persistence import SessionData
@@ -45,16 +42,14 @@ def display_restored_session(
     # Display session header
     console.print()
     console.print(
-        f"[bold cyan]↺ Continuing session[/bold cyan] "
-        f"[dim]{meta.session_id[:8]}...[/dim]"
+        f"[bold cyan]↺ Continuing session[/bold cyan] [dim]{meta.session_id[:8]}...[/dim]"
     )
 
     # Display message count
     if meta.message_count > 0:
         recent_count = len(session_data.messages)
         console.print(
-            f"  [dim]{meta.message_count} total messages "
-            f"({recent_count} recent in context)[/dim]"
+            f"  [dim]{meta.message_count} total messages ({recent_count} recent in context)[/dim]"
         )
 
     # Display session age
@@ -62,9 +57,8 @@ def display_restored_session(
         created_at = datetime.fromisoformat(meta.created_at)
         # Handle both timezone-aware and timezone-naive datetimes
         if created_at.tzinfo is not None:
-            from datetime import timezone
 
-            current_time = datetime.now(timezone.utc)
+            current_time = datetime.now(UTC)
         else:
             current_time = datetime.now()
 
@@ -114,9 +108,7 @@ def display_restored_session(
 
     # Display NAMI.md status
     if nami_md_loaded:
-        console.print(
-            f"  [dim green]✓ NAMI.md loaded (project rules active)[/dim green]"
-        )
+        console.print("  [dim green]✓ NAMI.md loaded (project rules active)[/dim green]")
 
     console.print()
 
@@ -130,9 +122,7 @@ def display_restored_session(
     )
 
 
-def _display_recent_messages(
-    messages: list[BaseMessage], max_display: int = 10
-) -> None:
+def _display_recent_messages(messages: list[BaseMessage], max_display: int = 10) -> None:
     """Display recent messages from conversation history.
 
     Args:
@@ -143,9 +133,7 @@ def _display_recent_messages(
         return
 
     # Filter out system messages for display (they're in the new system prompt)
-    displayable_messages = [
-        msg for msg in messages if not isinstance(msg, SystemMessage)
-    ]
+    displayable_messages = [msg for msg in messages if not isinstance(msg, SystemMessage)]
 
     # Only show last max_display messages
     messages_to_show = (
@@ -165,19 +153,15 @@ def _display_recent_messages(
             # User message with > prefix
             content = _get_message_content(msg)
             if content:
-                console.print(f"[bold cyan]> You:[/bold cyan]")
+                console.print("[bold cyan]> You:[/bold cyan]")
                 console.print(f"  {content}")
                 console.print()
 
         elif isinstance(msg, AIMessage):
             # AI message with proper markdown rendering
             content = _get_message_content(msg)
-            if (
-                content and not msg.tool_calls
-            ):  # Don't show messages that are just tool calls
-                console.print(
-                    f"[bold {COLORS['agent']}]> Nami:[/bold {COLORS['agent']}]"
-                )
+            if content and not msg.tool_calls:  # Don't show messages that are just tool calls
+                console.print(f"[bold {COLORS['agent']}]> Nami:[/bold {COLORS['agent']}]")
                 # Display full content without truncation
                 console.print(Markdown(content))
                 console.print()
@@ -192,9 +176,7 @@ def _display_recent_messages(
 
     # Show truncation indicator if we didn't show all messages
     if len(displayable_messages) > max_display:
-        console.print(
-            f"[dim]... and {len(displayable_messages) - max_display} more messages[/dim]"
-        )
+        console.print(f"[dim]... and {len(displayable_messages) - max_display} more messages[/dim]")
         console.print()
 
 
@@ -211,7 +193,7 @@ def _get_message_content(msg: BaseMessage) -> str:
         content = msg.content
         if isinstance(content, str):
             return content
-        elif isinstance(content, list):
+        if isinstance(content, list):
             # Handle multimodal content (list of dicts)
             text_parts = []
             for item in content:
