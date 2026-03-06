@@ -29,6 +29,10 @@ class PathApprovalManager:
         if not self.config_file.exists():
             return True
 
+        # Windows does not use Unix permission bits — skip the check entirely.
+        if os.name == "nt":
+            return True
+
         try:
             mode = os.stat(self.config_file).st_mode
             # Check if group or others have any permissions
