@@ -160,14 +160,12 @@ def parse_agent_color(agent_md_path: Path) -> str | None:
 
 # ASCII art banner - Sleek red design
 NAMI_CODE_ASCII = """
-                                                                     
-       ███╗   ██╗ █████╗ ███╗   ███╗██╗     ██████╗ ██████╗ ██████╗ ███████╗   
-       ████╗  ██║██╔══██╗████╗ ████║██║    ██╔════╝██╔═══██╗██╔══██╗██╔════╝   
-       ██╔██╗ ██║███████║██╔████╔██║██║    ██║     ██║   ██║██║  ██║█████╗     
-       ██║╚██╗██║██╔══██║██║╚██╔╝██║██║    ██║     ██║   ██║██║  ██║██╔══╝     
-       ██║ ╚████║██║  ██║██║ ╚═╝ ██║██║    ╚██████╗╚██████╔╝██████╔╝███████╗   
-       ╚═╝  ╚═══╝╚═╝  ╚═╝╚═╝     ╚═╝╚═╝     ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝   
-
+███╗   ██╗ █████╗ ███████╗██╗██████╗ ██╗████████╗
+████╗  ██║██╔══██╗██╔════╝██║██╔══██╗██║╚══██╔══╝
+██╔██╗ ██║███████║█████╗  ██║██████╔╝██║   ██║
+██║╚██╗██║██╔══██║██╔══╝  ██║██╔══██╗██║   ██║
+██║ ╚████║██║  ██║██║     ██║██████╔╝██║   ██║
+╚═╝  ╚═══╝╚═╝  ╚═╝╚═╝     ╚═╝╚═════╝ ╚═╝   ╚═╝
 """
 
 # Interactive commands
@@ -189,6 +187,9 @@ COMMANDS = {
     "trace": "Manage LangSmith tracing (status, enable, disable, projects)",
     "kill": "Kill a running process by PID or name (e.g., /kill 1234)",
     "images": "Manage images in conversation (list, remove <id>, clear)",
+    "plan": "Toggle plan mode (e.g., /plan, /plan on, /plan off)",
+    "files": "Show file operation summary for the session",
+    "critique": "Run critique agent on recent changes (e.g., /critique or /critique src/)",
     "exit": "Exit the CLI",
 }
 
@@ -226,7 +227,9 @@ config = {"recursion_limit": 1000}
 if sys.platform == "win32":
     import io
 
-    console = Console(highlight=False, file=io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8"))
+    console = Console(
+        highlight=False, file=io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+    )
 else:
     console = Console(highlight=False)
 
@@ -387,18 +390,18 @@ class Settings:
             openai_key = secret_manager.get_secret("openai_api_key") or os.environ.get(
                 "OPENAI_API_KEY"
             )
-            anthropic_key = secret_manager.get_secret("anthropic_api_key") or os.environ.get(
-                "ANTHROPIC_API_KEY"
-            )
+            anthropic_key = secret_manager.get_secret(
+                "anthropic_api_key"
+            ) or os.environ.get("ANTHROPIC_API_KEY")
             google_key = secret_manager.get_secret("google_api_key") or os.environ.get(
                 "GOOGLE_API_KEY"
             )
             tavily_key = secret_manager.get_secret("tavily_api_key") or os.environ.get(
                 "TAVILY_API_KEY"
             )
-            replicate_key = secret_manager.get_secret("replicate_api_key") or os.environ.get(
-                "REPLICATE_API_TOKEN"
-            )
+            replicate_key = secret_manager.get_secret(
+                "replicate_api_key"
+            ) or os.environ.get("REPLICATE_API_TOKEN")
         else:
             openai_key = os.environ.get("OPENAI_API_KEY")
             anthropic_key = os.environ.get("ANTHROPIC_API_KEY")

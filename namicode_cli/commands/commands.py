@@ -3099,22 +3099,25 @@ def execute_bash_command(command: str) -> bool:
         console.print()
         console.print(f"[dim]$ {cmd}[/dim]")
 
-        # Execute the command
+        # Execute the command (binary mode to avoid Windows cp1252 issues)
         result = subprocess.run(
             cmd,
             check=False,
             shell=True,
             capture_output=True,
-            text=True,
             timeout=30,
             cwd=Path.cwd(),
         )
 
+        # Decode output as UTF-8 with error replacement
+        stdout = (result.stdout or b"").decode("utf-8", errors="replace")
+        stderr = (result.stderr or b"").decode("utf-8", errors="replace")
+
         # Display output
-        if result.stdout:
-            console.print(result.stdout, style=COLORS["dim"], markup=False)
-        if result.stderr:
-            console.print(result.stderr, style="red", markup=False)
+        if stdout.strip():
+            console.print(stdout, style=COLORS["dim"], markup=False)
+        if stderr.strip():
+            console.print(stderr, style="red", markup=False)
 
         # Show return code if non-zero
         if result.returncode != 0:

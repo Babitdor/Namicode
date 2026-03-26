@@ -7,6 +7,7 @@ from .prompt import (
     CODE_DOC_AAGENT,
     CODE_EXPLORER,
     CODE_SIMPLIFIER,
+    CRITIQUE_AGENT,
     IMPLEMENTATION_AGENT,
     PERFORMANCE_ANALYST_AGENT,
     REFACTORING_SPECIALIST_AGENT,
@@ -129,5 +130,14 @@ def retrieve_core_subagents(
         "tools": tools,
     }
     subagents.append(refactoring_specialist_agent)
+
+    critique_agent: SubAgent = {
+        "name": "critique-agent",
+        "description": "Self-reflection agent that evaluates recent code changes for correctness, completeness, safety, and regressions. Uses git diff to discover changes and reports structured findings (PASS/WARN/FAIL).",
+        "system_prompt": CRITIQUE_AGENT,
+        "tools": tools,
+        "color": "#f59e0b",
+    }
+    subagents.append(critique_agent)
 
     return subagents

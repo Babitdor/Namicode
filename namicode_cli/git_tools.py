@@ -33,10 +33,11 @@ def _run_git_command(args: list[str], repo_path: str = ".") -> tuple[int, str, s
         cmd,
         cwd=repo_path,
         capture_output=True,
-        text=True,
         check=False,
     )
-    return result.returncode, result.stdout, result.stderr
+    stdout = (result.stdout or b"").decode("utf-8", errors="replace")
+    stderr = (result.stderr or b"").decode("utf-8", errors="replace")
+    return result.returncode, stdout, stderr
 
 
 def git_status(

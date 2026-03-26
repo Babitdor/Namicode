@@ -70,9 +70,19 @@ def create_model() -> BaseChatModel:
                     "[yellow]Warning: ANTHROPIC_API_KEY not set, falling back to Ollama[/yellow]"
                 )
             else:
+                # Extended thinking support (Anthropic only)
+                thinking_budget = nami_config.get("thinking_budget", 0)
+                thinking_kwargs: dict = {}
+                if thinking_budget and thinking_budget > 0:
+                    thinking_kwargs["thinking"] = {
+                        "type": "enabled",
+                        "budget_tokens": int(thinking_budget),
+                    }
+
                 return ChatAnthropic(
                     model_name=model_name,
                     max_tokens=20_000,  # type: ignore[arg-type]
+                    **thinking_kwargs,
                 )
 
         elif provider == "google":
@@ -105,11 +115,22 @@ def create_model() -> BaseChatModel:
 
         model_name = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-5-20250929")
         console.print(f"[dim]Using Anthropic model: {model_name}[/dim]")
+
+        # Extended thinking support (Anthropic only)
+        thinking_kwargs: dict = {}
+        thinking_budget = int(os.environ.get("NAMI_THINKING_BUDGET", "0"))
+        if thinking_budget > 0:
+            thinking_kwargs["thinking"] = {
+                "type": "enabled",
+                "budget_tokens": thinking_budget,
+            }
+
         return ChatAnthropic(
             model_name=model_name,
             # The attribute exists, but it has a Pydantic alias which
             # causes issues in IDEs/type checkers.
             max_tokens=20_000,  # type: ignore[arg-type]
+            **thinking_kwargs,
         )
     if settings.has_google:
         from langchain_google_genai import ChatGoogleGenerativeAI

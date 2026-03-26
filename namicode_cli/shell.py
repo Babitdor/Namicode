@@ -371,20 +371,21 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
                 check=False,
                 shell=True,
                 capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
                 timeout=self._timeout,
                 env=self._env,
                 cwd=self._workspace_root,
             )
 
+            # Decode bytes → str with UTF-8 (replace errors for Windows compat)
+            stdout = (result.stdout or b"").decode("utf-8", errors="replace")
+            stderr = (result.stderr or b"").decode("utf-8", errors="replace")
+
             # Combine stdout and stderr
             output_parts = []
-            if result.stdout:
-                output_parts.append(result.stdout)
-            if result.stderr:
-                stderr_lines = result.stderr.strip().split("\n")
+            if stdout.strip():
+                output_parts.append(stdout)
+            if stderr.strip():
+                stderr_lines = stderr.strip().split("\n")
                 output_parts.extend(f"[stderr] {line}" for line in stderr_lines)
 
             output = "\n".join(output_parts) if output_parts else "<no output>"

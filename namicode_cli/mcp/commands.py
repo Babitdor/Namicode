@@ -285,6 +285,8 @@ async def execute_bash_command_async(command: str) -> None:
             shell=True,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=30,
             cwd=Path.cwd(),
         )

@@ -783,6 +783,7 @@ def create_agent_with_config(
     auto_approve: bool = False,
     store: InMemoryStore | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
+    is_continuation: bool = False,
 ) -> tuple[Pregel, CompositeBackend]:
     """Create and configure an agent with the specified model and tools.
 
@@ -795,6 +796,8 @@ def create_agent_with_config(
         sandbox_type: Type of sandbox provider ("modal", "runloop", "daytona")
         store: Optional InMemoryStore. If None and use_shared_store is True,
                uses a module-level shared store that subagents can also access.
+        is_continuation: If True, skip project memory paths (NAMI.md/CLAUDE.md)
+               from MemoryMiddleware since they're already in the continuation prompt.
 
     Returns:
         2-tuple of (graph, backend)
@@ -849,8 +852,11 @@ def create_agent_with_config(
     memory_sources.append(str(agent_md))
 
     # Project NAMI.md / CLAUDE.md (all found files)
-    project_memory_paths = settings.get_project_agent_md_paths()
-    memory_sources.extend(str(p) for p in project_memory_paths)
+    # Skip on continuation — the continuation prompt already includes these,
+    # so loading them again via MemoryMiddleware would duplicate context.
+    if not is_continuation:
+        project_memory_paths = settings.get_project_agent_md_paths()
+        memory_sources.extend(str(p) for p in project_memory_paths)
 
     # Skills directory - global (shared across all agents at ~/.nami/skills/)
     skills_dir = settings.ensure_user_skills_dir()

@@ -55,6 +55,7 @@ class SessionMeta:
     task_status: str = "active"  # active | blocked | complete
     blocked_reason: str | None = None
     next_step_hint: str | None = None
+    storage_version: int = 2  # v2: recent+archive, no conversation.jsonl
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -69,6 +70,7 @@ class SessionMeta:
             "task_status": "active",
             "blocked_reason": None,
             "next_step_hint": None,
+            "storage_version": 1,  # Old sessions default to v1
         }
         # Merge defaults with provided data (data takes precedence)
         merged = {**defaults, **data}
@@ -94,6 +96,7 @@ class SessionData:
     tool_state: dict | None = None
     memory: str | None = None
     workspace_state: dict | None = None
+    shared_memory: dict | None = None
 
 
 class SessionManager:
@@ -132,6 +135,7 @@ class SessionManager:
         next_step_hint: str | None = None,
         memory: str | None = None,
         workspace_state: dict | None = None,
+        shared_memory: dict | None = None,
     ) -> Path:
         """Save a session to disk.
 
@@ -201,10 +205,8 @@ class SessionManager:
         with open(archive_path, "w", encoding="utf-8") as f:
             f.writelines(json.dumps(self._serialize_message(msg)) + "\n" for msg in archive_messages)
 
-        # Also save full conversation for backward compatibility (deprecated)
-        conversation_path = session_dir / "conversation.jsonl"
-        with open(conversation_path, "w", encoding="utf-8") as f:
-            f.writelines(json.dumps(self._serialize_message(msg)) + "\n" for msg in messages)
+        # Note: conversation.jsonl is no longer written (deprecated).
+        # Old sessions with conversation.jsonl are still readable via load_session().
 
         # Save todos if provided
         if todos is not None:
@@ -229,6 +231,12 @@ class SessionManager:
             workspace_path = session_dir / "workspace_state.json"
             with open(workspace_path, "w") as f:
                 json.dump(workspace_state, f, indent=2)
+
+        # Save shared memory if provided
+        if shared_memory is not None:
+            shared_memory_path = session_dir / "shared_memory.json"
+            with open(shared_memory_path, "w") as f:
+                json.dump(shared_memory, f, indent=2)
 
         return session_dir
 
@@ -340,6 +348,16 @@ class SessionManager:
             except json.JSONDecodeError:
                 pass
 
+        # Load shared memory
+        shared_memory: dict | None = None
+        shared_memory_path = session_dir / "shared_memory.json"
+        if shared_memory_path.exists():
+            try:
+                with open(shared_memory_path) as f:
+                    shared_memory = json.load(f)
+            except json.JSONDecodeError:
+                pass
+
         return SessionData(
             meta=meta,
             messages=messages,
@@ -347,6 +365,7 @@ class SessionManager:
             tool_state=tool_state,
             memory=memory,
             workspace_state=workspace_state,
+            shared_memory=shared_memory,
         )
 
     def list_sessions(self, limit: int = 10) -> list[SessionMeta]:

@@ -951,6 +951,8 @@ def format_code(
                     input=code,
                     capture_output=True,
                     text=True,
+            encoding="utf-8",
+            errors="replace",
                     timeout=30,
                     check=False,
                 )
@@ -1390,6 +1392,8 @@ def _lint_with_ruff(path: Path, fix: bool, show_fixes: bool) -> dict[str, Any]:
             cmd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=120,
             check=False,
         )
@@ -1465,6 +1469,8 @@ def _lint_with_eslint(path: Path, fix: bool) -> dict[str, Any]:
             cmd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=120,
             check=False,
         )
@@ -1585,6 +1591,8 @@ def _format_with_ruff(path: Path, check_only: bool) -> dict[str, Any]:
             cmd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=120,
             check=False,
         )
@@ -1641,6 +1649,8 @@ def _format_with_prettier(path: Path, check_only: bool) -> dict[str, Any]:
             cmd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=120,
             check=False,
         )
@@ -1681,6 +1691,8 @@ def _format_with_gofmt(path: Path, check_only: bool) -> dict[str, Any]:
             cmd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=60,
             check=False,
         )
@@ -1710,6 +1722,8 @@ def _format_with_rustfmt(path: Path, check_only: bool) -> dict[str, Any]:
             cmd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=60,
             check=False,
         )
@@ -1816,6 +1830,8 @@ def _check_types_mypy(path: Path, strict: bool) -> dict[str, Any]:
             cmd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=300,
             check=False,
         )
@@ -1880,6 +1896,8 @@ def _check_types_pyright(path: Path, strict: bool) -> dict[str, Any]:
             cmd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=300,
             check=False,
         )
@@ -1932,6 +1950,8 @@ def _check_types_tsc(path: Path) -> dict[str, Any]:
             cmd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=300,
             cwd=str(path.parent if path.is_file() else path),
             check=False,

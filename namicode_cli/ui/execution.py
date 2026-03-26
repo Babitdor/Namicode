@@ -162,7 +162,8 @@ def prompt_for_tool_approval(
     # Display action info first
     console.print(
         Panel(
-            "[bold yellow]Tool Action Requires Approval[/bold yellow]\n\n" + "\n".join(body_lines),
+            "[bold yellow]Tool Action Requires Approval[/bold yellow]\n\n"
+            + "\n".join(body_lines),
             border_style="yellow",
             box=box.ROUNDED,
             padding=(0, 1),
@@ -212,7 +213,9 @@ def prompt_for_tool_approval(
                             sys.stdout.write("\033[1;31m☑ Reject\033[0m\n")
                         else:
                             # Blue bold with filled checkbox for auto-accept
-                            sys.stdout.write("\033[1;34m☑ Auto-accept all going forward\033[0m\n")
+                            sys.stdout.write(
+                                "\033[1;34m☑ Auto-accept all going forward\033[0m\n"
+                            )
                     elif option == "approve":
                         # Dim with empty checkbox
                         sys.stdout.write("\033[2m☐ Approve\033[0m\n")
@@ -221,7 +224,9 @@ def prompt_for_tool_approval(
                         sys.stdout.write("\033[2m☐ Reject\033[0m\n")
                     else:
                         # Dim with empty checkbox
-                        sys.stdout.write("\033[2m☐ Auto-accept all going forward\033[0m\n")
+                        sys.stdout.write(
+                            "\033[2m☐ Auto-accept all going forward\033[0m\n"
+                        )
 
                 sys.stdout.flush()
 
@@ -289,6 +294,7 @@ async def execute_task(  # type: ignore
     backend=None,
     is_subagent: bool = False,
     image_tracker: ImageTracker | None = None,
+    seen_message_ids: set[str] | None = None,
 ) -> None:
     """Execute any task by passing it directly to the AI agent."""
     # Initialize error handler for this execution
@@ -337,7 +343,9 @@ async def execute_task(  # type: ignore
                 f"[yellow]Warning: Current model '{current_model}' may not support images.[/yellow]"
             )
             if suggested:
-                console.print(f"[dim]Consider using a vision model like '{suggested}'[/dim]")
+                console.print(
+                    f"[dim]Consider using a vision model like '{suggested}'[/dim]"
+                )
                 console.print("[dim]Use /model to change models.[/dim]")
             console.print()
         message_content = create_multimodal_content(final_input, images_to_send)
@@ -378,6 +386,7 @@ async def execute_task(  # type: ignore
     captured_cache_read_tokens = 0
     captured_cache_creation_tokens = 0
     current_todos = None  # Track current todo list state
+    _prev_auto_approve: bool | None = None  # Saved auto_approve for plan execution restore
 
     status = console.status(
         f"[bold {agent_colors}]{agent_display_name} is thinking...",
@@ -387,7 +396,9 @@ async def execute_task(  # type: ignore
     spinner_active = True
 
     # Use session-level tracker so subagent file ops are tracked
-    file_op_tracker = get_session_file_op_tracker(assistant_id=assistant_id, backend=backend)
+    file_op_tracker = get_session_file_op_tracker(
+        assistant_id=assistant_id, backend=backend
+    )
 
     # Track which tool calls we've displayed to avoid duplicates
     displayed_tool_ids = set()
@@ -580,6 +591,7 @@ async def execute_task(  # type: ignore
             pending_text = ""
             current_ai_message_id = None
             return
+
         # Show all deferred subagent completions together before the synthesis response
         flush_pending_completions()
         if spinner_active:
@@ -600,17 +612,36 @@ async def execute_task(  # type: ignore
 
     # Stream input - may need to loop if there are interrupts
     stream_input = {"messages": [{"role": "user", "content": message_content}]}
+    # Dedup state persists across HITL resume iterations AND across turns
+    # (when caller passes a persistent set) so re-emitted messages/tool-calls
+    # from agent state are not displayed a second time.
+    if seen_message_ids is None:
+        seen_message_ids = set()
+
+    # Snapshot message count before streaming to detect auto-compaction
+    pre_stream_msg_count: int | None = None
+    try:
+        _pre_state = await agent.aget_state(config)
+        _pre_msgs = _pre_state.values.get("messages", [])
+        pre_stream_msg_count = len(_pre_msgs)
+        # Pre-seed seen_message_ids with all existing state message IDs.
+        # The messages stream replays ALL state messages at the start of each
+        # astream() call; without this, old HumanMessages and AIMessages would
+        # be re-displayed on every turn.
+        for _m in _pre_msgs:
+            _mid = getattr(_m, "id", None)
+            if _mid:
+                seen_message_ids.add(_mid)
+    except Exception:
+        pass
 
     try:
         while True:
             interrupt_occurred = False
-            seen_message_ids = set()
             hitl_response: dict[str, HITLResponse] = {}
             suppress_resumed_output = False
-            # Reset per-turn tracking
-            displayed_tool_ids.clear()
+            # Reset per-iteration tracking (in-progress state only)
             active_subagents.clear()
-            tool_call_to_name.clear()
             subagent_stack.clear()
             subagent_activity_by_ns.clear()
             tool_call_id_to_ns.clear()
@@ -651,17 +682,23 @@ async def execute_task(  # type: ignore
                                     and interrupt_value.get("type") == "question"
                                 ):
                                     # Handle question interrupt immediately
-                                    question_request = interrupt_value.get("request", {})
+                                    question_request = interrupt_value.get(
+                                        "request", {}
+                                    )
 
                                     if spinner_active:
                                         status.stop()
                                         spinner_active = False
 
                                     # Handle the question and get user response
-                                    response = await handle_agent_question(question_request)
+                                    response = await handle_agent_question(
+                                        question_request
+                                    )
 
                                     # Create a question response to resume with
-                                    hitl_response[interrupt_obj.id] = {"response": response}
+                                    hitl_response[interrupt_obj.id] = {
+                                        "response": response
+                                    }
                                     interrupt_occurred = True
 
                                     # Restart spinner
@@ -709,14 +746,28 @@ async def execute_task(  # type: ignore
                                             )
                                         except Exception:
                                             pass
-                                        hitl_response[interrupt_obj.id] = {"approved": True}
-                                        console.print("[green]Plan approved! Executing...[/green]")
+
+                                        if result["action"] == "proceed_auto":
+                                            # Auto-accept: temporarily enable auto-approve
+                                            _prev_auto_approve = session_state.auto_approve
+                                            session_state.auto_approve = True
+                                            hitl_response[interrupt_obj.id] = {
+                                                "approved": True,
+                                                "mode": "auto",
+                                            }
+                                        else:
+                                            # Manual-accept: ensure HITL is active
+                                            _prev_auto_approve = session_state.auto_approve
+                                            session_state.auto_approve = False
+                                            hitl_response[interrupt_obj.id] = {
+                                                "approved": True,
+                                                "mode": "manual",
+                                            }
                                     else:
-                                        # User rejected - stay in plan mode
-                                        hitl_response[interrupt_obj.id] = {"approved": False}
-                                        console.print(
-                                            "[yellow]Plan rejected. Revise the plan.[/yellow]"
-                                        )
+                                        # User rejected or wants to edit - stay in plan mode
+                                        hitl_response[interrupt_obj.id] = {
+                                            "approved": False
+                                        }
 
                                     console.print()
                                     interrupt_occurred = True
@@ -731,10 +782,14 @@ async def execute_task(  # type: ignore
                                 # Interrupt has required fields: value (HITLRequest) and id (str)
                                 # Validate the HITLRequest using TypeAdapter
                                 try:
-                                    validated_request = _HITL_REQUEST_ADAPTER.validate_python(
-                                        interrupt_value
+                                    validated_request = (
+                                        _HITL_REQUEST_ADAPTER.validate_python(
+                                            interrupt_value
+                                        )
                                     )
-                                    pending_interrupts[interrupt_obj.id] = validated_request
+                                    pending_interrupts[interrupt_obj.id] = (
+                                        validated_request
+                                    )
                                     interrupt_occurred = True
                                 except ValidationError as e:
                                     console.print(
@@ -759,63 +814,10 @@ async def execute_task(  # type: ignore
                                 render_todo_list(new_todos)
                                 console.print()
 
-                        # Display AI response from model node (completed message)
-                        # Only show the AI's final response after tool execution is complete
-                        # Don't show tool call intentions or raw tool results
-                        # Only show for main agent — subagent updates come through the same
-                        # updates stream with a non-empty namespace and must be ignored here.
-                        if _namespace == () and "messages" in chunk_data:
-                            messages = chunk_data["messages"]
-                            # Check if messages is a valid list (not a Rich Overwrite object)
-                            if isinstance(messages, list) and messages:
-                                last_msg = messages[-1]
-                                msg_type = getattr(last_msg, "type", "")
-                                msg_text = getattr(last_msg, "text", None) or getattr(
-                                    last_msg, "content", ""
-                                )
-                                tool_calls = getattr(last_msg, "tool_calls", [])
-                                # Skip tool calls, tool results, and AIMessages with tool_calls
-                                # Only show AI assistant messages without tool_calls (final responses)
-                                # Skip if subagent is active
-                                if msg_text and msg_type in ("ai", "assistant") and not tool_calls:
-                                    # Deduplicate using the actual ID from THIS updates chunk,
-                                    # not the outer-scope msg_id (which is from the messages stream
-                                    # and may be stale or unset when updates arrives first).
-                                    updates_msg_id = getattr(last_msg, "id", None)
-                                    if updates_msg_id and updates_msg_id in seen_message_ids:
-                                        continue
-
-                                    if updates_msg_id:
-                                        seen_message_ids.add(updates_msg_id)
-
-                                    # Normalize msg_text to a string (Anthropic may return a list
-                                    # of content blocks even for plain-text responses)
-                                    if isinstance(msg_text, list):
-                                        msg_text = " ".join(
-                                            b.get("text", "") if isinstance(b, dict) else str(b)
-                                            for b in msg_text
-                                            if not isinstance(b, dict) or b.get("type") == "text"
-                                        ).strip()
-                                    if not msg_text:
-                                        continue
-
-                                    # Flush any deferred subagent completion banners
-                                    # before the main agent's synthesis response
-                                    flush_pending_completions()
-                                    if spinner_active:
-                                        status.stop()
-                                        spinner_active = False
-                                    if not has_responded:
-                                        console.print()
-                                        console.print(
-                                            "●",
-                                            style=agent_colors,
-                                            markup=False,
-                                            end=" ",
-                                        )
-                                        has_responded = True
-                                    console.print(agent_display_name, style=agent_colors)
-                                    console.print(Markdown(msg_text), justify="full")
+                        # AI responses are displayed exclusively via the messages
+                        # stream (token-by-token in pending_text → flush_text_buffer).
+                        # Displaying them here too caused double-printing because IDs
+                        # can differ between the updates and messages streams.
 
                 # Handle MESSAGES stream - for content and tool calls
                 elif current_stream_mode == "messages":
@@ -848,23 +850,9 @@ async def execute_task(  # type: ignore
                             continue  # Skip entire message if already processed via updates
 
                     if isinstance(message, HumanMessage):
-                        # Skip subagent human messages
-                        if not is_main_agent:
-                            continue
-                        content = message.text
-                        if content:
-                            flush_text_buffer(final=True)
-                            if spinner_active:
-                                status.stop()
-                                spinner_active = False
-                            if not has_responded:
-                                console.print()
-                                console.print("●", style=agent_colors, markup=False, end=" ")
-                                has_responded = True
-                            markdown = Markdown(content)
-                            console.print(agent_display_name, style=agent_colors)
-                            console.print(markdown, justify="full")
-
+                        # Never re-display user messages or internal summaries.
+                        # The user already typed their input; compaction summaries
+                        # and continuation prompts are state-only.
                         continue
 
                     if isinstance(message, ToolMessage):
@@ -892,7 +880,8 @@ async def execute_task(  # type: ignore
                         # Track subagent tool errors for summary
                         if is_subagent and subagent_type_for_ns:
                             if tool_status != "success" or (
-                                tool_content and str(tool_content).lower().startswith("error")
+                                tool_content
+                                and str(tool_content).lower().startswith("error")
                             ):
                                 activity = subagent_activity_by_ns.get(_namespace)
                                 if activity:
@@ -943,9 +932,11 @@ async def execute_task(  # type: ignore
                                     "status_icon": status_icon,
                                     "subagent_type": subagent_type,
                                     "duration_str": duration_str,
-                                    "condensed": format_condensed_activity(activity)
-                                    if activity
-                                    else None,
+                                    "condensed": (
+                                        format_condensed_activity(activity)
+                                        if activity
+                                        else None
+                                    ),
                                     "indent": indent,
                                     "subagent_color": subagent_color,
                                 }
@@ -983,7 +974,11 @@ async def execute_task(  # type: ignore
                                 pass
                             elif pending_completions:
                                 # All subagents done, synthesis imminent
-                                label = "subagent" if len(pending_completions) == 1 else "subagents"
+                                label = (
+                                    "subagent"
+                                    if len(pending_completions) == 1
+                                    else "subagents"
+                                )
                                 status.update(
                                     f"[bold {COLORS['thinking']}]"
                                     f"All {len(pending_completions)} {label} done, synthesizing..."
@@ -1002,7 +997,9 @@ async def execute_task(  # type: ignore
                                         status.stop()
                                         spinner_active = False
                                     console.print()
-                                    console.print(tool_content, style="red", markup=False)
+                                    console.print(
+                                        tool_content, style="red", markup=False
+                                    )
                                     console.print()
                             elif tool_content and isinstance(tool_content, str):
                                 stripped = tool_content.lstrip()
@@ -1012,7 +1009,9 @@ async def execute_task(  # type: ignore
                                         status.stop()
                                         spinner_active = False
                                     console.print()
-                                    console.print(tool_content, style="red", markup=False)
+                                    console.print(
+                                        tool_content, style="red", markup=False
+                                    )
                                     console.print()
 
                             if record:
@@ -1035,11 +1034,15 @@ async def execute_task(  # type: ignore
                                 ) or (
                                     tool_content
                                     and isinstance(tool_content, str)
-                                    and tool_content.lstrip().lower().startswith("error")
+                                    and tool_content.lstrip()
+                                    .lower()
+                                    .startswith("error")
                                 )
                                 if not already_printed_error:
                                     elapsed = None
-                                    start = tool_call_start_times.pop(tool_call_id, None)
+                                    start = tool_call_start_times.pop(
+                                        tool_call_id, None
+                                    )
                                     if start is not None:
                                         elapsed = time.time() - start
                                     preview = format_tool_result_preview(
@@ -1051,7 +1054,9 @@ async def execute_task(  # type: ignore
                                             status.stop()
                                             spinner_active = False
                                         is_err = preview.startswith("✗")
-                                        sty = "red" if is_err else f"dim {COLORS['tool']}"
+                                        sty = (
+                                            "red" if is_err else f"dim {COLORS['tool']}"
+                                        )
                                         detail = Text()
                                         detail.append("  ⎿  ", style=sty)
                                         detail.append(preview, style=sty)
@@ -1089,7 +1094,11 @@ async def execute_task(  # type: ignore
                         continue
 
                     # Extract token usage — only from main agent to avoid subagent contamination
-                    if token_tracker and is_main_agent and hasattr(message, "usage_metadata"):
+                    if (
+                        token_tracker
+                        and is_main_agent
+                        and hasattr(message, "usage_metadata")
+                    ):
                         usage = message.usage_metadata
                         if usage:
                             input_toks = usage.get("input_tokens", 0)
@@ -1101,8 +1110,12 @@ async def execute_task(  # type: ignore
                             # Actual context sent = fresh tokens + cached tokens
                             actual_context = input_toks + cache_read + cache_create
                             if actual_context or output_toks:
-                                captured_input_tokens = max(captured_input_tokens, actual_context)
-                                captured_output_tokens = max(captured_output_tokens, output_toks)
+                                captured_input_tokens = max(
+                                    captured_input_tokens, actual_context
+                                )
+                                captured_output_tokens = max(
+                                    captured_output_tokens, output_toks
+                                )
                                 captured_cache_read_tokens = max(
                                     captured_cache_read_tokens, cache_read
                                 )
@@ -1110,27 +1123,31 @@ async def execute_task(  # type: ignore
                                     captured_cache_creation_tokens, cache_create
                                 )
 
+                    # LangGraph's messages stream emits individual
+                    # AIMessageChunk objects during streaming, then a final
+                    # completed AIMessage with the FULL accumulated content.
+                    # We must only accumulate text from the incremental chunks;
+                    # re-appending the completed AIMessage would double the output.
+                    _msg_type_name = type(message).__name__
+                    _is_completed_msg = _msg_type_name == "AIMessage"
+
                     # Process normalized content blocks
                     for block in blocks:
                         block_type = block.get("type")
-                        # Handle text blocks - only accumulate for main agent
+                        # Handle text blocks - only accumulate from streaming chunks
                         if block_type == "text":
                             text = block.get("text", "")
-                            if text and is_main_agent:
+                            if text and is_main_agent and not _is_completed_msg:
                                 # Track which message owns the buffered text so
                                 # flush_text_buffer can deduplicate against the updates stream
                                 current_ai_message_id = getattr(message, "id", None)
                                 pending_text += text
 
-                        # Handle reasoning blocks
-                        elif block_type == "reasoning":
-                            flush_text_buffer(final=True)
-                            reasoning = block.get("reasoning", "")
-                            if reasoning and spinner_active:
-                                status.stop()
-                                spinner_active = False
-                                # Could display reasoning differently if desired
-                                # For now, skip it or handle minimally
+                        # Handle reasoning/thinking blocks (extended thinking)
+                        # Claude returns "thinking" blocks; other models may use "reasoning"
+                        # These are internal deliberation — never shown to the user.
+                        elif block_type in ("reasoning", "thinking"):
+                            pass  # Silently skip — internal reasoning only
 
                         # Handle tool call chunks
                         # Some models (OpenAI, Anthropic) stream tool_call_chunks
@@ -1170,7 +1187,9 @@ async def execute_task(  # type: ignore
                                 buffer["args_parts"] = []
                             elif isinstance(chunk_args, str):
                                 if chunk_args:
-                                    parts: list[str] = buffer.setdefault("args_parts", [])
+                                    parts: list[str] = buffer.setdefault(
+                                        "args_parts", []
+                                    )
                                     if not parts or chunk_args != parts[-1]:
                                         parts.append(chunk_args)
                                     buffer["args"] = "".join(parts)
@@ -1219,7 +1238,9 @@ async def execute_task(  # type: ignore
 
                             if display_needed:
                                 icon = TOOL_ICONS.get(buffer_name, "🔧")
-                                display_str = format_tool_display(buffer_name, parsed_args)
+                                display_str = format_tool_display(
+                                    buffer_name, parsed_args
+                                )
 
                                 # Main agent: display tool call
                                 if is_main_agent:
@@ -1241,8 +1262,12 @@ async def execute_task(  # type: ignore
                                     activity = subagent_activity_by_ns.get(_namespace)
                                     if activity:
                                         # Track call with category
-                                        category = TOOL_CATEGORIES.get(buffer_name, "other")
-                                        activity["calls"].append((buffer_name, category))
+                                        category = TOOL_CATEGORIES.get(
+                                            buffer_name, "other"
+                                        )
+                                        activity["calls"].append(
+                                            (buffer_name, category)
+                                        )
                                         activity["categories"][category] = (
                                             activity["categories"].get(category, 0) + 1
                                         )
@@ -1304,16 +1329,22 @@ async def execute_task(  # type: ignore
 
                                     # Display delegation banner with indentation
                                     console.print()
-                                    banner_text = f"{indent}┌─ {subagent_type} " + "─" * max(
-                                        20, 40 - len(subagent_type) - len(indent)
+                                    banner_text = (
+                                        f"{indent}┌─ {subagent_type} "
+                                        + "─"
+                                        * max(20, 40 - len(subagent_type) - len(indent))
                                     )
-                                    console.print(banner_text, style=f"dim {subagent_color}")
+                                    console.print(
+                                        banner_text, style=f"dim {subagent_color}"
+                                    )
                                     if desc_preview:
                                         console.print(
                                             f"{indent}│ {desc_preview}",
                                             style=f"dim {subagent_color}",
                                         )
-                                    console.print(f"{indent}│", style=f"dim {subagent_color}")
+                                    console.print(
+                                        f"{indent}│", style=f"dim {subagent_color}"
+                                    )
 
                                     # Restart spinner with context about which tool is executing
                                     status.update(
@@ -1349,7 +1380,9 @@ async def execute_task(  # type: ignore
                                 status.stop()
                                 spinner_active = False
 
-                            description = action_request.get("description", "tool action")
+                            description = action_request.get(
+                                "description", "tool action"
+                            )
                             console.print()
                             console.print(f"  [dim]⚡ {description}[/dim]")
 
@@ -1385,7 +1418,9 @@ async def execute_task(  # type: ignore
                                 # Switch to auto-approve mode
                                 session_state.auto_approve = True
                                 console.print()
-                                console.print("[bold blue]✓ Auto-approve mode enabled[/bold blue]")
+                                console.print(
+                                    "[bold blue]✓ Auto-approve mode enabled[/bold blue]"
+                                )
                                 console.print(
                                     "[dim]All future tool actions will be automatically approved.[/dim]"
                                 )
@@ -1393,9 +1428,9 @@ async def execute_task(  # type: ignore
 
                                 # Approve this action and all remaining actions in the batch
                                 decisions.append({"type": "approve"})
-                                for _remaining_action in hitl_request["action_requests"][
-                                    action_index + 1 :
-                                ]:
+                                for _remaining_action in hitl_request[
+                                    "action_requests"
+                                ][action_index + 1 :]:
                                     decisions.append({"type": "approve"})
                                 break
                             decisions.append(decision)
@@ -1408,7 +1443,9 @@ async def execute_task(  # type: ignore
                                         tool_name, action_request.get("args", {})
                                     )
 
-                        if any(decision.get("type") == "reject" for decision in decisions):
+                        if any(
+                            decision.get("type") == "reject" for decision in decisions
+                        ):
                             any_rejected = True
 
                         hitl_response[interrupt_id] = {"decisions": decisions}
@@ -1433,6 +1470,19 @@ async def execute_task(  # type: ignore
                 # No interrupt, break out of while loop
                 break
 
+        # Detect if SummarizationMiddleware auto-compacted during this turn
+        if pre_stream_msg_count is not None:
+            try:
+                _post_state = await agent.aget_state(config)
+                post_msg_count = len(_post_state.values.get("messages", []))
+                if post_msg_count < pre_stream_msg_count - 2:
+                    console.print()
+                    console.print(
+                        "[dim]⟳ Context auto-compacted to stay within window[/dim]"
+                    )
+            except Exception:
+                pass
+
     except asyncio.CancelledError:
         # Event loop cancelled the task (e.g. Ctrl+C during streaming) - clean up and return
         if spinner_active:
@@ -1445,7 +1495,9 @@ async def execute_task(  # type: ignore
                 config=config,
                 values={
                     "messages": [
-                        HumanMessage(content="[The previous request was cancelled by the system]")
+                        HumanMessage(
+                            content="[The previous request was cancelled by the system]"
+                        )
                     ]
                 },
             )
@@ -1468,7 +1520,9 @@ async def execute_task(  # type: ignore
                 config=config,
                 values={
                     "messages": [
-                        HumanMessage(content="[User interrupted the previous request with Ctrl+C]")
+                        HumanMessage(
+                            content="[User interrupted the previous request with Ctrl+C]"
+                        )
                     ]
                 },
             )
@@ -1489,6 +1543,10 @@ async def execute_task(  # type: ignore
     if current_todos:
         session_state.todos = current_todos
 
+    # Restore auto_approve if it was temporarily changed for plan execution
+    if _prev_auto_approve is not None:
+        session_state.auto_approve = _prev_auto_approve
+
     if has_responded:
         console.print()
         # Track token usage (display only via /tokens command)
@@ -1505,3 +1563,15 @@ async def execute_task(  # type: ignore
             # Track tool calls (count of unique tool call IDs displayed)
             if displayed_tool_ids:
                 token_tracker.increment_tool_calls(len(displayed_tool_ids))
+
+            # Build detailed context breakdown from agent state
+            try:
+                from namicode_cli.context.context_manager import build_context_breakdown
+
+                _bd_state = await agent.aget_state(config)
+                _bd_msgs = _bd_state.values.get("messages", [])
+                if _bd_msgs and token_tracker.model_name:
+                    breakdown = build_context_breakdown(_bd_msgs, token_tracker.model_name)
+                    token_tracker.set_breakdown(breakdown)
+            except Exception:
+                pass

@@ -226,7 +226,7 @@ class PlanApprovalResult(TypedDict):
     """Result of plan approval prompt."""
 
     approved: bool
-    action: str  # "proceed", "reject", "edit"
+    action: str  # "proceed_auto", "proceed_manual", "reject", "edit"
 
 
 def prompt_for_plan_approval(
@@ -282,10 +282,14 @@ def prompt_for_plan_approval(
     )
     console.print()
 
+    # Colors per option index: green (auto), blue (manual), red (reject), yellow (edit)
+    option_colors = ["\033[1;32m", "\033[1;34m", "\033[1;31m", "\033[1;33m"]
+
     options = [
-        "Yes, proceed with this plan",
-        "No, reject and stay in plan mode",
-        "Edit plan (continue planning)",
+        "Auto-accept: execute the full plan autonomously (a)",
+        "Manual-accept: approve each step as it runs (m)",
+        "Reject: stay in plan mode and revise (n)",
+        "Edit: continue planning (e)",
     ]
 
     selected = 0
@@ -317,14 +321,7 @@ def prompt_for_plan_approval(
                     sys.stdout.write("\r\033[K")  # Clear line
 
                     if i == selected:
-                        if i == 0:
-                            sys.stdout.write(f"\033[1;32m\u25cf {option}\033[0m\n")  # Green for yes
-                        elif i == 1:
-                            sys.stdout.write(f"\033[1;31m\u25cf {option}\033[0m\n")  # Red for no
-                        else:
-                            sys.stdout.write(
-                                f"\033[1;33m\u25cf {option}\033[0m\n"
-                            )  # Yellow for edit
+                        sys.stdout.write(f"{option_colors[i]}\u25cf {option}\033[0m\n")
                     else:
                         sys.stdout.write(f"\033[2m\u25cb {option}\033[0m\n")
 
@@ -344,16 +341,20 @@ def prompt_for_plan_approval(
                 elif char in {"\r", "\n"}:  # Enter
                     sys.stdout.write("\r\n")
                     break
-                elif char == "y" or char == "Y":  # Quick key for yes
+                elif char in {"a", "A"}:  # Quick key for auto-accept
                     selected = 0
                     sys.stdout.write("\r\n")
                     break
-                elif char == "n" or char == "N":  # Quick key for no
+                elif char in {"m", "M"}:  # Quick key for manual-accept
                     selected = 1
                     sys.stdout.write("\r\n")
                     break
-                elif char == "e" or char == "E":  # Quick key for edit
+                elif char in {"n", "N"}:  # Quick key for reject
                     selected = 2
+                    sys.stdout.write("\r\n")
+                    break
+                elif char in {"e", "E"}:  # Quick key for edit
+                    selected = 3
                     sys.stdout.write("\r\n")
                     break
                 elif char.isdigit():
@@ -374,30 +375,37 @@ def prompt_for_plan_approval(
     except (ImportError, AttributeError, Exception):
         # Fallback for non-Unix systems (Windows)
         console.print("[bold]Options:[/bold]")
-        console.print("  [green]1. Yes, proceed with this plan (y)[/green]")
-        console.print("  [red]2. No, reject and stay in plan mode (n)[/red]")
-        console.print("  [yellow]3. Edit plan - continue planning (e)[/yellow]")
+        console.print("  [green]1. Auto-accept: execute the full plan autonomously (a)[/green]")
+        console.print("  [blue]2. Manual-accept: approve each step as it runs (m)[/blue]")
+        console.print("  [red]3. Reject: stay in plan mode and revise (n)[/red]")
+        console.print("  [yellow]4. Edit: continue planning (e)[/yellow]")
 
-        choice = input("\nEnter choice (1-3 or y/n/e): ").strip().lower()
-        if choice in {"1", "y", "yes"}:
+        choice = input("\nEnter choice (1-4 or a/m/n/e): ").strip().lower()
+        if choice in {"1", "a", "auto"}:
             selected = 0
-        elif choice in {"2", "n", "no"}:
+        elif choice in {"2", "m", "manual"}:
             selected = 1
-        elif choice in {"3", "e", "edit"}:
+        elif choice in {"3", "n", "no", "reject"}:
             selected = 2
+        elif choice in {"4", "e", "edit"}:
+            selected = 3
         else:
-            selected = 1  # Default to reject on invalid input
+            selected = 2  # Default to reject on invalid input
 
     # Map selection to result
     if selected == 0:
-        console.print("[green]✓ Plan approved - proceeding with execution[/green]")
+        console.print("[green]Plan approved — executing autonomously[/green]")
         console.print()
-        return PlanApprovalResult(approved=True, action="proceed")
+        return PlanApprovalResult(approved=True, action="proceed_auto")
     if selected == 1:
-        console.print("[yellow]✗ Plan rejected - staying in plan mode[/yellow]")
+        console.print("[blue]Plan approved — you'll review each step[/blue]")
+        console.print()
+        return PlanApprovalResult(approved=True, action="proceed_manual")
+    if selected == 2:
+        console.print("[yellow]Plan rejected — staying in plan mode[/yellow]")
         console.print()
         return PlanApprovalResult(approved=False, action="reject")
-    console.print("[cyan]↻ Continuing to edit plan[/cyan]")
+    console.print("[cyan]Continuing to edit plan[/cyan]")
     console.print()
     return PlanApprovalResult(approved=False, action="edit")
 

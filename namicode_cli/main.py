@@ -574,6 +574,14 @@ async def simple_cli(
                         if not silent:
                             console.print(f"[dim]Could not generate memory summary: {e}[/dim]")
 
+                # Capture shared memory for persistence
+                try:
+                    from namicode_cli.memory.shared_memory import save_shared_memory
+
+                    shared_memory_data = save_shared_memory()
+                except Exception:
+                    shared_memory_data = None
+
                 session_manager.save_session(
                     session_id=session_state.session_id or session_state.thread_id,
                     thread_id=session_state.thread_id,
@@ -586,6 +594,7 @@ async def simple_cli(
                     current_task=current_task,
                     task_status=task_status,
                     memory=memory_content,
+                    shared_memory=shared_memory_data if shared_memory_data else None,
                 )
                 if not silent:
                     console.print("[dim]Session saved.[/dim]")
@@ -649,6 +658,10 @@ async def simple_cli(
             # Signal handling may fail in some contexts (e.g., threads)
             pass
 
+    # Persistent set of message IDs already displayed — prevents re-display
+    # of compaction summaries and old AI responses across turns.
+    _seen_message_ids: set[str] = set()
+
     while True:
         try:
             user_input = await session.prompt_async()
@@ -688,6 +701,15 @@ async def simple_cli(
                     console.print()
             except Exception:
                 pass
+
+        # /critique shortcut → delegate to the built-in critique-agent subagent
+        # via the main agent's `task` tool (not the custom @agent path)
+        if user_input.startswith("/critique"):
+            critique_args = user_input[len("/critique"):].strip()
+            user_input = (
+                f"Use the critique-agent subagent (via the task tool) to: "
+                f"{critique_args or 'Review recent changes for correctness, safety, and regressions'}"
+            )
 
         # Check for slash commands first
         if user_input.startswith("/"):
@@ -747,6 +769,7 @@ async def simple_cli(
                 backend=backend,
                 is_subagent=True,
                 image_tracker=image_tracker,
+                seen_message_ids=_seen_message_ids,
             )
 
         else:
@@ -759,6 +782,14 @@ async def simple_cli(
                 backend=backend,
                 is_subagent=False,
                 image_tracker=image_tracker,
+                seen_message_ids=_seen_message_ids,
+            )
+
+        # Proactive context warning after each turn
+        breakdown = token_tracker.get_breakdown()
+        if breakdown and breakdown.is_critical:
+            console.print(
+                "[dim yellow]⚠ Context nearly full. Use /compact to summarize conversation.[/dim yellow]"
             )
 
         # Track message for auto-save and check if we should save
@@ -843,6 +874,7 @@ async def _run_agent_session(
         sandbox_type=sandbox_type,
         store=store,
         checkpointer=checkpointer,
+        is_continuation=bool(initial_messages),
     )
 
     # Inject initial messages if continuing a session
@@ -1001,6 +1033,12 @@ async def main(
             # Restore todos if available
             if session_data.todos:
                 session_state.todos = session_data.todos
+
+            # Restore shared memory if available
+            if session_data.shared_memory:
+                from namicode_cli.memory.shared_memory import restore_shared_memory
+
+                restore_shared_memory(session_data.shared_memory)
 
             # Create tuple for displaying after splash screen
             restored_session_data = (

@@ -7,8 +7,8 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import (
     HumanInTheLoopMiddleware,
     InterruptOnConfig,
-    TodoListMiddleware,
 )
+from nami_deepagents.middleware.todo import HierarchicalTodoMiddleware
 from langchain.agents.middleware.summarization import SummarizationMiddleware
 from langchain.agents.middleware.types import AgentMiddleware
 from langchain.agents.structured_output import ResponseFormat
@@ -140,7 +140,7 @@ def create_deep_agent(
 
     # Build middleware stack for subagents (includes skills if provided)
     subagent_middleware: list[AgentMiddleware] = [
-        TodoListMiddleware(),
+        HierarchicalTodoMiddleware(),
     ]
 
     backend = backend if backend is not None else (lambda rt: StateBackend(rt))
@@ -163,7 +163,7 @@ def create_deep_agent(
 
     # Build main agent middleware stack
     deepagent_middleware: list[AgentMiddleware] = [
-        TodoListMiddleware(),
+        HierarchicalTodoMiddleware(),
     ]
     if memory is not None:
         deepagent_middleware.append(MemoryMiddleware(backend=backend, sources=memory))

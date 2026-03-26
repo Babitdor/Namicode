@@ -440,6 +440,9 @@ class TokenTracker:
         self.assistant_message_count = 0
         self.tool_call_count = 0
 
+        # Detailed breakdown from post-turn analysis
+        self._last_breakdown: ContextBreakdown | None = None
+
     def set_model(self, model_name: str) -> None:
         """Set the model name for context window calculation.
 
@@ -470,6 +473,7 @@ class TokenTracker:
         self.user_message_count = 0
         self.assistant_message_count = 0
         self.tool_call_count = 0
+        self._last_breakdown = None
 
     def add(
         self,
@@ -506,17 +510,38 @@ class TokenTracker:
         """Increment tool call count."""
         self.tool_call_count += count
 
+    def set_breakdown(self, breakdown: ContextBreakdown) -> None:
+        """Set a detailed breakdown from post-turn analysis.
+
+        Merges API-sourced totals (more accurate) with message-level detail.
+
+        Args:
+            breakdown: ContextBreakdown built from agent state messages.
+        """
+        self._last_breakdown = breakdown
+        # Update message counts from the detailed breakdown
+        self.user_message_count = breakdown.user_message_count
+        self.assistant_message_count = breakdown.assistant_message_count
+        self.tool_call_count = breakdown.tool_call_count
+
     def get_breakdown(self) -> ContextBreakdown:
         """Get detailed context breakdown.
+
+        If a detailed breakdown was set via set_breakdown(), returns it
+        with API-sourced total_tokens (more accurate than char estimation).
 
         Returns:
             ContextBreakdown with current usage statistics
         """
         from namicode_cli.context.context_manager import ContextBreakdown
 
-        # Calculate conversation tokens
-        conversation_tokens = self.current_context - self.baseline_context
-        conversation_tokens = max(conversation_tokens, 0)
+        if hasattr(self, "_last_breakdown") and self._last_breakdown is not None:
+            bd = self._last_breakdown
+            # Override total_tokens with API data if available (more accurate)
+            if self.has_api_data and self.current_context > 0:
+                bd.total_tokens = self.current_context
+                bd.context_window_size = self.context_window_size
+            return bd
 
         return ContextBreakdown(
             system_prompt_tokens=self.baseline_context,
@@ -789,27 +814,41 @@ class StreamingOutputRenderer:
         return self._truncated
 
 
+def _todo_line(todo: dict, indent: str = "") -> str:
+    """Format a single todo item as a styled line."""
+    status = todo.get("status", "pending")
+    content = todo.get("content", "")
+    task_id = todo.get("id", "")
+    deps = todo.get("depends_on", [])
+
+    if status == "completed":
+        icon = "✓"
+        style = COLORS["success"]
+    elif status == "in_progress":
+        icon = "►"
+        style = COLORS["primary"]
+    elif status == "blocked":
+        icon = "🔒"
+        style = "red"
+    else:  # pending
+        icon = "○"
+        style = COLORS["dim"]
+
+    id_label = f"[dim]{task_id}.[/dim] " if task_id else ""
+    dep_label = f" [dim](← {', '.join(deps)})[/dim]" if deps else ""
+    return f"{indent}[{style}]{icon} {id_label}{content}{dep_label}[/{style}]"
+
+
 def render_todo_list(todos: list[dict]) -> None:
-    """Render todo list as a rich Panel with checkboxes."""
+    """Render todo list as a rich Panel with checkboxes, supporting subtasks."""
     if not todos:
         return
 
     lines = []
     for todo in todos:
-        status = todo.get("status", "pending")
-        content = todo.get("content", "")
-
-        if status == "completed":
-            icon = "✓"
-            style = COLORS["success"]
-        elif status == "in_progress":
-            icon = "►"
-            style = COLORS["primary"]
-        else:  # pending
-            icon = "○"
-            style = COLORS["dim"]
-
-        lines.append(f"[{style}]{icon} {content}[/{style}]")
+        lines.append(_todo_line(todo))
+        for sub in todo.get("subtasks", []):
+            lines.append(_todo_line(sub, indent="   "))
 
     panel = Panel(
         "\n".join(lines),

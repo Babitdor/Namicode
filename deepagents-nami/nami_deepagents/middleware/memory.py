@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, NotRequired, TypedDict
 
 from langchain.messages import SystemMessage
@@ -181,6 +182,8 @@ class MemoryMiddleware(AgentMiddleware):
         """
         self._backend = backend
         self.sources = sources
+        # Track file modification times for hotloading
+        self._last_mtimes: dict[str, float] = {}
 
     def _get_backend(
         self, state: MemoryState, runtime: Runtime, config: RunnableConfig
@@ -301,13 +304,36 @@ class MemoryMiddleware(AgentMiddleware):
 
         return None
 
+    def _sources_changed(self) -> bool:
+        """Check if any source files have been modified since last load."""
+        for source in self.sources:
+            p = Path(source).expanduser()
+            if p.exists():
+                try:
+                    mtime = p.stat().st_mtime
+                    if mtime != self._last_mtimes.get(source):
+                        return True
+                except OSError:
+                    pass
+        return False
+
+    def _record_mtimes(self) -> None:
+        """Record current modification times for all sources."""
+        for source in self.sources:
+            p = Path(source).expanduser()
+            if p.exists():
+                try:
+                    self._last_mtimes[source] = p.stat().st_mtime
+                except OSError:
+                    pass
+
     def before_agent( # type: ignore
         self, state: MemoryState, runtime: Runtime, config: RunnableConfig
     ) -> MemoryStateUpdate | None:
         """Load memory content before agent execution (synchronous).
 
         Loads memory from all configured sources and stores in state.
-        Only loads if not already present in state.
+        Reloads if source files have been modified on disk.
 
         Args:
             state: Current agent state.
@@ -317,8 +343,8 @@ class MemoryMiddleware(AgentMiddleware):
         Returns:
             State update with memory_contents populated.
         """
-        # Skip if already loaded
-        if "memory_contents" in state:
+        # Skip if already loaded and no files changed on disk
+        if "memory_contents" in state and not self._sources_changed():
             return None
 
         backend = self._get_backend(state, runtime, config)
@@ -330,13 +356,14 @@ class MemoryMiddleware(AgentMiddleware):
                 contents[path] = content
                 logger.debug(f"Loaded memory from: {path}")
 
+        self._record_mtimes()
         return MemoryStateUpdate(memory_contents=contents)
 
     async def abefore_agent(self, state: MemoryState, runtime: Runtime, config: RunnableConfig) -> MemoryStateUpdate | None:  # type: ignore
         """Load memory content before agent execution.
 
         Loads memory from all configured sources and stores in state.
-        Only loads if not already present in state.
+        Reloads if source files have been modified on disk.
 
         Args:
             state: Current agent state.
@@ -346,8 +373,8 @@ class MemoryMiddleware(AgentMiddleware):
         Returns:
             State update with memory_contents populated.
         """
-        # Skip if already loaded
-        if "memory_contents" in state:
+        # Skip if already loaded and no files changed on disk
+        if "memory_contents" in state and not self._sources_changed():
             return None
 
         backend = self._get_backend(state, runtime, config)
@@ -359,6 +386,7 @@ class MemoryMiddleware(AgentMiddleware):
                 contents[path] = content
                 logger.debug(f"Loaded memory from: {path}")
 
+        self._record_mtimes()
         return MemoryStateUpdate(memory_contents=contents)
 
     def modify_request(self, request: ModelRequest) -> ModelRequest:

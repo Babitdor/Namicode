@@ -51,6 +51,8 @@ def scan_workspace(project_root: Path | None = None) -> dict[str, Any]:
             cwd=project_root,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=5,
             check=False,
         )
@@ -63,6 +65,8 @@ def scan_workspace(project_root: Path | None = None) -> dict[str, Any]:
             cwd=project_root,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=5,
             check=False,
         )
@@ -75,6 +79,8 @@ def scan_workspace(project_root: Path | None = None) -> dict[str, Any]:
             cwd=project_root,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=5,
             check=False,
         )

@@ -67,6 +67,29 @@ def reset_shared_memory_store() -> None:
     _shared_memory_store = None
 
 
+def save_shared_memory() -> dict[str, dict]:
+    """Serialize the shared memory store contents for persistence.
+
+    Returns:
+        Dictionary mapping memory keys to their entry values.
+    """
+    store = get_shared_memory_store()
+    items = store.search(MEMORY_NAMESPACE, limit=1000)
+    return {item.key: item.value for item in items}
+
+
+def restore_shared_memory(data: dict[str, dict]) -> None:
+    """Restore shared memory from a previously saved dict.
+
+    Args:
+        data: Dictionary mapping memory keys to entry values,
+              as returned by save_shared_memory().
+    """
+    store = get_shared_memory_store()
+    for key, value in data.items():
+        store.put(MEMORY_NAMESPACE, key, value)
+
+
 # Namespace for shared memories
 MEMORY_NAMESPACE = ("shared_memory",)
 
@@ -400,5 +423,7 @@ __all__ = [
     "list_memories",
     "read_memory",
     "reset_shared_memory_store",
+    "restore_shared_memory",
+    "save_shared_memory",
     "write_memory",
 ]

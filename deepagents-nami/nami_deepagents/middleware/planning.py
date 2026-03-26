@@ -557,26 +557,25 @@ class PlanModeMiddleware(AgentMiddleware):
         Returns:
             Tool execution result or error message if blocked
         """
-        # Get tool name from request
-        tool_name = getattr(request, "tool", getattr(request, "name", None))
-        if tool_name is None:
-            # Try different attribute names
-            if hasattr(request, "tool_call"):
-                tool_name = getattr(request.tool_call, "name", None)
-            elif hasattr(request, "args"):
-                # ToolCallRequest might have different structure
-                tool_name = getattr(request, "tool_name", None)
+        # Get tool name from request — ToolCallRequest.tool_call is a dict
+        # with keys "name", "args", "id"
+        tool_call = getattr(request, "tool_call", None)
+        if isinstance(tool_call, dict):
+            tool_name = tool_call.get("name")
+        else:
+            tool_name = getattr(tool_call, "name", None)
 
         # Get plan mode state from request
         plan_mode_enabled = False
         if hasattr(request, "state"):
-            plan_mode_enabled = request.state.get("plan_mode_enabled", False)
+            state = request.state
+            if isinstance(state, dict):
+                plan_mode_enabled = state.get("plan_mode_enabled", False)
 
         # Block modifying tools in plan mode
         if plan_mode_enabled and tool_name and tool_name in BLOCKED_TOOLS_IN_PLAN_MODE:
             logger.warning(f"Tool '{tool_name}' blocked in plan mode. Exit plan mode first or use ask_question to clarify.")
             from langchain_core.messages import ToolMessage
-            from uuid import uuid4
 
             return ToolMessage(
                 content=f"Tool '{tool_name}' is blocked in plan mode. "
@@ -584,7 +583,7 @@ class PlanModeMiddleware(AgentMiddleware):
                 f"Please either:\n"
                 f"1. Create a plan with write_todos and call exit_plan_mode, or\n"
                 f"2. Ask a clarifying question with ask_question",
-                tool_call_id=str(uuid4()),
+                tool_call_id=tool_call.get("id", "") if isinstance(tool_call, dict) else str(getattr(tool_call, "id", "")),
             )
 
         # Tool allowed - proceed with execution
@@ -596,24 +595,24 @@ class PlanModeMiddleware(AgentMiddleware):
         handler: Callable,
     ):
         """Async version of wrap_tool_call."""
-        # Get tool name from request
-        tool_name = getattr(request, "tool", getattr(request, "name", None))
-        if tool_name is None:
-            if hasattr(request, "tool_call"):
-                tool_name = getattr(request.tool_call, "name", None)
-            elif hasattr(request, "args"):
-                tool_name = getattr(request, "tool_name", None)
+        # Get tool name from request — ToolCallRequest.tool_call is a dict
+        tool_call = getattr(request, "tool_call", None)
+        if isinstance(tool_call, dict):
+            tool_name = tool_call.get("name")
+        else:
+            tool_name = getattr(tool_call, "name", None)
 
         # Get plan mode state from request
         plan_mode_enabled = False
         if hasattr(request, "state"):
-            plan_mode_enabled = request.state.get("plan_mode_enabled", False)
+            state = request.state
+            if isinstance(state, dict):
+                plan_mode_enabled = state.get("plan_mode_enabled", False)
 
         # Block modifying tools in plan mode
         if plan_mode_enabled and tool_name and tool_name in BLOCKED_TOOLS_IN_PLAN_MODE:
             logger.warning(f"Tool '{tool_name}' blocked in plan mode. Exit plan mode first or use ask_question to clarify.")
             from langchain_core.messages import ToolMessage
-            from uuid import uuid4
 
             return ToolMessage(
                 content=f"Tool '{tool_name}' is blocked in plan mode. "
@@ -621,7 +620,7 @@ class PlanModeMiddleware(AgentMiddleware):
                 f"Please either:\n"
                 f"1. Create a plan with write_todos and call exit_plan_mode, or\n"
                 f"2. Ask a clarifying question with ask_question",
-                tool_call_id=str(uuid4()),
+                tool_call_id=tool_call.get("id", "") if isinstance(tool_call, dict) else str(getattr(tool_call, "id", "")),
             )
 
         # Tool allowed - proceed with execution

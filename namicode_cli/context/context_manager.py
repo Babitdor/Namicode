@@ -4,7 +4,13 @@ This module provides utilities for tracking and analyzing context window usage,
 including model-specific context window sizes and detailed token breakdowns.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from langchain_core.messages import BaseMessage
 
 # Model context window sizes (input tokens)
 # These are approximate and may vary by version
@@ -235,3 +241,85 @@ def format_token_count(tokens: int) -> str:
         Formatted string with thousands separators (e.g., "128,000")
     """
     return f"{tokens:,}"
+
+
+def _estimate_tokens(text: str) -> int:
+    """Estimate token count from text using char/4 heuristic."""
+    return len(text) // 4
+
+
+def _message_text(msg: BaseMessage) -> str:
+    """Extract text content from a message."""
+    content = msg.content
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict):
+                parts.append(block.get("text", ""))
+            elif isinstance(block, str):
+                parts.append(block)
+        return " ".join(parts)
+    return str(content)
+
+
+def build_context_breakdown(
+    messages: list[BaseMessage],
+    model_name: str,
+) -> ContextBreakdown:
+    """Build a ContextBreakdown from the current conversation state.
+
+    Uses character-based token estimation (len // 4). This is approximate
+    but sufficient for threshold-based warnings.
+
+    Args:
+        messages: Current conversation messages from agent state.
+        model_name: Model name for looking up context window size.
+
+    Returns:
+        Populated ContextBreakdown with usage stats.
+    """
+    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+
+    context_window = get_context_window_size(model_name)
+
+    system_tokens = 0
+    user_tokens = 0
+    assistant_tokens = 0
+    tool_tokens = 0
+    user_count = 0
+    assistant_count = 0
+    tool_count = 0
+
+    for msg in messages:
+        text = _message_text(msg)
+        tokens = _estimate_tokens(text)
+
+        if isinstance(msg, SystemMessage):
+            system_tokens += tokens
+        elif isinstance(msg, HumanMessage):
+            user_tokens += tokens
+            user_count += 1
+        elif isinstance(msg, AIMessage):
+            assistant_tokens += tokens
+            assistant_count += 1
+            # Count tool calls
+            if hasattr(msg, "tool_calls") and msg.tool_calls:
+                tool_count += len(msg.tool_calls)
+        elif isinstance(msg, ToolMessage):
+            tool_tokens += tokens
+
+    total = system_tokens + user_tokens + assistant_tokens + tool_tokens
+
+    return ContextBreakdown(
+        system_prompt_tokens=system_tokens,
+        user_message_tokens=user_tokens,
+        assistant_message_tokens=assistant_tokens,
+        tool_result_tokens=tool_tokens,
+        total_tokens=total,
+        context_window_size=context_window,
+        user_message_count=user_count,
+        assistant_message_count=assistant_count,
+        tool_call_count=tool_count,
+    )
