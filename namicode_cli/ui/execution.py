@@ -999,6 +999,15 @@ async def execute_task(  # type: ignore
 
                     message, _metadata = data
 
+                    # Skip messages from middleware's internal LLM calls (e.g.
+                    # SummarizationMiddleware.before_model). These run as nodes in
+                    # the main graph (namespace == ()), so is_main_agent=True, but
+                    # their output is internal — never user-facing. Detected via the
+                    # langgraph_checkpoint_ns metadata field.
+                    _ckpt_ns = _metadata.get("langgraph_checkpoint_ns", "") if isinstance(_metadata, dict) else ""
+                    if _ckpt_ns and "before_model" in _ckpt_ns:
+                        continue
+
                     if hasattr(message, "id"):
                         msg_id = message.id
                         if msg_id in seen_message_ids:
