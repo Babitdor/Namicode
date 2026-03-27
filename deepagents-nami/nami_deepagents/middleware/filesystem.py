@@ -237,7 +237,13 @@ Usage:
 - Results are returned using cat -n format, with line numbers starting at 1
 - You have the capability to call multiple tools in a single response. It is always better to speculatively read multiple files as a batch that are potentially useful.
 - If you read a file that exists but has empty contents you will receive a system reminder warning in place of file contents.
-- You should ALWAYS make sure a file has been read before editing it."""
+- You should ALWAYS make sure a file has been read before editing it.
+
+Args:
+    file_path: Absolute path to the file to read (e.g., /home/user/project/main.py).
+    offset: Line number to start reading from (0-indexed). Default: 0. Use for pagination.
+    limit: Maximum number of lines to read. Default: 500. Use a smaller value (e.g., 100)
+        for initial exploration of large files to avoid context overflow."""
 
 EDIT_FILE_TOOL_DESCRIPTION = """Performs exact string replacements in files.
 
@@ -247,7 +253,14 @@ Usage:
 - ALWAYS prefer editing existing files. NEVER write new files unless explicitly required.
 - Only use emojis if the user explicitly requests it. Avoid adding emojis to files unless asked.
 - The edit will FAIL if `old_string` is not unique in the file. Either provide a larger string with more surrounding context to make it unique or use `replace_all` to change every instance of `old_string`.
-- Use `replace_all` for replacing and renaming strings across the file. This parameter is useful if you want to rename a variable for instance."""
+- Use `replace_all` for replacing and renaming strings across the file. This parameter is useful if you want to rename a variable for instance.
+
+Args:
+    file_path: Absolute path to the file to edit.
+    old_string: The exact string to find and replace. Must be unique within the file,
+        or use replace_all=True. Include surrounding context lines if needed for uniqueness.
+    new_string: The replacement string. Use an empty string to delete old_string.
+    replace_all: If True, replace every occurrence of old_string in the file. Default: False."""
 
 
 WRITE_FILE_TOOL_DESCRIPTION = """Writes to a new file in the filesystem.
@@ -256,7 +269,11 @@ Usage:
 - The file_path parameter must be an absolute path, not a relative path
 - The content parameter must be a string
 - The write_file tool will create the a new file.
-- Prefer to edit existing files over creating new ones when possible."""
+- Prefer to edit existing files over creating new ones when possible.
+
+Args:
+    file_path: Absolute path for the new file (e.g., /project/src/new_module.py).
+    content: Full text content to write to the file."""
 
 
 GLOB_TOOL_DESCRIPTION = """Find files matching a glob pattern.
@@ -270,7 +287,13 @@ Usage:
 Examples:
 - `**/*.py` - Find all Python files
 - `*.txt` - Find all text files in root
-- `/subdir/**/*.md` - Find all markdown files under /subdir"""
+- `/subdir/**/*.md` - Find all markdown files under /subdir
+- The path parameter optionally restricts the search to a specific directory
+
+Args:
+    pattern: Glob pattern to match against file paths (e.g., "**/*.py", "src/**/*.ts").
+    path: Optional directory to restrict the search to. Defaults to the filesystem root.
+        Use to narrow results when you know the relevant subdirectory (e.g., "/src")."""
 
 GREP_TOOL_DESCRIPTION = """Search for a regex pattern in files.
 
@@ -290,7 +313,16 @@ Examples:
 - Search Python files only: `grep(pattern="import", glob="*.py")`
 - Show matching lines: `grep(pattern="error", output_mode="content")`
 - Regex search: `grep(pattern="def \\w+_handler", glob="*.py", output_mode="content")`
-- Word boundary: `grep(pattern="\\berror\\b", output_mode="content")`"""
+- Word boundary: `grep(pattern="\\berror\\b", output_mode="content")`
+
+Args:
+    pattern: Regular expression to search for (e.g., "def\\s+\\w+", "TODO", "import\\s+os").
+    path: Optional directory path to restrict the search scope.
+    glob: Optional glob pattern to filter which files are searched (e.g., "*.py", "**/*.ts").
+    output_mode: Controls output format. One of:
+        - "files_with_matches" (default): return only file paths
+        - "content": return matching lines with file and line number context
+        - "count": return match count per file"""
 
 EXECUTE_TOOL_DESCRIPTION = """Executes a given command in the sandbox environment with proper handling and security measures.
 
@@ -505,10 +537,14 @@ def _write_file_tool_generator(
 
     def sync_write_file(
         file_path: str,
-        content: str,
+        content: Any,
         runtime: ToolRuntime[None, FilesystemState],
     ) -> Command | str:
         """Synchronous wrapper for write_file tool."""
+        import json as _json
+
+        if not isinstance(content, str):
+            content = _json.dumps(content, indent=2, ensure_ascii=False)
         resolved_backend = _get_backend(backend, runtime)
         file_path = _validate_path(
             file_path, virtual_mode=_get_virtual_mode(resolved_backend)
@@ -533,10 +569,14 @@ def _write_file_tool_generator(
 
     async def async_write_file(
         file_path: str,
-        content: str,
+        content: Any,
         runtime: ToolRuntime[None, FilesystemState],
     ) -> Command | str:
         """Asynchronous wrapper for write_file tool."""
+        import json as _json
+
+        if not isinstance(content, str):
+            content = _json.dumps(content, indent=2, ensure_ascii=False)
         resolved_backend = _get_backend(backend, runtime)
         file_path = _validate_path(
             file_path, virtual_mode=_get_virtual_mode(resolved_backend)

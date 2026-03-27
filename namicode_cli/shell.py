@@ -300,7 +300,6 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
 
             Args:
                 command: The shell command to execute.
-                runtime: The tool runtime context.
                 interactive: If True, run in interactive mode allowing user to
                     respond to prompts. Use for commands like npx create-next-app,
                     npm init, or any command that may ask for user input.

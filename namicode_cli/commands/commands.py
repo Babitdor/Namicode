@@ -2514,6 +2514,19 @@ async def handle_command(
             console.print()
         return True
 
+    if cmd == "verbose":
+        # Toggle verbose mode
+        new_state = session_state.toggle_verbose()
+        if new_state:
+            console.print()
+            console.print("  [bold green]Verbose mode enabled[/bold green] — internal agent context will be shown")
+            console.print()
+        else:
+            console.print()
+            console.print("  [bold yellow]Verbose mode disabled[/bold yellow] — internal agent context will be collapsed")
+            console.print()
+        return True
+
     if cmd == "images":
         # Manage images in the conversation
         try:

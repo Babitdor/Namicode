@@ -331,6 +331,11 @@ def get_bottom_toolbar(
             # Silently ignore - toolbar is non-critical and called frequently
             pass
 
+        # Check if verbose mode is active
+        if session_state.verbose:
+            parts.append(("bg:#a855f7 fg:#ffffff bold", " VERBOSE "))
+            parts.append(("", " | "))
+
         # Base status message
         if session_state.auto_approve:
             base_msg = "auto-accept ON (CTRL+T to toggle)"

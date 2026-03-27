@@ -4,415 +4,437 @@ This file provides guidance to AI assistants when working with code in this repo
 
 ## Project Overview
 
-**Nami-Code CLI** is a terminal-based AI coding assistant built on LangGraph with a "Deep Agent" architecture. It provides:
-- Agentic coding with planning tools (`write_todos`) and subagent delegation (`task` tool)
-- Multiple sandbox backends for safe code execution (Modal, Daytona, Docker, E2B, Runloop)
-- Persistent agent memory via `agent.md` files
-- Progressive skill disclosure system
-- Model Context Protocol (MCP) integration for extended capabilities
-- Rich terminal UI with multiline input support
+**Nami-Code CLI** (`namicode-cli`) is an open-source terminal-based AI coding assistant similar to Claude Code. It's built on top of a custom `deepagents` framework using LangGraph for agentic workflows with planning, subagent delegation, and multi-backend file system access.
 
 ## Technology Stack
 
-| Category | Technologies |
-|----------|-------------|
-| **Language** | Python 3.11+ (3.11, 3.12, 3.13 supported) |
-| **Agent Framework** | LangChain, LangGraph |
-| **LLM Providers** | Anthropic (default), OpenAI, Google Gemini, Ollama |
-| **Terminal UI** | Rich, prompt-toolkit |
-| **Sandbox Backends** | Modal, Daytona, Docker, E2B, Runloop |
-| **Protocol Support** | MCP (Model Context Protocol) |
-| **Testing** | pytest, pytest-asyncio, pytest-cov |
-| **Linting/Formatting** | Ruff (primary), Black, MyPy (strict mode) |
-| **Package Manager** | uv (recommended), pip |
+| Category | Technology |
+|----------|------------|
+| **Language** | Python 3.11+ |
+| **Package Manager** | uv (modern Python package manager) |
+| **Agent Framework** | LangGraph 1.1.3+, LangChain 1.2.13+ |
+| **LLM Providers** | Anthropic Claude, OpenAI, Google GenAI, Ollama |
+| **Sandbox Providers** | Docker, E2B, Modal, Runloop, Daytona |
+| **UI Framework** | Rich, prompt-toolkit |
+| **Testing** | pytest, pytest-asyncio, pytest-timeout |
+| **Linting/Formatting** | Ruff, mypy (strict mode) |
 
 ## Project Structure
 
 ```
-namicode-cli/
-├── namicode_cli/              # Main CLI package
-│   ├── main.py                # Entry point (cli_main)
-│   ├── __main__.py            # Module entry (python -m namicode_cli)
-│   ├── agents/                # Agent creation and management
-│   │   ├── core_agent.py      # Agent creation with LangGraph
-│   │   ├── named_agents.py    # Named agent configurations
-│   │   ├── commands.py        # Agent commands
-│   │   └── default_subagents/ # Default subagent definitions
-│   ├── config/                # Configuration and settings
-│   │   ├── config.py          # Main configuration
-│   │   ├── model_create.py    # Model creation utilities
-│   │   ├── model_manager.py   # Model management
-│   │   └── default_agent_prompt.md # Default system prompt
-│   ├── integrations/          # Sandbox backend integrations
-│   │   ├── sandbox_factory.py # Factory for creating backends
-│   │   ├── modal.py           # Modal cloud sandbox
-│   │   ├── daytona.py         # Daytona sandbox
-│   │   ├── runloop.py        # Runloop sandbox
-│   │   ├── docker.py          # Docker sandbox
-│   │   └── e2b_executor.py    # E2B code execution
-│   ├── mcp/                   # Model Context Protocol
-│   │   ├── client.py          # MCP client
-│   │   ├── middleware.py      # MCP middleware
-│   │   ├── commands.py        # MCP commands
-│   │   └── presets.py         # MCP server presets
-│   ├── skills/                 # Skill system
-│   │   ├── load.py            # Skill loading
-│   │   ├── middleware.py      # Skill middleware
-│   │   └── skill_creation.py  # Skill creation utilities
-│   ├── memory/                # Memory management
-│   │   ├── agent_memory.py    # Agent memory persistence
-│   │   └── shared_memory.py   # Shared memory system
-│   ├── session/               # Session management
-│   │   ├── session_persistence.py # Session save/restore
-│   │   ├── session_restore.py  # Session restoration
-│   │   └── session_summarization.py # Session summarization
-│   ├── ui/                    # Terminal UI
-│   │   ├── ui_elements.py     # UI components
-│   │   ├── execution.py       # Execution display
-│   │   └── question_prompt.py # Question prompts
-│   ├── tools.py               # Core tools (file, web, code)
-│   ├── browser_tools.py       # Playwright browser automation
-│   ├── git_tools.py           # Git operations
-│   ├── file_ops.py            # File operation tools
-│   ├── semantic_search.py     # Code semantic search
-│   └── shell.py               # Shell command execution
-├── deepagents-nami/           # Core agent library
+Namicode-CodeAssistant-CLI/
+├── namicode_cli/                    # Main CLI package
+│   ├── main.py                      # Entry point & CLI loop
+│   ├── __main__.py                  # Module entry (python -m)
+│   ├── agents/                      # Agent management
+│   │   ├── core_agent.py            # Agent creation/config
+│   │   ├── default_subagents/       # Built-in subagents
+│   │   └── named_agents.py          # Named agent profiles
+│   ├── browser_tools.py             # Browser automation tools
+│   ├── commands/                    # CLI commands
+│   ├── config/                      # Configuration management
+│   ├── doctor.py                    # System diagnostics
+│   ├── file_ops.py                  # File operations
+│   ├── git_tools.py                 # Git integration tools
+│   ├── image_utils.py               # Image handling
+│   ├── input.py                     # User input handling
+│   ├── integrations/                # Sandbox providers
+│   │   ├── daytona.py               # Daytona sandbox
+│   │   ├── docker.py                # Docker sandbox
+│   │   ├── e2b_executor.py          # E2B sandbox
+│   │   ├── modal.py                 # Modal sandbox
+│   │   ├── runloop.py               # Runloop sandbox
+│   │   └── sandbox_factory.py       # Sandbox factory
+│   ├── mcp/                         # Model Context Protocol
+│   │   ├── client.py                # MCP client
+│   │   ├── commands.py              # MCP CLI commands
+│   │   ├── config.py                # MCP configuration
+│   │   ├── middleware.py            # MCP middleware
+│   │   └── presets.py               # MCP presets
+│   ├── memory/                      # Memory management
+│   ├── onboarding.py                # First-run setup
+│   ├── semantic_search.py           # Code semantic search
+│   ├── server_runner/               # Dev server management
+│   ├── session/                     # Session persistence
+│   ├── shell.py                     # Shell execution
+│   ├── skills/                      # Skills system
+│   ├── states/                      # Session state
+│   ├── tools.py                     # Custom tools (HTTP, web search, etc.)
+│   ├── tracking/                    # Tracing/tracking
+│   └── ui/                          # Rich UI components
+├── deepagents-nami/                  # Core agent framework
 │   └── nami_deepagents/
-│       ├── graph.py           # LangGraph agent definition
-│       ├── backends/          # Backend protocols
-│       │   ├── protocol.py    # Backend protocol definitions
-│       │   ├── filesystem.py  # Local filesystem backend
-│       │   ├── sandbox.py     # Sandbox backend base
-│       │   └── composite.py   # Multi-backend composition
-│       └── middleware/        # Agent middleware
-│           ├── filesystem.py  # File operations middleware
-│           ├── memory.py      # Memory middleware
-│           ├── skills.py      # Skills middleware
-│           ├── subagents.py   # Subagent middleware
-│           └── patch_tool_calls.py # Tool call patching
-├── tests/                     # Test suite
-│   ├── unit_tests/            # Unit tests
-│   ├── integration_tests/     # Integration tests
-│   └── security/              # Security tests
-├── evaluation/                # Terminal-Bench evaluation
-│   └── terminal-bench-2/      # Benchmark environments
-├── acp/                       # Agent Communication Protocol
-├── nami-scripts/              # Utility scripts
-├── docs/                      # Documentation
-└── pyproject.toml             # Project configuration
+│       ├── graph.py                 # Deep agent creation
+│       ├── backends/                 # Backend protocols
+│       │   ├── composite.py          # Composite backend
+│       │   ├── filesystem.py        # Local filesystem
+│       │   ├── protocol.py          # Backend protocol
+│       │   └── sandbox.py            # Sandbox backend
+│       └── middleware/              # Agent middleware
+├── evaluation/                       # Harbor evaluation framework
+│   ├── deepagents_harbor/           # Evaluation harness
+│   └── terminal-bench-2/            # Benchmark tasks
+├── tests/                           # Test suite
+│   ├── unit_tests/
+│   └── integration_tests/
+└── assets/                          # Static assets
 ```
 
 ## Development Setup
 
 ### Prerequisites
-- Python 3.11+ (supports 3.11, 3.12, 3.13)
-- uv package manager (recommended) or pip
+- Python 3.11+
+- uv package manager (`pip install uv`)
 
 ### Installation
 
 ```bash
-# Clone and setup
+# Clone the repository
 git clone https://github.com/Babitdor/namicode-cli.git
 cd namicode-cli
 
 # Create virtual environment and install
 uv venv
-uv sync --all-groups
+uv pip install -e .
 
-# Configure environment
-cp .env.template .env
-# Edit .env with your API keys
+# Or for development with all groups:
+uv sync --all-groups
 ```
 
 ### Environment Variables
 
-**Required:**
-- `ANTHROPIC_API_KEY` - Claude models (default provider)
-- `OPENAI_API_KEY` - GPT models
-- `GOOGLE_API_KEY` - Gemini models
+Copy `.env.template` to `.env` and configure:
 
-**Optional:**
-- `OLLAMA_HOST` - Local Ollama server (default: http://localhost:11434)
-- `TAVILY_API_KEY` - Web search
-- `RUNLOOP_API_KEY` - Runloop sandbox
-- `DAYTONA_API_KEY` - Daytona sandbox
-- `E2B_API_KEY` - E2B sandbox
-- `LANGSMITH_API_KEY` - LangSmith tracing
+```bash
+# Required API Keys
+ANTHROPIC_API_KEY=          # Claude models
+OPENAI_API_KEY=             # GPT models
+GOOGLE_API_KEY=             # Gemini models
+
+# Optional Services
+TAVILY_API_KEY=             # Web search
+RUNLOOP_API_KEY=            # Cloud sandbox
+DAYTONA_API_KEY=            # Daytona sandbox
+E2B_API_KEY=                # E2B cloud sandbox
+
+# LangSmith Tracing (optional)
+LANGSMITH_TRACING=true
+LANGSMITH_API_KEY=
+LANGSMITH_PROJECT=Nami-Code
+
+# Model Overrides
+OLLAMA_HOST=http://localhost:11434
+OLLAMA_MODEL=qwen3-coder:480b-cloud
+```
 
 ## Development Commands
 
 ### Running the CLI
+
 ```bash
-uv run nami                           # Standard run
-uv run nami --agent mybot             # Specific agent
-uv run nami --auto-approve            # Skip prompts
-uv run nami --sandbox modal           # Modal sandbox
-uv run nami --sandbox e2b             # E2B sandbox
-uv run nami --sandbox docker          # Docker sandbox
-uv run nami doctor                    # System diagnostics
+# Run directly
+uv run nami
+
+# Or after install
+nami
 ```
 
-### Testing
+### Makefile Commands
+
+| Command | Description |
+|---------|-------------|
+| `make run` | Run Nami CLI |
+| `make run_reinstall` | Reinstall and run CLI |
+| `make test` | Run unit tests (excludes subprocess-heavy tests) |
+| `make test TEST_FILE=<path>` | Run specific test file |
+| `make test_integration` | Run integration tests |
+| `make test_all` | Run all tests |
+| `make test_watch` | Run tests in watch mode |
+| `make test_cov` | Run tests with coverage |
+| `make format` | Format code (ruff format + fix) |
+| `make lint` | Run linters (ruff format check + ruff check) |
+| `make clean` | Remove build artifacts and caches |
+
+### DeepAgents Subpackage Commands
+
 ```bash
-make test                    # Unit tests
-make test_integration        # Integration tests
-make test_all               # All tests
-make test_cov               # Tests with coverage
-make test_watch             # Watch mode
+cd deepagents-nami
+make lint          # Run ruff format check + ruff check + mypy
+make format        # Run ruff format + ruff check --fix
+make test          # Run unit tests with coverage
+make integration_test  # Run integration tests
 ```
 
-### Code Quality
-```bash
-make format                 # Format with ruff
-make lint                   # Check formatting and linting
-make clean                  # Remove build artifacts
-```
+### Evaluation Framework Commands
 
-### Makefile Targets
-| Target | Description |
-|--------|-------------|
-| `run` | Run Nami CLI |
-| `run_reinstall` | Reinstall and run |
-| `test` | Run unit tests (pytest tests/unit_tests) |
-| `test_integration` | Run integration tests |
-| `test_all` | Run all tests |
-| `test_cov` | Run tests with coverage |
-| `lint` | Check formatting + linter |
-| `format` | Format code with ruff |
-| `clean` | Remove build artifacts |
+```bash
+cd evaluation
+make run-hello-world           # Run hello-world task
+make run-terminal-bench-docker # Run 1 task with Docker
+make run-namicode-docker       # Run Nami Code with Docker
+make run-compare               # Compare DeepAgents vs Nami Code
+```
 
 ## Architecture
 
-### Core Pattern: Modular Monorepo with Plugin Architecture
+### Deep Agent Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     CLI Layer (main.py)                         │
-│  - Argument parsing, Interactive REPL, Session management      │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-┌─────────────────────────────────────────────────────────────────┐
-│                 Agent Layer (agents/)                           │
-│  - Core agent creation, Subagent delegation, Memory management │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-┌─────────────────────────────────────────────────────────────────┐
-│              Middleware Layer (nami_deepagents/middleware/)    │
-│  - FilesystemMiddleware, MemoryMiddleware, SkillsMiddleware    │
-│  - SubAgentMiddleware, ShellMiddleware, MCPMiddleware          │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-┌─────────────────────────────────────────────────────────────────┐
-│               Backend Layer (backends/)                         │
-│  - FilesystemBackend (local), SandboxBackend (cloud/container)  │
-│  - CompositeBackend (multi-backend)                             │
-└─────────────────────────────────────────────────────────────────┘
-```
+Built on LangGraph with:
+- **Planning Tool** (`write_todos`) for task management
+- **Sub-agents** (`task` tool) for parallel delegation
+- **File System Access** via multiple backends (local, sandbox)
+- **Middleware Stack** (memory, skills, MCP, shell)
 
-### Key Architectural Patterns
+### Backend System
 
-1. **LangGraph State Machine**: Core agent uses `CompiledStateGraph` for conversation state and tool execution
-2. **Middleware Pattern**: Pluggable middleware for extending agent capabilities
-3. **Backend Protocol Pattern**: Abstract backend interface with multiple implementations
-4. **Factory Pattern**: `sandbox_factory.py` creates appropriate sandbox backends
-5. **Repository Pattern**: Session persistence via SQLite backend
+Supports multiple execution environments:
+- **Local filesystem** - Direct file operations
+- **Docker** - Containerized execution
+- **E2B** - Cloud sandbox
+- **Modal** - Serverless execution
+- **Runloop** - Cloud sandbox
+- **Daytona** - Development environment
 
-### Sandbox Backends
+### Skills System
 
-| Provider | Working Dir | API Key | Use Case |
-|----------|------------|---------|----------|
-| Local | Project root | None | Default development |
-| Modal | `/workspace` | Modal SDK | Cloud sandbox |
-| Runloop | `/home/user` | `RUNLOOP_API_KEY` | Cloud sandbox |
-| Daytona | `/home/daytona` | `DAYTONA_API_KEY` | Dev environments |
-| Docker | `/workspace` | None | Container isolation |
-| E2B | - | `E2B_API_KEY` | Code execution |
+Progressive disclosure pattern for domain-specific capabilities. Skills are loaded from:
+- `C:\users\babit-pc\.nami\skills` (user skills)
+- Project-level skills directories
+
+### MCP Integration
+
+Model Context Protocol for extending agent capabilities through:
+- `mcp/client.py` - MCP client
+- `mcp/commands.py` - CLI commands
+- `mcp/config.py` - Configuration
+- `mcp/middleware.py` - Middleware integration
+- `mcp/presets.py` - Preset configurations
 
 ## Important Files
 
 | File | Purpose |
 |------|---------|
-| `namicode_cli/main.py` | CLI entry point, argument parsing, main loop |
-| `namicode_cli/agents/core_agent.py` | Agent creation with LangGraph |
-| `namicode_cli/config/config.py` | Configuration management |
-| `namicode_cli/integrations/sandbox_factory.py` | Sandbox backend factory |
-| `namicode_cli/tools.py` | Core tools (file, web, code operations) |
-| `namicode_cli/browser_tools.py` | Playwright browser automation |
-| `namicode_cli/mcp/client.py` | MCP client implementation |
-| `namicode_cli/skills/load.py` | Skill loading system |
-| `deepagents-nami/nami_deepagents/graph.py` | Deep agent graph definition |
-| `deepagents-nami/nami_deepagents/backends/protocol.py` | Backend protocol definitions |
-| `pyproject.toml` | Project configuration, dependencies |
-| `Makefile` | Build/test commands |
+| `namicode_cli/main.py` | Main CLI entry point and REPL loop |
+| `namicode_cli/agents/core_agent.py` | Agent creation and configuration |
+| `namicode_cli/config/__init__.py` | Configuration management |
+| `namicode_cli/tools.py` | Custom tools (HTTP, web search, etc.) |
+| `deepagents-nami/nami_deepagents/graph.py` | Core deep agent creation |
+| `deepagents-nami/nami_deepagents/backends/protocol.py` | Backend protocol definition |
+| `pyproject.toml` | Main project configuration |
+| `Makefile` | Build/test/lint commands |
+| `.env.template` | Environment variable template |
 
 ## Common Workflows
 
 ### Adding a New Tool
-1. Define tool function in appropriate module (`tools.py`, `browser_tools.py`, etc.)
-2. Add tool to agent's tool list in `agents/core_agent.py`
-3. Add tests in `tests/unit_tests/`
 
-### Adding a New Sandbox Backend
-1. Create new integration in `namicode_cli/integrations/`
-2. Implement `SandboxBackendProtocol` from `backends/protocol.py`
-3. Register in `sandbox_factory.py`
-4. Add configuration in `config/config.py`
+1. Define tool in `namicode_cli/tools.py` or appropriate module
+2. Use `@tool` decorator from LangChain
+3. Add to agent's tool list in `agents/core_agent.py`
+
+### Adding a New Subagent
+
+1. Create subagent definition in `agents/default_subagents/`
+2. Register in `agents/named_agents.py`
+3. Define subagent type in appropriate enum
+
+### Adding a New Sandbox Provider
+
+1. Create integration file in `integrations/`
+2. Implement backend protocol from `deepagents-nami/nami_deepagents/backends/protocol.py`
+3. Register in `integrations/sandbox_factory.py`
 
 ### Adding a New Skill
-1. Create skill directory in user's `.nami/skills/` or project's `skills/`
-2. Add `SKILL.md` with instructions
-3. Optionally add helper scripts
-4. Skill is auto-loaded on startup
+
+1. Create skill directory in `~/.nami/skills/<skill-name>/`
+2. Add `SKILL.md` with skill instructions
+3. Optionally add `scripts/` for helper scripts
+
+## Testing
+
+### Test Structure
+
+```
+tests/
+├── unit_tests/         # Unit tests
+│   ├── test_config.py
+│   ├── test_agent.py
+│   └── test_imports.py
+├── integration_tests/  # Integration tests
+│   ├── conftest.py     # Shared fixtures
+│   ├── test_sandbox_factory.py
+│   └── test_sandbox_operations.py
+└── security/           # Security tests
+    └── test_path_security.py
+```
+
+### Test Naming Conventions
+
+- **Files:** `test_*.py` (pytest standard)
+- **Classes:** `Test<Feature>` (PascalCase with Test prefix)
+- **Functions:** `test_<action>_<condition>` (snake_case)
 
 ### Running Tests
+
 ```bash
 # Unit tests
 make test
 
 # Specific test file
-uv run pytest tests/unit_tests/test_specific.py -v
+make test TEST_FILE=tests/unit_tests/test_config.py
 
 # Integration tests
 make test_integration
 
 # With coverage
 make test_cov
+
+# Watch mode
+make test_watch
 ```
 
-## Testing
+### Test Fixtures
 
-### Test Structure
-```
-tests/
-├── unit_tests/           # Fast, isolated tests
-│   ├── mcp/              # MCP client tests
-│   ├── skills/           # Skills system tests
-│   └── tools/            # Tool tests
-├── integration_tests/    # Integration tests
-│   └── benchmarks/       # Benchmark tests
-└── security/            # Security tests
-```
-
-### Test Configuration
-- **Framework**: pytest with pytest-asyncio
-- **Timeout**: 10 seconds default
-- **Async Mode**: Auto (pytest-asyncio)
-- **Coverage**: pytest-cov
-
-### Running Tests
-```bash
-make test                    # Unit tests only
-make test_integration        # Integration tests
-make test_all               # All tests
-uv run pytest tests/unit_tests/test_file.py -v  # Specific file
-```
+- `conftest.py` in `tests/integration_tests/` provides shared fixtures
+- LangSmith client fixture for tracing tests
+- Mock tools available in `deepagents-nami/tests/utils.py`
 
 ## Code Style and Conventions
 
-### Linting/Formatting
-- **Primary Tool**: Ruff (ALL rules enabled)
-- **Line Length**: 100 characters (150 in deepagents-nami)
-- **Docstring Style**: Google-style
-- **Type Checking**: MyPy strict mode
+### Linting & Formatting
 
-### Ruff Configuration
+**Primary Tool:** Ruff (replaces Black, isort, flake8, etc.)
+
+| Setting | Main Project | deepagents-nami |
+|---------|--------------|-----------------|
+| Line length | 100 | 150 |
+| Rule selection | ALL | ALL |
+| Docstring convention | Google | Google |
+
+### Key Ruff Rules (from pyproject.toml)
+
 ```toml
-[tool.ruff]
-line-length = 100
+[tool.ruff.lint]
 select = ["ALL"]  # Enable all rules
-
-# Ignored rules:
-# COM812, ISC001 - Formatter conflicts
-# PERF203 - Rarely useful
-# SLF001 - Private member access
-# PLC0415 - Imports at top
-# PLR0913 - Too many arguments
-# C901 - Too complex
+ignore = [
+    "COM812",   # Messes with formatter
+    "ISC001",   # Messes with formatter
+    "PERF203",  # Rarely useful
+    "SLF001",   # Private member access
+    "PLC0415",  # Imports at top
+    "PLR0913",  # Too many arguments
+    "PLC0414",  # Re-exports
+    "C901",     # Too complex
+]
 ```
 
-### MyPy Configuration
+### Type Checking
+
+**Tool:** mypy (strict mode)
+
 ```toml
 [tool.mypy]
 strict = true
 ignore_missing_imports = true
+enable_error_code = ["deprecated"]
+disallow_any_generics = false
+warn_return_any = false
 ```
 
 ### Naming Conventions
-- Test files: `test_*.py`
-- Test classes: `Test*` prefix
-- Test functions: `test_*` prefix
-- Fixtures: `conftest.py`
+
+| Element | Convention | Example |
+|---------|------------|---------|
+| Classes | PascalCase | `TestProjectRootDetection` |
+| Functions | snake_case | `test_find_project_root_with_git` |
+| Constants | UPPER_SNAKE_CASE | `HOME_DIR`, `COLORS` |
+| Module docstrings | Triple-quoted with description | See `main.py` |
+| Function docstrings | Google-style with Args/Returns | See `config.py` |
 
 ### Import Organization
-Standard library → Third-party → Local imports
 
-## Key Dependencies
+```python
+# Standard library
+import argparse
+import asyncio
 
-### Core Dependencies
-| Package | Purpose |
-|---------|---------|
-| `langchain` | LLM framework core |
-| `langchain-anthropic` | Claude model integration |
-| `langchain-openai` | GPT model integration |
-| `langchain-ollama` | Local Ollama integration |
-| `langchain-google-genai` | Gemini integration |
-| `langgraph` | State machine for agents |
-| `rich` | Terminal UI |
-| `prompt-toolkit` | Interactive input |
-| `mcp` | Model Context Protocol |
-| `aiosqlite` | Async SQLite for sessions |
+# Third-party
+from langgraph.checkpoint.memory import InMemorySaver
 
-### Sandbox Dependencies
-| Package | Purpose |
-|---------|---------|
-| `modal` | Modal cloud sandbox |
-| `daytona` | Daytona dev environments |
-| `runloop-api-client` | Runloop sandbox |
-| `docker` | Docker containers |
-| `e2b-code-interpreter` | E2B code execution |
+# Local imports
+from namicode_cli.agents.core_agent import create_agent_with_config
+```
 
-### Development Dependencies
-| Package | Purpose |
-|---------|---------|
-| `pytest` | Testing framework |
-| `pytest-asyncio` | Async test support |
-| `pytest-cov` | Coverage reporting |
-| `ruff` | Linting/formatting |
-| `mypy` | Type checking |
+### Type Annotations
 
-## Entry Points
+Use modern Python type hints with `|` union syntax:
 
-| Entry Point | Command | File |
-|-------------|---------|------|
-| CLI | `nami` | `namicode_cli.main:cli_main` |
-| Module | `python -m namicode_cli` | `namicode_cli/__main__.py` |
-
-## Version Information
-
-- **Package**: namicode-cli
-- **Version**: 0.0.14
-- **Core Library**: nami-deepagents v0.2.8
+```python
+def create_deep_agent(
+    model: str | BaseChatModel | None = None,
+    tools: Sequence[BaseTool | Callable | dict[str, Any]] | None = None,
+) -> CompiledStateGraph:
+```
 
 ## Additional Notes
 
-### Skills System
-Skills use progressive disclosure - only name and description are shown initially. Full instructions are loaded on demand from `SKILL.md` files.
+### Entry Points
 
-### Memory System
-- **Agent Memory**: Stored in `agent.md` files in project root
-- **Shared Memory**: Persists across agents using key-value store
+| Entry Point | Location | Usage |
+|-------------|----------|-------|
+| CLI Entry | `namicode_cli/main.py:cli_main()` | `nami` command |
+| Module Entry | `namicode_cli/__main__.py` | `python -m namicode_cli` |
+| Deep Agent Factory | `deepagents-nami/nami_deepagents/graph.py:create_deep_agent()` | Agent creation |
 
-### Session Persistence
-Sessions are saved to SQLite database and can be restored. Use `--session` flag to restore a previous session.
+### Key Dependencies
 
-### MCP Integration
-MCP servers are configured in `~/.nami/mcp.json`. Presets available for common integrations (filesystem, github, etc.).
+**LangChain Ecosystem:**
+- `langchain>=1.2.13`, `langchain-core>=1.2.22`
+- `langgraph>=1.1.3`
+- `langchain-anthropic>=1.4.0`, `langchain-ollama>=1.0.1`, `langchain-google-genai>=4.2.1`
 
-### Browser Automation
-Playwright-based browser tools available for web automation. Requires browser installation: `playwright install`.
+**Sandbox Providers:**
+- `modal>=0.65.0`, `daytona>=0.113.0`, `runloop-api-client>=0.69.0`
+- `docker>=7.0.0`, `e2b-code-interpreter>=1.0.0`
 
-### Semantic Search
-Code semantic search using sentence-transformers and FAISS for finding similar code patterns.
+**Tools & Utilities:**
+- `rich>=13.0.0`, `prompt-toolkit>=3.0.52`
+- `tavily-python`, `ddgs>=7.0.0` (web search)
+- `replicate>=0.25.0` (image generation)
 
-### Evaluation Framework
-Terminal-Bench evaluation in `evaluation/` directory for benchmark testing with Docker environments.
+### Per-File Ignores
+
+```toml
+[tool.ruff.lint.per-file-ignores]
+"namicode_cli/cli.py" = ["T201"]  # Allow print in CLI
+"tests/*" = ["D1", "S101", "S311", "ANN201", "INP001", "PLR2004"]
+```
+
+### Sandbox Provider Configuration
+
+| Provider | Dependency | Environment Variable |
+|----------|------------|---------------------|
+| Docker | `docker>=7.0.0` | Built-in |
+| E2B | `e2b-code-interpreter>=1.0.0` | `E2B_API_KEY` |
+| Modal | `modal>=0.65.0` | Modal auth |
+| Runloop | `runloop-api-client>=0.69.0` | `RUNLOOP_API_KEY` |
+| Daytona | `daytona>=0.113.0` | `DAYTONA_API_KEY` |
+
+### Quick Reference
+
+```bash
+# Install
+uv sync --all-groups
+
+# Run CLI
+uv run nami
+
+# Development workflow
+make format && make lint && make test
+
+# Run specific test
+uv run pytest tests/unit_tests/test_file.py
+
+# System diagnostics
+nami doctor
+```

@@ -102,6 +102,7 @@ from namicode_cli.tools import (
     format_code_file,
     generate_image,
     http_request,
+    image_search,
     lint_code,
     package_info,
     web_search,
@@ -662,6 +663,29 @@ async def simple_cli(
     # of compaction summaries and old AI responses across turns.
     _seen_message_ids: set[str] = set()
 
+    # Cancellable task tracking: lets Ctrl+C cancel a running execute_task
+    # by injecting CancelledError rather than relying on KeyboardInterrupt
+    # propagation (which is unreliable on Windows asyncio).
+    _exec_task: asyncio.Task | None = None
+    _event_loop = asyncio.get_event_loop()
+
+    def _cancel_exec_task(signum=None, frame=None) -> None:
+        nonlocal _exec_task
+        if _exec_task is not None and not _exec_task.done():
+            _event_loop.call_soon_threadsafe(_exec_task.cancel)
+        else:
+            # No agent task running — raise so the prompt can handle it
+            raise KeyboardInterrupt
+
+    # Register SIGINT handler so Ctrl+C reliably cancels the agent task.
+    # prompt_toolkit saves/restores this when prompt_async() is active,
+    # so the double-Ctrl+C-to-exit behavior during prompts is unaffected.
+    _prev_sigint: object = None
+    try:
+        _prev_sigint = signal.signal(signal.SIGINT, _cancel_exec_task)
+    except (ValueError, OSError):
+        pass  # May fail in non-main threads or restricted environments
+
     while True:
         try:
             user_input = await session.prompt_async()
@@ -760,7 +784,7 @@ async def simple_cli(
                 store=store,
                 checkpointer=checkpointer,
             )
-            await execute_task(
+            _exec_task = asyncio.ensure_future(execute_task(
                 query,
                 subagent,
                 agent_name,
@@ -770,10 +794,16 @@ async def simple_cli(
                 is_subagent=True,
                 image_tracker=image_tracker,
                 seen_message_ids=_seen_message_ids,
-            )
+            ))
+            try:
+                await _exec_task
+            except asyncio.CancelledError:
+                pass  # execute_task's CancelledError handler ran cleanup
+            finally:
+                _exec_task = None
 
         else:
-            await execute_task(
+            _exec_task = asyncio.ensure_future(execute_task(
                 user_input,
                 agent,
                 assistant_id,
@@ -783,7 +813,13 @@ async def simple_cli(
                 is_subagent=False,
                 image_tracker=image_tracker,
                 seen_message_ids=_seen_message_ids,
-            )
+            ))
+            try:
+                await _exec_task
+            except asyncio.CancelledError:
+                pass  # execute_task's CancelledError handler ran cleanup
+            finally:
+                _exec_task = None
 
         # Proactive context warning after each turn
         breakdown = token_tracker.get_breakdown()
@@ -845,6 +881,8 @@ async def _run_agent_session(
         # Web search (always available, no API key needed)
         duckduckgo_search,
         docs_search,
+        # Image search & download (no API key needed)
+        image_search,
         # Image generation (Replicate API - 50 free/month)
         generate_image,
         # Git tools (structured git operations)

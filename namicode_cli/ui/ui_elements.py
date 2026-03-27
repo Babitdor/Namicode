@@ -267,10 +267,12 @@ def format_tool_display(tool_name: str, tool_args: dict) -> str:
         return f"{tool_name}()"
 
     elif tool_name in ("write_memory", "read_memory", "delete_memory"):
-        # Memory tools: show key
         if "key" in tool_args:
             key = truncate_value(str(tool_args["key"]), 60)
             return f'{tool_name}("{key}")'
+
+    elif tool_name == "ask_question":
+        return f"{tool_name}()"
 
     # Fallback: generic formatting for unknown tools
     # Show all arguments in key=value format
@@ -310,6 +312,10 @@ def format_tool_result_preview(
     """
     # File ops have their own rich render_file_operation — skip them
     if tool_name in ("read_file", "write_file", "edit_file"):
+        return None
+
+    # Task (subagent) results are handled by completion banners — skip preview
+    if tool_name == "task":
         return None
 
     duration = f" · {elapsed_s:.1f}s" if elapsed_s is not None and elapsed_s >= 1.0 else ""
@@ -1236,6 +1242,9 @@ def show_help() -> None:
     console.print("  /tokens         Show token usage for current session", style=COLORS["dim"])
     console.print("  /context        Show detailed context window usage", style=COLORS["dim"])
     console.print("  /compact        Summarize conversation to free context", style=COLORS["dim"])
+    console.print(
+        "  /verbose        Toggle verbose mode (show internal agent context)", style=COLORS["dim"]
+    )
     console.print(
         "  /init           Explore codebase and create NAMI.MD file",
         style=COLORS["dim"],

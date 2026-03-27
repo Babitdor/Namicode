@@ -260,6 +260,112 @@ def duckduckgo_search(
         }
 
 
+def image_search(
+    query: str,
+    download_path: str | None = None,
+    max_results: int = 5,
+    size: str | None = None,
+    image_type: str | None = None,
+    layout: str | None = None,
+    license: str | None = None,
+) -> dict[str, Any]:
+    """Search for images by description and optionally download them.
+
+    Useful for finding stock photos, icons, and illustrations for web projects.
+
+    Args:
+        query: Description of the image to search for (e.g. "modern office workspace")
+        download_path: If provided, download the first result to this file path.
+            Supports .jpg, .png, .webp extensions.
+        max_results: Number of search results to return (1-20, default 5)
+        size: Filter by size - "Small", "Medium", "Large", or "Wallpaper"
+        image_type: Filter by type - "photo", "clipart", "gif", "transparent", "line"
+        layout: Filter by layout - "Square", "Tall", "Wide"
+        license: Filter by license - "any", "Public", "Share", "Modify", "ModifyCommercially"
+
+    Returns:
+        Dictionary with:
+        - success: Whether search succeeded
+        - results: List of image results with title, image_url, thumbnail_url, source, width, height
+        - downloaded_to: File path if download_path was provided and download succeeded
+
+    Example:
+        image_search("modern office workspace photo")
+        image_search("transparent gear icon", image_type="transparent", download_path="./icons/gear.png")
+    """
+    try:
+        from ddgs import DDGS
+    except ImportError:
+        try:
+            from duckduckgo_search import DDGS
+        except ImportError:
+            return {
+                "success": False,
+                "error": "ddgs not installed. Install with: pip install ddgs",
+                "query": query,
+            }
+
+    max_results = max(1, min(20, max_results))
+
+    try:
+        kwargs: dict[str, Any] = {}
+        if size:
+            kwargs["size"] = size
+        if image_type:
+            kwargs["type_image"] = image_type
+        if layout:
+            kwargs["layout"] = layout
+        if license and license != "any":
+            kwargs["license_image"] = license
+
+        with DDGS() as ddgs:
+            raw = list(ddgs.images(query, max_results=max_results, **kwargs))
+
+        results = [
+            {
+                "title": r.get("title", ""),
+                "image_url": r.get("image", ""),
+                "thumbnail_url": r.get("thumbnail", ""),
+                "source": r.get("source", ""),
+                "width": r.get("width", 0),
+                "height": r.get("height", 0),
+            }
+            for r in raw
+        ]
+
+        output: dict[str, Any] = {
+            "success": True,
+            "results": results,
+            "query": query,
+            "total_results": len(results),
+        }
+
+        if download_path and results:
+            import requests
+
+            img_url = results[0]["image_url"]
+            resp = requests.get(
+                img_url,
+                timeout=30,
+                headers={"User-Agent": "Mozilla/5.0 (compatible; DeepAgents/1.0)"},
+            )
+            resp.raise_for_status()
+            Path(download_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(download_path).write_bytes(resp.content)
+            output["downloaded_to"] = str(Path(download_path).resolve())
+            output["downloaded_url"] = img_url
+            output["file_size_bytes"] = len(resp.content)
+
+        return output
+
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Image search error: {e!s}",
+            "query": query,
+        }
+
+
 # Documentation site mappings for docs_search
 _DOCS_SITES: dict[str, list[str]] = {
     # Python ecosystem

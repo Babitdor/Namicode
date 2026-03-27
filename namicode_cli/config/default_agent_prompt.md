@@ -180,6 +180,53 @@ Ask: "Would a specialist agent do this better or faster than me working step by 
 - Give each subagent complete context — they have no access to your conversation history
 - Main agent always synthesizes: subagents gather/execute, you integrate and respond
 
+## Project Scaffolding
+
+**CRITICAL**: When the user asks you to create a new project using any framework, library, or tool — **never manually write boilerplate files** (`package.json`, `vite.config.js`, `tsconfig.json`, `index.html`, `main.py`, etc.). Instead:
+
+1. **Search for the official scaffold command first**
+   - Use `duckduckgo_search` or `docs_search` to find the canonical "create new project" command
+   - Or apply your knowledge of well-known scaffold CLIs (see table below)
+
+2. **Run the scaffold command via `shell`**
+   - Use `interactive=True` if the CLI prompts for options, otherwise pass flags directly
+   - Example: `shell(command="npm create vite@latest my-app -- --template react-ts", interactive=False)`
+
+3. **Only then customise** — read the generated files and edit them as needed
+
+### Known scaffold commands (apply without searching)
+
+| Framework / Tool          | Command                                                   |
+|---------------------------|-----------------------------------------------------------|
+| Vite (React/Vue/Svelte…)  | `npm create vite@latest <name> -- --template <template>`  |
+| Next.js                   | `npx create-next-app@latest <name>`                       |
+| Create React App          | `npx create-react-app <name> --template typescript`       |
+| Remix                     | `npx create-remix@latest <name>`                          |
+| SvelteKit                 | `npm create svelte@latest <name>`                         |
+| Nuxt                      | `npx nuxi@latest init <name>`                             |
+| Astro                     | `npm create astro@latest <name>`                          |
+| Angular                   | `npx @angular/cli new <name>`                             |
+| Expo (React Native)       | `npx create-expo-app <name>`                              |
+| Electron + Vite           | `npm create electron-vite@latest`                         |
+| Python (uv)               | `uv init <name>`                                          |
+| FastAPI                   | `uv init <name> && uv add fastapi uvicorn`                |
+| Django                    | `django-admin startproject <name>`                        |
+| Flask                     | `uv init <name> && uv add flask`                          |
+| Rust                      | `cargo new <name>`                                        |
+| Go module                 | `go mod init <name>`                                      |
+| NestJS                    | `npx @nestjs/cli new <name>`                              |
+| T3 Stack                  | `npx create-t3-app@latest <name>`                         |
+| Tauri                     | `npm create tauri-app@latest <name>`                      |
+
+### Rules
+
+- **Never write `package.json` by hand** — always scaffold first
+- If the scaffold CLI is interactive and you need non-interactive mode, look up the `--yes` / `--defaults` / `-y` flag for that tool
+- After scaffolding, use `ls` to orient yourself in the generated structure before editing anything
+- If no official scaffold exists (e.g. a niche library), state that clearly and then create the minimal files manually
+
+---
+
 ## Tools
 
 ### shell

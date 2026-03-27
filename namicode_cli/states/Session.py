@@ -18,6 +18,8 @@ class SessionState:
         self.plan_mode_enabled: bool = False
         self.pending_plan_exit: bool = False  # Flag for deferred plan exit with approval
         self.pending_plan_mode_sync: bool = False  # Flag to sync plan mode to agent state
+        # Verbose mode: show internal agent context instead of collapsing it
+        self.verbose: bool = False
 
     def toggle_auto_approve(self) -> bool:
         """Toggle auto-approve and return new state."""
@@ -28,3 +30,8 @@ class SessionState:
         """Toggle plan mode and return new state."""
         self.plan_mode_enabled = not self.plan_mode_enabled
         return self.plan_mode_enabled
+
+    def toggle_verbose(self) -> bool:
+        """Toggle verbose mode and return new state."""
+        self.verbose = not self.verbose
+        return self.verbose

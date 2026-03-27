@@ -188,6 +188,7 @@ COMMANDS = {
     "kill": "Kill a running process by PID or name (e.g., /kill 1234)",
     "images": "Manage images in conversation (list, remove <id>, clear)",
     "plan": "Toggle plan mode (e.g., /plan, /plan on, /plan off)",
+    "verbose": "Toggle verbose mode - show/hide internal agent context",
     "files": "Show file operation summary for the session",
     "critique": "Run critique agent on recent changes (e.g., /critique or /critique src/)",
     "exit": "Exit the CLI",

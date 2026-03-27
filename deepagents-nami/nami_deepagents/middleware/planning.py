@@ -1,32 +1,30 @@
-"""Plan Mode Middleware for enhanced planning and question-asking capabilities.
+"""Plan Mode Middleware for structured planning with user approval.
 
 This middleware provides:
 1. Plan mode state tracking (enabled/disabled)
-2. ask_question tool for both structured (multiple choice) and open-ended questions
+2. exit_plan_mode tool to submit a plan for user approval
 3. System prompt injection for planning instructions when enabled
 4. Complexity detection to suggest plan mode activation
 5. Hard enforcement - blocking modifying tools when in plan mode
+
+Note: The ask_question tool and its system prompt are provided by
+``AskQuestionMiddleware`` (ask_question.py), which should appear earlier in the
+middleware chain so the tool is registered before this middleware's blocklist runs.
 
 State Schema:
 - plan_mode_enabled: bool - Whether plan mode is currently active
 - pending_question: dict | None - Question awaiting user response
 
-Tool Schema (ask_question):
-- question: str - The question to ask the user
-- question_type: "structured" | "open_ended" - Type of question
-- options: list[str] | None - Options for structured questions (required if structured)
-- context: str | None - Additional context about why asking
-
 Integration:
-- Uses LangGraph Command(interrupt=...) for HITL question flow
-- Integrates with execution.py for rendering question UI
+- Uses LangGraph interrupt() for the plan approval flow
+- Integrates with execution.py for rendering the approval UI
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Annotated, Literal, NotRequired, TypedDict
+from typing import Annotated, NotRequired, TypedDict
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
@@ -42,10 +40,13 @@ from langgraph.types import interrupt
 import re
 from dataclasses import dataclass
 
-logger = logging.getLogger(__name__)
+from nami_deepagents.middleware.ask_question import (
+    QuestionRequest,
+    QuestionResponse,
+    QuestionType,
+)
 
-# Question types
-QuestionType = Literal["structured", "open_ended"]
+logger = logging.getLogger(__name__)
 
 # Tools that are BLOCKED when in plan mode
 BLOCKED_TOOLS_IN_PLAN_MODE = {
@@ -53,6 +54,7 @@ BLOCKED_TOOLS_IN_PLAN_MODE = {
     "write_file",
     "edit_file",
     # Shell execution
+    "shell",
     "execute_bash",
     "execute",
     # Server management
@@ -245,22 +247,6 @@ def analyze_complexity(message: str) -> ComplexityResult:
     )
 
 
-class QuestionRequest(TypedDict):
-    """Schema for a question request from the agent."""
-
-    question: str
-    question_type: QuestionType
-    options: NotRequired[list[str]]  # Required if question_type == "structured"
-    context: NotRequired[str]  # Why the agent is asking
-
-
-class QuestionResponse(TypedDict):
-    """Schema for user's response to a question."""
-
-    answer: str
-    selected_index: NotRequired[int]  # For structured questions
-
-
 class PlanModeState(AgentState):
     """State schema for plan mode middleware."""
 
@@ -293,7 +279,7 @@ You are currently in **Plan Mode**. This is a PLANNING-ONLY phase.
 ### BLOCKED TOOLS (not available in plan mode):
 The following tools are BLOCKED because they modify state:
 - write_file, edit_file (file modifications)
-- execute_bash, execute (shell commands)
+- shell, execute_bash, execute (shell commands)
 - start_dev_server, stop_server (server management)
 - run_tests (test execution)
 - git_branch, git_stash (git state modifications)
@@ -325,25 +311,6 @@ your plan for user approval. The user will review and approve before you execute
 **REMEMBER: In Plan Mode, you are a PLANNER, not an EXECUTOR.**
 **ALWAYS call `exit_plan_mode` when your plan is ready.**
 """
-
-# System prompt for ask_question tool (always included)
-ASK_QUESTION_SYSTEM_PROMPT = """
-## Question Tool Available
-
-You have access to `ask_question` to get clarification from the user:
-
-- **Structured questions**: Multiple choice with predefined options
-- **Open-ended questions**: Free-form text response
-
-Use this when:
-- Requirements are ambiguous or incomplete
-- Multiple valid approaches exist and user preference matters
-- You need specific information (API keys locations, deployment targets)
-- Confirming understanding before significant changes
-
-The user will see your question and respond directly.
-"""
-
 
 def _exit_plan_mode() -> str:
     """Exit plan mode and submit the plan for user approval.
@@ -384,79 +351,17 @@ def _create_exit_plan_mode_tool() -> BaseTool:
     )
 
 
-def _ask_question(
-    question: str,
-    question_type: QuestionType = "open_ended",
-    options: list[str] | None = None,
-    context: str | None = None,
-) -> str:
-    """Ask the user a question and wait for their response.
-
-    Use this tool when you need clarification or user input before proceeding.
-    The execution will pause until the user responds.
-
-    Args:
-        question: The question to ask the user.
-        question_type: Either "structured" (multiple choice) or "open_ended" (free text).
-        options: List of options for structured questions. Required if question_type is "structured".
-        context: Optional explanation of why you're asking this question.
-
-    Returns:
-        The user's response as a string.
-    """
-    if question_type == "structured" and not options:
-        return "Error: 'options' is required for structured questions."
-
-    if question_type == "structured" and options and len(options) < 2:
-        return "Error: Structured questions need at least 2 options."
-
-    # Create the question request
-    question_request: QuestionRequest = {
-        "question": question,
-        "question_type": question_type,
-    }
-    if options:
-        question_request["options"] = options
-    if context:
-        question_request["context"] = context
-
-    # Use LangGraph's interrupt to pause execution and get user input
-    # The execution loop will handle displaying the question and getting the response
-    response = interrupt(
-        {
-            "type": "question",
-            "request": question_request,
-        }
-    )
-
-    # Return the user's answer
-    if isinstance(response, dict) and "answer" in response:
-        return response["answer"]
-    return str(response)
-
-
-def _create_ask_question_tool() -> BaseTool:
-    """Create the ask_question tool."""
-    return StructuredTool.from_function(
-        name="ask_question",
-        func=_ask_question,
-        description=(
-            "Ask the user a question when you need clarification or input. "
-            "Use 'structured' for multiple choice, 'open_ended' for free text. "
-            "Execution pauses until the user responds."
-        ),
-    )
-
-
 class PlanModeMiddleware(AgentMiddleware):
-    """Middleware for plan mode and question-asking capabilities.
+    """Middleware for structured plan-mode with user approval.
 
     This middleware:
     1. Tracks plan mode state (enabled/disabled)
-    2. Provides the ask_question tool for agent-initiated questions
+    2. Provides the exit_plan_mode tool to submit a plan for approval
     3. Injects planning instructions when plan mode is enabled
-    4. Supports both structured (multiple choice) and open-ended questions
-    5. Blocks modifying tools when in plan mode (hard enforcement)
+    4. Blocks modifying tools when in plan mode (hard enforcement)
+
+    The ask_question tool is provided by AskQuestionMiddleware, which should
+    appear earlier in the middleware chain.
 
     Args:
         enabled_by_default: Whether plan mode starts enabled (default: False).
@@ -473,13 +378,12 @@ class PlanModeMiddleware(AgentMiddleware):
         super().__init__()
         self.enabled_by_default = enabled_by_default
         self.include_system_prompt = include_system_prompt
-        self._ask_question_tool = _create_ask_question_tool()
         self._exit_plan_mode_tool = _create_exit_plan_mode_tool()
 
     @property
     def tools(self) -> list[BaseTool]:
         """Return tools provided by this middleware."""
-        return [self._ask_question_tool, self._exit_plan_mode_tool]
+        return [self._exit_plan_mode_tool]
 
     def before_agent(  # type: ignore
         self, state: PlanModeState, runtime, config
@@ -511,9 +415,6 @@ class PlanModeMiddleware(AgentMiddleware):
             return request
 
         system_prompt = request.system_prompt or ""
-
-        # Always include ask_question tool instructions
-        system_prompt += "\n\n" + ASK_QUESTION_SYSTEM_PROMPT
 
         # Add plan mode instructions if enabled
         plan_mode_enabled = request.state.get("plan_mode_enabled", False)

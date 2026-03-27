@@ -44,6 +44,7 @@ from nami_deepagents.backends import CompositeBackend
 from nami_deepagents.backends.filesystem import FilesystemBackend
 from nami_deepagents.backends.sandbox import SandboxBackendProtocol
 from nami_deepagents.middleware import (
+    AskQuestionMiddleware,
     MemoryMiddleware,
     PlanModeMiddleware,
     SkillsMiddleware,
@@ -415,6 +416,26 @@ When making any change:
 
 ---
 
+## Filesystem Tool Selection
+
+ALWAYS prefer dedicated tools over shell commands for file operations:
+- Use `grep` instead of `shell("grep ...")` — richer output, no shell escaping needed
+- Use `glob` instead of `shell("find ...")` — cross-platform, faster
+- Use `read_file` instead of `shell("cat ...")` — paginated, line-numbered output
+
+### grep vs glob
+
+| Goal                              | Tool   |
+| --------------------------------- | ------ |
+| Find files named `*.ts`           | `glob` |
+| Find files containing `useState`  | `grep` |
+| Find all test files               | `glob` (pattern: `**/*test*.py`) |
+| Find where a function is called   | `grep` (pattern: `my_function\\(`) |
+
+Rule: If you know what the file is **called**, use `glob`. If you know what it **contains**, use `grep`.
+
+---
+
 ## Shell Command Usage
 
 * **Interactive commands** (`interactive=True`):
@@ -438,6 +459,17 @@ When making any change:
   Example: *"FastAPI JWT authentication 2025"* instead of *"auth"*
 * **Synthesize** findings; do not expose raw JSON or search responses
 * **Cite sources** when accuracy or recency matters
+
+### Which web search tool to use
+
+| Tool                | When to use                                                        |
+| ------------------- | ------------------------------------------------------------------ |
+| `docs_search`       | First choice for library APIs, framework docs, configuration       |
+| `web_search`        | General queries with higher-quality results (requires Tavily key)  |
+| `duckduckgo_search` | Fallback when `web_search` is unavailable (no API key required)    |
+
+Decision rule: For technical library/API questions, try `docs_search` first.
+For general knowledge, use `web_search`. Fall back to `duckduckgo_search` if unavailable.
 
 ---
 
@@ -744,10 +776,8 @@ def _add_interrupt_on() -> dict[str, InterruptOnConfig]:
         "description": _format_fetch_url_description,  # type: ignore
     }
 
-    task_interrupt_config: InterruptOnConfig = {
-        "allowed_decisions": ["approve", "reject"],
-        "description": _format_task_description,  # type: ignore
-    }
+    # Subagent delegation (task tool) runs without HITL approval —
+    # subagents are controlled, stateless agents, not destructive operations.
 
     run_tests_interrupt_config: InterruptOnConfig = {
         "allowed_decisions": ["approve", "reject"],
@@ -766,7 +796,6 @@ def _add_interrupt_on() -> dict[str, InterruptOnConfig]:
         "edit_file": edit_file_interrupt_config,
         "web_search": web_search_interrupt_config,
         "fetch_url": fetch_url_interrupt_config,
-        "task": task_interrupt_config,
         "run_tests": run_tests_interrupt_config,
         "start_dev_server": start_dev_server_interrupt_config,
     }
@@ -888,6 +917,7 @@ def create_agent_with_config(
             truncate_results=True,
             include_system_prompt=True,
         ),
+        AskQuestionMiddleware(),
         PlanModeMiddleware(enabled_by_default=False),
         SkillsMiddleware(backend=FilesystemBackend(), sources=skill_sources),
         mcp_middleware,
