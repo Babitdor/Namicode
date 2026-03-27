@@ -620,15 +620,21 @@ async def execute_task(  # type: ignore
         if not final or not pending_text.strip():
             return
 
-        # If SummarizationMiddleware just ran, the model's next text response will be
+        # If SummarizationMiddleware just ran, the model's next text response MAY be
         # an echo of the SESSION INTENT / SUMMARY / ARTIFACTS / NEXT STEPS structure.
-        # Suppress it unconditionally — no pattern matching needed.
+        # Only suppress if the text actually looks like that echo — not if it's the
+        # real user-facing response (which happens when summarization runs right before
+        # the final model call).
         if _post_summarization:
-            _dbg("FLUSH-POST-SUMMARIZATION", f"suppressing post-compaction echo ({len(pending_text)} chars)")
-            _post_summarization = False
-            pending_text = ""
-            current_ai_message_id = None
-            return
+            _post_summarization = False  # Always clear the flag
+            _ps_stripped = pending_text.lstrip().lstrip("#").lstrip()
+            _is_echo = any(_ps_stripped.lower().startswith(kw) for kw in _INTERNAL_CONTEXT_KEYWORDS)
+            if _is_echo:
+                _dbg("FLUSH-POST-SUMMARIZATION", f"suppressing post-compaction echo ({len(pending_text)} chars)")
+                pending_text = ""
+                current_ai_message_id = None
+                return
+            # Not an echo — fall through and display the actual response
 
         # Detect internal context/scratchpad text the LLM writes before tool calls.
         # Normalize by stripping leading markdown heading markers (# / ## / ###) and
