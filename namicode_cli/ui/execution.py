@@ -608,6 +608,9 @@ async def execute_task(  # type: ignore
         "session summary",
         "agent context",
         "agent state",
+        # LLM-generated project preamble before tool calls (e.g. "**Project:** Nami-Code...")
+        "project:",
+        "project overview",
     )
 
     def flush_text_buffer(*, final: bool = False) -> None:
@@ -627,7 +630,7 @@ async def execute_task(  # type: ignore
         # the final model call).
         if _post_summarization:
             _post_summarization = False  # Always clear the flag
-            _ps_stripped = pending_text.lstrip().lstrip("#").lstrip()
+            _ps_stripped = pending_text.lstrip().lstrip("#*_").lstrip()
             _is_echo = any(_ps_stripped.lower().startswith(kw) for kw in _INTERNAL_CONTEXT_KEYWORDS)
             if _is_echo:
                 _dbg("FLUSH-POST-SUMMARIZATION", f"suppressing post-compaction echo ({len(pending_text)} chars)")
@@ -638,10 +641,10 @@ async def execute_task(  # type: ignore
 
         # Detect internal context/scratchpad text the LLM writes before tool calls.
         # Normalize by stripping leading markdown heading markers (# / ## / ###) and
-        # whitespace, then check case-insensitively against known internal keywords.
-        # In verbose mode: show full content. Otherwise: show a dim one-line summary.
+        # bold markers (** / __) and whitespace, then check case-insensitively against
+        # known internal keywords. In verbose mode: show full content.
         stripped = pending_text.lstrip()
-        _heading_stripped = stripped.lstrip("#").lstrip()
+        _heading_stripped = stripped.lstrip("#*_").lstrip()
         _is_internal = any(
             _heading_stripped.lower().startswith(kw) for kw in _INTERNAL_CONTEXT_KEYWORDS
         )
