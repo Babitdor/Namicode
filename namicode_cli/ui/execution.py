@@ -726,6 +726,7 @@ async def execute_task(  # type: ignore
             )
             interrupt_occurred = False
             hitl_response: dict[str, HITLResponse] = {}
+            command_state_update: dict = {}  # State updates to apply atomically on resume
             suppress_resumed_output = False
             # Reset per-iteration tracking (in-progress state only)
             active_subagents.clear()
@@ -916,18 +917,14 @@ async def execute_task(  # type: ignore
                                         f"approved={result['approved']} action={result.get('action', '?')}",
                                     )
                                     if result["approved"]:
-                                        # User approved - exit plan mode
+                                        # User approved - exit plan mode.
+                                        # Set plan_mode_enabled=False via command_state_update
+                                        # so it is applied ATOMICALLY when the graph resumes.
+                                        # (aupdate_state would create a new checkpoint that
+                                        # Command(resume=...) would NOT pick up — causing the
+                                        # agent to resume still in plan mode and loop.)
                                         session_state.plan_mode_enabled = False
-                                        try:
-                                            from namicode_cli.agents.core_agent import (
-                                                set_agent_plan_mode_state,
-                                            )
-
-                                            await set_agent_plan_mode_state(
-                                                agent, session_state.thread_id, False
-                                            )
-                                        except Exception:
-                                            pass
+                                        command_state_update["plan_mode_enabled"] = False
 
                                         if result["action"] == "proceed_auto":
                                             # Auto-accept: temporarily enable auto-approve
@@ -1615,11 +1612,17 @@ async def execute_task(  # type: ignore
                     console.print()
                     return
 
-                # Resume the agent with the human decision
-                stream_input = Command(resume=hitl_response)
+                # Resume the agent with the human decision.
+                # Include any state updates (e.g. plan_mode_enabled=False) atomically
+                # so they are applied at the same checkpoint as the resume — not as a
+                # separate aupdate_state call that Command(resume=...) would ignore.
+                stream_input = Command(
+                    resume=hitl_response,
+                    update=command_state_update if command_state_update else None,
+                )
                 _dbg(
                     "HITL-INPUT",
-                    f"resume keys={list(hitl_response.keys())} suppress={suppress_resumed_output}",
+                    f"resume keys={list(hitl_response.keys())} state_update={command_state_update} suppress={suppress_resumed_output}",
                 )
                 # Continue the while loop to restream
             else:
