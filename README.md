@@ -18,6 +18,7 @@ An open-source terminal-based AI coding assistant that runs in your terminal, si
 - **Default Subagents**: Built-in specialized agents for code exploration, documentation, and simplification
 - **Terminal-Bench Evaluation**: Built-in Harbor evaluation framework for benchmark testing
 - **Security-First**: Automatic .gitignore enforcement to protect sensitive files
+- **File Recovery**: Automatic snapshots before destructive operations — restore deleted or overwritten files via `/restore` or agent tools
 
 ## Installation
 
@@ -93,6 +94,8 @@ nami doctor
 | `fetch_url` | Fetch and convert web pages to markdown |
 | `task` | Delegate work to subagents for parallel execution |
 | `write_todos` | Create and manage task lists for complex work |
+| `list_trash` | List file snapshots available for recovery |
+| `restore_file` | Restore a deleted or overwritten file from snapshots |
 
 > **Note**: Potentially destructive operations require user approval. Use `--auto-approve` to skip prompts.
 
@@ -106,9 +109,13 @@ nami doctor
 ├── agents/           # Agent configurations
 │   └── default/
 │       └── agent.md
-└── skills/           # Global skills (shared across all agents)
-    └── web-research/
-        └── SKILL.md
+├── skills/           # Global skills (shared across all agents)
+│   └── web-research/
+│       └── SKILL.md
+└── trash/            # File recovery snapshots (auto-created)
+    └── <session-id>/
+        ├── manifest.json
+        └── <snapshots>
 ```
 
 **Project Configuration** (in your project root):
@@ -237,6 +244,35 @@ E2B sandboxes are ideal for:
 - Running untrusted code safely
 - Testing code in clean, isolated environments
 - Executing code that requires specific dependencies
+
+### File Recovery
+
+Nami-Code automatically snapshots files before any destructive operation, so you can always recover from mistakes.
+
+**What gets snapshotted:**
+- Files targeted by `rm` shell commands — captured before deletion
+- Files overwritten by `write_file` — previous content saved
+- Files modified by `edit_file` — pre-edit content saved
+
+**Restoring files (human):**
+```bash
+# Show all recent snapshots interactively
+/restore
+
+# Restore by index
+/restore 1
+
+# Restore by path
+/restore src/utils.py
+```
+
+**Restoring files (agent):**
+
+The agent can also self-recover autonomously using its built-in tools:
+- `list_trash()` — see what snapshots are available
+- `restore_file("src/utils.py")` — restore the most recent snapshot for that path
+
+Snapshots are stored in `~/.nami/trash/<session-id>/` and are available across session restarts. Files larger than 10 MB are skipped.
 
 ### Doctor Command
 
@@ -403,6 +439,7 @@ The CLI implements a "Deep Agent" architecture with four key components:
 - `config.py` - Settings and environment configuration
 - `tools.py` - Custom tool implementations
 - `ui.py` - Rich-based UI rendering
+- `recovery.py` - File recovery system (snapshots + restore)
 - `skills/` - Skills system implementation
 - `mcp/` - Model Context Protocol integration
 - `integrations/` - Sandbox providers (Modal, Runloop, Daytona, Docker, E2B)

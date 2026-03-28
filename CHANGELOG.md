@@ -1,3 +1,47 @@
+## v0.0.15 - 2026-03-28
+
+### Features
+
+#### File Recovery System (da82f04, 03435ce)
+- New `namicode_cli/recovery.py` — `FileRecoveryManager` snapshots files to `~/.nami/trash/<session_id>/` before any destructive operation
+- Automatic snapshotting before `rm` shell commands (parses targets, glob-expands, copies to trash)
+- Automatic snapshotting before `write_file` and `edit_file` overwrites (persists `before_content` to disk)
+- `/restore` slash command — interactive numbered list of recent snapshots across sessions; supports `/restore <index>` and `/restore <path>` shortcuts
+- `list_trash(path_filter?)` agent tool — agent can discover what files were deleted or overwritten
+- `restore_file(original_path)` agent tool — agent can autonomously self-recover without human intervention
+- Snapshots capped at 10 MB per file; manifest.json indexes all entries per session
+
+#### Middleware Stack Improvements (27e520b)
+- Replaced `HierarchicalTodoMiddleware` with `TodoListMiddleware` in both subagent and deepagent stacks
+- Added `ContextEditingMiddleware` + `ClearToolUsesEdit` — clears stale tool results at 60k tokens (keeps last 5), preventing context bloat without an LLM call
+- Added `ModelRetryMiddleware` (3 retries, exponential backoff) — resilience for Ollama Cloud API transience and rate limits
+- Added `ToolRetryMiddleware` (2 retries) — resilience for external (non-local) tool failures
+- Removed `LLMToolSelectorMiddleware` (incompatible with Ollama structured output)
+
+### Removals (Codebase Cleanup)
+
+- **`browser_tools.py`** removed — superseded by Playwright MCP server (84d9721)
+- **`workflows.py`** removed — `WorkflowEngine` was never implemented or imported anywhere (84d9721)
+- **`semantic_search.py`** removed — superseded by Serena MCP which provides LSP-based symbol search with better accuracy and real-time results (8379903)
+- **`git_tools.py`** removed — 6 tools wrapping git commands with fragile parsers; the shell tool covers all git operations and Claude LLMs read raw git output as well as parsed dicts (8e06bb7)
+
+### Bug Fixes
+
+- Fixed shell tool output printing twice in HITL auto-approve path — removed redundant description echo in `execution.py` (84d9721)
+
+### Files Changed Summary
+
+| Commit | Files Changed | Description |
+|--------|---------------|-------------|
+| 27e520b | 1 file | Middleware stack overhaul (TodoList, ContextEditing, ModelRetry, ToolRetry) |
+| 84d9721 | 5 files | Remove browser_tools, workflows, fix shell double-print |
+| 8379903 | 3 files | Remove semantic_search |
+| 8e06bb7 | 3 files | Remove git_tools |
+| da82f04 | 5 files | File recovery system (recovery.py, shell, file_ops, commands, main) |
+| 03435ce | 3 files | list_trash + restore_file agent tools |
+
+---
+
 ## v0.0.14 - 2025-01-11
 
 ### Features
