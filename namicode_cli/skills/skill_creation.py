@@ -765,7 +765,13 @@ def _parse_github_url(url: str) -> tuple[str, str, str, str] | None:
     return owner, repo, branch, path
 
 
-def _fetch_skill_from_github(owner: str, repo: str, branch: str = "main", path: str = "") -> tuple[str | None, str | None]:
+def _fetch_skill_from_github(
+    owner: str,
+    repo: str,
+    branch: str = "main",
+    path: str = "",
+    preferred_name: str | None = None,
+) -> tuple[str | None, str | None]:
     """Fetch SKILL.md from a GitHub repository.
 
     Args:
@@ -773,6 +779,8 @@ def _fetch_skill_from_github(owner: str, repo: str, branch: str = "main", path: 
         repo: Repository name.
         branch: Branch name (default: main).
         path: Subdirectory path within the repo (e.g., "skills/find-skills").
+        preferred_name: When set (from --skill flag), try {preferred_name}/SKILL.md
+            first so multi-skill repos like obra/superpowers serve the right skill.
 
     Returns:
         Tuple of (skill_content, skill_name) or (None, None) if failed.
@@ -781,61 +789,45 @@ def _fetch_skill_from_github(owner: str, repo: str, branch: str = "main", path: 
 
     api_base = "https://api.github.com"
 
+    def _try_raw(skill_path: str) -> tuple[str, str] | None:
+        """Fetch a single raw path; return (content, name) or None."""
+        url = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{skill_path}"
+        try:
+            r = requests.get(url, timeout=10)
+            if r.status_code == 200:
+                content = r.text.strip()
+                name = _extract_skill_name(content)
+                return content, name or repo
+        except requests.RequestException:
+            pass
+        return None
+
     # Build the base path for SKILL.md locations
     base_path = path.strip("/") if path else ""
+
+    # --skill hint: try {preferred_name}/SKILL.md before anything else so the
+    # user gets exactly the skill they asked for in a multi-skill repo.
+    if preferred_name and not base_path:
+        result = _try_raw(f"{preferred_name}/SKILL.md")
+        if result:
+            return result
 
     # If a specific path was provided in the URL (e.g., pointing to a skill directory),
     # try that location first
     if base_path:
-        # Check if path points to a specific SKILL.md file
-        if base_path.endswith("/SKILL.md"):
-            url = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{base_path}"
-            try:
-                response = requests.get(url, timeout=10)
-                if response.status_code == 200:
-                    content = response.text.strip()
-                    skill_name = _extract_skill_name(content)
-                    return content, skill_name or repo
-            except requests.RequestException:
-                pass
-        else:
-            # Path points to a directory, look for SKILL.md inside
-            skill_path = f"{base_path}/SKILL.md"
-            url = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{skill_path}"
-            try:
-                response = requests.get(url, timeout=10)
-                if response.status_code == 200:
-                    content = response.text.strip()
-                    skill_name = _extract_skill_name(content)
-                    return content, skill_name or repo
-            except requests.RequestException:
-                pass
+        target = base_path if base_path.endswith("/SKILL.md") else f"{base_path}/SKILL.md"
+        result = _try_raw(target)
+        if result:
+            return result
 
     # Try common SKILL.md locations at root level
-    possible_paths = [
-        "SKILL.md",
-        "skills/SKILL.md",
-        "skill/SKILL.md",
-        ".skills/SKILL.md",
-    ]
-
-    for skill_path in possible_paths:
-        url = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{skill_path}"
-        try:
-            response = requests.get(url, timeout=10)
-            if response.status_code == 200:
-                content = response.text.strip()
-                skill_name = _extract_skill_name(content)
-                if skill_name:
-                    return content, skill_name
-                else:
-                    return content, repo
-        except requests.RequestException:
-            continue
+    for skill_path in ("SKILL.md", "skills/SKILL.md", "skill/SKILL.md", ".skills/SKILL.md"):
+        result = _try_raw(skill_path)
+        if result:
+            return result
 
     # Full recursive scan via Git Trees API (one request, entire repo tree)
     try:
-        # Resolve branch to a commit SHA first
         branch_url = f"{api_base}/repos/{owner}/{repo}/branches/{branch}"
         branch_resp = requests.get(branch_url, timeout=10)
         if branch_resp.status_code == 200:
@@ -844,19 +836,27 @@ def _fetch_skill_from_github(owner: str, repo: str, branch: str = "main", path: 
             tree_resp = requests.get(tree_url, timeout=15)
             if tree_resp.status_code == 200:
                 tree = tree_resp.json()
-                # Collect all SKILL.md paths, prefer shallower ones
-                skill_paths = sorted(
-                    (item["path"] for item in tree.get("tree", [])
-                     if item["type"] == "blob" and item["path"].endswith("SKILL.md")),
-                    key=lambda p: p.count("/"),
-                )
-                for skill_path in skill_paths:
-                    raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{skill_path}"
-                    file_resp = requests.get(raw_url, timeout=10)
-                    if file_resp.status_code == 200:
-                        content = file_resp.text.strip()
-                        skill_name = _extract_skill_name(content)
-                        return content, skill_name or repo
+                all_skill_paths = [
+                    item["path"] for item in tree.get("tree", [])
+                    if item["type"] == "blob" and item["path"].endswith("SKILL.md")
+                ]
+
+                # If a preferred name was given, try paths whose parent directory
+                # matches it (e.g. "writing-plans/SKILL.md") before falling back
+                # to shallowest-first ordering.
+                if preferred_name:
+                    preferred = [
+                        p for p in all_skill_paths
+                        if p.split("/")[-2] == preferred_name
+                    ] if any("/" in p for p in all_skill_paths) else []
+                    ordered = preferred + [p for p in sorted(all_skill_paths, key=lambda p: p.count("/")) if p not in preferred]
+                else:
+                    ordered = sorted(all_skill_paths, key=lambda p: p.count("/"))
+
+                for skill_path in ordered:
+                    result = _try_raw(skill_path)
+                    if result:
+                        return result
     except requests.RequestException:
         pass
 
@@ -970,8 +970,10 @@ def _add(
 
     console.print(f"[dim]Fetching skill from {owner}/{repo} (branch: {branch}, path: {path or 'root'})...[/dim]")
 
-    # Try to fetch an existing SKILL.md first
-    content, fetched_name = _fetch_skill_from_github(owner, repo, branch, path)
+    # Try to fetch an existing SKILL.md first.
+    # Pass skill_name as a hint so the fetcher tries {skill_name}/SKILL.md first
+    # (useful for multi-skill repos like obra/superpowers).
+    content, fetched_name = _fetch_skill_from_github(owner, repo, branch, path, preferred_name=skill_name)
     # --skill flag overrides whatever name was derived from the repo/SKILL.md
     if skill_name is None:
         skill_name = fetched_name
