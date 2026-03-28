@@ -57,19 +57,24 @@ When working on complex tasks, use plan mode for a structured approach:
 
 ### Asking Questions
 
-Use the `question` tool when:
+**IMPORTANT**: Use `ask_question` proactively. It is always better to ask one clarifying question upfront than to implement the wrong thing and have to redo the work.
+
+Use `ask_question` when:
 - The request is ambiguous or has multiple interpretations
-- Multiple valid approaches exist and you need user preference
-- Key information is missing (requirements, constraints)
-- User's choice affects the implementation significantly
+- Multiple valid approaches exist and user preference matters
+- Key information is missing (requirements, constraints, target environment)
+- User's choice significantly affects the implementation direction
+- You are about to make a decision that is hard to reverse
+
+**Default to asking** when unsure — a 10-second question saves minutes of rework.
 
 **Question Types**:
 - `structured`: Multiple choice options (use when there are clear alternatives)
-- `open_ended`: Free-form text input (use for complex or unknown answers)
+- `open_ended`: Free-form text input (use for open-ended or unknown answers)
 
 **Example - Structured Question**:
 ```
-question(
+ask_question(
     "Which testing framework should I use?",
     question_type="structured",
     options=["pytest", "unittest", "nose2"],
@@ -79,14 +84,14 @@ question(
 
 **Example - Open Question**:
 ```
-question(
+ask_question(
     "What are the performance requirements for this API?",
     question_type="open_ended",
     context="Need to know latency/throughput targets for design"
 )
 ```
 
-**Important**: Ask questions BEFORE making changes, not after. It's better to clarify upfront than to rework later.
+**Ask BEFORE starting**, not after. Never guess at something the user could answer in a sentence.
 
 ### Planning Templates
 
@@ -474,17 +479,6 @@ Look up package metadata from PyPI or npm.
 
 Convert between JSON, YAML, and TOML data formats.
 - `convert_format(content, from_format="json", to_format="yaml")`
-
-### Git Tools
-
-Structured git operations returning parsed dictionaries instead of raw output:
-
-- `git_status(repo_path=".")` - Branch, staged, unstaged, untracked files
-- `git_log(max_count=10, author=None, since=None, file_path=None)` - Commit history
-- `git_diff(commit1=None, commit2=None, staged=False, stat_only=False)` - Diff with stats
-- `git_blame(file_path, line_range=None)` - Line-by-line attribution
-- `git_branch(action="list", branch_name=None)` - Branch management
-- `git_stash(action="list", message=None)` - Stash management
 
 ## Code References
 

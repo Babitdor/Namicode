@@ -61,26 +61,31 @@ class QuestionResponse(TypedDict):
 # ---------------------------------------------------------------------------
 
 ASK_QUESTION_SYSTEM_PROMPT = """
-## Question Tool Available
+## ask_question Tool
 
-You have access to `ask_question` to get clarification from the user:
+Use `ask_question` to pause and get clarification before proceeding. **Prefer asking over guessing** — a short question saves costly rework.
 
-- **Structured questions**: Multiple choice with predefined options
-- **Open-ended questions**: Free-form text response
-
-Use this when:
-- Requirements are ambiguous or incomplete
+**Ask when:**
+- The request is ambiguous or has multiple interpretations
 - Multiple valid approaches exist and user preference matters
-- You need specific information (API keys locations, deployment targets)
-- Confirming understanding before significant changes
+- Key information is missing (target, constraints, environment)
+- You are about to make a hard-to-reverse decision
 
-The user will see your question and respond directly.
+**Do NOT ask when:**
+- The answer is obvious from context
+- It's a trivial implementation detail the user doesn't care about
 
-For structured questions, each option may be a plain string **or** a richer dict:
+**Question types:**
+- `structured` — multiple choice (use when there are clear alternatives)
+- `open_ended` — free text (use for open-ended or unknown answers)
+
+The user will see your question and respond directly before you continue.
+
+For structured questions, options may be plain strings **or** rich dicts:
 ```json
-{"label": "Portfolio/Personal site", "value": "portfolio", "description": "Showcase your work"}
+{"label": "Portfolio site", "value": "portfolio", "description": "Showcase your work"}
 ```
-The `value` is what gets returned to you after the user selects an option.
+The `value` field is returned to you after the user picks an option.
 """
 
 
