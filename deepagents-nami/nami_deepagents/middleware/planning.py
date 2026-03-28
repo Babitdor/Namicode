@@ -48,6 +48,20 @@ from nami_deepagents.middleware.ask_question import (
 
 logger = logging.getLogger(__name__)
 
+
+def _is_plan_file_path(file_path: str) -> bool:
+    """Return True if the path targets a plan file, which is allowed in plan mode."""
+    import os
+
+    normalized = file_path.replace("\\", "/").lower()
+    basename = os.path.basename(normalized)
+    return (
+        ".nami/plans/" in normalized
+        or normalized.endswith("plan.md")
+        or basename.startswith("plan")
+    )
+
+
 # Tools that are BLOCKED when in plan mode
 BLOCKED_TOOLS_IN_PLAN_MODE = {
     # File modifying tools
@@ -272,44 +286,62 @@ You are currently in **Plan Mode**. This is a PLANNING-ONLY phase.
 
 ### CRITICAL RULES:
 1. **DO NOT EXECUTE** - You must ONLY create a plan, not execute it
-2. **NO FILE OPERATIONS** - Do not write, edit, or create any files
-3. **NO CODE CHANGES** - Do not implement any code yet
-4. **PLAN FIRST** - Create your plan using the `write_todos` tool
+2. **NO CODE CHANGES** - Do not implement any code yet
+3. **PLAN FIRST** - Research the task, write a plan file, then call `exit_plan_mode`
+
+### FILE OPERATIONS in Plan Mode:
+- **BLOCKED**: `write_file` for source code, configs, or any non-plan files
+- **BLOCKED**: `edit_file` (always blocked in plan mode)
+- **ALLOWED**: `write_file` to create or update a plan file:
+  - Preferred path: `.nami/plans/plan.md`
+  - Any file whose name starts with `plan` or ends with `plan.md`
+- Write your plan to `.nami/plans/plan.md` so the user can review it in their editor
+- After writing the plan file, call `exit_plan_mode` to request approval
 
 ### BLOCKED TOOLS (not available in plan mode):
 The following tools are BLOCKED because they modify state:
-- write_file, edit_file (file modifications)
+- edit_file (file modifications)
 - shell, execute_bash, execute (shell commands)
 - start_dev_server, stop_server (server management)
 - run_tests (test execution)
 - git_branch, git_stash (git state modifications)
 
-### ALLOWED TOOLS (read-only):
-- read_file, ls, glob, grep (file operations)
+### ALLOWED TOOLS:
+- read_file, ls, glob, grep (file reading)
+- write_file **only to `.nami/plans/plan.md`** (plan writing)
 - git_status, git_log, git_diff, git_blame (git read operations)
 - web_search, http_request, fetch_url (information gathering)
 - ask_question, write_todos, exit_plan_mode (planning tools)
 - task (subagent delegation)
 
 ### Your Task in Plan Mode:
-1. **Analyze** the user's request thoroughly
+1. **Analyze** the user's request thoroughly (read files, search code)
 2. **Decompose** the task into clear, actionable steps
-3. **Identify** dependencies, constraints, and potential issues
-4. **Create a plan** using `write_todos` with all steps needed
-5. **Call `exit_plan_mode`** to submit the plan for user approval
+3. **Write your plan** to `.nami/plans/plan.md` using `write_file`
+4. **Call `exit_plan_mode`** to submit the plan for user approval
 
-### Plan Structure (use write_todos):
-- Break complex tasks into small, verifiable steps
-- Each todo should be a single, clear action
-- Order todos by dependency (what must happen first)
-- Include verification steps (e.g., "Test the changes")
+### Plan File Format (write to .nami/plans/plan.md):
+```markdown
+# Plan: <short title>
+
+## Context
+<why this change is needed>
+
+## Steps
+- [ ] Step 1: ...
+- [ ] Step 2: ...
+- [ ] Step 3: ...
+
+## Files to Modify
+- `path/to/file.py` — what changes
+```
 
 ### After Planning:
-Once you create the plan with `write_todos`, you MUST call `exit_plan_mode` to submit
+Once you write the plan file, you MUST call `exit_plan_mode` to submit
 your plan for user approval. The user will review and approve before you execute.
 
 **REMEMBER: In Plan Mode, you are a PLANNER, not an EXECUTOR.**
-**ALWAYS call `exit_plan_mode` when your plan is ready.**
+**ALWAYS write `.nami/plans/plan.md` and call `exit_plan_mode` when your plan is ready.**
 """
 
 def _exit_plan_mode() -> str:
@@ -475,6 +507,13 @@ class PlanModeMiddleware(AgentMiddleware):
 
         # Block modifying tools in plan mode
         if plan_mode_enabled and tool_name and tool_name in BLOCKED_TOOLS_IN_PLAN_MODE:
+            # Allow write_file when writing to a plan file (.nami/plans/ or plan*.md)
+            if tool_name == "write_file":
+                args = tool_call.get("args", {}) if isinstance(tool_call, dict) else {}
+                file_path = str(args.get("file_path", ""))
+                if _is_plan_file_path(file_path):
+                    return handler(request)
+
             logger.warning(f"Tool '{tool_name}' blocked in plan mode. Exit plan mode first or use ask_question to clarify.")
             from langchain_core.messages import ToolMessage
 
@@ -512,6 +551,13 @@ class PlanModeMiddleware(AgentMiddleware):
 
         # Block modifying tools in plan mode
         if plan_mode_enabled and tool_name and tool_name in BLOCKED_TOOLS_IN_PLAN_MODE:
+            # Allow write_file when writing to a plan file (.nami/plans/ or plan*.md)
+            if tool_name == "write_file":
+                args = tool_call.get("args", {}) if isinstance(tool_call, dict) else {}
+                file_path = str(args.get("file_path", ""))
+                if _is_plan_file_path(file_path):
+                    return await handler(request)
+
             logger.warning(f"Tool '{tool_name}' blocked in plan mode. Exit plan mode first or use ask_question to clarify.")
             from langchain_core.messages import ToolMessage
 
