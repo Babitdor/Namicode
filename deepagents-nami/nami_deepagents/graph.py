@@ -9,6 +9,7 @@ from langchain.agents.middleware import (
     InterruptOnConfig,
 )
 from nami_deepagents.middleware.todo import HierarchicalTodoMiddleware
+from langchain.agents.middleware import LLMToolSelectorMiddleware
 from langchain.agents.middleware.summarization import SummarizationMiddleware
 from langchain.agents.middleware.types import AgentMiddleware
 from langchain.agents.structured_output import ResponseFormat
@@ -132,7 +133,9 @@ def create_deep_agent(
     ):
         trigger = ("fraction", 0.85)
         keep = ("fraction", 0.25)
-        trim_tokens_to_summarize: int | None = int(model.profile["max_input_tokens"] * 0.70)
+        trim_tokens_to_summarize: int | None = int(
+            model.profile["max_input_tokens"] * 0.70
+        )
     else:
         trigger = ("tokens", 40000)
         keep = ("tokens", 12000)
@@ -141,10 +144,13 @@ def create_deep_agent(
     # Build middleware stack for subagents (includes skills if provided)
     subagent_middleware: list[AgentMiddleware] = [
         HierarchicalTodoMiddleware(),
+        LLMToolSelectorMiddleware(),
     ]
 
     backend = backend if backend is not None else (lambda rt: StateBackend(rt))
 
+    if memory is not None:
+        subagent_middleware.append(MemoryMiddleware(backend=backend, sources=memory))
     if skills is not None:
         subagent_middleware.append(SkillsMiddleware(backend=backend, sources=skills))
     subagent_middleware.extend(
@@ -164,6 +170,7 @@ def create_deep_agent(
     # Build main agent middleware stack
     deepagent_middleware: list[AgentMiddleware] = [
         HierarchicalTodoMiddleware(),
+        LLMToolSelectorMiddleware(),
     ]
     if memory is not None:
         deepagent_middleware.append(MemoryMiddleware(backend=backend, sources=memory))
