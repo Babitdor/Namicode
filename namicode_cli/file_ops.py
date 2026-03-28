@@ -303,6 +303,18 @@ class FileOpTracker:
                     record.before_content = ""
             elif record.physical_path:
                 record.before_content = _safe_read(record.physical_path) or ""
+
+        # Persist snapshot to ~/.nami/trash/ so content survives session end
+        if record.before_content:
+            try:
+                from namicode_cli.recovery import get_recovery_manager
+
+                mgr = get_recovery_manager()
+                if mgr:
+                    mgr.snapshot_from_content(path_str, record.before_content, reason=tool_name)
+            except Exception:
+                pass
+
         self.active[tool_call_id] = record
 
     def update_args(self, tool_call_id: str, args: dict[str, Any]) -> None:

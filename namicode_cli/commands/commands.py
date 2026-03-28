@@ -2539,6 +2539,17 @@ async def handle_command(
             console.print()
         return True
 
+    if cmd == "restore":
+        try:
+            return await _handle_restore_command(cmd_args)
+        except Exception as e:
+            console.print(f"[red]Error running /restore command: {e}[/red]")
+            import traceback
+
+            console.print(f"[dim]{traceback.format_exc()}[/dim]")
+            console.print()
+        return True
+
     console.print()
     console.print(f"[yellow]Unknown command: /{cmd}[/yellow]")
     console.print("[dim]Type /help for available commands.[/dim]")
@@ -3201,3 +3212,130 @@ def execute_skills_command(args: argparse.Namespace) -> None:
         console.print("  nami skills info web-research")
         console.print("\n[dim]For more help on a specific command:[/dim]", style=COLORS["dim"])
         console.print("  nami skills <command> --help", style=COLORS["dim"])
+
+
+async def _handle_restore_command(cmd_args: str | None) -> bool:
+    """Handle /restore [index|path] — recover a file from the snapshot trash.
+
+    With no args: show an interactive numbered list of recent snapshots.
+    With an index (e.g. /restore 2) or a path (e.g. /restore src/foo.py):
+    restore that snapshot directly.
+    """
+    from namicode_cli.recovery import REASON_LABELS, get_recovery_manager
+
+    mgr = get_recovery_manager()
+    if mgr is None:
+        console.print()
+        console.print("[yellow]No recovery manager active for this session.[/yellow]")
+        console.print()
+        return True
+
+    snapshots = mgr.list_snapshots(include_past_sessions=True)
+
+    if not snapshots:
+        console.print()
+        console.print("[yellow]No file snapshots found.[/yellow]")
+        console.print("[dim]Snapshots are created automatically before rm, write_file, and edit_file.[/dim]")
+        console.print()
+        return True
+
+    # ------------------------------------------------------------------
+    # If the user gave an argument, try to resolve it without prompting
+    # ------------------------------------------------------------------
+    if cmd_args:
+        arg = cmd_args.strip()
+        # Try numeric index
+        if arg.isdigit():
+            idx = int(arg) - 1
+            if 0 <= idx < len(snapshots):
+                session_id, entry = snapshots[idx]
+                _do_restore(mgr, session_id, entry)
+                return True
+            else:
+                console.print(f"[red]No snapshot at index {arg}.[/red]")
+                console.print()
+                return True
+
+        # Try path match (most recent matching snapshot)
+        for session_id, entry in snapshots:
+            if arg in entry.original_path or entry.original_path.endswith(arg):
+                _do_restore(mgr, session_id, entry)
+                return True
+
+        console.print(f"[red]No snapshot found matching '{arg}'.[/red]")
+        console.print()
+        return True
+
+    # ------------------------------------------------------------------
+    # Interactive list
+    # ------------------------------------------------------------------
+    console.print()
+    console.print("[bold]File snapshots[/bold] (newest first):")
+    console.print()
+
+    from datetime import datetime
+
+    now = datetime.now()
+
+    for i, (session_id, entry) in enumerate(snapshots, 1):
+        label = REASON_LABELS.get(entry.reason, entry.reason)
+        try:
+            ts = datetime.fromisoformat(entry.timestamp)
+            delta = now - ts
+            secs = int(delta.total_seconds())
+            if secs < 60:
+                age = f"{secs}s ago"
+            elif secs < 3600:
+                age = f"{secs // 60}m ago"
+            elif secs < 86400:
+                age = f"{secs // 3600}h ago"
+            else:
+                age = f"{secs // 86400}d ago"
+        except Exception:
+            age = entry.timestamp
+
+        console.print(f"  [bold cyan][{i}][/bold cyan] {entry.original_path}  "
+                      f"[dim]— {label}  ({age})[/dim]")
+
+    console.print()
+    console.print("[dim]Restore which file? Enter a number, path, or q to cancel:[/dim] ", end="")
+
+    try:
+        choice = input().strip()
+    except (EOFError, KeyboardInterrupt):
+        console.print()
+        return True
+
+    if not choice or choice.lower() == "q":
+        console.print()
+        return True
+
+    if choice.isdigit():
+        idx = int(choice) - 1
+        if 0 <= idx < len(snapshots):
+            session_id, entry = snapshots[idx]
+            _do_restore(mgr, session_id, entry)
+        else:
+            console.print(f"[red]No snapshot at index {choice}.[/red]")
+            console.print()
+    else:
+        for session_id, entry in snapshots:
+            if choice in entry.original_path or entry.original_path.endswith(choice):
+                _do_restore(mgr, session_id, entry)
+                return True
+        console.print(f"[red]No snapshot found matching '{choice}'.[/red]")
+        console.print()
+
+    return True
+
+
+def _do_restore(mgr, session_id: str, entry) -> None:
+    """Restore a single snapshot entry and print the result."""
+    ok = mgr.restore(entry, session_id=session_id)
+    console.print()
+    if ok:
+        console.print(f"[green]Restored:[/green] {entry.original_path}")
+    else:
+        console.print(f"[red]Failed to restore {entry.original_path}[/red]")
+        console.print("[dim]The snapshot file may have been deleted from the trash.[/dim]")
+    console.print()

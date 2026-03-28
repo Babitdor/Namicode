@@ -34,6 +34,7 @@ import os
 import re
 import subprocess
 import sys
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -363,6 +364,18 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
                 name=self._tool_name,
                 status="error",
             )
+
+        # Snapshot files targeted by rm before they are deleted
+        if re.search(r"\brm\b", command):
+            try:
+                from namicode_cli.recovery import extract_rm_targets, get_recovery_manager
+
+                mgr = get_recovery_manager()
+                if mgr:
+                    for target in extract_rm_targets(command, Path(self._workspace_root)):
+                        mgr.snapshot(target, reason="rm-command", command=command)
+            except Exception:
+                pass  # never block execution due to snapshot failure
 
         try:
             result = subprocess.run(  # noqa: S602
