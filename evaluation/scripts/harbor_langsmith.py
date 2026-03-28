@@ -243,7 +243,7 @@ async def create_experiment_async(dataset_name: str, experiment_name: str | None
         session_id = experiment_session["id"]
         tenant_id = experiment_session["tenant_id"]
 
-        print(f"✓ Experiment created successfully!")
+        print("Experiment created successfully!")
         print(f"  Session ID: {session_id}")
         print(
             f"  View at: https://smith.langchain.com/o/{tenant_id}/datasets/{dataset_id}/compare?selectedSessions={session_id}"
@@ -276,7 +276,7 @@ def _extract_reward(trial_dir: Path) -> float:
         result = json.load(f)
         verifier_result = result.get("verifier_result") or {}
         rewards = verifier_result.get("rewards") or {}
-        return rewards.get("reward")
+        return float(rewards.get("reward") or 0.0)
 
 
 def _process_trial(
@@ -376,13 +376,13 @@ def add_feedback(job_folder: Path, project_name: str, dry_run: bool = False) -> 
         message = result["message"]
 
         if status == "success":
-            print(f"  ✓ {message}")
+            print(f"  [OK] {message}")
             results["success"] += 1
         elif status == "skipped":
-            print(f"  ⊘ {message}")
+            print(f"  [--] {message}")
             results["skipped"] += 1
         else:  # error
-            print(f"  ✗ {message}")
+            print(f"  [FAIL] {message}")
             results["error"] += 1
 
     # Print summary

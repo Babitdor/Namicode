@@ -36,7 +36,7 @@ from deepagents_harbor.backend import HarborSandbox
 from deepagents_harbor.tracing import create_example_id_from_instruction
 
 # Import Nami Code components
-from namicode_cli.agents.core_agent import create_agent_with_config
+from namicode_cli.agents.core_agent import create_agent_with_config, get_system_prompt
 from namicode_cli.tracking.file_tracker import reset_session_tracker
 from namicode_cli.config.model_manager import ModelManager, MODEL_PRESETS, ProviderType
 from namicode_cli.tools import fetch_url, http_request
@@ -144,6 +144,50 @@ class NamiCodeWrapper(BaseAgent):
         # Reset session tracker for clean evaluation
         reset_session_tracker()
 
+    async def _build_system_prompt(self, backend: HarborSandbox, assistant_id: str) -> str:
+        """Build system prompt with actual container CWD and file listing injected.
+
+        Queries the Docker container at runtime so the model knows exactly where it is,
+        rather than relying on a static /app placeholder.
+        """
+        # Query actual container state
+        try:
+            cwd_result = await backend.aexecute("pwd")
+            current_dir = cwd_result.output.strip() if cwd_result.output else "/app"
+        except Exception:
+            current_dir = "/app"
+
+        try:
+            ls_info = await backend.als_info(".")
+            total = len(ls_info)
+            shown = ls_info[:15]
+            if total == 0:
+                file_section = "Current directory is empty."
+            elif total <= 15:
+                file_section = "\n".join(
+                    f"- {f['path']}{'/' if f['is_dir'] else ''}" for f in shown
+                )
+            else:
+                file_section = "\n".join(
+                    f"- {f['path']}{'/' if f['is_dir'] else ''}" for f in shown
+                ) + f"\n... ({total - 15} more)"
+        except Exception:
+            file_section = "(unable to list directory)"
+
+        context_block = f"""<env>
+Working directory: {current_dir}
+</env>
+
+You are operating in a **Docker sandbox**. Your current working directory is `{current_dir}`.
+All file operations and shell commands execute inside this container — NOT on the host machine.
+
+Files in `{current_dir}`:
+{file_section}
+
+"""
+        base_prompt = get_system_prompt(assistant_id=assistant_id, sandbox_type="harbor")
+        return context_block + base_prompt
+
     def version(self) -> str | None:
         """The version of the agent."""
         return "0.1.0"
@@ -170,6 +214,10 @@ class NamiCodeWrapper(BaseAgent):
         # Create Harbor sandbox backend
         backend = HarborSandbox(environment)
 
+        # Build system prompt with actual container CWD and file listing
+        assistant_id = f"nami-eval-{environment.session_id}"
+        system_prompt = await self._build_system_prompt(backend, assistant_id)
+
         # Create tools list for the agent
         tools = [
             http_request,
@@ -180,14 +228,16 @@ class NamiCodeWrapper(BaseAgent):
             list_servers_tool,
         ]
 
-        # Create Nami Code agent with full middleware stack
-        # Note: We use the sandbox backend for file operations
+        # Create Nami Code agent with full middleware stack.
+        # auto_approve=True: evaluation runs unattended — no human-in-the-loop interrupts.
         nami_agent, _ = create_agent_with_config(
             model=self._model,
-            assistant_id=f"nami-eval-{environment.session_id}",
+            assistant_id=assistant_id,
             tools=tools,
             sandbox=backend,
             sandbox_type="harbor",
+            system_prompt=system_prompt,
+            auto_approve=True,
         )
 
         # Build metadata
@@ -281,7 +331,9 @@ class NamiCodeWrapper(BaseAgent):
                     steps.append(pending_step)
                     pending_step = None
 
-                # Extract content and tool calls
+                # Extract content and tool calls.
+                # Prefer msg.tool_calls (authoritative) for tool call extraction;
+                # content_blocks is used for text/reasoning content only.
                 atf_tool_calls = []
                 message = ""
 
@@ -292,14 +344,7 @@ class NamiCodeWrapper(BaseAgent):
                             message += cb.get("text", "")
                         elif cb.get("type") == "reasoning":
                             message += cb.get("reasoning", "")
-                        elif cb.get("type") == "tool_call":
-                            atf_tool_calls.append(
-                                ToolCall(
-                                    tool_call_id=cb.get("id", ""),
-                                    function_name=cb.get("name", ""),
-                                    arguments=cb.get("args", {}),
-                                )
-                            )
+                        # Skip tool_call blocks here — captured below via msg.tool_calls
                 elif isinstance(msg.content, str):
                     message = msg.content
                 elif isinstance(msg.content, list):
@@ -309,7 +354,6 @@ class NamiCodeWrapper(BaseAgent):
                         elif isinstance(item, dict) and item.get("type") == "text":
                             message += item.get("text", "")
 
-                # Also check tool_calls attribute
                 if hasattr(msg, 'tool_calls') and msg.tool_calls:
                     for tc in msg.tool_calls:
                         atf_tool_calls.append(

@@ -43,7 +43,7 @@ override-dependencies = [
 
 [tool.uv.sources]
 nami-deepagents = { path = "../deepagents-nami" }
-namicode-cli = { path = ".." }
+namicode-cli = { path = "..", editable = true }
 
 [tool.ruff]
 line-length = 100

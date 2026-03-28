@@ -307,9 +307,11 @@ class MCPMiddleware(AgentMiddleware):
         request: ModelRequest,
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> ModelResponse:
-        """Inject MCP tools and information into the model request.
+        """Inject MCP tool information into the model request system prompt.
 
-        This runs on every model call to ensure MCP tools are always available.
+        MCP tools are already registered statically via self.tools at init time,
+        so they are already present in request.tools. This method only injects
+        the MCP documentation section into the system prompt.
 
         Args:
             request: The model request being processed
@@ -323,12 +325,6 @@ class MCPMiddleware(AgentMiddleware):
 
         # Build updated request
         updated_request = request
-
-        # Add MCP tools to the request if we have any
-        if self.tools:
-            # Merge MCP tools with existing tools
-            updated_tools = list(request.tools) + self.tools
-            updated_request = updated_request.override(tools=updated_tools)
 
         # Inject MCP info into system prompt if we have tools
         if mcp_tools:
@@ -354,7 +350,11 @@ class MCPMiddleware(AgentMiddleware):
         request: ModelRequest,
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
     ) -> ModelResponse:
-        """(async) Inject MCP tools and information into the model request.
+        """(async) Inject MCP tool information into the model request system prompt.
+
+        MCP tools are already registered statically via self.tools at init time,
+        so they are already present in request.tools. This method only injects
+        the MCP documentation section into the system prompt.
 
         Args:
             request: The model request being processed
@@ -368,12 +368,6 @@ class MCPMiddleware(AgentMiddleware):
 
         # Build updated request
         updated_request = request
-
-        # Add MCP tools to the request if we have any
-        if self.tools:
-            # Merge MCP tools with existing tools
-            updated_tools = list(request.tools) + self.tools
-            updated_request = updated_request.override(tools=updated_tools)
 
         # Inject MCP info into system prompt if we have tools
         if mcp_tools:

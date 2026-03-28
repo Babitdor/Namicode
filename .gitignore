@@ -104,3 +104,6 @@ dmypy.json
 traces/
 error_traces/
 langsmith.json
+
+# Evaluation job outputs
+evaluation/jobs/

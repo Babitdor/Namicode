@@ -1,160 +1,241 @@
-# Building DeepAgent Harnesses for Terminal Bench 2.0 with Harbor
+# Nami Code Evaluation with Harbor & Terminal-Bench 2.0
 
-## Overview
+Runs the Nami Code CLI agent on [Terminal-Bench 2.0](https://github.com/laude-institute/terminal-bench-2) using [Harbor](https://github.com/laude-institute/harbor) as the evaluation harness, with optional [LangSmith](https://smith.langchain.com) tracing.
 
-This repository demonstrates how to evaluate and improve your DeepAgent harness using [Harbor](https://github.com/laude-institute/harbor) and [LangSmith](https://smith.langchain.com).
+---
 
-### What is Harbor?
+## Prerequisites
 
-Harbor is an evaluation framework that simplifies running agents on challenging benchmarks. It provides:
+- **Python 3.12+** and **[uv](https://docs.astral.sh/uv/)**
+- **Docker Desktop** running (required for `--env docker`)
+- API keys for your chosen model and (optionally) LangSmith
 
-- **Sandbox environments** (Docker, Modal, Daytona, E2B, etc.)
-- **Automatic test execution** and verification
-- **Reward scoring** (0.0 - 1.0 based on test pass rate)
-- **Trajectory logging** in ATIF format (Agent Trajectory Interchange Format)
+---
 
-### What is Terminal Bench 2.0?
-
-[Terminal Bench 2.0](https://github.com/laude-institute/terminal-bench-2) is an evaluation benchmark that measures agent capabilities across several domains, testing how well an agent operates using a computer environment, primarily via the terminal. The benchmark includes 90+ tasks across domains like software engineering, biology, security, gaming, and more.
-
-**Example tasks:**
-- `path-tracing`: Reverse-engineer C program from rendered image
-- `chess-best-move`: Find optimal move using chess engine
-- `git-multibranch`: Complex git operations with merge conflicts
-- `sqlite-with-gcov`: Build SQLite with code coverage, analyze reports
-
-### The DeepAgent Architecture
-
-The DeepAgent harness ships with design patterns validated as good defaults across agentic tasks:
-
-1. **Detailed System Prompt**: Expansive, instructional prompts with tool guidance and examples
-2. **Planning Middleware**: The `write_todos` tool helps the agent structure thinking and track progress
-3. **Filesystem**: Provides `ls`, `read_file`, `write_file`, `edit_file`, `glob`, `grep` for context management
-4. **SubAgents**: The `task` tool spawns specialized subagents for isolated work
-
-## Quick Start
+## Setup
 
 ```bash
+cd evaluation
+
 # Install dependencies
 uv sync
 
-# Configure API keys - Choose one approach:
-
-# Option 1: Use .env file (recommended for local development)
-cp .env.example .env
-# Edit .env and add your keys - they'll be automatically loaded
-
-# Option 2: Export directly (useful for CI/CD or quick testing)
-export ANTHROPIC_API_KEY="sk-ant-..."  # Required: For Claude model
-export LANGSMITH_API_KEY="lsv2_..."    # Required: For tracing
-export LANGSMITH_TRACING_V2=true       # Required: Enable LangSmith tracing
-export LANGSMITH_ENDPOINT="https://api.smith.langchain.com"  # Optional: Default shown
-# export DAYTONA_API_KEY="..."  # Optional: Only if using --env daytona
-
-# Run via Docker (1 task)
-uv run harbor run --agent-import-path deepagents_harbor:DeepAgentsWrapper \
-  --dataset terminal-bench@2.0 -n 1 --jobs-dir jobs/terminal-bench --env docker
-
-# Run via Daytona (10 tasks)
-uv run harbor run --agent-import-path deepagents_harbor:DeepAgentsWrapper \
-  --dataset terminal-bench@2.0 -n 10 --jobs-dir jobs/terminal-bench --env daytona
+# Copy and fill in environment variables
+cp .env.example .env   # or create .env manually
 ```
 
-## LangSmith Integration
+Minimum `.env` for a local Docker run with an Anthropic model:
 
-LangSmith provides tracing and observability for agent runs. The workflow:
+```env
+ANTHROPIC_API_KEY=sk-ant-...
 
-```
-DeepAgents → Harbor (evaluate) → LangSmith (analyze) → Improve → Repeat
-```
-
-### Prerequisites
-
-Ensure your LangSmith credentials are configured (see Quick Start for .env or export options):
-
-```bash
-# Required environment variables:
+# Optional — enable LangSmith tracing
 LANGSMITH_API_KEY=lsv2_...
 LANGSMITH_TRACING_V2=true
-LANGSMITH_ENDPOINT=https://api.smith.langchain.com  # Optional: defaults to this
 ```
 
-### Step 1: Create Dataset and Experiment
+---
+
+## Running the Evaluation
+
+### Nami Code agent (recommended)
 
 ```bash
-# Create dataset from Harbor tasks
-python scripts/harbor_langsmith.py create-dataset terminal-bench --version 2.0
+# 1 task — Docker, local testing
+make run-namicode-docker
 
-# Create experiment session (outputs session ID and URL)
-python scripts/harbor_langsmith.py create-experiment terminal-bench --name deepagents-baseline-v1
+# 10 tasks — Daytona cloud
+make run-namicode-daytona
+
+# 4 tasks — Modal cloud
+make run-namicode-modal
+
+# Specific task by name
+make run-namicode-task TASK=fix-git
+
+# Compare Nami Code vs DeepAgents on the same task
+make run-compare
 ```
 
-### Step 2: Run Benchmark with Tracing
+All jobs are written to `jobs/namicode/<timestamp>/`.
+
+### Select a model
+
+Use the `--model` flag when calling Harbor directly:
 
 ```bash
-# Option 1: For experiments (enables side-by-side comparison in LangSmith)
-export LANGSMITH_EXPERIMENT="deepagents-baseline-v1"
-make run-terminal-bench-daytona  # Runs 10 tasks on Daytona
-
-# Option 2: For development (simpler project view in LangSmith)
-export LANGSMITH_PROJECT="deepagents-development"
-make run-terminal-bench-daytona
-
-# Option 3: Run harbor directly (customize -n for number of tasks)
-export LANGSMITH_EXPERIMENT="deepagents-baseline-v1"
+# Anthropic Claude
 uv run harbor run \
-  --agent-import-path deepagents_harbor:DeepAgentsWrapper \
-  --dataset terminal-bench@2.0 -n 10 --jobs-dir jobs/terminal-bench --env daytona
+  --agent-import-path deepagents_harbor:NamiCodeWrapper \
+  --dataset terminal-bench@2.0 -n 1 \
+  --jobs-dir jobs/namicode --env docker \
+  --model claude-sonnet-4-6
+
+# OpenAI GPT-4o
+uv run harbor run \
+  --agent-import-path deepagents_harbor:NamiCodeWrapper \
+  --dataset terminal-bench@2.0 -n 1 \
+  --jobs-dir jobs/namicode --env docker \
+  --model gpt-4o
+
+# Local Ollama (GLM / any local model)
+uv run harbor run \
+  --agent-import-path deepagents_harbor:NamiCodeWrapper \
+  --dataset terminal-bench@2.0 -n 1 \
+  --jobs-dir jobs/namicode --env docker \
+  --model ollama:glm4
 ```
 
-### Step 3: Add Feedback Scores
+> **Note:** Do not use `--ak model_name=...` — pass the model name via `--model` only.
 
-After the benchmark completes, push reward scores to LangSmith for filtering and analysis:
+### Run a specific task
 
 ```bash
-python scripts/harbor_langsmith.py add-feedback jobs/terminal-bench/2025-12-02__16-25-40 \
-  --project-name deepagents-baseline-v1
+# Via Makefile variable
+make run-namicode-task TASK=chess-best-move
+
+# Directly (any task name from terminal-bench-2/)
+uv run harbor run \
+  --agent-import-path deepagents_harbor:NamiCodeWrapper \
+  --dataset terminal-bench@2.0 \
+  --task-name chess-best-move -n 1 \
+  --jobs-dir jobs/namicode-chess --env docker
 ```
 
-This matches trials to traces and adds `harbor_reward` feedback (0.0-1.0) from Harbor's test results.
+### DeepAgents baseline agent
+
+```bash
+make run-terminal-bench-docker     # 1 task, Docker
+make run-terminal-bench-daytona    # 40 tasks, Daytona
+make run-terminal-bench-modal      # 4 tasks, Modal
+```
+
+---
 
 ## Analyzing Results
 
-LangSmith captures every LLM call, tool invocation, and performance metric. Combined with Harbor reward scores (added via Step 3), you can filter runs by performance and identify patterns in successful vs. failed runs.
+```bash
+# Summarize a completed job run
+uv run python scripts/analyze.py --jobs-dir jobs/namicode/<timestamp>
 
-### Common Patterns & Fixes
+# Example
+uv run python scripts/analyze.py --jobs-dir jobs/namicode/2026-03-28__23-52-59
+```
 
-After running evaluations, analyze failed runs in LangSmith to identify improvement opportunities:
+Output includes: trial status, reward scores, step counts, tool usage, and exception details.
 
-| Pattern                    | Symptom                                              | Potential Fix                              |
-|----------------------------|------------------------------------------------------|--------------------------------------------|
-| **Poor Planning**          | Agent jumps into coding without reading requirements | Add upfront planning requirement to prompt |
-| **Incorrect Tool Usage**   | Uses `bash cat` instead of `read_file`               | Improve tool descriptions with examples    |
-| **No Incremental Testing** | Writes 200 lines, then tests once                    | Prompt to test after each logical unit     |
-| **Hallucinated Paths**     | Reads files before checking existence                | Add "always `ls` before read" rule         |
-| **Wrong Model**            | Model fails on complex reasoning                     | Use more capable model for hard tasks      |
+---
 
-### Agent-Assisted Analysis
+## LangSmith Integration
 
-Use LangSmith's Insights Agent or your own agent to analyze trajectory data across runs. Task it with identifying common failure patterns, grouping errors by category, and suggesting prompt or tool improvements.
+LangSmith provides per-call tracing across all trials. The workflow:
+
+```
+Run evaluation  →  Add reward scores  →  Analyze in LangSmith UI
+```
+
+### 1. Create a dataset (one-time)
+
+```bash
+uv run python scripts/harbor_langsmith.py create-dataset terminal-bench --version 2.0
+```
+
+### 2. Create an experiment session
+
+```bash
+uv run python scripts/harbor_langsmith.py create-experiment terminal-bench \
+  --name namicode-baseline-v1
+```
+
+This prints a session ID and a direct link to the LangSmith comparison view.
+
+### 3. Run with tracing enabled
+
+```bash
+# Set the experiment name so traces are grouped
+export LANGSMITH_EXPERIMENT="namicode-baseline-v1"
+
+make run-namicode-daytona
+# or run harbor directly with --model etc.
+```
+
+### 4. Push reward scores to traces
+
+After the run completes, attach Harbor's `harbor_reward` scores (0.0–1.0) to each trace:
+
+```bash
+uv run python scripts/harbor_langsmith.py add-feedback \
+  jobs/namicode/2026-03-28__23-52-59 \
+  --project-name namicode-baseline-v1
+
+# Dry-run first to preview what would be updated
+uv run python scripts/harbor_langsmith.py add-feedback \
+  jobs/namicode/2026-03-28__23-52-59 \
+  --project-name namicode-baseline-v1 \
+  --dry-run
+```
+
+---
+
+## Project Structure
+
+```
+evaluation/
+├── deepagents_harbor/
+│   ├── backend.py             # HarborSandbox — wraps Docker/Daytona/Modal APIs
+│   ├── deepagents_wrapper.py  # DeepAgents baseline wrapper
+│   ├── namicode_wrapper.py    # Nami Code CLI wrapper (primary)
+│   └── tracing.py             # LangSmith helpers
+├── scripts/
+│   ├── analyze.py             # Summarize job results locally
+│   └── harbor_langsmith.py    # Dataset / experiment / feedback CLI
+├── terminal-bench-2/          # Benchmark tasks (90+ tasks)
+├── jobs/                      # Output from evaluation runs
+├── Makefile                   # All run commands
+└── pyproject.toml             # Dependencies (uv)
+```
+
+---
+
+## Environment Variables
+
+| Variable | Required | Description |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | For Claude models | `sk-ant-...` |
+| `OPENAI_API_KEY` | For GPT models | `sk-...` |
+| `LANGSMITH_API_KEY` | For tracing | `lsv2_...` |
+| `LANGSMITH_TRACING_V2` | For tracing | `true` |
+| `LANGSMITH_EXPERIMENT` | Optional | Groups traces by experiment name |
+| `LANGSMITH_PROJECT` | Optional | Simpler project-level grouping |
+| `DAYTONA_API_KEY` | For `--env daytona` | Daytona cloud API key |
+
+---
 
 ## Available Environments
 
-Harbor supports multiple sandbox environments. Use the `--env` flag to select:
+| Flag | Description | Best for |
+|---|---|---|
+| `--env docker` | Local Docker containers | Quick single-task tests |
+| `--env daytona` | Daytona cloud sandboxes | Scaled parallel runs |
+| `--env modal` | Modal cloud compute | Medium-scale runs |
+| `--env runloop` | Runloop sandboxes | Alternative cloud |
 
-- `docker` - Local Docker containers (good for testing)
-- `daytona` - Daytona cloud sandboxes (requires DAYTONA_API_KEY)
-- `modal` - Modal cloud compute
-- `runloop` - Runloop sandboxes
+---
 
-Makefile shortcuts are available for common workflows:
-- `make run-terminal-bench-docker` - Run 1 task locally with Docker
-- `make run-terminal-bench-daytona` - Run 10 tasks on Daytona
-- `make run-terminal-bench-modal` - Run 4 tasks on Modal
-- `make run-terminal-bench-runloop` - Run 10 tasks on Runloop
+## All Makefile Targets
 
-## Resources
+```
+make run-namicode-docker          Run 1 task with Nami Code (Docker)
+make run-namicode-daytona         Run 10 tasks with Nami Code (Daytona)
+make run-namicode-modal           Run 4 tasks with Nami Code (Modal)
+make run-namicode-task TASK=name  Run a specific task with Nami Code
+make run-compare                  Run Nami Code vs DeepAgents on same task
 
-- [DeepAgents Documentation](https://docs.langchain.com/oss/python/deepagents/overview)
-- [Harbor GitHub](https://github.com/laude-institute/harbor)
-- [LangSmith](https://smith.langchain.com)
+make run-terminal-bench-docker    Run 1 task with DeepAgents (Docker)
+make run-terminal-bench-daytona   Run 40 tasks with DeepAgents (Daytona)
+make run-terminal-bench-modal     Run 4 tasks with DeepAgents (Modal)
+
+make test                         Run unit tests
+make lint                         Lint source files
+make format                       Format source files
+```
