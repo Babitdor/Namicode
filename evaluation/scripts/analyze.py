@@ -406,11 +406,11 @@ def print_summary(trials: list[Trial]) -> None:
 
     for trial in sorted_trials:
         if trial.status == TrialStatus.COMPLETED:
-            status = "✓ COMPLETED"
+            status = "[OK] COMPLETED"
         elif trial.status == TrialStatus.FAILED:
-            status = "✗ FAILED"
+            status = "[FAIL] FAILED"
         else:
-            status = "⋯ PENDING"
+            status = "[...] PENDING"
 
         print(f"\n{status} | {trial.trial_id}")
 
@@ -716,12 +716,6 @@ async def main():
         action="store_true",
         help="Analyze pending trials in addition to failed trials",
     )
-    parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Output results as JSON instead of human-readable format",
-    )
-
     args = parser.parse_args()
 
     # Scan dataset for solutions if provided
@@ -781,11 +775,11 @@ async def main():
                         analyze_pending=args.analyze_pending,
                     )
                     if output_file:
-                        print(f"  ✓ Analysis written to: {output_file}")
+                        print(f"  [OK] Analysis written to: {output_file}")
                     else:
-                        print(f"  ✗ Skipped (no trajectory or already completed)")
+                        print(f"  [--] Skipped (no trajectory or already completed)")
                 except Exception as e:
-                    print(f"  ✗ Error: {e}")
+                    print(f"  [FAIL] Error: {e}")
 
             print(f"\n{'=' * 80}")
             print(f"Analysis complete. Results saved to: {args.output_dir}")
