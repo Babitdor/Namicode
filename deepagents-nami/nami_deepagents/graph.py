@@ -11,6 +11,7 @@ from langchain.agents.middleware import (
 from langchain.agents.middleware import TodoListMiddleware
 from langchain.agents.middleware import ContextEditingMiddleware, ClearToolUsesEdit
 from langchain.agents.middleware import ModelRetryMiddleware, ToolRetryMiddleware
+from langgraph.errors import GraphInterrupt
 from langchain.agents.middleware.summarization import SummarizationMiddleware
 from langchain.agents.middleware.types import AgentMiddleware
 from langchain.agents.structured_output import ResponseFormat
@@ -156,7 +157,7 @@ def create_deep_agent(
     subagent_middleware.extend(
         [
             FilesystemMiddleware(backend=backend),
-            ToolRetryMiddleware(max_retries=2, backoff_factor=2.0, initial_delay=1.0),
+            ToolRetryMiddleware(max_retries=2, backoff_factor=2.0, initial_delay=1.0, retry_on=lambda e: not isinstance(e, GraphInterrupt)),
             ContextEditingMiddleware(
                 edits=[ClearToolUsesEdit(trigger=60000, keep=5)]
             ),
@@ -183,7 +184,7 @@ def create_deep_agent(
     deepagent_middleware.extend(
         [
             FilesystemMiddleware(backend=backend),
-            ToolRetryMiddleware(max_retries=2, backoff_factor=2.0, initial_delay=1.0),
+            ToolRetryMiddleware(max_retries=2, backoff_factor=2.0, initial_delay=1.0, retry_on=lambda e: not isinstance(e, GraphInterrupt)),
             SubAgentMiddleware(
                 default_model=model,
                 default_tools=tools,
