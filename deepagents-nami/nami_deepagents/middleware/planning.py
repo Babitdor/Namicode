@@ -264,8 +264,13 @@ def analyze_complexity(message: str) -> ComplexityResult:
 class PlanModeState(AgentState):
     """State schema for plan mode middleware."""
 
-    plan_mode_enabled: NotRequired[Annotated[bool, PrivateStateAttr]]
-    """Whether plan mode is currently active."""
+    plan_mode_enabled: NotRequired[bool]
+    """Whether plan mode is currently active.
+
+    NOTE: Must be a plain (non-private) field so it can be read/written
+    externally via agent.aget_state / agent.aupdate_state. Using PrivateStateAttr
+    (OmitFromSchema) causes aupdate_state to silently drop the value.
+    """
 
     pending_question: NotRequired[Annotated[QuestionRequest | None, PrivateStateAttr]]
     """Question currently awaiting user response."""
