@@ -266,7 +266,7 @@ def prompt_for_plan_approval(
 
             body_lines.append(f"  {indicator} {i}. {content}")
     else:
-        body_lines.append("[dim]No plan steps defined yet.[/dim]")
+        body_lines.append("[dim]Plan written to file — review it above before choosing.[/dim]")
 
     body_lines.append("\n[dim]Would you like to proceed with this plan?[/dim]")
 
