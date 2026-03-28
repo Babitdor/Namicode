@@ -118,6 +118,9 @@ TOOL_ICONS: dict[str, str] = {
     "browser_query": "❓",
     "browser_get_content": "📄",
     "browser_get_url": "🔗",
+    # Recovery
+    "list_trash": "🗑️",
+    "restore_file": "♻️",
 }
 
 
@@ -462,6 +465,9 @@ async def execute_task(  # type: ignore
         # Web
         "fetch_url": "web",
         "http_request": "web",
+        # Recovery
+        "list_trash": "recovery",
+        "restore_file": "recovery",
         # Shell
         "shell": "shell",
         "execute": "shell",

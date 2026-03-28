@@ -865,12 +865,13 @@ async def _run_agent_session(
         tools.append(web_search)
 
     # Initialize file recovery manager for this session
-    from namicode_cli.recovery import get_recovery_manager
+    from namicode_cli.recovery import get_recovery_manager, list_trash, restore_file
 
     get_recovery_manager(
         session_id=session_state.session_id or session_state.thread_id,
         workspace_root=Path.cwd(),
     )
+    tools.extend([list_trash, restore_file])
 
     agent, composite_backend = create_agent_with_config(
         model,

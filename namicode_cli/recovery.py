@@ -295,3 +295,89 @@ def extract_rm_targets(command: str, workspace_root: Path) -> list[Path]:
                 result.append(candidate)
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Agent-callable tools
+# ---------------------------------------------------------------------------
+
+def list_trash(path_filter: str | None = None) -> dict:
+    """List file snapshots available for recovery.
+
+    Shows files that were deleted or overwritten by the agent during this
+    session (and recent past sessions). Use this to discover what can be
+    restored before calling restore_file.
+
+    Args:
+        path_filter: Optional substring to filter results by path
+                     (e.g. "src/", ".py", "utils"). Default: show all.
+
+    Returns:
+        Dictionary with:
+        - success: bool
+        - snapshots: list of {index, original_path, reason, timestamp, session_id}
+        - total: number of snapshots found
+    """
+    mgr = get_recovery_manager()
+    if mgr is None:
+        return {"success": False, "error": "Recovery manager not initialized", "snapshots": [], "total": 0}
+
+    raw = mgr.list_snapshots(include_past_sessions=True)
+
+    results = []
+    for i, (session_id, entry) in enumerate(raw, 1):
+        if path_filter and path_filter not in entry.original_path:
+            continue
+        results.append({
+            "index": i,
+            "original_path": entry.original_path,
+            "reason": REASON_LABELS.get(entry.reason, entry.reason),
+            "timestamp": entry.timestamp,
+            "session_id": session_id,
+            "snapshot_id": entry.id,
+        })
+
+    return {"success": True, "snapshots": results, "total": len(results)}
+
+
+def restore_file(original_path: str) -> dict:
+    """Restore a file from the snapshot trash to its original location.
+
+    Recovers the most recent snapshot for the given path. The file will be
+    written back to where it was before the agent deleted or overwrote it.
+
+    Call list_trash() first if you are unsure what snapshots exist.
+
+    Args:
+        original_path: The original file path to restore (relative or absolute).
+                       Partial matches work — e.g. "utils.py" matches
+                       "namicode_cli/utils.py".
+
+    Returns:
+        Dictionary with:
+        - success: bool
+        - restored_path: the path the file was written to (on success)
+        - error: description of failure (on failure)
+    """
+    mgr = get_recovery_manager()
+    if mgr is None:
+        return {"success": False, "error": "Recovery manager not initialized"}
+
+    snapshots = mgr.list_snapshots(include_past_sessions=True)
+
+    # Find the most recent snapshot matching the path
+    for session_id, entry in snapshots:
+        if original_path in entry.original_path or entry.original_path.endswith(original_path):
+            ok = mgr.restore(entry, session_id=session_id)
+            if ok:
+                return {"success": True, "restored_path": entry.original_path}
+            else:
+                return {
+                    "success": False,
+                    "error": f"Snapshot file missing from trash for '{entry.original_path}'",
+                }
+
+    return {
+        "success": False,
+        "error": f"No snapshot found matching '{original_path}'. Call list_trash() to see available snapshots.",
+    }
