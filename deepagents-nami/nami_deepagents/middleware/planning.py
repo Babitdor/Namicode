@@ -388,9 +388,9 @@ Vague plans like "modify the middleware to support X" are **not acceptable**.
 ### BLOCKED IN PLAN MODE
 
 These tools are blocked and will return an error:
-`edit_file`, `shell`, `execute_bash`, `execute`, `start_dev_server`, `stop_server`, `run_tests`, `git_branch`, `git_stash`
+`shell`, `execute_bash`, `execute`, `start_dev_server`, `stop_server`, `run_tests`, `git_branch`, `git_stash`
 
-`write_file` is **only allowed** for `.nami/plans/plan.md` (or any file whose name starts with `plan`).
+`write_file` and `edit_file` are **only allowed** when the target is the plan file (`.nami/plans/plan.md` or any file whose name starts with `plan`). Using them on any other path returns a block error.
 
 ---
 
@@ -560,22 +560,20 @@ class PlanModeMiddleware(AgentMiddleware):
 
         # Block modifying tools in plan mode
         if plan_mode_enabled and tool_name and tool_name in BLOCKED_TOOLS_IN_PLAN_MODE:
-            # Allow write_file when writing to a plan file (.nami/plans/ or plan*.md)
-            if tool_name == "write_file":
+            # Allow write_file / edit_file when targeting the plan file only
+            if tool_name in ("write_file", "edit_file"):
                 args = tool_call.get("args", {}) if isinstance(tool_call, dict) else {}
                 file_path = str(args.get("file_path", ""))
                 if _is_plan_file_path(file_path):
                     return handler(request)
 
-            logger.warning(f"Tool '{tool_name}' blocked in plan mode. Exit plan mode first or use ask_question to clarify.")
+            logger.warning(f"Tool '{tool_name}' blocked in plan mode.")
             from langchain_core.messages import ToolMessage
 
             return ToolMessage(
                 content=f"Tool '{tool_name}' is blocked in plan mode. "
-                f"Plan mode is for planning only, not execution. "
-                f"Please either:\n"
-                f"1. Create a plan with write_todos and call exit_plan_mode, or\n"
-                f"2. Ask a clarifying question with ask_question",
+                f"Only write_file/edit_file to .nami/plans/plan.md are allowed. "
+                f"Write your plan to .nami/plans/plan.md, then call exit_plan_mode.",
                 tool_call_id=tool_call.get("id", "") if isinstance(tool_call, dict) else str(getattr(tool_call, "id", "")),
             )
 
@@ -604,22 +602,20 @@ class PlanModeMiddleware(AgentMiddleware):
 
         # Block modifying tools in plan mode
         if plan_mode_enabled and tool_name and tool_name in BLOCKED_TOOLS_IN_PLAN_MODE:
-            # Allow write_file when writing to a plan file (.nami/plans/ or plan*.md)
-            if tool_name == "write_file":
+            # Allow write_file / edit_file when targeting the plan file only
+            if tool_name in ("write_file", "edit_file"):
                 args = tool_call.get("args", {}) if isinstance(tool_call, dict) else {}
                 file_path = str(args.get("file_path", ""))
                 if _is_plan_file_path(file_path):
                     return await handler(request)
 
-            logger.warning(f"Tool '{tool_name}' blocked in plan mode. Exit plan mode first or use ask_question to clarify.")
+            logger.warning(f"Tool '{tool_name}' blocked in plan mode.")
             from langchain_core.messages import ToolMessage
 
             return ToolMessage(
                 content=f"Tool '{tool_name}' is blocked in plan mode. "
-                f"Plan mode is for planning only, not execution. "
-                f"Please either:\n"
-                f"1. Create a plan with write_todos and call exit_plan_mode, or\n"
-                f"2. Ask a clarifying question with ask_question",
+                f"Only write_file/edit_file to .nami/plans/plan.md are allowed. "
+                f"Write your plan to .nami/plans/plan.md, then call exit_plan_mode.",
                 tool_call_id=tool_call.get("id", "") if isinstance(tool_call, dict) else str(getattr(tool_call, "id", "")),
             )
 
