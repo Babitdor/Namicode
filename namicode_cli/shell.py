@@ -801,9 +801,14 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         server_ready = False
         start_time = time.time()
 
-        # Start the subprocess
+        # Start the subprocess.
+        # stdin=DEVNULL is critical: prevents the background process from
+        # inheriting the terminal's stdin handle. On Windows, a subprocess
+        # that holds the console handle locks the terminal entirely —
+        # the user cannot type or Ctrl+C until the process exits.
         process = await asyncio.create_subprocess_shell(
             command,
+            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             cwd=self._workspace_root,
@@ -902,6 +907,41 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
                     process.stdin.close()
             except Exception:
                 pass
+
+        # If the server is still running, drain its stdout pipe in a background
+        # daemon thread. Without this, the pipe buffer (~64 KB) fills up as the
+        # server keeps logging, causing the server process to block on write and
+        # appear frozen. The daemon thread exits automatically when the process ends.
+        if process.returncode is None and process.stdout is not None:
+            import threading
+
+            def _drain_stdout(proc_stdout: asyncio.StreamReader) -> None:
+                """Read and discard server output to keep the pipe from filling."""
+                import asyncio as _asyncio
+
+                loop = _asyncio.new_event_loop()
+                try:
+                    async def _drain() -> None:
+                        while True:
+                            try:
+                                chunk = await _asyncio.wait_for(proc_stdout.read(4096), timeout=1.0)
+                                if not chunk:
+                                    break
+                            except (_asyncio.TimeoutError, Exception):
+                                if proc_stdout.at_eof():
+                                    break
+
+                    loop.run_until_complete(_drain())
+                finally:
+                    loop.close()
+
+            drain_thread = threading.Thread(
+                target=_drain_stdout,
+                args=(process.stdout,),
+                daemon=True,
+                name=f"stdout-drain-{process.pid}",
+            )
+            drain_thread.start()
 
         # Build output message
         output = "\n".join(output_lines) if output_lines else "<no output>"
