@@ -912,21 +912,58 @@ async def _run_agent_session(
     # Extract model name for context window calculation
     model_name = getattr(model, "model_name", None) or getattr(model, "model", "unknown")
 
-    await simple_cli(
-        agent,
-        assistant_id,
-        session_state,
-        baseline_tokens,
-        backend=composite_backend,
-        sandbox_type=sandbox_type,
-        setup_script_path=setup_script_path,
-        no_splash=session_state.no_splash,
-        model_name=model_name,
-        session_manager=session_manager,
-        store=store,
-        checkpointer=checkpointer,
-        restored_session_data=restored_session_data,
-    )
+    try:
+        await simple_cli(
+            agent,
+            assistant_id,
+            session_state,
+            baseline_tokens,
+            backend=composite_backend,
+            sandbox_type=sandbox_type,
+            setup_script_path=setup_script_path,
+            no_splash=session_state.no_splash,
+            model_name=model_name,
+            session_manager=session_manager,
+            store=store,
+            checkpointer=checkpointer,
+            restored_session_data=restored_session_data,
+        )
+    except Exception as _crash_exc:
+        # Failsafe: session crashed unexpectedly — save whatever we have before dying
+        if session_manager and session_state.session_id and session_state.thread_id:
+            try:
+                console.print(
+                    "\n[bold yellow]⚠ Unexpected crash — saving session...[/bold yellow]"
+                )
+                # Pull the latest messages straight from the LangGraph checkpointer
+                _crash_messages: list = []
+                try:
+                    _config = {"configurable": {"thread_id": session_state.thread_id}}
+                    _snap = await agent.aget_state(_config)
+                    _crash_messages = list(_snap.values.get("messages", []))
+                except Exception:
+                    pass  # checkpointer may also be broken; save what we can
+
+                _crash_model = (
+                    getattr(model, "model_name", None)
+                    or getattr(model, "model", None)
+                    or model_name
+                )
+                session_manager.save_session(
+                    session_id=session_state.session_id,
+                    thread_id=session_state.thread_id,
+                    messages=_crash_messages,
+                    assistant_id=assistant_id,
+                    model_name=_crash_model,
+                    project_root=Path.cwd(),
+                    task_status="crashed",
+                )
+                console.print(
+                    f"[dim]Session saved → {session_state.session_id}[/dim]"
+                )
+            except Exception as _save_err:
+                console.print(f"[dim]Failsafe save failed: {_save_err}[/dim]")
+        raise  # re-raise so the traceback still propagates to main()
 
 
 def _cleanup_old_checkpoints(checkpoints_dir: Path, max_age_days: int = 30) -> None:
@@ -1101,8 +1138,13 @@ async def main(
             console.print("\n\n[yellow]Interrupted[/yellow]")
             sys.exit(0)
         except Exception as e:
-            console.print(f"\n[bold red]Error:[/bold red] {e}\n")
+            console.print(f"\n[bold red]Fatal error:[/bold red] {e}\n")
             console.print_exception()
+            if session_state.session_id:
+                console.print(
+                    f"[dim]Session may have been saved — resume with:[/dim]\n"
+                    f"  nami --continue {session_state.session_id}"
+                )
             sys.exit(1)
 
     # Branch 2: User wants local mode (none or default)
@@ -1123,8 +1165,13 @@ async def main(
             console.print("\n\n[yellow]Interrupted[/yellow]")
             sys.exit(0)
         except Exception as e:
-            console.print(f"\n[bold red]Error:[/bold red] {e}\n")
+            console.print(f"\n[bold red]Fatal error:[/bold red] {e}\n")
             console.print_exception()
+            if session_state.session_id:
+                console.print(
+                    f"[dim]Session may have been saved — resume with:[/dim]\n"
+                    f"  nami --continue {session_state.session_id}"
+                )
             sys.exit(1)
 
 
