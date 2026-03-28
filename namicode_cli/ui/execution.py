@@ -466,9 +466,6 @@ async def execute_task(  # type: ignore
         "web_search": "search",
         "duckduckgo_search": "search",
         "docs_search": "search",
-        "semantic_search": "search",
-        "find_similar_code": "search",
-        "find_function": "search",
         # Web
         "fetch_url": "web",
         "http_request": "web",

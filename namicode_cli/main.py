@@ -108,18 +108,6 @@ from namicode_cli.tools import (
 )
 from namicode_cli.ui.execution import execute_task
 
-# Semantic search (optional, requires sentence-transformers)
-try:
-    from namicode_cli.semantic_search import (
-        find_function,
-        find_similar_code,
-        semantic_search,
-    )
-
-    SEMANTIC_SEARCH_AVAILABLE = True
-except ImportError:
-    SEMANTIC_SEARCH_AVAILABLE = False
-
 # Git tools (always available)
 from namicode_cli.git_tools import (
     git_blame,
@@ -891,10 +879,6 @@ async def _run_agent_session(
     ]
     if settings.has_tavily:
         tools.append(web_search)
-
-    # Add semantic search tools if available (requires sentence-transformers)
-    if SEMANTIC_SEARCH_AVAILABLE:
-        tools.extend([semantic_search, find_similar_code, find_function])
 
     agent, composite_backend = create_agent_with_config(
         model,
