@@ -921,6 +921,7 @@ async def _run_agent_session(
         await agent.aupdate_state(
             config=config,  # type: ignore
             values={"messages": initial_messages},
+            as_node="model",
         )
         console.print(
             f"[dim]Restored {len(initial_messages)} messages from previous session.[/dim]"

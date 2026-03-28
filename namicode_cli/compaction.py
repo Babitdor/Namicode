@@ -216,6 +216,7 @@ async def compact_conversation(
         await agent.aupdate_state(
             config=config,
             values={"messages": remove_ops + [summary_message]},
+            as_node="model",
         )
 
         # Count new tokens using the model's tokenizer when available.

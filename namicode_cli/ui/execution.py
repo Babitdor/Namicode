@@ -1641,6 +1641,7 @@ async def execute_task(  # type: ignore
                             HumanMessage(content="[The previous request was cancelled by the system]")
                         ]
                     },
+                    as_node="model",
                 ),
                 timeout=3.0,
             )
@@ -1675,6 +1676,7 @@ async def execute_task(  # type: ignore
                             HumanMessage(content="[User interrupted the previous request with Ctrl+C]")
                         ]
                     },
+                    as_node="model",
                 ),
                 timeout=3.0,
             )
