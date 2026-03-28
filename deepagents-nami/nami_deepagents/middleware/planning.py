@@ -340,13 +340,13 @@ Your plan must be specific enough that a developer could execute it without need
 - <sub-step b>
 
 Key change:
-\`\`\`python
+```python
 # before (line ~N)
 old_code_here
 
 # after
 new_code_here
-\`\`\`
+```
 
 ### 2. <Action verb> — `path/to/other_file.py`
 ...
