@@ -35,10 +35,14 @@ from namicode_cli.server_runner.test_runner import (
     run_tests,
 )
 from namicode_cli.skills.skill_creation import (
+    _add,
     _create,
+    _find,
     _generate_skill,
     _info,
     _list,
+    _remove,
+    _update,
     _validate_name,
 )
 from namicode_cli.ui.execution import execute_task
@@ -3197,19 +3201,53 @@ def execute_skills_command(args: argparse.Namespace) -> None:
             project=args.project,
             global_scope=getattr(args, "global_scope", False),
         )
+    elif args.skills_command == "add":
+        _add(
+            args.url,
+            agent=args.agent,
+            project=args.project,
+            global_scope=getattr(args, "global_scope", False),
+            force=getattr(args, "force", False),
+            skill_name=getattr(args, "skill_name", None),
+        )
+    elif args.skills_command == "remove":
+        _remove(
+            args.name,
+            agent=args.agent,
+            project=args.project,
+            global_scope=getattr(args, "global_scope", False),
+            yes=getattr(args, "yes", False),
+        )
+    elif args.skills_command == "update":
+        _update(
+            skill_name=getattr(args, "name", None),
+            agent=args.agent,
+            project=args.project,
+            global_scope=getattr(args, "global_scope", False),
+            all_skills=getattr(args, "all_skills", False),
+        )
+    elif args.skills_command in ("find", "search"):
+        _find(args.query)
     else:
         # No subcommand provided, show help
-        console.print("[yellow]Please specify a skills subcommand: list, create, or info[/yellow]")
+        console.print("[yellow]Please specify a skills subcommand.[/yellow]")
         console.print("\n[bold]Usage:[/bold]", style=COLORS["primary"])
         console.print("  nami skills <command> [options]\n")
         console.print("[bold]Available commands:[/bold]", style=COLORS["primary"])
-        console.print("  list              List all available skills")
-        console.print("  create <name>     Create a new skill")
-        console.print("  info <name>       Show detailed information about a skill")
+        console.print("  list                    List all available skills")
+        console.print("  create <name>           Create a new skill")
+        console.print("  info <name>             Show detailed information about a skill")
+        console.print("  add <url>               Install a skill from GitHub URL")
+        console.print("  remove <name>           Remove an installed skill")
+        console.print("  update [name]           Update skill(s) from their original source")
+        console.print("  find <query>            Search GitHub for skills")
+        console.print("  search <query>          Alias for find")
         console.print("\n[bold]Examples:[/bold]", style=COLORS["primary"])
-        console.print("  nami skills list")
-        console.print("  nami skills create web-research")
-        console.print("  nami skills info web-research")
+        console.print("  nami skills add https://github.com/owner/repo --skill my-skill")
+        console.print("  nami skills remove my-skill -y")
+        console.print("  nami skills update my-skill")
+        console.print("  nami skills update --all --global")
+        console.print("  nami skills find kubernetes")
         console.print("\n[dim]For more help on a specific command:[/dim]", style=COLORS["dim"])
         console.print("  nami skills <command> --help", style=COLORS["dim"])
 

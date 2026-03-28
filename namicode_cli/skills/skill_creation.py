@@ -1,5 +1,7 @@
 import argparse
 import re
+import shutil
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -831,33 +833,30 @@ def _fetch_skill_from_github(owner: str, repo: str, branch: str = "main", path: 
         except requests.RequestException:
             continue
 
-    # If common paths didn't work, try searching in the repo
-    search_url = f"{api_base}/repos/{owner}/{repo}/contents"
+    # Full recursive scan via Git Trees API (one request, entire repo tree)
     try:
-        response = requests.get(search_url, params={"ref": branch}, timeout=10)
-        if response.status_code == 200:
-            items = response.json()
-            for item in items:
-                if item["name"] in ["SKILL.md", "skills", "skill", ".skills"]:
-                    if item["type"] == "file" and item["name"] == "SKILL.md":
-                        # Fetch this file
-                        file_response = requests.get(item["download_url"], timeout=10)
-                        if file_response.status_code == 200:
-                            content = file_response.text.strip()
-                            skill_name = _extract_skill_name(content)
-                            return content, skill_name or repo
-                    elif item["type"] == "dir":
-                        # Search in directory
-                        dir_response = requests.get(item["url"], timeout=10)
-                        if dir_response.status_code == 200:
-                            dir_items = dir_response.json()
-                            for subitem in dir_items:
-                                if subitem["name"] == "SKILL.md":
-                                    file_response = requests.get(subitem["download_url"], timeout=10)
-                                    if file_response.status_code == 200:
-                                        content = file_response.text.strip()
-                                        skill_name = _extract_skill_name(content)
-                                        return content, skill_name or repo
+        # Resolve branch to a commit SHA first
+        branch_url = f"{api_base}/repos/{owner}/{repo}/branches/{branch}"
+        branch_resp = requests.get(branch_url, timeout=10)
+        if branch_resp.status_code == 200:
+            sha = branch_resp.json()["commit"]["sha"]
+            tree_url = f"{api_base}/repos/{owner}/{repo}/git/trees/{sha}?recursive=1"
+            tree_resp = requests.get(tree_url, timeout=15)
+            if tree_resp.status_code == 200:
+                tree = tree_resp.json()
+                # Collect all SKILL.md paths, prefer shallower ones
+                skill_paths = sorted(
+                    (item["path"] for item in tree.get("tree", [])
+                     if item["type"] == "blob" and item["path"].endswith("SKILL.md")),
+                    key=lambda p: p.count("/"),
+                )
+                for skill_path in skill_paths:
+                    raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{skill_path}"
+                    file_resp = requests.get(raw_url, timeout=10)
+                    if file_resp.status_code == 200:
+                        content = file_resp.text.strip()
+                        skill_name = _extract_skill_name(content)
+                        return content, skill_name or repo
     except requests.RequestException:
         pass
 
@@ -890,14 +889,52 @@ def _extract_skill_name(content: str) -> str | None:
     return None
 
 
+def _fetch_repo_context(owner: str, repo: str, branch: str = "main") -> tuple[str | None, str | None]:
+    """Fetch README and description from a GitHub repo for LLM-based skill generation.
+
+    Returns:
+        Tuple of (readme_content, repo_description). Either may be None.
+    """
+    import requests
+
+    readme_content: str | None = None
+    repo_description: str | None = None
+
+    # Fetch repo metadata (description)
+    try:
+        meta = requests.get(f"https://api.github.com/repos/{owner}/{repo}", timeout=10)
+        if meta.status_code == 200:
+            repo_description = meta.json().get("description") or None
+    except requests.RequestException:
+        pass
+
+    # Fetch README
+    for readme_name in ("README.md", "readme.md", "Readme.md", "README.rst", "README"):
+        try:
+            url = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{readme_name}"
+            r = requests.get(url, timeout=10)
+            if r.status_code == 200:
+                readme_content = r.text[:8000]  # Cap at 8 KB to stay within LLM context
+                break
+        except requests.RequestException:
+            continue
+
+    return readme_content, repo_description
+
+
 def _add(
     url: str,
     agent: str,
     project: bool = False,
     global_scope: bool = False,
     force: bool = False,
+    skill_name: str | None = None,
 ) -> None:
     """Add a skill from a GitHub URL.
+
+    If the repository contains a SKILL.md file it is installed directly.
+    Otherwise the repo's README and description are used to auto-generate
+    a SKILL.md with the LLM.
 
     Args:
         url: GitHub URL to the skill repository.
@@ -905,7 +942,10 @@ def _add(
         project: If True, install in project skills directory.
         global_scope: If True, install in global skills directory.
         force: If True, overwrite existing skill.
+        skill_name: Override the skill name (default: derived from repo or SKILL.md).
     """
+    import asyncio
+
     # Parse GitHub URL
     parsed = _parse_github_url(url)
     if not parsed:
@@ -921,16 +961,95 @@ def _add(
 
     owner, repo, branch, path = parsed
 
+    # Validate --skill override early, before any network I/O
+    if skill_name is not None:
+        is_valid, error_msg = _validate_name(skill_name)
+        if not is_valid:
+            console.print(f"[bold red]Error:[/bold red] Invalid --skill name: {error_msg}")
+            return
+
     console.print(f"[dim]Fetching skill from {owner}/{repo} (branch: {branch}, path: {path or 'root'})...[/dim]")
 
-    # Fetch skill content
-    content, skill_name = _fetch_skill_from_github(owner, repo, branch, path)
+    # Try to fetch an existing SKILL.md first
+    content, fetched_name = _fetch_skill_from_github(owner, repo, branch, path)
+    # --skill flag overrides whatever name was derived from the repo/SKILL.md
+    if skill_name is None:
+        skill_name = fetched_name
+    generated = False
+
     if not content:
-        console.print(f"[bold red]Error:[/bold red] Could not find SKILL.md in {owner}/{repo}")
+        # No SKILL.md — fall back to generating one from the repo's README
         console.print(
-            "[dim]Make sure the repository contains a SKILL.md file.[/dim]",
-            style=COLORS["dim"],
+            f"[dim]No SKILL.md found in {owner}/{repo}. "
+            "Fetching README to generate skill...[/dim]"
         )
+        readme, repo_desc = _fetch_repo_context(owner, repo, branch)
+
+        if not readme and not repo_desc:
+            console.print(
+                f"[bold red]Error:[/bold red] Could not retrieve any content from {owner}/{repo}.\n"
+                "[dim]Make sure the repository is public and accessible.[/dim]"
+            )
+            return
+
+        # Build a rich description for the LLM
+        description_parts = []
+        if repo_desc:
+            description_parts.append(f"Repository description: {repo_desc}")
+        if readme:
+            description_parts.append(f"README:\n\n{readme}")
+        description = "\n\n".join(description_parts)
+
+        # Derive a skill name from the repo name (sanitise to allowed chars),
+        # unless the caller already provided one via --skill
+        if skill_name is None:
+            raw_name = repo.lower().replace(" ", "-")
+            skill_name = re.sub(r"[^a-z0-9_-]", "-", raw_name).strip("-")
+            if not skill_name:
+                skill_name = "imported-skill"
+
+        console.print(f"[dim]Generating skill '{skill_name}' from repo content...[/dim]")
+
+        # Get target directory early so we can pass skills_dir to the generator
+        skills_dir, is_project = _get_skills_dir(agent, project, global_scope)
+        if skills_dir is None:
+            return
+
+        skill_dir = skills_dir / skill_name
+        is_valid_path, path_error = _validate_skill_path(skill_dir, skills_dir)
+        if not is_valid_path:
+            console.print(f"[bold red]Error:[/bold red] {path_error}")
+            return
+
+        existing = _skill_exists(skill_name, skills_dir)
+        if existing and not force:
+            console.print(f"[bold red]Error:[/bold red] Skill '{skill_name}' already exists.")
+            console.print(f"  Location: {existing}")
+            console.print("\n[dim]Use --force to overwrite.[/dim]", style=COLORS["dim"])
+            return
+
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        content = asyncio.run(_generate_skill(skill_name, skills_dir, description=description))
+        if not content:
+            # LLM failed — write a minimal stub so the install still succeeds
+            content = _get_static_template(skill_name)
+            (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
+
+        generated = True
+        scope_label = "project" if is_project else "global"
+        _print_skill_installed_banner(skill_name, str(skill_dir), scope_label, f"{owner}/{repo}")
+        try:
+            from namicode_cli.skills.skill_lock import SkillLock
+            SkillLock.for_skills_dir(skills_dir).update(skill_name, {
+                "source": url,
+                "branch": branch,
+                "skill_name_override": skill_name,
+                "installed_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "scope": "project" if is_project else "global",
+                "generated": True,
+            })
+        except Exception:
+            pass
         return
 
     console.print(f"[dim]Found skill: {skill_name}[/dim]")
@@ -974,13 +1093,324 @@ def _add(
     skill_md.write_text(content, encoding="utf-8")
 
     scope_label = "project" if is_project else "global"
-    console.print(
-        f"✓ Skill '{skill_name}' installed successfully!",
-        style=COLORS["primary"],
+    _print_skill_installed_banner(skill_name, str(skill_dir), scope_label, f"{owner}/{repo}")
+    try:
+        from namicode_cli.skills.skill_lock import SkillLock
+        SkillLock.for_skills_dir(skills_dir).update(skill_name, {
+            "source": url,
+            "branch": branch,
+            "skill_name_override": skill_name if skill_name != fetched_name else None,
+            "installed_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "scope": "project" if is_project else "global",
+            "generated": False,
+        })
+    except Exception:
+        pass
+
+
+def _print_skill_installed_banner(
+    skill_name: str,
+    location: str,
+    scope: str,
+    source: str,
+) -> None:
+    """Print an ASCII art banner celebrating a successful skill install."""
+    from rich.panel import Panel
+    from rich import box
+
+    ascii_art = (
+        " ░██████╗██╗░░██╗██╗██╗░░░░░██╗░░░░░\n"
+        " ██╔════╝██║░██╔╝██║██║░░░░░██║░░░░░\n"
+        " ╚█████╗░█████═╝░██║██║░░░░░██║░░░░░\n"
+        " ░╚═══██╗██╔═██╗░██║██║░░░░░██║░░░░░\n"
+        " ██████╔╝██║░╚██╗██║███████╗███████╗\n"
+        " ╚═════╝░╚═╝░░╚═╝╚═╝╚══════╝╚══════╝"
     )
-    console.print(f"Location: {skill_dir}", style=COLORS["dim"])
-    console.print(f"Scope: {scope_label}", style=COLORS["dim"])
+
+    body = (
+        f"[bold cyan]{ascii_art}[/bold cyan]\n\n"
+        f"  [bold green]✓[/bold green] [bold]{skill_name}[/bold] installed\n\n"
+        f"  [dim]📁 {location}[/dim]\n"
+        f"  [dim]🔗 {source}[/dim]\n"
+        f"  [dim]🌐 scope: {scope}[/dim]"
+    )
+
     console.print()
+    console.print(
+        Panel(
+            body,
+            border_style="cyan",
+            box=box.DOUBLE_EDGE,
+            padding=(1, 3),
+        )
+    )
+    console.print()
+
+
+def _remove(
+    skill_name: str,
+    agent: str,
+    project: bool = False,
+    global_scope: bool = False,
+    ask: bool = True,
+    yes: bool = False,
+) -> None:
+    """Remove an installed skill.
+
+    Args:
+        skill_name: Name of the skill to remove.
+        agent: Agent identifier for skills.
+        project: If True, remove from project skills directory.
+        global_scope: If True, remove from global skills directory.
+        ask: If True and no scope flag given, prompt user interactively.
+        yes: If True, skip confirmation prompt.
+    """
+    is_valid, error_msg = _validate_name(skill_name)
+    if not is_valid:
+        console.print(f"[bold red]Error:[/bold red] Invalid skill name: {error_msg}")
+        return
+
+    skills_dir, is_project = _get_skills_dir(agent, project, global_scope, ask)
+    if skills_dir is None:
+        return
+
+    skill_dir = skills_dir / skill_name
+    is_valid_path, path_error = _validate_skill_path(skill_dir, skills_dir)
+    if not is_valid_path:
+        console.print(f"[bold red]Error:[/bold red] {path_error}")
+        return
+
+    if not skill_dir.exists():
+        console.print(f"[bold red]Error:[/bold red] Skill '{skill_name}' not found at {skill_dir}")
+        return
+
+    if not yes:
+        try:
+            confirm = input(f"Remove skill '{skill_name}' from {skill_dir}? [y/N]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            console.print("\nCancelled.", style=COLORS["dim"])
+            return
+        if confirm not in {"y", "yes"}:
+            console.print("Cancelled.", style=COLORS["dim"])
+            return
+
+    try:
+        shutil.rmtree(skill_dir)
+    except OSError as e:
+        console.print(f"[bold red]Error:[/bold red] Could not remove skill directory: {e}")
+        return
+
+    try:
+        from namicode_cli.skills.skill_lock import SkillLock
+        SkillLock.for_skills_dir(skills_dir).remove(skill_name)
+    except Exception:
+        pass
+
+    console.print(f"✓ Skill '{skill_name}' removed.", style=COLORS["primary"])
+
+
+def _update(
+    skill_name: str | None,
+    agent: str,
+    project: bool = False,
+    global_scope: bool = False,
+    all_skills: bool = False,
+) -> None:
+    """Update installed skill(s) by re-installing from their original source.
+
+    Args:
+        skill_name: Name of the skill to update (None when --all is used).
+        agent: Agent identifier for skills.
+        project: If True, target project skills directory.
+        global_scope: If True, target global skills directory.
+        all_skills: If True, update all skills recorded in the lock file.
+    """
+    if not skill_name and not all_skills:
+        console.print(
+            "[bold red]Error:[/bold red] Specify a skill name or pass --all."
+        )
+        return
+
+    # When updating all, require explicit scope rather than prompting interactively
+    ask = not all_skills
+    skills_dir, is_project = _get_skills_dir(agent, project, global_scope, ask)
+    if skills_dir is None:
+        return
+
+    from namicode_cli.skills.skill_lock import SkillLock
+    lock = SkillLock.for_skills_dir(skills_dir)
+    entries = lock.all_entries()
+
+    if all_skills:
+        if not entries:
+            console.print(
+                "[yellow]No skills in lock file. Nothing to update.[/yellow]\n"
+                "[dim]Only skills installed via 'nami skills add' are tracked.[/dim]"
+            )
+            return
+        names_to_update = list(entries.keys())
+        console.print(f"[dim]Updating {len(names_to_update)} skill(s)...[/dim]")
+    else:
+        is_valid, error_msg = _validate_name(skill_name)  # type: ignore[arg-type]
+        if not is_valid:
+            console.print(f"[bold red]Error:[/bold red] Invalid skill name: {error_msg}")
+            return
+        entry = lock.get(skill_name)  # type: ignore[arg-type]
+        if entry is None:
+            console.print(
+                f"[yellow]Warning:[/yellow] Skill '{skill_name}' has no lock entry.\n"
+                "[dim]Only skills installed via 'nami skills add' can be updated.[/dim]"
+            )
+            return
+        names_to_update = [skill_name]  # type: ignore[list-item]
+
+    updated = 0
+    for name in names_to_update:
+        entry = entries.get(name)
+        if not entry:
+            console.print(f"[yellow]Skipping '{name}': no lock entry.[/yellow]")
+            continue
+        source_url = entry.get("source")
+        if not source_url:
+            console.print(f"[yellow]Skipping '{name}': lock entry has no source URL.[/yellow]")
+            continue
+        scope_project = entry.get("scope") == "project"
+        override_name = entry.get("skill_name_override")
+        try:
+            console.print(f"[dim]Updating '{name}' from {source_url}...[/dim]")
+            _add(
+                url=source_url,
+                agent=agent,
+                project=scope_project,
+                global_scope=not scope_project,
+                force=True,
+                skill_name=override_name or name,
+            )
+            updated += 1
+        except Exception as e:
+            console.print(f"[yellow]Warning:[/yellow] Failed to update '{name}': {e}")
+
+    console.print(f"\n✓ Updated {updated}/{len(names_to_update)} skill(s).", style=COLORS["primary"])
+
+
+def _extract_skill_description(content: str) -> str | None:
+    """Extract skill description from SKILL.md frontmatter.
+
+    Args:
+        content: SKILL.md content.
+
+    Returns:
+        Skill description if found in frontmatter, None otherwise.
+    """
+    if not content.startswith("---"):
+        return None
+    parts = content.split("---", 2)
+    if len(parts) < 2:
+        return None
+    frontmatter = parts[1]
+    match = re.search(r"^\s*description:\s*(.+?)\s*$", frontmatter, re.MULTILINE)
+    if match:
+        return match.group(1).strip().strip("\"'")
+    return None
+
+
+def _find(query: str) -> None:
+    """Search GitHub for SKILL.md repositories matching query.
+
+    Args:
+        query: Search term (e.g., 'azure', 'kubernetes', 'pdf').
+    """
+    import requests
+
+    if not query.strip():
+        console.print("[bold red]Error:[/bold red] Search query cannot be empty.")
+        return
+
+    console.print(f"[dim]Searching for skills matching '{query}'...[/dim]")
+
+    token = __import__("os").environ.get("GITHUB_TOKEN")
+    headers: dict = {"Accept": "application/vnd.github+json"}
+    if token:
+        headers["Authorization"] = f"token {token}"
+
+    results: list[dict] = []
+
+    # Try GitHub code search first (finds SKILL.md files directly)
+    try:
+        resp = requests.get(
+            "https://api.github.com/search/code",
+            headers=headers,
+            params={"q": f"{query} filename:SKILL.md", "per_page": 10},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            for item in resp.json().get("items", []):
+                repo = item.get("repository", {})
+                raw_url = (
+                    item["html_url"]
+                    .replace("github.com", "raw.githubusercontent.com")
+                    .replace("/blob/", "/")
+                )
+                skill_name_found = None
+                skill_desc = None
+                try:
+                    file_resp = requests.get(raw_url, headers=headers, timeout=8)
+                    if file_resp.status_code == 200:
+                        skill_name_found = _extract_skill_name(file_resp.text)
+                        skill_desc = _extract_skill_description(file_resp.text)
+                except requests.RequestException:
+                    pass
+                results.append({
+                    "name": skill_name_found or repo.get("name", "(unknown)"),
+                    "description": skill_desc or repo.get("description") or "(no description)",
+                    "repo_url": repo.get("html_url", ""),
+                })
+        elif resp.status_code == 403:
+            # Rate limited — fall back to repo search
+            raise requests.RequestException("rate limited")
+    except requests.RequestException:
+        # Fallback: search repository descriptions/READMEs
+        try:
+            resp = requests.get(
+                "https://api.github.com/search/repositories",
+                headers=headers,
+                params={"q": f"{query} SKILL.md in:readme", "per_page": 10},
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                for repo in resp.json().get("items", []):
+                    results.append({
+                        "name": repo.get("name", "(unknown)"),
+                        "description": repo.get("description") or "(no description)",
+                        "repo_url": repo.get("html_url", ""),
+                    })
+            elif resp.status_code == 403:
+                console.print(
+                    "[yellow]GitHub search rate limited.[/yellow] "
+                    "Set GITHUB_TOKEN env var to increase rate limit, or try again in 60s."
+                )
+                return
+        except requests.RequestException as e:
+            console.print(f"[bold red]Error:[/bold red] Network error: {e}")
+            return
+
+    if not results:
+        console.print(f"[yellow]No skills found for '{query}'.[/yellow] Try a broader search term.")
+        return
+
+    from rich.table import Table
+
+    table = Table(show_header=True, header_style=f"bold cyan", box=None, padding=(0, 2))
+    table.add_column("Skill", style="cyan", min_width=20)
+    table.add_column("Description", style="dim", min_width=40)
+    table.add_column("Repo", style="dim")
+
+    for r in results:
+        table.add_row(r["name"], r["description"][:80], r["repo_url"])
+
+    console.print()
+    console.print(table)
+    console.print(f"\n[dim]Install with: nami skills add <repo-url>[/dim]")
 
 
 def setup_skills_parser(
@@ -1096,4 +1526,101 @@ def setup_skills_parser(
         action="store_true",
         help="Force overwrite if skill already exists",
     )
+    add_parser.add_argument(
+        "--skill",
+        dest="skill_name",
+        default=None,
+        metavar="NAME",
+        help="Override the skill name (default: derived from repo name)",
+    )
+    # Skills remove
+    remove_parser = skills_subparsers.add_parser(
+        "remove",
+        help="Remove an installed skill",
+        description="Remove an installed skill and its directory",
+    )
+    remove_parser.add_argument(
+        "name",
+        help="Name of the skill to remove",
+    )
+    remove_parser.add_argument(
+        "--agent",
+        default="nami-agent",
+        help="Agent identifier for skills (default: nami-agent)",
+    )
+    remove_parser.add_argument(
+        "--project",
+        action="store_true",
+        help="Remove from project skills directory",
+    )
+    remove_parser.add_argument(
+        "--global",
+        dest="global_scope",
+        action="store_true",
+        help="Remove from global skills directory",
+    )
+    remove_parser.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="Skip confirmation prompt",
+    )
+
+    # Skills update
+    update_parser = skills_subparsers.add_parser(
+        "update",
+        help="Update skill(s) from their original source",
+        description="Re-fetch and reinstall a skill from its original GitHub URL",
+    )
+    update_parser.add_argument(
+        "name",
+        nargs="?",
+        default=None,
+        help="Name of the skill to update (omit when using --all)",
+    )
+    update_parser.add_argument(
+        "--agent",
+        default="nami-agent",
+        help="Agent identifier for skills (default: nami-agent)",
+    )
+    update_parser.add_argument(
+        "--project",
+        action="store_true",
+        help="Target project skills directory",
+    )
+    update_parser.add_argument(
+        "--global",
+        dest="global_scope",
+        action="store_true",
+        help="Target global skills directory",
+    )
+    update_parser.add_argument(
+        "--all",
+        dest="all_skills",
+        action="store_true",
+        help="Update all skills that have a lock entry",
+    )
+
+    # Skills find
+    find_parser = skills_subparsers.add_parser(
+        "find",
+        help="Search GitHub for skills",
+        description="Search GitHub for SKILL.md repositories matching a query",
+    )
+    find_parser.add_argument(
+        "query",
+        help="Search term (e.g. 'azure', 'kubernetes', 'pdf')",
+    )
+
+    # Skills search (alias for find)
+    search_parser = skills_subparsers.add_parser(
+        "search",
+        help="Search GitHub for skills (alias for find)",
+        description="Search GitHub for SKILL.md repositories matching a query",
+    )
+    search_parser.add_argument(
+        "query",
+        help="Search term (e.g. 'azure', 'kubernetes', 'pdf')",
+    )
+
     return skills_parser
