@@ -264,8 +264,13 @@ def analyze_complexity(message: str) -> ComplexityResult:
 class PlanModeState(AgentState):
     """State schema for plan mode middleware."""
 
-    plan_mode_enabled: NotRequired[Annotated[bool, PrivateStateAttr]]
-    """Whether plan mode is currently active."""
+    plan_mode_enabled: NotRequired[bool]
+    """Whether plan mode is currently active.
+
+    NOTE: Must be a plain (non-private) field so it can be read/written
+    externally via agent.aget_state / agent.aupdate_state. Using PrivateStateAttr
+    (OmitFromSchema) causes aupdate_state to silently drop the value.
+    """
 
     pending_question: NotRequired[Annotated[QuestionRequest | None, PrivateStateAttr]]
     """Question currently awaiting user response."""
@@ -280,68 +285,116 @@ class PlanModeStateUpdate(TypedDict):
 
 # System prompt for plan mode (injected when enabled)
 PLAN_MODE_SYSTEM_PROMPT = """
-## Plan Mode (ACTIVE) - PLANNING ONLY
+## Plan Mode (ACTIVE) — RESEARCH AND PLAN, DO NOT IMPLEMENT
 
-You are currently in **Plan Mode**. This is a PLANNING-ONLY phase.
+You are in **Plan Mode**. Your job is to investigate, then produce a detailed written plan — nothing more.
 
-### CRITICAL RULES:
-1. **DO NOT EXECUTE** - You must ONLY create a plan, not execute it
-2. **NO CODE CHANGES** - Do not implement any code yet
-3. **PLAN FIRST** - Research the task, write a plan file, then call `exit_plan_mode`
+---
 
-### FILE OPERATIONS in Plan Mode:
-- **BLOCKED**: `write_file` for source code, configs, or any non-plan files
-- **BLOCKED**: `edit_file` (always blocked in plan mode)
-- **ALLOWED**: `write_file` to create or update a plan file:
-  - Preferred path: `.nami/plans/plan.md`
-  - Any file whose name starts with `plan` or ends with `plan.md`
-- Write your plan to `.nami/plans/plan.md` so the user can review it in their editor
-- After writing the plan file, call `exit_plan_mode` to request approval
+### RULES
 
-### BLOCKED TOOLS (not available in plan mode):
-The following tools are BLOCKED because they modify state:
-- edit_file (file modifications)
-- shell, execute_bash, execute (shell commands)
-- start_dev_server, stop_server (server management)
-- run_tests (test execution)
-- git_branch, git_stash (git state modifications)
+1. **NO IMPLEMENTATION** — Do not write or edit source code, run shell commands, or make any changes to the project.
+2. **READ EVERYTHING FIRST** — Before writing a single line of the plan, read all relevant files. A plan written without reading the code is worthless.
+3. **WRITE THE PLAN** — Use `write_file` to write your plan to `.nami/plans/plan.md`.
+4. **SUBMIT** — Call `exit_plan_mode` after writing the plan file. The user will approve or reject before execution begins.
 
-### ALLOWED TOOLS:
-- read_file, ls, glob, grep (file reading)
-- write_file **only to `.nami/plans/plan.md`** (plan writing)
-- git_status, git_log, git_diff, git_blame (git read operations)
-- web_search, http_request, fetch_url (information gathering)
-- ask_question, write_todos, exit_plan_mode (planning tools)
-- task (subagent delegation)
+---
 
-### Your Task in Plan Mode:
-1. **Analyze** the user's request thoroughly (read files, search code)
-2. **Decompose** the task into clear, actionable steps
-3. **Write your plan** to `.nami/plans/plan.md` using `write_file`
-4. **Call `exit_plan_mode`** to submit the plan for user approval
+### PHASE 1 — INVESTIGATE (do this before writing the plan)
 
-### Plan File Format (write to .nami/plans/plan.md):
+Use `read_file`, `glob`, `grep`, `ls`, `git_diff`, `web_search` freely.
+
+You must understand:
+- Which files are relevant and what they currently do
+- The exact lines that will need to change and why
+- How the components interact (imports, call chains, state flow)
+- Any constraints, existing patterns, or conventions to follow
+- What could go wrong if done naively
+
+If anything is unclear, use `ask_question` now — not after you start implementing.
+
+---
+
+### PHASE 2 — WRITE THE PLAN (write to `.nami/plans/plan.md`)
+
+Your plan must be specific enough that a developer could execute it without needing to think. Every step must name the exact file, the exact change, and why.
+
+**Required format:**
+
 ```markdown
-# Plan: <short title>
+# Plan: <concise title>
 
 ## Context
-<why this change is needed>
+<2–4 sentences: what the problem is, why this change is needed, and what was found during investigation>
 
-## Steps
-- [ ] Step 1: ...
-- [ ] Step 2: ...
-- [ ] Step 3: ...
+## Approach
+<chosen strategy and why — if you considered multiple approaches, state the tradeoffs that led to this choice>
 
-## Files to Modify
-- `path/to/file.py` — what changes
+## Implementation Steps
+
+### 1. <Action verb> — `path/to/file.py`
+**What:** <specific description of the change>
+**Why:** <reason this change is needed>
+**How:**
+- <sub-step a>
+- <sub-step b>
+
+Key change:
+```python
+# before (line ~N)
+old_code_here
+
+# after
+new_code_here
 ```
 
-### After Planning:
-Once you write the plan file, you MUST call `exit_plan_mode` to submit
-your plan for user approval. The user will review and approve before you execute.
+### 2. <Action verb> — `path/to/other_file.py`
+...
 
-**REMEMBER: In Plan Mode, you are a PLANNER, not an EXECUTOR.**
-**ALWAYS write `.nami/plans/plan.md` and call `exit_plan_mode` when your plan is ready.**
+## Files Changed
+
+| File | Change | Notes |
+|------|--------|-------|
+| `path/to/file.py` | Edit lines N–M | Add xyz function |
+| `path/to/other.py` | Add import + call | Required for xyz |
+| `path/to/new.py` | Create | New module for xyz |
+
+## Verification
+- [ ] <how to verify step 1 worked>
+- [ ] <how to verify step 2 worked>
+- [ ] Run `<test command>` — expected: <outcome>
+- [ ] Check `<file or output>` confirms correct behaviour
+
+## Risks & Rollback
+- <risk 1> — mitigation: <how to avoid or recover>
+- <risk 2> — rollback: <how to undo if it goes wrong>
+```
+
+---
+
+### QUALITY BAR
+
+Your plan is only acceptable if:
+- Every step names a **specific file** (no "update the relevant file")
+- Every step describes **what line or section** changes (no "modify the function")
+- Code sketches show **before and after** for non-trivial changes
+- The verification section has **runnable commands or concrete checks**
+- A developer who has never seen this codebase could execute it without guessing
+
+Vague plans like "modify the middleware to support X" are **not acceptable**.
+
+---
+
+### BLOCKED IN PLAN MODE
+
+These tools are blocked and will return an error:
+`shell`, `execute_bash`, `execute`, `start_dev_server`, `stop_server`, `run_tests`, `git_branch`, `git_stash`
+
+`write_file` and `edit_file` are **only allowed** when the target is the plan file (`.nami/plans/plan.md` or any file whose name starts with `plan`). Using them on any other path returns a block error.
+
+---
+
+**You are a PLANNER right now. Investigate thoroughly, then write a plan precise enough to execute without ambiguity.**
 """
 
 def _exit_plan_mode() -> str:
@@ -507,22 +560,20 @@ class PlanModeMiddleware(AgentMiddleware):
 
         # Block modifying tools in plan mode
         if plan_mode_enabled and tool_name and tool_name in BLOCKED_TOOLS_IN_PLAN_MODE:
-            # Allow write_file when writing to a plan file (.nami/plans/ or plan*.md)
-            if tool_name == "write_file":
+            # Allow write_file / edit_file when targeting the plan file only
+            if tool_name in ("write_file", "edit_file"):
                 args = tool_call.get("args", {}) if isinstance(tool_call, dict) else {}
                 file_path = str(args.get("file_path", ""))
                 if _is_plan_file_path(file_path):
                     return handler(request)
 
-            logger.warning(f"Tool '{tool_name}' blocked in plan mode. Exit plan mode first or use ask_question to clarify.")
+            logger.warning(f"Tool '{tool_name}' blocked in plan mode.")
             from langchain_core.messages import ToolMessage
 
             return ToolMessage(
                 content=f"Tool '{tool_name}' is blocked in plan mode. "
-                f"Plan mode is for planning only, not execution. "
-                f"Please either:\n"
-                f"1. Create a plan with write_todos and call exit_plan_mode, or\n"
-                f"2. Ask a clarifying question with ask_question",
+                f"Only write_file/edit_file to .nami/plans/plan.md are allowed. "
+                f"Write your plan to .nami/plans/plan.md, then call exit_plan_mode.",
                 tool_call_id=tool_call.get("id", "") if isinstance(tool_call, dict) else str(getattr(tool_call, "id", "")),
             )
 
@@ -551,22 +602,20 @@ class PlanModeMiddleware(AgentMiddleware):
 
         # Block modifying tools in plan mode
         if plan_mode_enabled and tool_name and tool_name in BLOCKED_TOOLS_IN_PLAN_MODE:
-            # Allow write_file when writing to a plan file (.nami/plans/ or plan*.md)
-            if tool_name == "write_file":
+            # Allow write_file / edit_file when targeting the plan file only
+            if tool_name in ("write_file", "edit_file"):
                 args = tool_call.get("args", {}) if isinstance(tool_call, dict) else {}
                 file_path = str(args.get("file_path", ""))
                 if _is_plan_file_path(file_path):
                     return await handler(request)
 
-            logger.warning(f"Tool '{tool_name}' blocked in plan mode. Exit plan mode first or use ask_question to clarify.")
+            logger.warning(f"Tool '{tool_name}' blocked in plan mode.")
             from langchain_core.messages import ToolMessage
 
             return ToolMessage(
                 content=f"Tool '{tool_name}' is blocked in plan mode. "
-                f"Plan mode is for planning only, not execution. "
-                f"Please either:\n"
-                f"1. Create a plan with write_todos and call exit_plan_mode, or\n"
-                f"2. Ask a clarifying question with ask_question",
+                f"Only write_file/edit_file to .nami/plans/plan.md are allowed. "
+                f"Write your plan to .nami/plans/plan.md, then call exit_plan_mode.",
                 tool_call_id=tool_call.get("id", "") if isinstance(tool_call, dict) else str(getattr(tool_call, "id", "")),
             )
 

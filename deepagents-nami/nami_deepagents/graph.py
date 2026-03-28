@@ -40,6 +40,13 @@ from nami_deepagents.middleware.subagents import (
 BASE_AGENT_PROMPT = "In order to complete the objective that the user asks of you, you have access to a number of standard tools."
 
 
+def _reraise_graph_interrupt(exc: Exception) -> str:
+    """Re-raise GraphInterrupt so LangGraph handles it; format other exceptions as strings."""
+    if isinstance(exc, GraphInterrupt):
+        raise exc
+    return f"Tool failed with {type(exc).__name__}: {exc}"
+
+
 def get_default_model() -> ChatAnthropic:
     """Get the default model for deep agents.
 
@@ -157,7 +164,7 @@ def create_deep_agent(
     subagent_middleware.extend(
         [
             FilesystemMiddleware(backend=backend),
-            ToolRetryMiddleware(max_retries=2, backoff_factor=2.0, initial_delay=1.0, retry_on=lambda e: not isinstance(e, GraphInterrupt)),
+            ToolRetryMiddleware(max_retries=2, backoff_factor=2.0, initial_delay=1.0, retry_on=lambda e: not isinstance(e, GraphInterrupt), on_failure=_reraise_graph_interrupt),
             ContextEditingMiddleware(
                 edits=[ClearToolUsesEdit(trigger=60000, keep=5)]
             ),
@@ -184,7 +191,7 @@ def create_deep_agent(
     deepagent_middleware.extend(
         [
             FilesystemMiddleware(backend=backend),
-            ToolRetryMiddleware(max_retries=2, backoff_factor=2.0, initial_delay=1.0, retry_on=lambda e: not isinstance(e, GraphInterrupt)),
+            ToolRetryMiddleware(max_retries=2, backoff_factor=2.0, initial_delay=1.0, retry_on=lambda e: not isinstance(e, GraphInterrupt), on_failure=_reraise_graph_interrupt),
             SubAgentMiddleware(
                 default_model=model,
                 default_tools=tools,

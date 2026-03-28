@@ -39,6 +39,10 @@ warnings.filterwarnings(
     "ignore",
     message="None of PyTorch, TensorFlow",
 )
+warnings.filterwarnings(
+    "ignore",
+    message="Using fallback GPT-2 tokenizer for token counting",
+)
 
 import argparse
 import asyncio

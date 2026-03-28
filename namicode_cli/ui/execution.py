@@ -726,6 +726,7 @@ async def execute_task(  # type: ignore
             )
             interrupt_occurred = False
             hitl_response: dict[str, HITLResponse] = {}
+            command_state_update: dict = {}  # State updates to apply atomically on resume
             suppress_resumed_output = False
             # Reset per-iteration tracking (in-progress state only)
             active_subagents.clear()
@@ -841,38 +842,74 @@ async def execute_task(  # type: ignore
                                         style="bold",
                                     )
 
-                                    # Persist the plan as a markdown file before showing
-                                    # the approval dialog so the user can read it in their
-                                    # editor and it's preserved even if they reject/revise.
-                                    if current_todos:
-                                        try:
-                                            from pathlib import Path as _Path
+                                    # --- Resolve plan content and file path ---
+                                    # Two cases:
+                                    # 1. Agent wrote .nami/plans/plan.md directly (new flow) — read it
+                                    # 2. Agent used write_todos (old flow) — convert todos to markdown and save
+                                    _plan_content: str | None = None
+                                    _plan_path = None
+                                    try:
+                                        from pathlib import Path as _Path
 
-                                            from namicode_cli.config.config import (
-                                                settings as _settings,
-                                            )
+                                        from namicode_cli.config.config import (
+                                            settings as _settings,
+                                        )
+
+                                        _nami_dir = _settings.ensure_project_deepagents_dir()
+                                        if not _nami_dir:
+                                            _nami_dir = _Path.cwd() / ".nami"
+
+                                        # Case 1: agent wrote plan.md directly
+                                        _direct_plan = _nami_dir / "plans" / "plan.md"
+                                        if _direct_plan.exists():
+                                            _plan_content = _direct_plan.read_text(encoding="utf-8")
+                                            _plan_path = _direct_plan
+
+                                        # Case 2: todos-based plan (fallback)
+                                        if not _plan_content and current_todos:
                                             from namicode_cli.plans import (
+                                                todos_to_markdown as _todos_to_markdown,
                                                 write_plan_file as _write_plan_file,
                                             )
-
-                                            _nami_dir = _settings.ensure_project_deepagents_dir()
-                                            if not _nami_dir:
-                                                # Not in a detected git repo — fall back to cwd/.nami
-                                                _nami_dir = _Path.cwd() / ".nami"
-                                                _nami_dir.mkdir(parents=True, exist_ok=True)
+                                            _nami_dir.mkdir(parents=True, exist_ok=True)
                                             _plan_path = _write_plan_file(current_todos, _nami_dir)
+                                            _plan_content = _todos_to_markdown(current_todos)
+
+                                        if _plan_path:
                                             try:
                                                 _rel = _plan_path.relative_to(_Path.cwd())
                                             except ValueError:
                                                 _rel = _plan_path
-                                            console.print(f"[dim]Plan saved → {_rel}[/dim]")
+                                            console.print(f"[dim]Plan file → {_rel}[/dim]")
+                                    except Exception as _e:
+                                        _dbg("PLAN-SAVE-ERROR", f"Failed to resolve plan file: {_e}")
+
+                                    # --- Render plan content inline (like Claude Code) ---
+                                    if _plan_content:
+                                        try:
+                                            from rich.markdown import Markdown as _Markdown
+                                            from rich.rule import Rule as _Rule
+
+                                            console.print(_Rule(style="cyan dim"))
+                                            _lines = _plan_content.splitlines()
+                                            _MAX = 80
+                                            if len(_lines) > _MAX:
+                                                _shown = "\n".join(_lines[:_MAX])
+                                                console.print(_Markdown(_shown))
+                                                console.print(
+                                                    f"[dim]... {len(_lines) - _MAX} more lines"
+                                                    f" — open the plan file to see the full plan[/dim]"
+                                                )
+                                            else:
+                                                console.print(_Markdown(_plan_content))
+                                            console.print(_Rule(style="cyan dim"))
+                                            console.print()
                                         except Exception as _e:
-                                            _dbg("PLAN-SAVE-ERROR", f"Failed to save plan file: {_e}")
-                                            console.print(f"[dim yellow]Warning: Could not save plan file: {_e}[/dim yellow]")
+                                            _dbg("PLAN-RENDER-ERROR", f"Failed to render plan: {_e}")
 
                                     result = prompt_for_plan_approval(
-                                        todos=current_todos,
-                                        plan_summary="Agent has created a plan for your task",
+                                        todos=current_todos if current_todos else None,
+                                        plan_summary=None,
                                     )
 
                                     _dbg(
@@ -880,18 +917,14 @@ async def execute_task(  # type: ignore
                                         f"approved={result['approved']} action={result.get('action', '?')}",
                                     )
                                     if result["approved"]:
-                                        # User approved - exit plan mode
+                                        # User approved - exit plan mode.
+                                        # Set plan_mode_enabled=False via command_state_update
+                                        # so it is applied ATOMICALLY when the graph resumes.
+                                        # (aupdate_state would create a new checkpoint that
+                                        # Command(resume=...) would NOT pick up — causing the
+                                        # agent to resume still in plan mode and loop.)
                                         session_state.plan_mode_enabled = False
-                                        try:
-                                            from namicode_cli.agents.core_agent import (
-                                                set_agent_plan_mode_state,
-                                            )
-
-                                            await set_agent_plan_mode_state(
-                                                agent, session_state.thread_id, False
-                                            )
-                                        except Exception:
-                                            pass
+                                        command_state_update["plan_mode_enabled"] = False
 
                                         if result["action"] == "proceed_auto":
                                             # Auto-accept: temporarily enable auto-approve
@@ -1579,11 +1612,17 @@ async def execute_task(  # type: ignore
                     console.print()
                     return
 
-                # Resume the agent with the human decision
-                stream_input = Command(resume=hitl_response)
+                # Resume the agent with the human decision.
+                # Include any state updates (e.g. plan_mode_enabled=False) atomically
+                # so they are applied at the same checkpoint as the resume — not as a
+                # separate aupdate_state call that Command(resume=...) would ignore.
+                stream_input = Command(
+                    resume=hitl_response,
+                    update=command_state_update if command_state_update else None,
+                )
                 _dbg(
                     "HITL-INPUT",
-                    f"resume keys={list(hitl_response.keys())} suppress={suppress_resumed_output}",
+                    f"resume keys={list(hitl_response.keys())} state_update={command_state_update} suppress={suppress_resumed_output}",
                 )
                 # Continue the while loop to restream
             else:
