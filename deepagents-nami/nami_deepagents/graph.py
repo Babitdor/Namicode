@@ -8,8 +8,9 @@ from langchain.agents.middleware import (
     HumanInTheLoopMiddleware,
     InterruptOnConfig,
 )
-from nami_deepagents.middleware.todo import HierarchicalTodoMiddleware
-from langchain.agents.middleware import LLMToolSelectorMiddleware
+from langchain.agents.middleware import TodoListMiddleware
+from langchain.agents.middleware import ContextEditingMiddleware, ClearToolUsesEdit
+from langchain.agents.middleware import ModelRetryMiddleware, ToolRetryMiddleware
 from langchain.agents.middleware.summarization import SummarizationMiddleware
 from langchain.agents.middleware.types import AgentMiddleware
 from langchain.agents.structured_output import ResponseFormat
@@ -46,7 +47,7 @@ def get_default_model() -> ChatAnthropic:
     """
     return ChatAnthropic(
         model_name="claude-sonnet-4-5-20250929",
-        max_tokens=20000,  # type: ignore
+        max_tokens=200000,  # type: ignore
     )
 
 
@@ -143,8 +144,7 @@ def create_deep_agent(
 
     # Build middleware stack for subagents (includes skills if provided)
     subagent_middleware: list[AgentMiddleware] = [
-        HierarchicalTodoMiddleware(),
-        LLMToolSelectorMiddleware(),
+        TodoListMiddleware(),
     ]
 
     backend = backend if backend is not None else (lambda rt: StateBackend(rt))
@@ -156,6 +156,11 @@ def create_deep_agent(
     subagent_middleware.extend(
         [
             FilesystemMiddleware(backend=backend),
+            ToolRetryMiddleware(max_retries=2, backoff_factor=2.0, initial_delay=1.0),
+            ContextEditingMiddleware(
+                edits=[ClearToolUsesEdit(trigger=60000, keep=5)]
+            ),
+            ModelRetryMiddleware(max_retries=3, backoff_factor=2.0, initial_delay=1.0),
             SummarizationMiddleware(
                 model=model,
                 trigger=trigger,
@@ -169,8 +174,7 @@ def create_deep_agent(
 
     # Build main agent middleware stack
     deepagent_middleware: list[AgentMiddleware] = [
-        HierarchicalTodoMiddleware(),
-        LLMToolSelectorMiddleware(),
+        TodoListMiddleware(),
     ]
     if memory is not None:
         deepagent_middleware.append(MemoryMiddleware(backend=backend, sources=memory))
@@ -179,6 +183,7 @@ def create_deep_agent(
     deepagent_middleware.extend(
         [
             FilesystemMiddleware(backend=backend),
+            ToolRetryMiddleware(max_retries=2, backoff_factor=2.0, initial_delay=1.0),
             SubAgentMiddleware(
                 default_model=model,
                 default_tools=tools,
@@ -187,6 +192,10 @@ def create_deep_agent(
                 default_interrupt_on=interrupt_on,
                 general_purpose_agent=True,
             ),
+            ContextEditingMiddleware(
+                edits=[ClearToolUsesEdit(trigger=60000, keep=5)]
+            ),
+            ModelRetryMiddleware(max_retries=3, backoff_factor=2.0, initial_delay=1.0),
             SummarizationMiddleware(
                 model=model,
                 trigger=trigger,
