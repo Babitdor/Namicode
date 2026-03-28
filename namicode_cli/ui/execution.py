@@ -1513,14 +1513,9 @@ async def execute_task(  # type: ignore
                         # Auto-approve all commands without prompting
                         decisions = []
                         for action_request in hitl_request["action_requests"]:
-                            # Show what's being auto-approved (brief, dim message)
                             if spinner_active:
                                 status.stop()
                                 spinner_active = False
-
-                            description = action_request.get("description", "tool action")
-                            console.print()
-                            console.print(f"  [dim]⚡ {description}[/dim]")
 
                             decisions.append({"type": "approve"})
 

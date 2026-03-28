@@ -91,7 +91,6 @@ from namicode_cli.path_approval import PathApprovalManager, check_path_approval
 from namicode_cli.skills.skill_creation import setup_skills_parser
 from namicode_cli.states.Session import SessionState
 from namicode_cli.tools import (
-    BROWSER_TOOLS_AVAILABLE,
     check_types,
     convert_format,
     docs_search,
@@ -108,9 +107,6 @@ from namicode_cli.tools import (
     web_search,
 )
 from namicode_cli.ui.execution import execute_task
-
-if BROWSER_TOOLS_AVAILABLE:
-    from namicode_cli.browser_tools import BROWSER_TOOLS
 
 # Semantic search (optional, requires sentence-transformers)
 try:
@@ -895,10 +891,6 @@ async def _run_agent_session(
     ]
     if settings.has_tavily:
         tools.append(web_search)
-
-    # Add browser automation tools if available (requires playwright)
-    if BROWSER_TOOLS_AVAILABLE:
-        tools.extend(BROWSER_TOOLS)
 
     # Add semantic search tools if available (requires sentence-transformers)
     if SEMANTIC_SEARCH_AVAILABLE:

@@ -1092,42 +1092,8 @@ def format_code(
         return {"success": False, "error": f"Formatting failed: {e!s}"}
 
 
-# =============================================================================
-# Browser Automation Tools (Playwright)
-# =============================================================================
-
-# Import browser tools - requires playwright package
-try:
-    from namicode_cli.browser_tools import (
-        BROWSER_TOOLS,
-        browser_click,
-        browser_close,
-        browser_evaluate,
-        browser_fill_form,
-        browser_get_content,
-        browser_get_url,
-        browser_go_back,
-        browser_go_forward,
-        browser_navigate,
-        browser_pdf,
-        browser_query,
-        browser_refresh,
-        browser_run_code,
-        browser_screenshot,
-        browser_scroll,
-        browser_select,
-        browser_snapshot,
-        browser_status,
-        browser_type,
-        browser_upload,
-        browser_wait,
-        browser_wait_for,
-    )
-
-    BROWSER_TOOLS_AVAILABLE = True
-except ImportError:
-    BROWSER_TOOLS_AVAILABLE = False
-    BROWSER_TOOLS = []
+BROWSER_TOOLS_AVAILABLE = False
+BROWSER_TOOLS = []
 
 # =============================================================================
 # Image Generation (Replicate API)
