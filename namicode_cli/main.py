@@ -108,15 +108,6 @@ from namicode_cli.tools import (
 )
 from namicode_cli.ui.execution import execute_task
 
-# Git tools (always available)
-from namicode_cli.git_tools import (
-    git_blame,
-    git_branch,
-    git_diff,
-    git_log,
-    git_stash,
-    git_status,
-)
 from namicode_cli.process_manager import ProcessManager
 from namicode_cli.server_runner.dev_server import (
     list_servers_tool,
@@ -869,13 +860,6 @@ async def _run_agent_session(
         image_search,
         # Image generation (Replicate API - 50 free/month)
         generate_image,
-        # Git tools (structured git operations)
-        git_status,
-        git_log,
-        git_diff,
-        git_blame,
-        git_branch,
-        git_stash,
     ]
     if settings.has_tavily:
         tools.append(web_search)

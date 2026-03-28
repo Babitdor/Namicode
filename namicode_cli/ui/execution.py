@@ -118,13 +118,6 @@ TOOL_ICONS: dict[str, str] = {
     "browser_query": "❓",
     "browser_get_content": "📄",
     "browser_get_url": "🔗",
-    # Git
-    "git_status": "📊",
-    "git_log": "📜",
-    "git_diff": "📝",
-    "git_blame": "🔍",
-    "git_branch": "🌿",
-    "git_stash": "📦",
 }
 
 
@@ -479,13 +472,6 @@ async def execute_task(  # type: ignore
         "start_dev_server": "server",
         "stop_server": "server",
         "list_servers": "server",
-        # Git
-        "git_status": "git",
-        "git_log": "git",
-        "git_diff": "git",
-        "git_blame": "git",
-        "git_branch": "git",
-        "git_stash": "git",
         # Browser
         "browser_navigate": "browser",
         "browser_click": "browser",
