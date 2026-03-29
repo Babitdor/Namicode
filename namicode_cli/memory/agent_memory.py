@@ -183,6 +183,7 @@ class AgentMemoryMiddleware(AgentMiddleware):
         settings: Settings,
         assistant_id: str,
         system_prompt_template: str | None = None,
+        skip_project_memory: bool = False,
     ) -> None:
         """Initialize the agent memory middleware.
 
@@ -191,9 +192,13 @@ class AgentMemoryMiddleware(AgentMiddleware):
             assistant_id: The agent identifier.
             system_prompt_template: Optional custom template for injecting
                 agent memory into system prompt.
+            skip_project_memory: If True, skip loading project memory files
+                (NAMI.md/CLAUDE.md). Use on session continuation to avoid
+                duplicate context.
         """
         self.settings = settings
         self.assistant_id = assistant_id
+        self.skip_project_memory = skip_project_memory
 
         # User paths
         self.agent_dir = settings.get_agent_dir(assistant_id)
@@ -242,7 +247,7 @@ class AgentMemoryMiddleware(AgentMiddleware):
                     result["user_memory"] = content
 
         # Load project memory from ALL available sources if not already in state
-        if "project_memory" not in state:
+        if not self.skip_project_memory and "project_memory" not in state:
             project_paths = self.settings.get_project_agent_md_paths()
             combined_memories: list[str] = []
             self.loaded_project_memory_sources = []

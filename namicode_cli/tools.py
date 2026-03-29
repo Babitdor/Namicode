@@ -6,7 +6,9 @@ enabling the agent to interact with external services and the web:
 Key Tools:
 - http_request(): Make HTTP requests to APIs and web services
 - fetch_url(): Fetch web pages and convert HTML to markdown
-- web_search(): Search the web using Tavily API
+- web_search(): Search the web using Tavily API (requires TAVILY_API_KEY)
+- duckduckgo_search(): Search the web (no API key required)
+- docs_search(): Search official documentation sites only
 - execute_in_e2b(): Execute code in isolated E2B cloud sandboxes
 
 These tools are registered with the agent and allow it to:
@@ -19,7 +21,8 @@ These tools are registered with the agent and allow it to:
 Dependencies:
 - requests: HTTP client library
 - markdownify: HTML to markdown conversion
-- tavily: Web search API client
+- tavily: Tavily search client (optional)
+- ddgs: DuckDuckGo search client (no API key needed)
 - e2b-code-interpreter: E2B sandbox execution
 
 The Tavily client is initialized if TAVILY_API_KEY is available in settings.
@@ -952,148 +955,6 @@ def convert_format(
     except Exception as e:
         return {"success": False, "error": f"Failed to convert to {to_format}: {e!s}"}
 
-
-def format_code(
-    code: str,
-    language: Literal["python", "javascript", "typescript", "json", "yaml"],
-    line_length: int = 88,
-) -> dict[str, Any]:
-    """Format code using language-appropriate formatters.
-
-    Formats code to follow standard style conventions:
-    - Python: Uses Black formatter
-    - JavaScript/TypeScript: Uses basic formatting (or Prettier if available)
-    - JSON: Uses standard library json formatting
-    - YAML: Uses PyYAML formatting
-
-    Args:
-        code: The code string to format
-        language: Programming language - "python", "javascript", "typescript", "json", "yaml"
-        line_length: Maximum line length (default: 88, Black's default)
-
-    Returns:
-        Dictionary containing:
-        - success: Whether formatting succeeded
-        - result: The formatted code string
-        - language: Language that was formatted
-        - formatter: Name of formatter used
-        - changed: Whether the code was modified
-
-    Example:
-        format_code("def foo( x,y ):return x+y", "python")
-        format_code('{"a":1,"b":2}', "json")
-    """
-    original = code
-
-    try:
-        if language == "python":
-            try:
-                import black
-            except ImportError:
-                return {
-                    "success": False,
-                    "error": "Black not installed. Install with: pip install black",
-                }
-            try:
-                mode = black.Mode(line_length=line_length)
-                result = black.format_str(code, mode=mode)
-                return {
-                    "success": True,
-                    "result": result,
-                    "language": language,
-                    "formatter": "black",
-                    "changed": result != original,
-                }
-            except black.InvalidInput as e:
-                return {"success": False, "error": f"Invalid Python syntax: {e!s}"}
-
-        elif language == "json":
-            try:
-                data = json.loads(code)
-                result = json.dumps(data, indent=2, ensure_ascii=False)
-                return {
-                    "success": True,
-                    "result": result,
-                    "language": language,
-                    "formatter": "json.dumps",
-                    "changed": result != original,
-                }
-            except json.JSONDecodeError as e:
-                return {"success": False, "error": f"Invalid JSON: {e!s}"}
-
-        elif language == "yaml":
-            try:
-                import yaml
-            except ImportError:
-                return {
-                    "success": False,
-                    "error": "PyYAML not installed. Install with: pip install pyyaml",
-                }
-            try:
-                data = yaml.safe_load(code)
-                result = yaml.dump(
-                    data,
-                    default_flow_style=False,
-                    allow_unicode=True,
-                    indent=2,
-                    sort_keys=False,
-                )
-                return {
-                    "success": True,
-                    "result": result,
-                    "language": language,
-                    "formatter": "pyyaml",
-                    "changed": result != original,
-                }
-            except yaml.YAMLError as e:
-                return {"success": False, "error": f"Invalid YAML: {e!s}"}
-
-        elif language in ("javascript", "typescript"):
-            # Try to use Prettier via subprocess if available
-            try:
-                parser = "typescript" if language == "typescript" else "babel"
-                result = subprocess.run(
-                    ["npx", "prettier", "--parser", parser, "--print-width", str(line_length)],
-                    input=code,
-                    capture_output=True,
-                    text=True,
-            encoding="utf-8",
-            errors="replace",
-                    timeout=30,
-                    check=False,
-                )
-                if result.returncode == 0:
-                    return {
-                        "success": True,
-                        "result": result.stdout,
-                        "language": language,
-                        "formatter": "prettier",
-                        "changed": result.stdout != original,
-                    }
-                # Prettier failed or not available, provide basic formatting
-                return {
-                    "success": False,
-                    "error": f"Prettier formatting failed: {result.stderr or 'Unknown error'}",
-                    "hint": "Install Prettier globally: npm install -g prettier",
-                }
-            except FileNotFoundError:
-                return {
-                    "success": False,
-                    "error": "Prettier not available (npx not found)",
-                    "hint": "Install Node.js and Prettier: npm install -g prettier",
-                }
-            except subprocess.TimeoutExpired:
-                return {"success": False, "error": "Prettier timed out after 30 seconds"}
-
-        else:
-            return {"success": False, "error": f"Unsupported language: {language}"}
-
-    except Exception as e:
-        return {"success": False, "error": f"Formatting failed: {e!s}"}
-
-
-BROWSER_TOOLS_AVAILABLE = False
-BROWSER_TOOLS = []
 
 # =============================================================================
 # Image Generation (Replicate API)
@@ -2065,3 +1926,35 @@ def _check_types_tsc(path: Path) -> dict[str, Any]:
         }
     except Exception as e:
         return {"success": False, "error": f"Type checking failed: {e!s}"}
+
+def think(reflection: str) -> str:
+    """Tool for strategic reflection on code exploration and task progress.
+
+    Use this tool to pause and analyze your findings, assess what you've learned,
+    and make deliberate decisions about next steps in code analysis and exploration.
+
+    This creates a checkpoint for quality decision-making before continuing.
+
+    When to use:
+    - After exploring codebase sections: What key patterns did I discover?
+    - Before deciding next exploration targets: Do I understand the architecture enough?
+    - When assessing code understanding: What crucial details am I still missing?
+    - When planning refactoring/fixes: Is my analysis complete and correct?
+    - Before recommending changes: Have I considered all implications?
+    - When context is complex: Am I on the right track?
+
+    Reflection should address:
+    1. Key findings - What concrete code patterns, dependencies, or issues did I discover?
+    2. Current understanding - What have I learned about the architecture/functionality?
+    3. Knowledge gaps - What critical information is still missing?
+    4. Quality assessment - Do I have sufficient evidence to proceed with recommendations?
+    5. Strategic decision - Should I explore further or am I ready to make recommendations?
+
+    Args:
+        reflection: Your detailed reflection on code findings, understanding gaps,
+                   analysis quality, and decision about next steps
+
+    Returns:
+        Confirmation that reflection was recorded for decision-making
+    """
+    return f"Reflection recorded: {reflection}"

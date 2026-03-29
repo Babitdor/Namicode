@@ -101,13 +101,13 @@ from namicode_cli.tools import (
     duckduckgo_search,
     execute_in_e2b,
     fetch_url,
-    format_code,
     format_code_file,
     generate_image,
     http_request,
     image_search,
     lint_code,
     package_info,
+    think,
     web_search,
 )
 from namicode_cli.ui.execution import execute_task
@@ -852,7 +852,7 @@ async def _run_agent_session(
         # Utility tools
         package_info,
         convert_format,
-        format_code,
+        think,
         # Code quality tools (linting, formatting, type checking)
         lint_code,
         format_code_file,
@@ -1088,6 +1088,15 @@ async def main(
                 from namicode_cli.memory.shared_memory import restore_shared_memory
 
                 restore_shared_memory(session_data.shared_memory)
+
+            # Inject session summary as context if available
+            if session_data.memory:
+                from langchain_core.messages import SystemMessage
+
+                summary_msg = SystemMessage(
+                    content=f"## Session Summary (resumed)\n\n{session_data.memory}"
+                )
+                initial_messages.insert(0, summary_msg)
 
             # Create tuple for displaying after splash screen
             restored_session_data = (

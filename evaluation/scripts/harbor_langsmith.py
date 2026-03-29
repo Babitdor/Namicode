@@ -20,7 +20,7 @@ import aiohttp
 import toml
 from dotenv import load_dotenv
 from harbor.models.dataset_item import DownloadedDatasetItem
-from harbor.registry.client import BaseRegistryClient
+from harbor.registry.client import BaseRegistryClient, RegistryClientFactory
 from langsmith import Client
 
 from deepagents_harbor.tracing import create_example_id_from_instruction
@@ -42,7 +42,7 @@ def _read_instruction(task_path: Path) -> str:
     """Read the instruction.md file from a task directory."""
     instruction_file = task_path / "instruction.md"
     if instruction_file.exists():
-        return instruction_file.read_text()
+        return instruction_file.read_text(encoding='utf-8')
     return ""
 
 
@@ -65,7 +65,7 @@ def _read_solution(task_path: Path) -> str | None:
     """
     solution_file = task_path / "solution" / "solve.sh"
     if solution_file.exists():
-        return solution_file.read_text()
+        return solution_file.read_text(encoding='utf-8')
     return None
 
 
@@ -130,7 +130,7 @@ def create_dataset(dataset_name: str, version: str = "head", overwrite: bool = F
 
     # Download from Harbor registry
     print(f"Downloading dataset '{dataset_name}@{version}' from Harbor registry...")
-    registry_client = BaseRegistryClient()
+    registry_client = RegistryClientFactory().create()
     downloaded_tasks = registry_client.download_dataset(
         name=dataset_name,
         version=version,
@@ -143,15 +143,37 @@ def create_dataset(dataset_name: str, version: str = "head", overwrite: bool = F
 
     print(f"\nFound {len(examples)} tasks")
 
-    # Create the dataset
+    # Create the dataset (or get existing if it exists)
     print(f"\nCreating LangSmith dataset: {dataset_name}")
-    dataset = langsmith_client.create_dataset(dataset_name=dataset_name)
+    try:
+        dataset = langsmith_client.create_dataset(dataset_name=dataset_name)
+    except Exception as e:
+        # If dataset already exists, try to use it
+        if "already exists" in str(e).lower():
+            print(f"Dataset '{dataset_name}' already exists, using existing dataset")
+            dataset = langsmith_client.read_dataset(dataset_name=dataset_name)
+        else:
+            raise
 
-    print(f"Dataset created with ID: {dataset.id}")
+    print(f"Dataset created/loaded with ID: {dataset.id}")
+
+    # Prepare examples for LangSmith
+    # Remove explicit IDs to avoid conflicts with existing examples
+    # Store the original IDs as metadata instead
+    langsmith_examples = []
+    for example in examples:
+        ls_example = {
+            "inputs": example["inputs"],
+            "outputs": example["outputs"],
+        }
+        # Store original example ID in metadata for reference
+        if "example_id" not in ls_example["inputs"]:
+            ls_example["inputs"]["example_id"] = example.get("id", "")
+        langsmith_examples.append(ls_example)
 
     # Add examples to the dataset
-    print(f"\nAdding {len(examples)} examples to dataset...")
-    langsmith_client.create_examples(dataset_id=dataset.id, examples=examples)
+    print(f"\nAdding {len(langsmith_examples)} examples to dataset...")
+    langsmith_client.create_examples(dataset_id=dataset.id, examples=langsmith_examples)
 
     print(f"\nSuccessfully created dataset '{dataset_name}' with {len(examples)} examples")
     print(f"Dataset ID: {dataset.id}")
