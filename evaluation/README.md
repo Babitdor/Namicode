@@ -116,10 +116,10 @@ make run-terminal-bench-modal      # 4 tasks, Modal
 
 ```bash
 # Summarize a completed job run
-uv run python scripts/analyze.py --jobs-dir jobs/namicode/<timestamp>
+uv run python scripts/analyze.py jobs/namicode/<timestamp>
 
 # Example
-uv run python scripts/analyze.py --jobs-dir jobs/namicode/2026-03-28__23-52-59
+uv run python scripts/analyze.py jobs/namicode/2026-03-28__23-52-59
 ```
 
 Output includes: trial status, reward scores, step counts, tool usage, and exception details.

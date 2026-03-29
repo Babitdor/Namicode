@@ -45,7 +45,6 @@ from nami_deepagents.backends.filesystem import FilesystemBackend
 from nami_deepagents.backends.sandbox import SandboxBackendProtocol
 from nami_deepagents.middleware import (
     AskQuestionMiddleware,
-    MemoryMiddleware,
     PlanModeMiddleware,
     SkillsMiddleware,
 )
@@ -63,6 +62,7 @@ from namicode_cli.config.config import (
 )
 from namicode_cli.integrations.sandbox_factory import get_default_working_dir
 from namicode_cli.mcp import get_shared_mcp_middleware
+from namicode_cli.memory.agent_memory import AgentMemoryMiddleware
 from namicode_cli.memory.shared_memory import (
     SharedMemoryMiddleware,
     reset_shared_memory_store,
@@ -826,14 +826,13 @@ def create_agent_with_config(
         store: Optional InMemoryStore. If None and use_shared_store is True,
                uses a module-level shared store that subagents can also access.
         is_continuation: If True, skip project memory paths (NAMI.md/CLAUDE.md)
-               from MemoryMiddleware since they're already in the continuation prompt.
+               from AgentMemoryMiddleware since they're already in the continuation prompt.
 
     Returns:
         2-tuple of (graph, backend)
     """
     tracing_enabled = False
     skill_sources = []
-    memory_sources = []
     Nami_SubAgent: list[SubAgent] = []
 
     if is_tracing_enabled():
@@ -869,7 +868,7 @@ def create_agent_with_config(
             pass
 
     # Setup agent directory for persistent memory
-    # Global Memory
+    # Global Memory — create agent.md with default instructions if missing
     agent_md = settings.get_user_agent_md_path(assistant_id)
 
     if not agent_md.exists():
@@ -877,15 +876,6 @@ def create_agent_with_config(
         agent_md.parent.mkdir(parents=True, exist_ok=True)
         source_content = get_default_coding_instructions()
         agent_md.write_text(source_content, encoding="utf-8")
-
-    memory_sources.append(str(agent_md))
-
-    # Project NAMI.md / CLAUDE.md (all found files)
-    # Skip on continuation — the continuation prompt already includes these,
-    # so loading them again via MemoryMiddleware would duplicate context.
-    if not is_continuation:
-        project_memory_paths = settings.get_project_agent_md_paths()
-        memory_sources.extend(str(p) for p in project_memory_paths)
 
     # Skills directory - global (shared across all agents at ~/.nami/skills/)
     skills_dir = settings.ensure_user_skills_dir()
@@ -908,7 +898,6 @@ def create_agent_with_config(
         # ========== REMOTE SANDBOX MODE ==========
         # Backend: Remote sandbox for code (no /memories/ route needed with filesystem-based memory)
         backend = sandbox
-        # Middleware: FileTrackerMiddleware, AgentMemoryMiddleware, SkillsMiddleware, MCPMiddleware, SharedMemoryMiddleware, ShellToolMiddleware
         # FileTrackerMiddleware MUST be first to track all file operations and enforce read-before-edit
 
     agent_middleware = [
@@ -926,7 +915,11 @@ def create_agent_with_config(
             workspace_root=str(Path.cwd()),
             env=dict(os.environ),
         ),
-        MemoryMiddleware(backend=FilesystemBackend(), sources=memory_sources),
+        AgentMemoryMiddleware(
+            settings=settings,
+            assistant_id=assistant_id,
+            skip_project_memory=is_continuation,
+        ),
     ]
     # Default core-nami-subagents
     default_subagents = retrieve_core_subagents(tools=tools)
