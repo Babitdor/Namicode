@@ -772,7 +772,7 @@ async def simple_cli(
 
         agent_name, query = parse_agent_mentions(user_input, settings)
         if agent_name:
-            console.print(f"\n> You: @{agent_name} {query}", style=COLORS["user"])
+            console.print(f"\n> @{agent_name} {query}", style=COLORS["user"])
             # The named agent is already registered in SubAgentMiddleware (via
             # build_named_subagents → create_agent_with_config). Route the request
             # through the main agent so it dispatches via the task tool.
