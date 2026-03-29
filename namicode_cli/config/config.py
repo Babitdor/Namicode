@@ -54,6 +54,9 @@ COLORS = {
     "subagent": "#30c3f0",  # Medium red (sub-agent messages)
 }
 
+# Reserved agent ID for the main agent — not a user-created named subagent.
+MAIN_AGENT_ID = "nami-agent"
+
 # Agent color registry - stores colors for custom agents
 _agent_colors: dict[str, str] = {}
 
@@ -576,6 +579,8 @@ class Settings:
         if global_agents_dir.exists():
             for agent_dir in global_agents_dir.iterdir():
                 if agent_dir.is_dir() and (agent_dir / "agent.md").exists():
+                    if agent_dir.name == MAIN_AGENT_ID:
+                        continue  # reserved — not a user-created named agent
                     agents.append((agent_dir.name, agent_dir, "global"))
 
         # Project agents ({project_root}/.nami/agents/)
@@ -583,6 +588,8 @@ class Settings:
         if project_agents_dir and project_agents_dir.exists():
             for agent_dir in project_agents_dir.iterdir():
                 if agent_dir.is_dir() and (agent_dir / "agent.md").exists():
+                    if agent_dir.name == MAIN_AGENT_ID:
+                        continue  # reserved — not a user-created named agent
                     agents.append((agent_dir.name, agent_dir, "project"))
 
         return agents

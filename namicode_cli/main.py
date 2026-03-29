@@ -178,7 +178,9 @@ def parse_args():
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
 
     # Init command - interactive configuration setup
-    init_parser = subparsers.add_parser("init", help="Initialize project or global configuration")
+    init_parser = subparsers.add_parser(
+        "init", help="Initialize project or global configuration"
+    )
     init_parser.add_argument(
         "--scope",
         choices=["project", "global"],
@@ -215,7 +217,9 @@ def parse_args():
     setup_mcp_parser(subparsers)
 
     # Config command - view/edit configuration
-    config_parser = subparsers.add_parser("config", help="View or edit configuration (non-secret)")
+    config_parser = subparsers.add_parser(
+        "config", help="View or edit configuration (non-secret)"
+    )
     config_parser.add_argument(
         "config_command",
         nargs="?",
@@ -255,7 +259,9 @@ def parse_args():
         "paths",
         help="Manage approved file system paths",
     )
-    paths_subparsers = paths_parser.add_subparsers(dest="paths_command", help="Paths command")
+    paths_subparsers = paths_parser.add_subparsers(
+        dest="paths_command", help="Paths command"
+    )
 
     # paths list
     paths_subparsers.add_parser(
@@ -335,7 +341,9 @@ def parse_args():
         version=f"{settings.version} (NamiCode)",
         help="Show the version number and exit",
     )
-    parser.add_argument("-h", "--help", action="help", help="Show this help message and exit")
+    parser.add_argument(
+        "-h", "--help", action="help", help="Show this help message and exit"
+    )
 
     return parser.parse_args()
 
@@ -379,7 +387,9 @@ async def simple_cli(
             "[red]Cannot start nami without path approval.[/red]",
             style=COLORS["dim"],
         )
-        console.print("[dim]Path approval is required to ensure safe file system access.[/dim]")
+        console.print(
+            "[dim]Path approval is required to ensure safe file system access.[/dim]"
+        )
         console.print()
         sys.exit(1)
 
@@ -401,7 +411,9 @@ async def simple_cli(
 
     # Display sandbox info persistently (survives console.clear())
     if sandbox_type and sandbox_id:
-        console.print(f"[yellow]⚡ {sandbox_type.capitalize()} sandbox: {sandbox_id}[/yellow]")
+        console.print(
+            f"[yellow]⚡ {sandbox_type.capitalize()} sandbox: {sandbox_id}[/yellow]"
+        )
         if setup_script_path:
             console.print(
                 f"[green]✓ Setup script ({setup_script_path}) completed successfully[/green]"
@@ -413,8 +425,12 @@ async def simple_cli(
             "[yellow]⚠ Web search disabled:[/yellow] TAVILY_API_KEY not found.",
             style=COLORS["dim"],
         )
-        console.print("  To enable web search, set your Tavily API key:", style=COLORS["dim"])
-        console.print("    export TAVILY_API_KEY=your_api_key_here", style=COLORS["dim"])
+        console.print(
+            "  To enable web search, set your Tavily API key:", style=COLORS["dim"]
+        )
+        console.print(
+            "    export TAVILY_API_KEY=your_api_key_here", style=COLORS["dim"]
+        )
         console.print(
             "  Or add it to your .env file. Get your key at: https://tavily.com",
             style=COLORS["dim"],
@@ -525,7 +541,9 @@ async def simple_cli(
             if messages:
                 # Scan current workspace state
                 workspace_state = (
-                    scan_workspace(settings.project_root) if settings.project_root else None
+                    scan_workspace(settings.project_root)
+                    if settings.project_root
+                    else None
                 )
 
                 # Extract current task from session state (if available)
@@ -552,7 +570,9 @@ async def simple_cli(
                         )
                     except Exception as e:
                         if not silent:
-                            console.print(f"[dim]Could not generate memory summary: {e}[/dim]")
+                            console.print(
+                                f"[dim]Could not generate memory summary: {e}[/dim]"
+                            )
 
                 # Capture shared memory for persistence
                 try:
@@ -592,7 +612,9 @@ async def simple_cli(
             manager = ProcessManager.get_instance()
             stopped_count = await manager.stop_all()
             if stopped_count > 0:
-                console.print(f"[dim]Stopped {stopped_count} managed process(es).[/dim]")
+                console.print(
+                    f"[dim]Stopped {stopped_count} managed process(es).[/dim]"
+                )
         except Exception as e:
             console.print(f"[dim]Could not stop processes: {e}[/dim]")
 
@@ -708,7 +730,7 @@ async def simple_cli(
         # /critique shortcut → delegate to the built-in critique-agent subagent
         # via the main agent's `task` tool (not the custom @agent path)
         if user_input.startswith("/critique"):
-            critique_args = user_input[len("/critique"):].strip()
+            critique_args = user_input[len("/critique") :].strip()
             user_input = (
                 f"Use the critique-agent subagent (via the task tool) to: "
                 f"{critique_args or 'Review recent changes for correctness, safety, and regressions'}"
@@ -745,54 +767,52 @@ async def simple_cli(
             console.print("\nGoodbye!", style=COLORS["primary"])
             break
 
-        # Check for @agent mentions
-        from namicode_cli.commands.commands import invoke_subagent
+        # Check for @agent mentions — route through main agent's task tool
         from namicode_cli.input import parse_agent_mentions
 
         agent_name, query = parse_agent_mentions(user_input, settings)
         if agent_name:
-            console.print()
-            # console.print(
-            #     f"[bold cyan]@{agent_name}[/bold cyan] [dim]processing...[/dim]"
-            # )
-            # console.print()
-
-            subagent, _ = invoke_subagent(
-                agent_name,
-                settings=settings,
-                store=store,
-                checkpointer=checkpointer,
+            console.print(f"\n> You: @{agent_name} {query}", style=COLORS["user"])
+            # The named agent is already registered in SubAgentMiddleware (via
+            # build_named_subagents → create_agent_with_config). Route the request
+            # through the main agent so it dispatches via the task tool.
+            task_input = (
+                f"Call the '{agent_name}' subagent to do the following:\n\n{query}"
             )
-            _exec_task = asyncio.ensure_future(execute_task(
-                query,
-                subagent,
-                agent_name,
-                session_state,
-                token_tracker,
-                backend=backend,
-                is_subagent=True,
-                image_tracker=image_tracker,
-                seen_message_ids=_seen_message_ids,
-            ))
+            _exec_task = asyncio.ensure_future(
+                execute_task(
+                    task_input,
+                    agent,
+                    assistant_id,
+                    session_state,
+                    token_tracker,
+                    backend=backend,
+                    is_subagent=False,
+                    image_tracker=image_tracker,
+                    seen_message_ids=_seen_message_ids,
+                )
+            )
             try:
                 await _exec_task
             except asyncio.CancelledError:
-                pass  # execute_task's CancelledError handler ran cleanup
+                pass
             finally:
                 _exec_task = None
 
         else:
-            _exec_task = asyncio.ensure_future(execute_task(
-                user_input,
-                agent,
-                assistant_id,
-                session_state,
-                token_tracker,
-                backend=backend,
-                is_subagent=False,
-                image_tracker=image_tracker,
-                seen_message_ids=_seen_message_ids,
-            ))
+            _exec_task = asyncio.ensure_future(
+                execute_task(
+                    user_input,
+                    agent,
+                    assistant_id,
+                    session_state,
+                    token_tracker,
+                    backend=backend,
+                    is_subagent=False,
+                    image_tracker=image_tracker,
+                    seen_message_ids=_seen_message_ids,
+                )
+            )
             try:
                 await _exec_task
             except asyncio.CancelledError:
@@ -906,11 +926,17 @@ async def _run_agent_session(
     from .token_utils import calculate_baseline_tokens
 
     agent_dir = settings.get_agent_dir(assistant_id)
-    system_prompt = get_system_prompt(assistant_id=assistant_id, sandbox_type=sandbox_type)
-    baseline_tokens = calculate_baseline_tokens(model, agent_dir, system_prompt, assistant_id)
+    system_prompt = get_system_prompt(
+        assistant_id=assistant_id, sandbox_type=sandbox_type
+    )
+    baseline_tokens = calculate_baseline_tokens(
+        model, agent_dir, system_prompt, assistant_id
+    )
 
     # Extract model name for context window calculation
-    model_name = getattr(model, "model_name", None) or getattr(model, "model", "unknown")
+    model_name = getattr(model, "model_name", None) or getattr(
+        model, "model", "unknown"
+    )
 
     try:
         await simple_cli(
@@ -958,9 +984,7 @@ async def _run_agent_session(
                     project_root=Path.cwd(),
                     task_status="crashed",
                 )
-                console.print(
-                    f"[dim]Session saved → {session_state.session_id}[/dim]"
-                )
+                console.print(f"[dim]Session saved → {session_state.session_id}[/dim]")
             except Exception as _save_err:
                 console.print(f"[dim]Failsafe save failed: {_save_err}[/dim]")
         raise  # re-raise so the traceback still propagates to main()
@@ -1041,12 +1065,16 @@ async def main(
 
             # Load only recent messages for context (not all messages)
             # The continuation prompt builder will handle the full context
-            recent_messages = session_manager.load_recent_messages(session_data.meta.session_id)
+            recent_messages = session_manager.load_recent_messages(
+                session_data.meta.session_id
+            )
 
             # Scan current workspace and detect drift
             current_workspace = scan_workspace(project_root)
             if session_data.workspace_state:
-                drift_warnings = detect_drift(session_data.workspace_state, current_workspace)
+                drift_warnings = detect_drift(
+                    session_data.workspace_state, current_workspace
+                )
                 warnings.extend(drift_warnings)
 
             # Load NAMI.md for continuation prompt
@@ -1121,7 +1149,9 @@ async def main(
             with create_sandbox(
                 sandbox_type, sandbox_id=sandbox_id, setup_script_path=setup_script_path
             ) as sandbox_backend:
-                console.print(f"[yellow]⚡ Remote execution enabled ({sandbox_type})[/yellow]")
+                console.print(
+                    f"[yellow]⚡ Remote execution enabled ({sandbox_type})[/yellow]"
+                )
                 console.print()
 
                 await _run_agent_session(
@@ -1230,7 +1260,9 @@ def _execute_paths_command(args) -> None:
 
         console.print()
         console.print("[yellow]⚠ This will clear ALL approved paths.[/yellow]")
-        console.print("[dim]You'll need to re-approve paths when you next run nami.[/dim]")
+        console.print(
+            "[dim]You'll need to re-approve paths when you next run nami.[/dim]"
+        )
         console.print()
 
         confirm = prompt("Are you sure? (yes/no): ").strip().lower()
@@ -1248,7 +1280,9 @@ def _execute_paths_command(args) -> None:
             console.print()
     else:
         console.print()
-        console.print("[yellow]Please specify a subcommand: list, revoke, or clear[/yellow]")
+        console.print(
+            "[yellow]Please specify a subcommand: list, revoke, or clear[/yellow]"
+        )
         console.print()
         console.print("[bold]Usage:[/bold]", style=COLORS["primary"])
         console.print("  nami paths list         List all approved paths")
@@ -1371,7 +1405,9 @@ def _execute_secrets_command(args) -> None:
         # Set API key
         if not args.key:
             console.print("[red]✗ Key name required for 'set' command[/red]")
-            console.print("[dim]Usage: nami secrets set <key> (e.g., 'openai_api_key')[/dim]")
+            console.print(
+                "[dim]Usage: nami secrets set <key> (e.g., 'openai_api_key')[/dim]"
+            )
             return
 
         console.print()
@@ -1396,7 +1432,9 @@ def _execute_secrets_command(args) -> None:
         # Delete API key
         if not args.key:
             console.print("[red]✗ Key name required for 'delete' command[/red]")
-            console.print("[dim]Usage: nami secrets delete <key> (e.g., 'openai_api_key')[/dim]")
+            console.print(
+                "[dim]Usage: nami secrets delete <key> (e.g., 'openai_api_key')[/dim]"
+            )
             return
 
         console.print()
@@ -1460,7 +1498,9 @@ def cli_main() -> None:
                 from namicode_cli.onboarding import OnboardingWizard
 
                 console.print()
-                console.print("[yellow]⚠ This will overwrite your current configuration.[/yellow]")
+                console.print(
+                    "[yellow]⚠ This will overwrite your current configuration.[/yellow]"
+                )
                 from prompt_toolkit import prompt
 
                 confirm = prompt("Continue? [y/N]: ").strip().lower()
@@ -1497,7 +1537,9 @@ def cli_main() -> None:
             sys.exit(run_doctor())
         else:
             # Create session state from args
-            session_state = SessionState(auto_approve=args.auto_approve, no_splash=args.no_splash)
+            session_state = SessionState(
+                auto_approve=args.auto_approve, no_splash=args.no_splash
+            )
 
             # API key validation happens in create_model()
             asyncio.run(

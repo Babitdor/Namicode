@@ -217,7 +217,9 @@ def list_agents() -> None:
         )
         return
 
-    console.print(f"\n[bold {COLORS['primary']}]📋 Available Agents[/bold {COLORS['primary']}]\n")
+    console.print(
+        f"\n[bold {COLORS['primary']}]📋 Available Agents[/bold {COLORS['primary']}]\n"
+    )
 
     for agent_name, agent_path, scope in sorted(agents, key=lambda x: (x[2], x[0])):
         # Display scope badge
@@ -285,13 +287,17 @@ def reset_agent(agent_name: str, source_agent: str | None = None) -> None:
 
     if agent_dir.exists():
         shutil.rmtree(agent_dir)
-        console.print(f"Removed existing agent directory: {agent_dir}", style=COLORS["tool"])
+        console.print(
+            f"Removed existing agent directory: {agent_dir}", style=COLORS["tool"]
+        )
 
     agent_dir.mkdir(parents=True, exist_ok=True)
     agent_md = agent_dir / "agent.md"
     agent_md.write_text(source_content, encoding="utf-8")
 
-    console.print(f"✓ Agent '{agent_name}' reset to {action_desc}", style=COLORS["primary"])
+    console.print(
+        f"✓ Agent '{agent_name}' reset to {action_desc}", style=COLORS["primary"]
+    )
     console.print(f"Location: {agent_dir}\n", style=COLORS["dim"])
 
 
@@ -666,7 +672,9 @@ def _format_fetch_url_description(
     return f"URL: {url}\nTimeout: {timeout}s\n\n⚠️  Will fetch and convert web content to markdown"
 
 
-def _format_task_description(tool_call: ToolCall, _state: AgentState, _runtime: Runtime) -> str:
+def _format_task_description(
+    tool_call: ToolCall, _state: AgentState, _runtime: Runtime
+) -> str:
     """Format task (subagent) tool call for approval prompt.
 
     The task tool signature is: task(description: str, subagent_type: str)
@@ -691,14 +699,18 @@ def _format_task_description(tool_call: ToolCall, _state: AgentState, _runtime: 
     )
 
 
-def _format_shell_description(tool_call: ToolCall, _state: AgentState, _runtime: Runtime) -> str:
+def _format_shell_description(
+    tool_call: ToolCall, _state: AgentState, _runtime: Runtime
+) -> str:
     """Format shell tool call for approval prompt."""
     args = tool_call["args"]
     command = args.get("command", "N/A")
     return f"Shell Command: {command}\nWorking Directory: {Path.cwd()}"
 
 
-def _format_execute_description(tool_call: ToolCall, _state: AgentState, _runtime: Runtime) -> str:
+def _format_execute_description(
+    tool_call: ToolCall, _state: AgentState, _runtime: Runtime
+) -> str:
     """Format execute tool call for approval prompt."""
     args = tool_call["args"]
     command = args.get("command", "N/A")
@@ -867,16 +879,6 @@ def create_agent_with_config(
         except ImportError:
             pass
 
-    # Setup agent directory for persistent memory
-    # Global Memory — create agent.md with default instructions if missing
-    agent_md = settings.get_user_agent_md_path(assistant_id)
-
-    if not agent_md.exists():
-        # Ensure parent directory exists before writing
-        agent_md.parent.mkdir(parents=True, exist_ok=True)
-        source_content = get_default_coding_instructions()
-        agent_md.write_text(source_content, encoding="utf-8")
-
     # Skills directory - global (shared across all agents at ~/.nami/skills/)
     skills_dir = settings.ensure_user_skills_dir()
     skill_sources.append(str(skills_dir))
@@ -923,7 +925,9 @@ def create_agent_with_config(
     ]
     # Default core-nami-subagents
     default_subagents = retrieve_core_subagents(tools=tools)
-    Nami_SubAgent.extend(default_subagents)  # Use extend to add all subagents individually
+    Nami_SubAgent.extend(
+        default_subagents
+    )  # Use extend to add all subagents individually
 
     # Build named subagents from all available agents
     named_subagents = build_named_subagents(
@@ -934,7 +938,9 @@ def create_agent_with_config(
 
     # Get the system prompt (sandbox-aware and with skills)
     if system_prompt is None:
-        system_prompt = get_system_prompt(assistant_id=assistant_id, sandbox_type=sandbox_type)
+        system_prompt = get_system_prompt(
+            assistant_id=assistant_id, sandbox_type=sandbox_type
+        )
 
     if auto_approve:
         # No interrupts - all tools run automatically
@@ -985,7 +991,9 @@ async def get_agent_plan_mode_state(agent: Pregel, thread_id: str) -> bool:
     return state.values.get("plan_mode_enabled", False)
 
 
-async def set_agent_plan_mode_state(agent: Pregel, thread_id: str, enabled: bool) -> None:
+async def set_agent_plan_mode_state(
+    agent: Pregel, thread_id: str, enabled: bool
+) -> None:
     """Set plan mode state in agent.
 
     Args:

@@ -28,8 +28,8 @@ from namicode_cli.states.Session import SessionState
 # Regex patterns for context-aware completion
 AT_MENTION_RE = re.compile(r"@(?P<path>(?:[^\s@]|(?<=\\)\s)*)$")
 SLASH_COMMAND_RE = re.compile(r"^/(?P<command>[a-z]*)$")
-# Pattern for @agent_name query at start of input
-AGENT_MENTION_RE = re.compile(r"^@([a-zA-Z0-9_-]+)\s+(.+)$", re.DOTALL)
+# Pattern for @agent_name with optional query at start of input
+AGENT_MENTION_RE = re.compile(r"^@([a-zA-Z0-9_-]+)(?:\s+(.+))?$", re.DOTALL)
 
 EXIT_CONFIRM_WINDOW = 3.0
 
@@ -296,14 +296,19 @@ def parse_agent_mentions(text: str, settings: Settings | None = None) -> tuple[s
         return None, text
 
     agent_name = match.group(1)
-    query = match.group(2).strip()
+    raw_query = match.group(2)
+    query = raw_query.strip() if raw_query else "Introduce yourself — describe what you specialise in and how you can help."
 
-    # Verify agent exists (checks project scope first, then global)
-    agent_location = settings.find_agent(agent_name)
-    if agent_location is not None:
+    # Core agents have no agent.md on disk — check their names directly.
+    from namicode_cli.agents.default_subagents.subagents import retrieve_core_subagents
+    if agent_name in {s["name"] for s in retrieve_core_subagents()}:
         return agent_name, query
 
-    return None, text  # Agent doesn't exist, treat as regular input
+    # User-created agents: verify agent.md exists on disk.
+    if settings.find_agent(agent_name) is not None:
+        return agent_name, query
+
+    return None, text  # Agent not found, treat as regular input
 
 
 def get_bottom_toolbar(

@@ -167,13 +167,14 @@ def format_tool_display(tool_name: str, tool_args: dict) -> str:
             return f'{tool_name}("{url}")'
 
     elif tool_name == "task":
-        # Task: show the subagent type and task description
+        # Task: "[Agent Name] description" — agent name is title-cased, no icon
         subagent_type = tool_args.get("subagent_type", "unknown")
+        agent_label = subagent_type.replace("-", " ").replace("_", " ").title()
         if "description" in tool_args:
             desc = str(tool_args["description"])
-            desc = truncate_value(desc, 80)
-            return f'{tool_name}[{subagent_type}]("{desc}")'
-        return f"{tool_name}[{subagent_type}]"
+            desc = truncate_value(desc, 100)
+            return f"[{agent_label}] {desc}"
+        return f"[{agent_label}]"
 
     elif tool_name == "write_todos":
         # Todos: show count of items

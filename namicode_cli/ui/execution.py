@@ -29,6 +29,7 @@ import asyncio
 import json
 import sys
 import time
+import uuid
 from pathlib import Path
 
 from langchain.agents.middleware.human_in_the_loop import (
@@ -341,12 +342,15 @@ async def execute_task(  # type: ignore
     else:
         message_content = final_input
 
+    # Subagents always get a fresh thread_id so they start with an empty
+    # checkpoint, isolated from the main agent's conversation history.
+    thread_id = str(uuid.uuid4()) if is_subagent else session_state.thread_id
     config = {
-        "configurable": {"thread_id": session_state.thread_id},
+        "configurable": {"thread_id": thread_id},
         # Metadata is passed through to LangSmith as filterable run metadata.
         # thread_id lets you correlate all runs in a session; assistant_id identifies the agent.
         "metadata": {
-            "thread_id": session_state.thread_id,
+            "thread_id": thread_id,
             **({"assistant_id": assistant_id} if assistant_id else {}),
         },
         # run_name becomes the trace name in LangSmith (replaces generic "LangGraph").
@@ -1426,8 +1430,13 @@ async def execute_task(  # type: ignore
                                     if has_responded:
                                         console.print()
 
+                                    # task tool has its own clean format — no icon prefix
+                                    if buffer_name == "task":
+                                        line = f"  {display_str}"
+                                    else:
+                                        line = f"  {icon} {display_str}"
                                     console.print(
-                                        f"  {icon} {display_str}",
+                                        line,
                                         style=f"dim {COLORS['tool']}",
                                         markup=False,
                                     )
@@ -1485,15 +1494,16 @@ async def execute_task(  # type: ignore
                                     )
                                     subagent_stack.append((buffer_id, subagent_type))
 
-                                    # Restart spinner — show how many subagents are running
+                                    # Restart spinner with agent-name-aware "is thinking..." style
                                     remaining = len(active_subagents)
+                                    _subagent_color = get_agent_color(subagent_type)
                                     if remaining > 1:
                                         status.update(
-                                            f"[bold {COLORS['thinking']}]{remaining} subagents running..."
+                                            f"[bold {_subagent_color}]{remaining} agents thinking..."
                                         )
                                     else:
                                         status.update(
-                                            f"[bold {COLORS['thinking']}]{subagent_type} running..."
+                                            f"[bold {_subagent_color}]{subagent_type} is thinking..."
                                         )
                                     status.start()
                                     spinner_active = True
