@@ -323,3 +323,121 @@ def build_context_breakdown(
         assistant_message_count=assistant_count,
         tool_call_count=tool_count,
     )
+
+
+@dataclass
+class CompactionRecommendation:
+    """Recommendation for whether compaction should be performed.
+
+    Attributes:
+        should_compact: Whether compaction is recommended
+        reason: Human-readable explanation for the recommendation
+        usage_percentage: Current context usage percentage
+        tokens_used: Total tokens currently used
+        tokens_available: Tokens remaining before hitting limit
+        messages_count: Number of messages in conversation
+        estimated_tokens_saved: Estimated tokens that would be saved by compaction
+    """
+
+    should_compact: bool
+    reason: str
+    usage_percentage: float
+    tokens_used: int
+    tokens_available: int
+    messages_count: int
+    estimated_tokens_saved: int = 0
+
+
+def get_compaction_recommendation(
+    messages: list[BaseMessage],
+    model_name: str,
+    baseline_tokens: int = 0,
+) -> CompactionRecommendation:
+    """Analyze conversation and recommend whether compaction should be performed.
+
+    This function evaluates multiple factors to determine if compaction is needed:
+    1. Context window usage percentage
+    2. Number of messages in conversation
+    3. Estimated token savings from compaction
+    4. Conversation age/length heuristics
+
+    Args:
+        messages: Current conversation messages from agent state
+        model_name: Model name for context window lookup
+        baseline_tokens: Baseline tokens (system prompt, tools, memory) already used
+
+    Returns:
+        CompactionRecommendation with analysis and recommendation
+    """
+    breakdown = build_context_breakdown(messages, model_name)
+
+    # Calculate effective usage including baseline
+    total_with_baseline = breakdown.total_tokens + baseline_tokens
+    effective_usage_pct = (total_with_baseline / breakdown.context_window_size) * 100
+    tokens_available = breakdown.context_window_size - total_with_baseline
+
+    # Count message types for heuristics
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+    human_count = sum(1 for m in messages if isinstance(m, HumanMessage))
+    ai_count = sum(1 for m in messages if isinstance(m, AIMessage))
+    tool_count = sum(1 for m in messages if isinstance(m, ToolMessage))
+    total_messages = len(messages)
+
+    # Heuristics for compaction recommendation
+    reasons = []
+
+    # Critical threshold: >90% usage - always recommend
+    if effective_usage_pct >= CONTEXT_CRITICAL_THRESHOLD * 100:
+        reasons.append(f"Critical context usage ({effective_usage_pct:.1f}%)")
+
+    # Warning threshold: >75% usage with significant message count
+    elif effective_usage_pct >= CONTEXT_WARNING_THRESHOLD * 100:
+        if total_messages >= 20:
+            reasons.append(f"High context usage ({effective_usage_pct:.1f}%) with {total_messages} messages")
+
+    # Moderate usage but lots of messages - recommend for efficiency
+    elif effective_usage_pct >= 50 and total_messages >= 50:
+        reasons.append(f"Many messages ({total_messages}) with moderate usage ({effective_usage_pct:.1f}%)")
+
+    # Long conversation without compaction - recommend for cleanliness
+    elif total_messages >= 100:
+        reasons.append(f"Very long conversation ({total_messages} messages)")
+
+    # Estimate tokens that would be saved
+    # Compaction typically reduces conversation to ~5-10% of original size
+    # But we keep the most recent exchanges
+    if total_messages > 10:
+        # Estimate: keep last 6 exchanges (12 messages) + summary
+        messages_to_summarize = max(0, total_messages - 12)
+        avg_tokens_per_message = breakdown.conversation_tokens / max(1, total_messages)
+        estimated_summary_tokens = 500  # Typical summary size
+        estimated_tokens_saved = int(
+            (messages_to_summarize * avg_tokens_per_message) - estimated_summary_tokens
+        )
+        estimated_tokens_saved = max(0, estimated_tokens_saved)
+    else:
+        estimated_tokens_saved = 0
+
+    # Build recommendation
+    should_compact = len(reasons) > 0
+
+    if not reasons:
+        if effective_usage_pct < 25:
+            reason = f"Low context usage ({effective_usage_pct:.1f}%) - no compaction needed"
+        elif total_messages < 10:
+            reason = f"Short conversation ({total_messages} messages) - no compaction needed"
+        else:
+            reason = f"Context usage acceptable ({effective_usage_pct:.1f}%) - compaction optional"
+    else:
+        reason = "; ".join(reasons)
+
+    return CompactionRecommendation(
+        should_compact=should_compact,
+        reason=reason,
+        usage_percentage=effective_usage_pct,
+        tokens_used=total_with_baseline,
+        tokens_available=tokens_available,
+        messages_count=total_messages,
+        estimated_tokens_saved=estimated_tokens_saved,
+    )

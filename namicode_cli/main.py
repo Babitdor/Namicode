@@ -616,8 +616,89 @@ async def simple_cli(
         except Exception as e:
             console.print(f"[dim]Could not stop processes: {e}[/dim]")
 
+        # Check if compaction is needed before saving
+        await _maybe_compact_on_exit()
+
         # Save session
         await _save_session(silent=False)
+
+    async def _maybe_compact_on_exit() -> None:
+        """Check context usage and perform compaction if needed on exit.
+
+        This analyzes the conversation and automatically compacts if:
+        - Context usage is above critical threshold (90%)
+        - Context usage is above warning threshold (75%) with many messages
+        - Conversation has 100+ messages
+        """
+        from namicode_cli.compaction import compact_conversation
+        from namicode_cli.config.model_create import create_model
+        from namicode_cli.context.context_manager import get_compaction_recommendation
+
+        try:
+            # Get current conversation state
+            config = {"configurable": {"thread_id": session_state.thread_id}}
+            state = await agent.aget_state(config)
+            messages = state.values.get("messages", [])
+
+            if not messages:
+                return
+
+            # Get baseline tokens from token tracker
+            baseline_tokens = getattr(token_tracker, "baseline_tokens", 0)
+
+            # Get compaction recommendation
+            recommendation = get_compaction_recommendation(
+                messages=messages,
+                model_name=model_name,
+                baseline_tokens=baseline_tokens,
+            )
+
+            if not recommendation.should_compact:
+                # No compaction needed - just show brief status
+                console.print(
+                    f"[dim]Context: {recommendation.usage_percentage:.1f}% used "
+                    f"({recommendation.tokens_used:,} / {recommendation.tokens_used + recommendation.tokens_available:,} tokens)[/dim]"
+                )
+                return
+
+            # Show compaction recommendation
+            console.print()
+            console.print("[bold yellow]Context Optimization[/bold yellow]")
+            console.print(f"[dim]{recommendation.reason}[/dim]")
+            console.print(
+                f"[dim]Messages: {recommendation.messages_count} | "
+                f"Tokens: {recommendation.tokens_used:,} ({recommendation.usage_percentage:.1f}%)[/dim]"
+            )
+
+            if recommendation.estimated_tokens_saved > 0:
+                console.print(
+                    f"[dim]Estimated savings: ~{recommendation.estimated_tokens_saved:,} tokens[/dim]"
+                )
+
+            # Perform compaction
+            model = create_model()
+            with console.status("[bold]Compacting conversation...[/bold]", spinner="dots"):
+                result = await compact_conversation(
+                    agent=agent,
+                    model=model,
+                    thread_id=session_state.thread_id,
+                )
+
+            if result.success:
+                console.print("[green]✓[/green] ", end="")
+                console.print("[green]Conversation optimized for next session[/green]")
+                console.print(
+                    f"[dim]Messages: {result.messages_before} → {result.messages_after} | "
+                    f"Tokens saved: ~{result.tokens_saved:,}[/dim]"
+                )
+                # Reset token tracker after compaction
+                token_tracker.reset()
+            else:
+                console.print(f"[yellow]Compaction skipped: {result.error}[/yellow]")
+
+        except Exception as e:
+            # Don't fail exit if compaction fails - just log and continue
+            console.print(f"[dim]Could not check context: {e}[/dim]")
 
     # Helper for auto-save check
     async def _maybe_auto_save() -> None:
