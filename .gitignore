@@ -111,3 +111,4 @@ evaluation/jobs/
 # .nami/.claude
 .nami/
 .claude/
+.serena/

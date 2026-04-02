@@ -22,11 +22,13 @@ classifiers = [
  ]
 dependencies = [
     "requests",
+    "jinja2>=3.1.0",
     "rich>=13.0.0",
     "prompt-toolkit>=3.0.52",
     # LangChain ecosystem (updated 2025-01)
     "langchain>=1.2.13",
     "langchain-core>=1.2.22",
+    "langchain-openai>=1.0.0",
     "langchain-anthropic>=1.4.0",
     "langchain-ollama>=1.0.1",
     "langchain-google-genai>=4.2.1",
@@ -71,6 +73,9 @@ dependencies = [
 
 [project.scripts]
 nami = "namicode_cli.main:cli_main"
+
+[tool.setuptools.package-data]
+"*" = ["*.jinja"]
 
 [tool.ruff]
 line-length = 100
