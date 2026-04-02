@@ -194,6 +194,7 @@ COMMANDS = {
     "verbose": "Toggle verbose mode - show/hide internal agent context",
     "files": "Show file operation summary for the session",
     "critique": "Run critique agent on recent changes (e.g., /critique or /critique src/)",
+    "ralph": "Run autonomous looping mode (e.g., /ralph <task>, /ralph <task> --iterations 5)",
     "exit": "Exit the CLI",
 }
 

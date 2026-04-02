@@ -208,7 +208,7 @@ class MemoryMiddleware(AgentMiddleware):
                 config=config,
                 tool_call_id=None,
             )
-            return self._backend(tool_runtime) # type: ignore
+            return self._backend(tool_runtime)  # type: ignore
         return self._backend
 
     def _format_agent_memory(self, contents: dict[str, str]) -> str:
@@ -327,7 +327,7 @@ class MemoryMiddleware(AgentMiddleware):
                 except OSError:
                     pass
 
-    def before_agent( # type: ignore
+    def before_agent(  # type: ignore
         self, state: MemoryState, runtime: Runtime, config: RunnableConfig
     ) -> MemoryStateUpdate | None:
         """Load memory content before agent execution (synchronous).

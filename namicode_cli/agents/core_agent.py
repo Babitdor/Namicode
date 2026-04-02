@@ -908,9 +908,6 @@ def create_agent_with_config(
             truncate_results=True,
             include_system_prompt=True,
         ),
-        AskQuestionMiddleware(),
-        PlanModeMiddleware(enabled_by_default=False),
-        SkillsMiddleware(backend=FilesystemBackend(), sources=skill_sources),
         mcp_middleware,
         SharedMemoryMiddleware(author_id="main-agent"),
         ShellMiddleware(
@@ -923,18 +920,9 @@ def create_agent_with_config(
             skip_project_memory=is_continuation,
         ),
     ]
-    # Default core-nami-subagents
-    default_subagents = retrieve_core_subagents(tools=tools)
-    Nami_SubAgent.extend(
-        default_subagents
-    )  # Use extend to add all subagents individually
-
-    # Build named subagents from all available agents
-    named_subagents = build_named_subagents(
-        assistant_id=assistant_id,
-        tools=tools,
-    )
-    Nami_SubAgent.extend(named_subagents)  # type: ignore
+    # Load pre-defined default and user defined subagents
+    Nami_SubAgent.extend(retrieve_core_subagents(tools=tools))  # type: ignore
+    Nami_SubAgent.extend(build_named_subagents(assistant_id=assistant_id, tools=tools))  # type: ignore
 
     # Get the system prompt (sandbox-aware and with skills)
     if system_prompt is None:
@@ -961,6 +949,7 @@ def create_agent_with_config(
     agent = create_deep_agent(
         name=assistant_id,
         model=wrapped_model,
+        skills=skill_sources,
         system_prompt=system_prompt,
         tools=tools,
         checkpointer=final_checkpointer,

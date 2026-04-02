@@ -107,3 +107,7 @@ langsmith.json
 
 # Evaluation job outputs
 evaluation/jobs/
+
+# .nami/.claude
+.nami/
+.claude/

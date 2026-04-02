@@ -61,31 +61,33 @@ class QuestionResponse(TypedDict):
 # ---------------------------------------------------------------------------
 
 ASK_QUESTION_SYSTEM_PROMPT = """
-## ask_question Tool
+## `ask_question` Tool
 
-Use `ask_question` to pause and get clarification before proceeding. **Prefer asking over guessing** — a short question saves costly rework.
+Use `ask_question` to pause and get clarification before proceeding. Use this tool sparingly — only when you genuinely need information you cannot determine from context.
 
 **Ask when:**
-- The request is ambiguous or has multiple interpretations
-- Multiple valid approaches exist and user preference matters
-- Key information is missing (target, constraints, environment)
-- You are about to make a hard-to-reverse decision
+- Requirements are ambiguous or have multiple valid interpretations
+- You want the user to choose between approaches and their preference matters
+- Key information is missing that only the user can provide
+- You are about to make a hard-to-reverse decision and want to confirm the plan first
 
 **Do NOT ask when:**
-- The answer is obvious from context
-- It's a trivial implementation detail the user doesn't care about
+- The answer is obvious from context — use your best judgment and proceed
+- It's a trivial implementation detail that doesn't meaningfully affect the outcome
+- A simple yes/no would suffice — just proceed with the sensible default
 
 **Question types:**
-- `structured` — multiple choice (use when there are clear alternatives)
-- `open_ended` — free text (use for open-ended or unknown answers)
+- `structured` — multiple choice; use when there are clear alternatives. An "Other" option is always available so the user can type a custom answer if none fit.
+- `open_ended` — free text; use when you need a free-form response
 
-The user will see your question and respond directly before you continue.
-
-For structured questions, options may be plain strings **or** rich dicts:
-```json
-{"label": "Portfolio site", "value": "portfolio", "description": "Showcase your work"}
-```
-The `value` field is returned to you after the user picks an option.
+**Usage tips:**
+- Be concise and specific — one focused question beats a vague one
+- Group related questions into a single `ask_question` call rather than making multiple sequential calls
+- For structured questions, options may be plain strings **or** rich dicts:
+  ```json
+  {"label": "Portfolio site", "value": "portfolio", "description": "Showcase your work"}
+  ```
+  The `value` field is returned to you after the user picks an option.
 """
 
 
@@ -174,7 +176,11 @@ def _ask_question(
         }
     )
 
-    raw_answer = response["answer"] if isinstance(response, dict) and "answer" in response else str(response)
+    raw_answer = (
+        response["answer"]
+        if isinstance(response, dict) and "answer" in response
+        else str(response)
+    )
     # Return the intended value (e.g. "portfolio") not just the display label
     return value_map.get(raw_answer, raw_answer)
 
@@ -185,8 +191,12 @@ def _create_ask_question_tool() -> BaseTool:
         name="ask_question",
         func=_ask_question,
         description=(
-            "Ask the user a question when you need clarification or input. "
-            "Use 'structured' for multiple choice, 'open_ended' for free text. "
+            "Ask the user one or more questions when you need clarification or input before proceeding. "
+            "Each question can be 'structured' (multiple choice — an 'Other' option is always available) "
+            "or 'open_ended' (free-form text). "
+            "Use this tool sparingly: only when you genuinely need information you cannot determine from context. "
+            "Group related questions into a single call rather than making multiple sequential calls. "
+            "Never ask questions you can answer yourself from the available context. "
             "Execution pauses until the user responds."
         ),
     )
@@ -220,18 +230,16 @@ class AskQuestionMiddleware(AgentMiddleware[AgentState, Any]):
         super().__init__()
         self.include_system_prompt = include_system_prompt
         self._ask_question_tool = _create_ask_question_tool()
-
-    @property
-    def tools(self) -> list[BaseTool]:
-        """Return the ask_question tool."""
-        return [self._ask_question_tool]
+        self.tools = [self._ask_question_tool]
 
     def modify_request(self, request: ModelRequest) -> ModelRequest:
         """Inject ASK_QUESTION_SYSTEM_PROMPT into the system prompt."""
         if not self.include_system_prompt:
             return request
-        system_prompt = (request.system_prompt or "") + "\n\n" + ASK_QUESTION_SYSTEM_PROMPT
-        return request.override(system_prompt=system_prompt)
+        system_prompt = (
+            (request.system_prompt or "") + "\n\n" + ASK_QUESTION_SYSTEM_PROMPT
+        )
+        return request.override(system_prompt=system_prompt)  # type: ignore
 
     def wrap_model_call(self, request: ModelRequest, handler) -> ModelResponse:
         return handler(self.modify_request(request))

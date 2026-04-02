@@ -126,140 +126,6 @@ ALLOWED_TOOLS_IN_PLAN_MODE = {
     "package_info",
 }
 
-# Complexity detection constants
-COMPLEXITY_KEYWORDS = {
-    # Feature implementation keywords
-    "implement",
-    "create",
-    "build",
-    "develop",
-    "add feature",
-    "develop feature",
-    "integrate",
-    "extend",
-    "new module",
-    "new component",
-    "architecture",
-    # Refactoring keywords
-    "refactor",
-    "restructure",
-    "reorganize",
-    "rewrite",
-    "migrate",
-    # Multi-step keywords
-    "then",
-    "next",
-    "after that",
-    "afterwards",
-    "following",
-    "finally",
-    "step by step",
-    "first",
-    "second",
-    "third",
-    "last",
-    # Complex task indicators
-    "multiple files",
-    "several files",
-    "across modules",
-    "coordinate",
-    "and then",
-    "also",
-    "additionally",
-    "furthermore",
-    # Implementation complexity
-    "design",
-    "structure",
-    "pattern",
-    "algorithm",
-    "optimize",
-}
-
-STEP_INDICATORS = {" and ", ", then", " next ", " first ", " then ", " finally ", " after that "}
-
-
-@dataclass
-class ComplexityResult:
-    """Result of complexity analysis."""
-
-    should_plan: bool
-    reason: str
-    score: float  # 0.0 to 1.0
-    factors: list[str]  # List of detected complexity factors
-
-
-def analyze_complexity(message: str) -> ComplexityResult:
-    """Analyze user message for complexity to suggest planning.
-
-    Uses multiple heuristics:
-    1. Keyword detection (implement, refactor, etc.)
-    2. Step count threshold (count conjunctions)
-    3. File scope analysis (detect file mentions)
-    4. Task length (word count)
-
-    Args:
-        message: User's request message
-
-    Returns:
-        ComplexityResult with should_plan boolean and reason
-    """
-    message_lower = message.lower()
-    factors = []
-    score = 0.0
-
-    # 1. Keyword detection (weight: 0.3 per keyword, max 0.6)
-    matched_keywords = []
-    for keyword in COMPLEXITY_KEYWORDS:
-        if keyword in message_lower:
-            matched_keywords.append(keyword)
-
-    if matched_keywords:
-        factors.append(f"Keywords: {', '.join(matched_keywords[:3])}")
-        score += min(0.6, len(matched_keywords) * 0.2)
-
-    # 2. Step count threshold (weight: 0.15 per step, max 0.5)
-    step_count = 0
-    for indicator in STEP_INDICATORS:
-        step_count += message_lower.count(indicator)
-
-    if step_count >= 2:
-        factors.append(f"Multiple steps detected ({step_count} step indicators)")
-        score += min(0.5, step_count * 0.15)
-
-    # 3. File scope analysis (weight: 0.1 per file, max 0.4)
-    # Match patterns like "file.py", "module.ts", "component.jsx"
-    file_pattern = r"\b[\w\-]+\.(py|js|ts|jsx|tsx|go|rs|java|cpp|c|h|md|json|yaml|yml|toml)\b"
-    file_mentions = re.findall(file_pattern, message, re.IGNORECASE)
-
-    if len(file_mentions) >= 2:
-        factors.append(f"Multiple files mentioned ({len(file_mentions)} files)")
-        score += min(0.4, len(file_mentions) * 0.1)
-
-    # 4. Word count (weight: 0.001 per word, max 0.3)
-    word_count = len(message.split())
-    if word_count >= 30:
-        factors.append(f"Long request ({word_count} words)")
-        score += min(0.3, word_count / 100)
-
-    # 5. Conjunction count (weight: 0.05 per conjunction, max 0.2)
-    conjunction_count = sum(1 for word in message_lower.split() if word in {"and", "or", "but"})
-    if conjunction_count >= 2:
-        factors.append(f"Multiple conjunctions ({conjunction_count})")
-        score += min(0.2, conjunction_count * 0.05)
-
-    # Determine if planning should be suggested
-    # Lower threshold: score >= 0.25 OR multiple factors
-    should_plan = score >= 0.25 or len(factors) >= 2
-
-    reason = f"Complexity score: {score:.2f}. " + "; ".join(factors) if factors else "Task appears simple"
-
-    return ComplexityResult(
-        should_plan=should_plan,
-        reason=reason,
-        score=score,
-        factors=factors,
-    )
-
 
 class PlanModeState(AgentState):
     """State schema for plan mode middleware."""
@@ -285,122 +151,109 @@ class PlanModeStateUpdate(TypedDict):
 
 # System prompt for plan mode (injected when enabled)
 PLAN_MODE_SYSTEM_PROMPT = """
-## Plan Mode (ACTIVE) — RESEARCH AND PLAN, DO NOT IMPLEMENT
+<system>
+**PLAN MODE ACTIVATED**
 
-You are in **Plan Mode**. Your job is to investigate, then produce a detailed written plan — nothing more.
+You are now in structured planning mode. Your goal is to design a clear, executable solution
+WITHOUT implementing it yet. Think deeply, explore thoroughly, then present a concrete plan
+for user approval before execution begins.
+</system>
 
----
+<principles>
+- **Be specific** - Vague plans cannot be executed well
+- **Be practical** - Plans should be executable by a developer
+- **Be complete** - Don't leave gaps that require guessing
+- **Be realistic** - Consider actual complexity and edge cases
+- **Be aware** - Understand why each step is necessary
+</principles>
 
-### RULES
+<workflow>
+1. **Investigate** - Explore the codebase thoroughly using read-only tools
+2. **Analyze** - Understand current behavior, dependencies, and implications
+3. **Design** - Develop clear strategy for change
+4. **Document** - Write the plan in a structured format
+5. **Submit** - Call exit_plan_mode when ready for approval
+</workflow>
 
-1. **NO IMPLEMENTATION** — Do not write or edit source code, run shell commands, or make any changes to the project.
-2. **READ EVERYTHING FIRST** — Before writing a single line of the plan, read all relevant files. A plan written without reading the code is worthless.
-3. **WRITE THE PLAN** — Use `write_file` to write your plan to `.nami/plans/plan.md`.
-4. **SUBMIT** — Call `exit_plan_mode` after writing the plan file. The user will approve or reject before execution begins.
+<investigation_checklist>
+Before designing, make sure you understand:
+- Which files/components are involved and their current responsibilities
+- How components interact (imports, data flow, function calls)
+- Existing patterns, naming conventions, and architectural decisions
+- Dependencies and potential breaking changes
+- Test coverage and integration points
+- Edge cases and error handling patterns
 
----
+Ask clarifying questions if requirements are ambiguous.
+</investigation_checklist>
 
-### PHASE 1 — INVESTIGATE (do this before writing the plan)
 
-Use `read_file`, `glob`, `grep`, `ls`, `git_diff`, `web_search` freely.
+Write a clear, structured plan.
 
-You must understand:
-- Which files are relevant and what they currently do
-- The exact lines that will need to change and why
-- How the components interact (imports, call chains, state flow)
-- Any constraints, existing patterns, or conventions to follow
-- What could go wrong if done naively
+Include:
 
-If anything is unclear, use `ask_question` now — not after you start implementing.
-
----
-
-### PHASE 2 — WRITE THE PLAN (write to `.nami/plans/plan.md`)
-
-Your plan must be specific enough that a developer could execute it without needing to think. Every step must name the exact file, the exact change, and why.
-
-**Required format:**
-
-```markdown
-# Plan: <concise title>
+## Goal
+What we are trying to achieve.
 
 ## Context
-<2–4 sentences: what the problem is, why this change is needed, and what was found during investigation>
+Key findings from investigation.
 
 ## Approach
-<chosen strategy and why — if you considered multiple approaches, state the tradeoffs that led to this choice>
+High-level strategy and reasoning.
 
-## Implementation Steps
+## Steps
+Numbered, actionable steps.
 
-### 1. <Action verb> — `path/to/file.py`
-**What:** <specific description of the change>
-**Why:** <reason this change is needed>
-**How:**
-- <sub-step a>
-- <sub-step b>
+For each step:
+- What to change
+- Where to change it
+- Why it’s needed
 
-Key change:
-```python
-# before (line ~N)
-old_code_here
-
-# after
-new_code_here
-```
-
-### 2. <Action verb> — `path/to/other_file.py`
-...
-
-## Files Changed
-
-| File | Change | Notes |
-|------|--------|-------|
-| `path/to/file.py` | Edit lines N–M | Add xyz function |
-| `path/to/other.py` | Add import + call | Required for xyz |
-| `path/to/new.py` | Create | New module for xyz |
+Include code snippets where helpful, but only when necessary.
 
 ## Verification
-- [ ] <how to verify step 1 worked>
-- [ ] <how to verify step 2 worked>
-- [ ] Run `<test command>` — expected: <outcome>
-- [ ] Check `<file or output>` confirms correct behaviour
+How to confirm the solution works.
 
-## Risks & Rollback
-- <risk 1> — mitigation: <how to avoid or recover>
-- <risk 2> — rollback: <how to undo if it goes wrong>
-```
+## Risks
+Potential issues and how to mitigate them.
+<constraints>
+- Do not write or modify actual project files
+- Do not run commands
+- Do not simulate execution
+</constraints>
 
----
+<quality_bar>
+A good plan:
+- Is specific and unambiguous
+- Can be executed without guesswork
+- Reflects real understanding of the codebase
+- Avoids unnecessary complexity
+</quality_bar>
 
-### QUALITY BAR
+Optionally, the plan may be written to `.nami/plans/plan.md` if the environment requires it.
 
-Your plan is only acceptable if:
-- Every step names a **specific file** (no "update the relevant file")
-- Every step describes **what line or section** changes (no "modify the function")
-- Code sketches show **before and after** for non-trivial changes
-- The verification section has **runnable commands or concrete checks**
-- A developer who has never seen this codebase could execute it without guessing
+<plan_structure>
+## Goal - What problem are we solving?
+## Analysis - Key findings from investigation
+## Strategy - Overall approach and why it's best
+## Implementation Steps - Numbered, specific changes
+## Testing & Verification - How to confirm it works
+## Risks & Mitigation - Issues and solutions
+## Rollback Plan - How to safely undo if needed
+</plan_structure>
 
-Vague plans like "modify the middleware to support X" are **not acceptable**.
-
----
-
-### BLOCKED IN PLAN MODE
-
-These tools are blocked and will return an error:
-`shell`, `execute_bash`, `execute`, `start_dev_server`, `stop_server`, `run_tests`, `git_branch`, `git_stash`
-
-`write_file` and `edit_file` are **only allowed** when the target is the plan file (`.nami/plans/plan.md` or any file whose name starts with `plan`). Using them on any other path returns a block error.
-
----
-
-**You are a PLANNER right now. Investigate thoroughly, then write a plan precise enough to execute without ambiguity.**
+<tools_available>
+INVESTIGATION (read-only): read_file, ls, glob, grep, git_status, git_log, git_diff
+DOCUMENTATION: write_file (.nami/plans/plan.md only), exit_plan_mode
+BLOCKED: All modifications, execution, git writes
+</tools_available>
 """
+
 
 def _exit_plan_mode() -> str:
     """Exit plan mode and submit the plan for user approval.
 
-    Call this tool when you have finished creating your plan using write_todos.
+    Call this tool when you have finished creating your plan.
     The user will review your plan and decide whether to approve it.
 
     Returns:
@@ -423,6 +276,33 @@ def _exit_plan_mode() -> str:
     return str(response)
 
 
+def _submit_complexity_decision(
+    task: str,
+    should_plan: bool,
+    reasoning: str,
+) -> str:
+    """Submit your decision on whether this task needs planning.
+
+    You evaluate the task using YOUR own judgment, not predefined rules.
+    This tool lets you decide whether to enable plan mode.
+
+    Args:
+        task: The user's task description
+        should_plan: Your decision (True = enable plan mode, False = execute directly)
+        reasoning: Explain your decision in your own words
+
+    Returns:
+        Confirmation of your decision
+    """
+    decision = "PLAN MODE ENABLED" if should_plan else "DIRECT EXECUTION"
+    return f"""{decision}
+
+Task: {task}
+Reasoning: {reasoning}
+
+You may now {'create a detailed plan' if should_plan else 'proceed with execution'}."""
+
+
 def _create_exit_plan_mode_tool() -> BaseTool:
     """Create the exit_plan_mode tool."""
     return StructuredTool.from_function(
@@ -430,23 +310,50 @@ def _create_exit_plan_mode_tool() -> BaseTool:
         func=_exit_plan_mode,
         description=(
             "Exit plan mode and submit your plan for user approval. "
-            "Call this after creating your plan with write_todos. "
+            "Call this after creating your plan. "
             "The user will review and approve or reject the plan."
         ),
     )
 
 
+def _create_complexity_decision_tool() -> BaseTool:
+    """Create the tool for agent to submit its own complexity decision."""
+    return StructuredTool.from_function(
+        name="decide_complexity",
+        func=_submit_complexity_decision,
+        description=(
+            "Submit YOUR decision on whether a task needs planning mode. "
+            "You decide what makes something complex - no predefined rules. "
+            "Use your own judgment based on task scope, interdependencies, and risk."
+        ),
+    )
+
+
 class PlanModeMiddleware(AgentMiddleware):
-    """Middleware for structured plan-mode with user approval.
+    """Middleware for structured plan-mode with agent-decided complexity.
 
     This middleware:
     1. Tracks plan mode state (enabled/disabled)
-    2. Provides the exit_plan_mode tool to submit a plan for approval
+    2. Provides tools for plan decision-making:
+       - decide_complexity: Agent decides if planning is needed (your own judgment)
+       - exit_plan_mode: Submit plan for user approval
     3. Injects planning instructions when plan mode is enabled
     4. Blocks modifying tools when in plan mode (hard enforcement)
 
+    Key difference: The agent decides what makes something complex.
+    No predefined keywords or heuristics - full agent autonomy.
+
     The ask_question tool is provided by AskQuestionMiddleware, which should
     appear earlier in the middleware chain.
+
+    Control Flow:
+    - Agent receives user request
+    - Agent calls decide_complexity with own reasoning
+    - Agent enables/disables plan mode based on its judgment
+    - If planning enabled: Agent creates detailed plan
+    - Agent calls exit_plan_mode to submit plan for approval
+    - User approves/rejects plan
+    - Agent executes approved plan
 
     Args:
         enabled_by_default: Whether plan mode starts enabled (default: False).
@@ -463,12 +370,9 @@ class PlanModeMiddleware(AgentMiddleware):
         super().__init__()
         self.enabled_by_default = enabled_by_default
         self.include_system_prompt = include_system_prompt
+        self._complexity_decision_tool = _create_complexity_decision_tool()
         self._exit_plan_mode_tool = _create_exit_plan_mode_tool()
-
-    @property
-    def tools(self) -> list[BaseTool]:
-        """Return tools provided by this middleware."""
-        return [self._exit_plan_mode_tool]
+        self.tools = [self._complexity_decision_tool, self._exit_plan_mode_tool]
 
     def before_agent(  # type: ignore
         self, state: PlanModeState, runtime, config
@@ -526,142 +430,6 @@ class PlanModeMiddleware(AgentMiddleware):
         modified_request = self.modify_request(request)
         return await handler(modified_request)
 
-    def wrap_tool_call(
-        self,
-        request,  # ToolCallRequest
-        handler: Callable,
-    ):
-        """Wrap tool calls to block modifying tools in plan mode.
-
-        When plan mode is enabled, this intercepts tool calls and blocks
-        tools that modify state (write_file, edit_file, execute_bash, etc.).
-
-        Args:
-            request: Tool call request containing tool name and arguments
-            handler: Function to execute the tool call
-
-        Returns:
-            Tool execution result or error message if blocked
-        """
-        # Get tool name from request — ToolCallRequest.tool_call is a dict
-        # with keys "name", "args", "id"
-        tool_call = getattr(request, "tool_call", None)
-        if isinstance(tool_call, dict):
-            tool_name = tool_call.get("name")
-        else:
-            tool_name = getattr(tool_call, "name", None)
-
-        # Get plan mode state from request
-        plan_mode_enabled = False
-        if hasattr(request, "state"):
-            state = request.state
-            if isinstance(state, dict):
-                plan_mode_enabled = state.get("plan_mode_enabled", False)
-
-        # Block modifying tools in plan mode
-        if plan_mode_enabled and tool_name and tool_name in BLOCKED_TOOLS_IN_PLAN_MODE:
-            # Allow write_file / edit_file when targeting the plan file only
-            if tool_name in ("write_file", "edit_file"):
-                args = tool_call.get("args", {}) if isinstance(tool_call, dict) else {}
-                file_path = str(args.get("file_path", ""))
-                if _is_plan_file_path(file_path):
-                    return handler(request)
-
-            logger.warning(f"Tool '{tool_name}' blocked in plan mode.")
-            from langchain_core.messages import ToolMessage
-
-            return ToolMessage(
-                content=f"Tool '{tool_name}' is blocked in plan mode. "
-                f"Only write_file/edit_file to .nami/plans/plan.md are allowed. "
-                f"Write your plan to .nami/plans/plan.md, then call exit_plan_mode.",
-                tool_call_id=tool_call.get("id", "") if isinstance(tool_call, dict) else str(getattr(tool_call, "id", "")),
-            )
-
-        # Tool allowed - proceed with execution
-        return handler(request)
-
-    async def awrap_tool_call(
-        self,
-        request,  # ToolCallRequest
-        handler: Callable,
-    ):
-        """Async version of wrap_tool_call."""
-        # Get tool name from request — ToolCallRequest.tool_call is a dict
-        tool_call = getattr(request, "tool_call", None)
-        if isinstance(tool_call, dict):
-            tool_name = tool_call.get("name")
-        else:
-            tool_name = getattr(tool_call, "name", None)
-
-        # Get plan mode state from request
-        plan_mode_enabled = False
-        if hasattr(request, "state"):
-            state = request.state
-            if isinstance(state, dict):
-                plan_mode_enabled = state.get("plan_mode_enabled", False)
-
-        # Block modifying tools in plan mode
-        if plan_mode_enabled and tool_name and tool_name in BLOCKED_TOOLS_IN_PLAN_MODE:
-            # Allow write_file / edit_file when targeting the plan file only
-            if tool_name in ("write_file", "edit_file"):
-                args = tool_call.get("args", {}) if isinstance(tool_call, dict) else {}
-                file_path = str(args.get("file_path", ""))
-                if _is_plan_file_path(file_path):
-                    return await handler(request)
-
-            logger.warning(f"Tool '{tool_name}' blocked in plan mode.")
-            from langchain_core.messages import ToolMessage
-
-            return ToolMessage(
-                content=f"Tool '{tool_name}' is blocked in plan mode. "
-                f"Only write_file/edit_file to .nami/plans/plan.md are allowed. "
-                f"Write your plan to .nami/plans/plan.md, then call exit_plan_mode.",
-                tool_call_id=tool_call.get("id", "") if isinstance(tool_call, dict) else str(getattr(tool_call, "id", "")),
-            )
-
-        # Tool allowed - proceed with execution
-        return await handler(request)
-
-    # Legacy method name for backwards compatibility
-    def filter_tools(
-        self,
-        tools: list[BaseTool],
-        state: PlanModeState,
-    ) -> list[BaseTool]:
-        """Filter tools based on plan mode state (legacy method).
-
-        NOTE: This method filters tools at the tool list level.
-        For runtime blocking based on state, use wrap_tool_call instead.
-
-        Args:
-            tools: List of all available tools
-            state: Current agent state
-
-        Returns:
-            Filtered list of tools (blocked tools removed if in plan mode)
-        """
-        plan_mode_enabled = state.get("plan_mode_enabled", self.enabled_by_default)
-
-        if not plan_mode_enabled:
-            return tools
-
-        filtered_tools = []
-        blocked_count = 0
-
-        for tool in tools:
-            tool_name = getattr(tool, "name", getattr(tool, "__name__", str(tool)))
-
-            if tool_name in BLOCKED_TOOLS_IN_PLAN_MODE:
-                blocked_count += 1
-                logger.debug(f"Blocked tool in plan mode: {tool_name}")
-            else:
-                filtered_tools.append(tool)
-
-        if blocked_count > 0:
-            logger.info(f"Plan mode: blocked {blocked_count} modifying tools, {len(filtered_tools)} read-only tools available")
-
-        return filtered_tools
-
 
 __all__ = [
     "PlanModeMiddleware",
@@ -670,8 +438,6 @@ __all__ = [
     "QuestionRequest",
     "QuestionResponse",
     "QuestionType",
-    "ComplexityResult",
-    "analyze_complexity",
     "BLOCKED_TOOLS_IN_PLAN_MODE",
     "ALLOWED_TOOLS_IN_PLAN_MODE",
 ]

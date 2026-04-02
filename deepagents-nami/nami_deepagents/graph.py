@@ -31,6 +31,9 @@ from nami_deepagents.middleware.filesystem import FilesystemMiddleware
 from nami_deepagents.middleware.memory import MemoryMiddleware
 from nami_deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
 from nami_deepagents.middleware.skills import SkillsMiddleware
+from nami_deepagents.middleware.ask_question import AskQuestionMiddleware
+from nami_deepagents.middleware.planning import PlanModeMiddleware
+from nami_deepagents.middleware.skills import SkillsMiddleware
 from nami_deepagents.middleware.subagents import (
     CompiledSubAgent,
     SubAgent,
@@ -164,10 +167,14 @@ def create_deep_agent(
     subagent_middleware.extend(
         [
             FilesystemMiddleware(backend=backend),
-            ToolRetryMiddleware(max_retries=2, backoff_factor=2.0, initial_delay=1.0, retry_on=lambda e: not isinstance(e, GraphInterrupt), on_failure=_reraise_graph_interrupt),
-            ContextEditingMiddleware(
-                edits=[ClearToolUsesEdit(trigger=60000, keep=5)]
+            ToolRetryMiddleware(
+                max_retries=2,
+                backoff_factor=2.0,
+                initial_delay=1.0,
+                retry_on=lambda e: not isinstance(e, GraphInterrupt),
+                on_failure=_reraise_graph_interrupt,
             ),
+            ContextEditingMiddleware(edits=[ClearToolUsesEdit(trigger=60000, keep=5)]),
             ModelRetryMiddleware(max_retries=3, backoff_factor=2.0, initial_delay=1.0),
             SummarizationMiddleware(
                 model=model,
@@ -191,7 +198,15 @@ def create_deep_agent(
     deepagent_middleware.extend(
         [
             FilesystemMiddleware(backend=backend),
-            ToolRetryMiddleware(max_retries=2, backoff_factor=2.0, initial_delay=1.0, retry_on=lambda e: not isinstance(e, GraphInterrupt), on_failure=_reraise_graph_interrupt),
+            AskQuestionMiddleware(),
+            PlanModeMiddleware(enabled_by_default=False),
+            ToolRetryMiddleware(
+                max_retries=2,
+                backoff_factor=2.0,
+                initial_delay=1.0,
+                retry_on=lambda e: not isinstance(e, GraphInterrupt),
+                on_failure=_reraise_graph_interrupt,
+            ),
             SubAgentMiddleware(
                 default_model=model,
                 default_tools=tools,
@@ -200,9 +215,7 @@ def create_deep_agent(
                 default_interrupt_on=interrupt_on,
                 general_purpose_agent=True,
             ),
-            ContextEditingMiddleware(
-                edits=[ClearToolUsesEdit(trigger=60000, keep=5)]
-            ),
+            ContextEditingMiddleware(edits=[ClearToolUsesEdit(trigger=60000, keep=5)]),
             ModelRetryMiddleware(max_retries=3, backoff_factor=2.0, initial_delay=1.0),
             SummarizationMiddleware(
                 model=model,

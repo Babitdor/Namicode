@@ -1,3 +1,5 @@
+# Built-In Agents for Nami Code CLI
+
 from collections.abc import Callable
 from typing import Any
 
@@ -7,7 +9,7 @@ from nami_deepagents.middleware.subagents import SubAgent
 from .prompt import (
     BUG_FIX_AGENT,
     CODE_DOC_AGENT,
-    CODE_EXPLORER,
+    # CODE_EXPLORER,
     CODE_SIMPLIFIER,
     REFACTORING_SPECIALIST_AGENT,
     REVIEWER_AGENT,
@@ -37,14 +39,14 @@ def retrieve_core_subagents(tools: list[AnyTool] | None = None) -> list[SubAgent
 
     # Define subagent configurations
     subagent_configs = [
-        ("code-explorer-agent", CODE_EXPLORER),
+        # ("code-explorer-agent", CODE_EXPLORER),
         ("code-doc-Agent", CODE_DOC_AGENT),
         ("code-simplifier-agent", CODE_SIMPLIFIER),
-        ("bug-fix-agent", BUG_FIX_AGENT),
+        # ("bug-fix-agent", BUG_FIX_AGENT),
         ("test-writer-agent", TEST_WRITER_AGENT),
         ("reviewer-agent", REVIEWER_AGENT),
         ("security-auditor-agent", SECURITY_AUDITOR_AGENT),
-        ("refactoring-specialist-agent", REFACTORING_SPECIALIST_AGENT),
+        # ("refactoring-specialist-agent", REFACTORING_SPECIALIST_AGENT),
     ]
 
     subagents: list[SubAgent] = [

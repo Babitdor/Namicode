@@ -1,4 +1,30 @@
 import uuid
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from enum import Enum
+
+
+class RalphTaskStatus(Enum):
+    """Status of a Ralph background task."""
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+@dataclass
+class BackgroundRalphTask:
+    """Tracks a Ralph background task."""
+    task_id: str  # Unique identifier
+    iteration: int  # Current iteration number
+    max_iterations: int  # Total iterations
+    task_description: str  # What ralph is working on
+    status: RalphTaskStatus = RalphTaskStatus.RUNNING
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    completed_at: datetime | None = None
+    asyncio_task: object = field(default=None, repr=False)  # Reference to asyncio.Task
+    working_directory: str = "."
+    error_message: str | None = None
 
 
 class SessionState:
@@ -20,6 +46,8 @@ class SessionState:
         self.pending_plan_mode_sync: bool = False  # Flag to sync plan mode to agent state
         # Verbose mode: show internal agent context instead of collapsing it
         self.verbose: bool = False
+        # Ralph background tasks: task_id -> BackgroundRalphTask
+        self.background_ralph_tasks: dict[str, BackgroundRalphTask] = {}
 
     def toggle_auto_approve(self) -> bool:
         """Toggle auto-approve and return new state."""

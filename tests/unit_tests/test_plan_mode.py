@@ -287,59 +287,55 @@ class TestSystemPrompts:
 
 
 class TestComplexityAnalysis:
-    """Tests for complexity analysis."""
+    """Tests for agent-decided complexity (no predefined rules)."""
 
-    def test_simple_task_no_planning(self):
-        """Simple tasks should not trigger planning."""
-        from nami_deepagents.middleware.planning import analyze_complexity
+    def test_decide_complexity_tool_exists(self):
+        """Agent should have decide_complexity tool."""
+        from nami_deepagents.middleware.planning import PlanModeMiddleware
 
-        result = analyze_complexity("Fix the bug in main.py")
-        assert result.should_plan is False
-        assert result.score == 0.0
+        middleware = PlanModeMiddleware()
+        tool_names = [tool.name for tool in middleware.tools]
+        assert "decide_complexity" in tool_names
 
-    def test_complex_task_triggers_planning(self):
-        """Complex tasks should trigger planning."""
-        from nami_deepagents.middleware.planning import analyze_complexity
+    def test_exit_plan_mode_tool_exists(self):
+        """Agent should have exit_plan_mode tool."""
+        from nami_deepagents.middleware.planning import PlanModeMiddleware
 
-        result = analyze_complexity("Implement user authentication and add tests")
-        assert result.should_plan is True
-        assert result.score > 0.0
+        middleware = PlanModeMiddleware()
+        tool_names = [tool.name for tool in middleware.tools]
+        assert "exit_plan_mode" in tool_names
 
-    def test_keyword_detection(self):
-        """Keywords should increase complexity score."""
-        from nami_deepagents.middleware.planning import analyze_complexity
+    def test_agent_decides_complexity_no_rules(self):
+        """Agent uses own judgment to decide complexity, not predefined keywords."""
+        from nami_deepagents.middleware.planning import _submit_complexity_decision
 
-        result = analyze_complexity("Implement a new feature")
-        assert "implement" in result.factors[0].lower()
-        assert result.score > 0.0
+        # Agent decides task needs planning
+        result_plan = _submit_complexity_decision(
+            task="Implement OAuth2 authentication across 5 microservices",
+            should_plan=True,
+            reasoning="Security-critical changes spanning multiple services need careful coordination",
+        )
+        assert "PLAN MODE ENABLED" in result_plan
 
-    def test_step_detection(self):
-        """Multiple steps should increase complexity score."""
-        from nami_deepagents.middleware.planning import analyze_complexity
+        # Agent decides task is simple
+        result_direct = _submit_complexity_decision(
+            task="Fix typo in docstring",
+            should_plan=False,
+            reasoning="Single file, isolated change, no dependencies",
+        )
+        assert "DIRECT EXECUTION" in result_direct
 
-        result = analyze_complexity("First read the file, then modify it, and finally test it")
-        assert any("step" in f.lower() for f in result.factors)
+    def test_agent_uses_custom_reasoning(self):
+        """Agent can use any reasoning it sees fit."""
+        from nami_deepagents.middleware.planning import _submit_complexity_decision
 
-    def test_file_mentions(self):
-        """Multiple file mentions should increase complexity."""
-        from nami_deepagents.middleware.planning import analyze_complexity
-
-        result = analyze_complexity("Update main.py, config.yaml, and utils.py")
-        assert any("file" in f.lower() for f in result.factors)
-
-    def test_refactor_keyword(self):
-        """Refactor keyword should trigger planning."""
-        from nami_deepagents.middleware.planning import analyze_complexity
-
-        result = analyze_complexity("Refactor the authentication module")
-        assert result.should_plan is True
-
-    def test_short_simple_request(self):
-        """Short simple requests should not trigger planning."""
-        from nami_deepagents.middleware.planning import analyze_complexity
-
-        result = analyze_complexity("Read the file")
-        assert result.should_plan is False
+        result = _submit_complexity_decision(
+            task="Implement user authentication",
+            should_plan=True,
+            reasoning="Custom reasoning: Must consider security implications, backwards compatibility, and testing across platforms",
+        )
+        assert "Custom reasoning" in result
+        assert "PLAN MODE ENABLED" in result
 
 
 class TestToolBlocking:
