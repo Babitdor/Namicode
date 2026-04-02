@@ -25,6 +25,8 @@ from langchain.agents.middleware.types import (
 from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.types import interrupt
 
+from nami_deepagents.prompts import render_template
+
 # ---------------------------------------------------------------------------
 # Types (also imported by planning.py so they stay in one canonical place)
 # ---------------------------------------------------------------------------
@@ -60,35 +62,7 @@ class QuestionResponse(TypedDict):
 # System-prompt snippet (injected by AskQuestionMiddleware)
 # ---------------------------------------------------------------------------
 
-ASK_QUESTION_SYSTEM_PROMPT = """
-## `ask_question` Tool
-
-Use `ask_question` to pause and get clarification before proceeding. Use this tool sparingly — only when you genuinely need information you cannot determine from context.
-
-**Ask when:**
-- Requirements are ambiguous or have multiple valid interpretations
-- You want the user to choose between approaches and their preference matters
-- Key information is missing that only the user can provide
-- You are about to make a hard-to-reverse decision and want to confirm the plan first
-
-**Do NOT ask when:**
-- The answer is obvious from context — use your best judgment and proceed
-- It's a trivial implementation detail that doesn't meaningfully affect the outcome
-- A simple yes/no would suffice — just proceed with the sensible default
-
-**Question types:**
-- `structured` — multiple choice; use when there are clear alternatives. An "Other" option is always available so the user can type a custom answer if none fit.
-- `open_ended` — free text; use when you need a free-form response
-
-**Usage tips:**
-- Be concise and specific — one focused question beats a vague one
-- Group related questions into a single `ask_question` call rather than making multiple sequential calls
-- For structured questions, options may be plain strings **or** rich dicts:
-  ```json
-  {"label": "Portfolio site", "value": "portfolio", "description": "Showcase your work"}
-  ```
-  The `value` field is returned to you after the user picks an option.
-"""
+ASK_QUESTION_SYSTEM_PROMPT = render_template("ask_question.jinja")
 
 
 # ---------------------------------------------------------------------------

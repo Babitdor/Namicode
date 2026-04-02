@@ -57,6 +57,7 @@ from namicode_cli.skills.skill_creation import (
     _validate_name,
 )
 from namicode_cli.states.Session import BackgroundRalphTask, RalphTaskStatus
+from namicode_cli.prompts import render_template
 from namicode_cli.ui import execution as execution_module
 from namicode_cli.ui.execution import execute_task
 from namicode_cli.ui.ui_elements import (
@@ -136,121 +137,12 @@ async def _handle_init_command(
         console.print("   [dim]It will be updated with fresh analysis[/dim]")
         console.print()
 
-    # Create the exploration prompt
-    exploration_prompt = f"""I need you to explore this codebase and create a comprehensive NAMI.md file.
-
-The NAMI.md file should be similar to a CLAUDE.md file used by Claude Code - it provides guidance and context about the codebase for AI assistants working with this project.
-
-Project root: {project_root}
-
-Please follow these steps:
-
-1. **Subagent Delegation (if available)**
-    
-    If subagents are available, you may delegate exploration tasks to them to speed up and improve coverage. Use delegation strategically, not redundantly.
-
-    **Suggested delegation:**
-    - One subagent explores the **codebase structure and entry points**
-    - One subagent analyzes **architecture, modules, and technology stack**
-    - One subagent focuses on **development setup, commands, and tooling**
-    - One subagent reviews **testing, code style, and conventions**
-
-    Instructions for delegation:
-    - Clearly assign each subagent a well-scoped task
-    - Require subagents to report concise findings with file paths and concrete evidence
-    - **Wait for all delegated subagents to complete and return their results before proceeding**
-    - Review, reconcile, and synthesize all subagent findings yourself
-    - Resolve conflicts or inconsistencies between subagent reports
-    - Do NOT write partial files from subagents; only write the final, unified NAMI.md
-
-2. **Explore the codebase structure:**
-   - Use glob to find key files (README, package.json, pyproject.toml, Cargo.toml, etc.)
-   - Identify the primary programming language(s)
-   - Find main entry points and important directories
-   - Look for configuration files
-
-3. **Analyze the architecture:**
-   - Read key files to understand the project structure
-   - Identify main modules/packages/components
-   - Understand the technology stack
-   - Note any frameworks or libraries used
-
-4. **Document development setup:**
-   - Find setup/installation instructions
-   - Identify build tools and commands
-   - Note testing frameworks and commands
-   - Document linting/formatting tools
-
-5. **Create NAMI.md with the following sections:**
-
-## NAMI.md Structure:
-
-```markdown
-# NAMI.md
-
-This file provides guidance to AI assistants when working with code in this repository.
-
-## Project Overview
-
-[Brief description of what this project does]
-
-## Technology Stack
-
-[Languages, frameworks, key dependencies]
-
-## Project Structure
-
-[Directory layout and purpose of main directories]
-
-## Development Setup
-
-[How to set up the development environment]
-[Installation commands]
-[Environment variables if applicable]
-
-## Development Commands
-
-[Common commands for development, testing, building]
-
-## Architecture
-
-[Key architectural patterns or design decisions]
-[Main modules/components and their purposes]
-
-## Important Files
-
-[List of critical files and what they do]
-
-## Common Workflows
-
-[Typical development tasks and how to do them]
-
-## Testing
-
-[How to run tests]
-[Testing philosophy/approach]
-
-## Code Style and Conventions
-
-[Coding standards, naming conventions, etc.]
-
-## Additional Notes
-
-[Any other important information for developers]
-```
-
-5. **Write the file:**
-   - Use write_file to create {nami_md_path}
-   - Make it comprehensive but concise
-   - Focus on information that would help an AI assistant understand and work with the codebase
-
-6. **Hard constraint**
-- The final NAMI.md **MUST NOT exceed 45,000 characters**
-- If content is too long, summarize aggressively
-- Prefer bullet points over prose
-- Omit redundant explanations
-
-Please start exploring now and create the NAMI.md file."""
+    # Create the exploration prompt using Jinja template
+    exploration_prompt = render_template(
+        "init_exploration.jinja",
+        project_root=str(project_root),
+        nami_md_path=str(nami_md_path),
+    )
 
     # Show status
     console.print("🤖 ", style=COLORS["primary"], end="")
@@ -2128,97 +2020,12 @@ async def _generate_agent_system_prompt(
     try:
         model = create_model()
 
-        # Comprehensive generation prompt with tool reference and examples
-        generation_prompt = f"""Generate a comprehensive system prompt for an AI coding assistant agent named "{agent_name}".
-
-Agent Description: {description}
-
-You MUST create a detailed, production-ready system prompt that includes ALL of the following sections:
-
----
-
-## REQUIRED SECTIONS:
-
-### 1. Core Identity (2-3 sentences)
-A clear statement of who this agent is, what they specialize in, and their primary mission.
-
-### 2. Expertise Areas
-List 4-6 specific domains, skills, or technologies this agent excels at. Be specific to the description.
-
-### 3. Tone and Communication Style
-- How verbose vs concise should responses be?
-- What formatting preferences (code blocks, bullet points, etc.)?
-- When to ask clarifying questions vs make assumptions?
-
-### 4. Methodology / Working Guidelines
-Step-by-step approach this agent should follow. Include:
-- How to analyze requests before acting
-- When to read existing code before making changes
-- How to break down complex tasks
-- When to use todos for task tracking
-
-### 5. Tool Usage Guidelines
-This agent has access to these tools - provide specific guidance on WHEN and HOW to use them:
-
-**File Operations (from FilesystemMiddleware):**
-- `read_file(path, offset?, limit?)` - Read file contents. Use pagination for large files (limit=100-200 lines)
-- `write_file(path, content)` - Create new files or overwrite existing ones
-- `edit_file(path, old_string, new_string)` - Make precise string replacements. MUST read file first to get exact strings!
-- `glob(pattern)` - Find files by pattern (e.g., "**/*.py", "src/**/*.ts", "*.json")
-- `grep(pattern, path?)` - Search file contents with regex patterns
-- `ls(path)` - List directory contents
-
-**Shell & Execution (from ShellMiddleware):**
-- `shell(command)` - Execute shell commands (git, npm, pip, make, docker, etc.)
-
-**Web & Research (conditional - may require API keys):**
-- `web_search(query, max_results?, topic?)` - Search the web for documentation, solutions, examples (requires TAVILY_API_KEY)
-- `fetch_url(url)` - Fetch web pages and convert HTML to markdown
-- `http_request(url, method?, headers?, data?, params?)` - Make HTTP/API requests
-
-**Dev Tools:**
-- `run_tests(command?, working_dir?, timeout?)` - Run test suites with streaming output
-- `start_dev_server(command, name?, port?, working_dir?)` - Start dev servers as background processes (auto-opens browser)
-- `stop_server(pid?, name?)` - Stop running dev servers
-- `list_servers()` - List all active dev servers
-
-**Task Management (from TodoListMiddleware):**
-- `write_todos(todos)` - Track multi-step tasks. Use for 3+ step tasks. Each todo has: content, status (pending/in_progress/completed)
-
-**Shared Memory (from SharedMemoryMiddleware):**
-- `write_memory(key, content, tags?)` - Save findings to shared memory store (persists across agents)
-- `read_memory(key)` - Read from shared memory (shows author attribution)
-- `list_memories(tag_filter?)` - List all memory entries with previews
-- `delete_memory(key)` - Remove a memory entry
-
-**Subagent Delegation (from SubAgentMiddleware):**
-- `task(description, subagent_type?)` - Spawn subagents for isolated tasks. Use for parallel work or specialized subtasks
-
-### 6. Best Practices
-Domain-specific best practices this agent MUST follow. Include:
-- Code quality standards
-- Error handling expectations
-- Documentation requirements
-- Security considerations (if applicable)
-
-### 7. Example Interactions
-Provide 2-3 concrete examples showing how this agent would handle typical requests.
-Format as:
-```
-User: [example request]
-Agent approach: [step-by-step how agent handles it]
-```
-
----
-
-## FORMAT REQUIREMENTS:
-- Start with: # {agent_name}
-- Use markdown headers (##, ###) for sections
-- Keep total length between 400-700 words
-- Be specific and actionable, not generic
-- Include code examples where relevant to the agent's specialty
-
-Generate the system prompt now:"""
+        # Generate agent system prompt using Jinja template
+        generation_prompt = render_template(
+            "agent_generation.jinja",
+            agent_name=agent_name,
+            description=description,
+        )
 
         response = await model.ainvoke(generation_prompt)
 
@@ -3205,7 +3012,7 @@ async def _handle_trace_command(cmd_args: list[str]) -> bool:
                 Panel(
                     Text(
                         "❌ LangSmith library is not installed.\n\n"
-                        "Install with: pip install langsmith",
+                        "Install with: uv add langsmith",
                         style="dim",
                     ),
                     title=header,
@@ -4106,13 +3913,11 @@ async def _execute_all_ralph_iterations_background(
             print(f"  Status: Created", file=sys.stderr)
             sys.stderr.flush()
 
-            # Build prompt for this iteration
-            prompt = (
-                f"## Iteration {iter_display}\n\n"
-                f"Your previous work is in the filesystem. Continue making progress.\n\n"
-                f"TASK:\n{task}\n\n"
-                f"Make progress on this task. If you believe the task is complete, "
-                f"state clearly what was accomplished and why it's done."
+            # Build prompt for this iteration using Jinja template
+            prompt = render_template(
+                "ralph_iteration.jinja",
+                iteration_display=iter_display,
+                task=task,
             )
 
             # Execute this iteration (sequentially, one at a time)
@@ -4432,6 +4237,10 @@ async def _handle_ralph_command(
     stop_after_iteration = False
     interrupted = False
 
+    # Enable auto-approve for Ralph mode (autonomous execution)
+    original_auto_approve = session_state.auto_approve
+    session_state.auto_approve = True
+
     # Run autonomous loop
     iteration = start_iteration
     background_tasks = []  # Track background tasks for cleanup
@@ -4450,13 +4259,11 @@ async def _handle_ralph_command(
             console.print(f"[bold cyan]{'─' * 50}[/bold cyan]")
             console.print()
 
-            # Build prompt for this iteration
-            prompt = (
-                f"## Iteration {iter_display}\n\n"
-                f"Your previous work is in the filesystem. Continue making progress.\n\n"
-                f"TASK:\n{task}\n\n"
-                f"Make progress on this task. If you believe the task is complete, "
-                f"state clearly what was accomplished and why it's done."
+            # Build prompt for this iteration using Jinja template
+            prompt = render_template(
+                "ralph_iteration.jinja",
+                iteration_display=iter_display,
+                task=task,
             )
 
             # Execute task synchronously (foreground mode only)
@@ -4515,6 +4322,7 @@ async def _handle_ralph_command(
         )
 
         if action == "stop":
+            session_state.auto_approve = original_auto_approve
             console.print()
             console.print("[yellow]Ralph mode stopped by user.[/yellow]")
             console.print(f"[dim]Completed {iteration - 1} iteration(s).[/dim]")
@@ -4523,6 +4331,7 @@ async def _handle_ralph_command(
 
         if action == "rollback":
             # Perform git rollback
+            session_state.auto_approve = original_auto_approve
             console.print()
             console.print("[yellow]Rolling back changes...[/yellow]")
             try:
@@ -4542,6 +4351,7 @@ async def _handle_ralph_command(
                 )
             console.print(f"[dim]Completed {iteration - 1} iteration(s).[/dim]")
             console.print()
+            session_state.auto_approve = original_auto_approve
             return True
 
         if action == "finish":
@@ -4558,6 +4368,7 @@ async def _handle_ralph_command(
             console.print("[green]Iteration already completed. Stopping now.[/green]")
             console.print(f"[dim]Completed {iteration - 1} iteration(s).[/dim]")
             console.print()
+            session_state.auto_approve = original_auto_approve
             return True
 
         if action == "continue":
@@ -4572,6 +4383,7 @@ async def _handle_ralph_command(
                 "[yellow]Note: Use /ralph --resume to continue if needed.[/yellow]"
             )
             console.print()
+            session_state.auto_approve = original_auto_approve
             return True
 
         if action == "checkpoint":
@@ -4588,6 +4400,7 @@ async def _handle_ralph_command(
             console.print("[dim]Resume with: /ralph --resume[/dim]")
             console.print(f"[dim]Completed {iteration - 1} iteration(s).[/dim]")
             console.print()
+            session_state.auto_approve = original_auto_approve
             return True
 
     console.print()
@@ -4595,4 +4408,8 @@ async def _handle_ralph_command(
         f"[green]Ralph mode completed after {iteration - 1} iteration(s).[/green]"
     )
     console.print()
+
+    # Restore original auto_approve state
+    session_state.auto_approve = original_auto_approve
+
     return True

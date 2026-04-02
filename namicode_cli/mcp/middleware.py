@@ -26,6 +26,7 @@ from mcp.client.session import ClientSession
 from namicode_cli.config.config import console
 from namicode_cli.mcp.client import MultiServerMCPClient
 from namicode_cli.mcp.config import MCPConfig
+from namicode_cli.prompts import render_template
 
 
 class MCPState(AgentState):
@@ -42,50 +43,7 @@ class MCPStateUpdate(TypedDict):
     """List of MCP tools metadata."""
 
 
-MCP_SYSTEM_PROMPT = """
-
-## MCP (Model Context Protocol) Tools Available
-
-You have access to external tools provided by MCP servers. These extend your capabilities beyond built-in tools.
-
-**Connected MCP Servers:**
-
-{servers_list}
-
-**How to Use MCP Tools:**
-
-1. **Tool Naming**: MCP tools are namespaced by server name
-   - Format: `servername__toolname`
-   - Example: `docs-langchain__search` calls the `search` tool from the `docs-langchain` server
-
-2. **Discovery**: All available MCP tools are listed above with their descriptions
-   - Check the tool descriptions to understand what each tool does
-   - Review the Parameters listed below each tool
-
-3. **CRITICAL - Parameter Names**: You MUST use the EXACT parameter names shown in the "Parameters:" line for each tool
-   - Do NOT guess or use alternative parameter names
-   - If a tool shows "Parameters: relative_path", you MUST use "relative_path" (not "file_path", "path", etc.)
-   - If a tool shows "Parameters: url, method", you MUST use exactly "url" and "method"
-   - Using wrong parameter names will cause validation errors
-
-4. **Invocation**: Call MCP tools exactly like built-in tools
-   - The middleware automatically routes calls to the appropriate MCP server
-   - Results are returned just like any other tool call
-
-**When to Use MCP Tools:**
-
-- **Domain-Specific Knowledge**: When you need specialized information (e.g., documentation search, API lookups)
-- **External Data Access**: When the task requires data from external systems or databases
-- **Specialized Capabilities**: When MCP tools offer functionality not available in built-in tools
-
-**Important Notes:**
-
-- ALWAYS check the exact parameter names before calling an MCP tool
-- MCP servers may become unavailable - handle tool call failures gracefully
-- Some tools may have rate limits or require specific permissions
-
-Remember: MCP tools are powerful extensions. Always use the EXACT parameter names shown!
-"""
+# MCP system prompt loaded from: namicode_cli/prompts/mcp.jinja
 
 
 class MCPMiddleware(AgentMiddleware):
@@ -331,9 +289,9 @@ class MCPMiddleware(AgentMiddleware):
             # Get servers configuration
             servers = self.mcp_config.list_servers()
 
-            # Format the MCP section
+            # Format the MCP section using Jinja template
             servers_list = self._format_servers_list(servers, mcp_tools)
-            mcp_section = MCP_SYSTEM_PROMPT.format(servers_list=servers_list)
+            mcp_section = render_template("mcp.jinja", servers_list=servers_list)
 
             # Inject into system prompt
             if updated_request.system_prompt:
@@ -374,9 +332,9 @@ class MCPMiddleware(AgentMiddleware):
             # Get servers configuration
             servers = self.mcp_config.list_servers()
 
-            # Format the MCP section
+            # Format the MCP section using Jinja template
             servers_list = self._format_servers_list(servers, mcp_tools)
-            mcp_section = MCP_SYSTEM_PROMPT.format(servers_list=servers_list)
+            mcp_section = render_template("mcp.jinja", servers_list=servers_list)
 
             # Inject into system prompt
             if updated_request.system_prompt:

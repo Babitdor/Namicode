@@ -161,9 +161,7 @@ def check_cli_dependencies() -> None:
         for pkg in missing:
             print(f"  - {pkg}")
         print("\nPlease install them with:")
-        print("  pip install deepagents[cli]")
-        print("\nOr install all dependencies:")
-        print("  pip install 'deepagents[cli]'")
+        print("  uv add 'deepagents[cli]'")
         sys.exit(1)
 
 

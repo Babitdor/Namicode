@@ -36,7 +36,7 @@ cd namicode-cli
 
 # Create virtual environment and install
 uv venv
-uv pip install -e .
+uv sync
 ```
 
 ### API Keys Setup

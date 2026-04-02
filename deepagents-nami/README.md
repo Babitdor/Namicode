@@ -15,11 +15,11 @@ a **planning tool**, **sub agents**, access to a **file system**, and a **detail
 ## Installation
 
 ```bash
+# uv (recommended)
+uv add nami-deepagents
+
 # pip
 pip install nami-deepagents
-
-# uv
-uv add nami-deepagents
 
 # poetry
 poetry add nami-deepagents
@@ -27,7 +27,7 @@ poetry add nami-deepagents
 
 ## Usage
 
-(To run the example below, you will need to `pip install tavily-python`).
+(To run the example below, you will need to `uv add tavily-python`).
 
 Make sure to set `TAVILY_API_KEY` in your environment. You can generate one [here](https://www.tavily.com/).
 
@@ -468,7 +468,7 @@ The `deepagents` library can be ran with MCP tools. This can be achieved by usin
 
 **NOTE:** You will want to use `from nami_deepagents import async_create_deep_agent` to use the async version of `deepagents`, since MCP tools are async
 
-(To run the example below, will need to `pip install langchain-mcp-adapters`)
+(To run the example below, you will need to `uv add langchain-mcp-adapters`)
 
 ```python
 import asyncio

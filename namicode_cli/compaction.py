@@ -10,51 +10,10 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, RemoveMessage, ToolMessage
 
 from namicode_cli.context.context_manager import CompactionResult
+from namicode_cli.prompts import render_template
 
-# Summarization prompt template
-SUMMARIZATION_PROMPT = """You are summarizing a conversation between a user and an AI coding assistant.
-
-Create a concise summary that preserves:
-1. **Key decisions made** - architectural choices, design patterns selected
-2. **Files modified** - list any files that were created, edited, or deleted
-3. **Problems solved** - bugs fixed, features implemented
-4. **Important context** - project structure understood, conventions established
-5. **Pending tasks** - any incomplete work or next steps mentioned
-
-{focus_instructions}
-
-Format the summary as:
-
-## Conversation Summary
-
-### Files Modified
-- [List of files with brief description of changes]
-
-### Key Decisions
-- [Important architectural/design decisions]
-
-### Work Completed
-- [Summary of what was accomplished]
-
-### Outstanding Items
-- [Any pending tasks or unresolved issues]
-
-### Important Context
-- [Key information that should be preserved for future reference]
-
-### User Preferences & Conventions
-- [Any user preferences, coding style, naming conventions, or workflow patterns established]
-- [Active working directory and key file paths referenced]
-
-Be thorough but concise. This summary will replace the full conversation history.
-Keep it under 5000 tokens. Prioritize completeness for Files Modified and Outstanding Items.
-
----
-
-CONVERSATION TO SUMMARIZE:
-
-{conversation}
-"""
+# Summarization prompt template (loaded from Jinja)
+# Template file: namicode_cli/prompts/summarization.jinja
 
 
 def _format_message_content(content: Any) -> str:
@@ -135,8 +94,9 @@ async def summarize_conversation(
     else:
         focus_text = ""
 
-    # Create summarization prompt
-    prompt = SUMMARIZATION_PROMPT.format(
+    # Create summarization prompt using Jinja template
+    prompt = render_template(
+        "summarization.jinja",
         focus_instructions=focus_text,
         conversation=conversation_text,
     )

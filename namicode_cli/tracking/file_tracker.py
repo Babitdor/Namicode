@@ -311,27 +311,7 @@ class FileTrackerState(AgentState):
 # Middleware Implementation
 # ============================================================================
 
-FILE_TRACKER_SYSTEM_PROMPT = """## File Operation Rules (ENFORCED)
-
-**CRITICAL: Read-Before-Edit Rule**
-You MUST read a file before editing it. The system tracks all file reads and will REJECT
-edit operations on files you haven't read in this session.
-
-**Why this matters:**
-- Prevents editing the wrong file or wrong location
-- Ensures you have current file content before making changes
-- Catches stale edits if the file changed since you last saw it
-
-**File Operation Best Practices:**
-1. **Always read first**: Before any edit_file or write_file (to existing file), use read_file
-2. **Use pagination for large files**: `read_file(path, limit=100)` for initial scan
-3. **Verify before edit**: Check the content you want to replace actually exists
-4. **Track your changes**: The system logs all file operations for the session
-
-**If an edit is rejected:**
-- Read the file first: `read_file("/path/to/file")`
-- Then retry your edit with the exact string from the file content
-"""
+# File tracker system prompt loaded from: namicode_cli/prompts/file_tracker.jinja
 
 
 class FileTrackerMiddleware(AgentMiddleware):
@@ -381,10 +361,12 @@ class FileTrackerMiddleware(AgentMiddleware):
     ) -> ModelResponse:
         """Inject file operation rules into the system prompt."""
         if self.include_system_prompt:
+            from namicode_cli.prompts import render_template
+            file_tracker_prompt = render_template("file_tracker.jinja")
             system_prompt = (
-                request.system_prompt + "\n\n" + FILE_TRACKER_SYSTEM_PROMPT
+                request.system_prompt + "\n\n" + file_tracker_prompt
                 if request.system_prompt
-                else FILE_TRACKER_SYSTEM_PROMPT
+                else file_tracker_prompt
             )
             return handler(request.override(system_prompt=system_prompt))
         return handler(request)
@@ -396,10 +378,12 @@ class FileTrackerMiddleware(AgentMiddleware):
     ) -> ModelResponse:
         """(async) Inject file operation rules into the system prompt."""
         if self.include_system_prompt:
+            from namicode_cli.prompts import render_template
+            file_tracker_prompt = render_template("file_tracker.jinja")
             system_prompt = (
-                request.system_prompt + "\n\n" + FILE_TRACKER_SYSTEM_PROMPT
+                request.system_prompt + "\n\n" + file_tracker_prompt
                 if request.system_prompt
-                else FILE_TRACKER_SYSTEM_PROMPT
+                else file_tracker_prompt
             )
             return await handler(request.override(system_prompt=system_prompt))
         return await handler(request)

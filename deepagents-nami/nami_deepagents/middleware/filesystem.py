@@ -368,24 +368,10 @@ Examples:
 Note: This tool is only available if the backend supports execution (SandboxBackendProtocol).
 If execution is not supported, the tool will return an error message."""
 
-FILESYSTEM_SYSTEM_PROMPT = """## Filesystem Tools `ls`, `read_file`, `write_file`, `edit_file`, `glob`, `grep`
+from nami_deepagents.prompts import render_template
 
-You have access to a filesystem which you can interact with using these tools.
-All file paths must start with a /.
-
-- ls: list files in a directory (requires absolute path)
-- read_file: read a file from the filesystem
-- write_file: write to a file in the filesystem
-- edit_file: edit a file in the filesystem
-- glob: find files matching a pattern (e.g., "**/*.py")
-- grep: search for text within files"""
-
-EXECUTION_SYSTEM_PROMPT = """## Execute Tool `execute`
-
-You have access to an `execute` tool for running shell commands in a sandboxed environment.
-Use this tool to run commands, scripts, tests, builds, and other shell operations.
-
-- execute: run a shell command in the sandbox (returns output and exit code)"""
+FILESYSTEM_SYSTEM_PROMPT = render_template("filesystem.jinja")
+EXECUTION_SYSTEM_PROMPT = render_template("execution.jinja")
 
 
 def _get_backend(

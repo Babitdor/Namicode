@@ -215,7 +215,7 @@ class CommandNotFoundRecovery:
             "To fix this, you may need to:\n"
             "1. Check if package is installed: `which {command}`\n"
             "2. Install the package (examples):\n"
-            "   - Python: `pip install {command}`\n"
+            "   - Python: `uv add {command}`\n"
             "   - Node: `npm install -g {command}`\n"
             "   - System: `sudo apt install {command}` or `brew install {command}`"
         )
@@ -249,7 +249,7 @@ class ImportErrorRecovery:
         suggestion = (
             f"Module not found: {module}\n\n"
             "Possible fixes:\n"
-            f"1. Install the package: `pip install {module}`\n"
+            f"1. Install the package: `uv add {module}`\n"
             "2. Check if you're in the correct virtual environment\n"
             "3. Verify the import statement spelling\n"
             "4. Check if the module is in the same directory"
@@ -357,17 +357,17 @@ class DependencyErrorRecovery:
             suggestion = (
                 f"Version conflict for {package}\n\n"
                 "To fix:\n"
-                "1. Check current versions: `pip list | grep {package}`\n"
-                "2. Update package: `pip install --upgrade {package}`\n"
-                "3. Reinstall dependencies: `pip install -r requirements.txt --force-reinstall`\n"
+                f"1. Check current versions: `uv pip list | grep {package}`\n"
+                f"2. Update package: `uv add {package} --upgrade`\n"
+                "3. Reinstall dependencies: `uv sync --reinstall`\n"
                 "4. Use virtual environment to isolate dependencies"
             )
         else:
             suggestion = (
                 f"Missing dependency: {package}\n\n"
                 "To fix:\n"
-                f"1. Install missing dependency: `pip install {package}`\n"
-                "2. Or install all dependencies: `pip install -r requirements.txt`"
+                f"1. Install missing dependency: `uv add {package}`\n"
+                "2. Or sync all dependencies: `uv sync`"
             )
 
         return RecoveryResult(

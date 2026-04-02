@@ -1,0 +1,114 @@
+I need you to explore this codebase and create a comprehensive NAMI.md file.
+
+The NAMI.md file should be similar to a CLAUDE.md file used by Claude Code - it provides guidance and context about the codebase for AI assistants working with this project.
+
+Project root: {{ project_root }}
+
+Please follow these steps:
+
+1. **Subagent Delegation (if available)**
+    
+    If subagents are available, you may delegate exploration tasks to them to speed up and improve coverage. Use delegation strategically, not redundantly.
+
+    **Suggested delegation:**
+    - One subagent explores the **codebase structure and entry points**
+    - One subagent analyzes **architecture, modules, and technology stack**
+    - One subagent focuses on **development setup, commands, and tooling**
+    - One subagent reviews **testing, code style, and conventions**
+
+    Instructions for delegation:
+    - Clearly assign each subagent a well-scoped task
+    - Require subagents to report concise findings with file paths and concrete evidence
+    - **Wait for all delegated subagents to complete and return their results before proceeding**
+    - Review, reconcile, and synthesize all subagent findings yourself
+    - Resolve conflicts or inconsistencies between subagent reports
+    - Do NOT write partial files from subagents; only write the final, unified NAMI.md
+
+2. **Explore the codebase structure:**
+   - Use glob to find key files (README, package.json, pyproject.toml, Cargo.toml, etc.)
+   - Identify the primary programming language(s)
+   - Find main entry points and important directories
+   - Look for configuration files
+
+3. **Analyze the architecture:**
+   - Read key files to understand the project structure
+   - Identify main modules/packages/components
+   - Understand the technology stack
+   - Note any frameworks or libraries used
+
+4. **Document development setup:**
+   - Find setup/installation instructions
+   - Identify build tools and commands
+   - Note testing frameworks and commands
+   - Document linting/formatting tools
+
+5. **Create NAMI.md with the following sections:**
+
+## NAMI.md Structure:
+
+```markdown
+# NAMI.md
+
+This file provides guidance to AI assistants when working with code in this repository.
+
+## Project Overview
+
+[Brief description of what this project does]
+
+## Technology Stack
+
+[Languages, frameworks, key dependencies]
+
+## Project Structure
+
+[Directory layout and purpose of main directories]
+
+## Development Setup
+
+[How to set up the development environment]
+[Installation commands]
+[Environment variables if applicable]
+
+## Development Commands
+
+[Common commands for development, testing, building]
+
+## Architecture
+
+[Key architectural patterns or design decisions]
+[Main modules/components and their purposes]
+
+## Important Files
+
+[List of critical files and what they do]
+
+## Common Workflows
+
+[Typical development tasks and how to do them]
+
+## Testing
+
+[How to run tests]
+[Testing philosophy/approach]
+
+## Code Style and Conventions
+
+[Coding standards, naming conventions, etc.]
+
+## Additional Notes
+
+[Any other important information for developers]
+```
+
+5. **Write the file:**
+   - Use write_file to create {{ nami_md_path }}
+   - Make it comprehensive but concise
+   - Focus on information that would help an AI assistant understand and work with the codebase
+
+6. **Hard constraint**
+- The final NAMI.md **MUST NOT exceed 45,000 characters**
+- If content is too long, summarize aggressively
+- Prefer bullet points over prose
+- Omit redundant explanations
+
+Please start exploring now and create the NAMI.md file.

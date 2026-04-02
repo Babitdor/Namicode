@@ -444,14 +444,21 @@ async def execute_task(  # type: ignore
     # Deferred subagent completion banners — printed together just before main-agent synthesis
     pending_completions: list[dict] = []
 
-    # Debug logging helper
-    import datetime as _dt
-
-    _DBG_PATH = Path("_nami_debug.log")
+    # Debug logging helper - enabled via NAMI_DEBUG environment variable
+    import os as _os
+    _DEBUG_ENABLED = _os.environ.get("NAMI_DEBUG", "").lower() in ("1", "true", "yes")
 
     def _dbg(tag: str, msg: str) -> None:
-        with open(_DBG_PATH, "a", encoding="utf-8") as f:
-            f.write(f"[{_dt.datetime.now():%H:%M:%S.%f}] [{tag}] {msg}\n")
+        pass  # Placeholder - replaced below if debug enabled
+
+    if _DEBUG_ENABLED:
+        import datetime as _dt
+
+        _DBG_PATH = Path("_nami_debug.log")
+
+        def _dbg(tag: str, msg: str) -> None:  # type: ignore
+            with open(_DBG_PATH, "a", encoding="utf-8") as f:
+                f.write(f"[{_dt.datetime.now():%H:%M:%S.%f}] [{tag}] {msg}\n")
 
     _dbg(
         "START",

@@ -219,7 +219,7 @@ def duckduckgo_search(
         except ImportError:
             return {
                 "success": False,
-                "error": "ddgs not installed. Install with: pip install ddgs",
+                "error": "ddgs not installed. Install with: uv add ddgs",
                 "query": query,
             }
 
@@ -304,7 +304,7 @@ def image_search(
         except ImportError:
             return {
                 "success": False,
-                "error": "ddgs not installed. Install with: pip install ddgs",
+                "error": "ddgs not installed. Install with: uv add ddgs",
                 "query": query,
             }
 
@@ -487,7 +487,7 @@ def docs_search(
         except ImportError:
             return {
                 "success": False,
-                "error": "ddgs not installed. Install with: pip install ddgs",
+                "error": "ddgs not installed. Install with: uv add ddgs",
                 "query": query,
             }
 
@@ -664,7 +664,7 @@ def execute_in_e2b(
     except ImportError as e:
         return (
             f"Error: E2B Code Interpreter SDK not installed: {e}\n\n"
-            "Install it with: pip install e2b-code-interpreter"
+            "Install it with: uv add e2b-code-interpreter"
         )
 
     # Check for API key in SecretManager or environment
@@ -886,7 +886,7 @@ def convert_format(
             except ImportError:
                 return {
                     "success": False,
-                    "error": "PyYAML not installed. Install with: pip install pyyaml",
+                    "error": "PyYAML not installed. Install with: uv add pyyaml",
                 }
             data = yaml.safe_load(content)
 
@@ -899,7 +899,7 @@ def convert_format(
                 except ImportError:
                     return {
                         "success": False,
-                        "error": "TOML parser not available. Requires Python 3.11+ or: pip install tomli",
+                        "error": "TOML parser not available. Requires Python 3.11+ or: uv add tomli",
                     }
             data = tomllib.loads(content)
 
@@ -922,7 +922,7 @@ def convert_format(
             except ImportError:
                 return {
                     "success": False,
-                    "error": "PyYAML not installed. Install with: pip install pyyaml",
+                    "error": "PyYAML not installed. Install with: uv add pyyaml",
                 }
             result = yaml.dump(
                 data,
@@ -938,7 +938,7 @@ def convert_format(
             except ImportError:
                 return {
                     "success": False,
-                    "error": "TOML writer not installed. Install with: pip install tomli-w",
+                    "error": "TOML writer not installed. Install with: uv add tomli-w",
                 }
             result = tomli_w.dumps(data)
 
@@ -1009,7 +1009,7 @@ def generate_image(
     except ImportError:
         return {
             "success": False,
-            "error": "replicate package not installed. Run: pip install replicate",
+            "error": "replicate package not installed. Run: uv add replicate",
         }
 
     # Get API key
@@ -1299,7 +1299,7 @@ def lint_code(
         except (FileNotFoundError, subprocess.CalledProcessError):
             return {
                 "success": False,
-                "error": "No linter available. Install ruff: pip install ruff",
+                "error": "No linter available. Install ruff: uv add ruff",
             }
     elif project["project_type"] in ("javascript", "typescript"):
         return _lint_with_eslint(path, fix)
@@ -1307,7 +1307,7 @@ def lint_code(
         return {
             "success": False,
             "error": f"No linter configured for {project['project_type']} projects",
-            "hint": "For Python: pip install ruff. For JS/TS: npm install eslint",
+            "hint": "For Python: uv add ruff. For JS/TS: npm install eslint",
         }
 
 
@@ -1385,7 +1385,7 @@ def _lint_with_ruff(path: Path, fix: bool, show_fixes: bool) -> dict[str, Any]:
     except subprocess.TimeoutExpired:
         return {"success": False, "error": "Linting timed out after 120 seconds"}
     except FileNotFoundError:
-        return {"success": False, "error": "ruff not found. Install with: pip install ruff"}
+        return {"success": False, "error": "ruff not found. Install with: uv add ruff"}
     except Exception as e:
         return {"success": False, "error": f"Linting failed: {e!s}"}
 
@@ -1500,7 +1500,7 @@ def format_code_file(
         except (FileNotFoundError, subprocess.CalledProcessError):
             return {
                 "success": False,
-                "error": "No formatter available. Install ruff: pip install ruff",
+                "error": "No formatter available. Install ruff: uv add ruff",
             }
     elif project["project_type"] in ("javascript", "typescript"):
         return _format_with_prettier(path, check_only)
@@ -1563,7 +1563,7 @@ def _format_with_ruff(path: Path, check_only: bool) -> dict[str, Any]:
     except subprocess.TimeoutExpired:
         return {"success": False, "error": "Formatting timed out after 120 seconds"}
     except FileNotFoundError:
-        return {"success": False, "error": "ruff not found. Install with: pip install ruff"}
+        return {"success": False, "error": "ruff not found. Install with: uv add ruff"}
     except Exception as e:
         return {"success": False, "error": f"Formatting failed: {e!s}"}
 
@@ -1732,7 +1732,7 @@ def check_types(
             except (FileNotFoundError, subprocess.CalledProcessError):
                 return {
                     "success": False,
-                    "error": "No type checker available. Install mypy: pip install mypy",
+                    "error": "No type checker available. Install mypy: uv add mypy",
                 }
     elif project["project_type"] == "typescript":
         return _check_types_tsc(path)
@@ -1812,7 +1812,7 @@ def _check_types_mypy(path: Path, strict: bool) -> dict[str, Any]:
     except subprocess.TimeoutExpired:
         return {"success": False, "error": "Type checking timed out after 5 minutes"}
     except FileNotFoundError:
-        return {"success": False, "error": "mypy not found. Install with: pip install mypy"}
+        return {"success": False, "error": "mypy not found. Install with: uv add mypy"}
     except Exception as e:
         return {"success": False, "error": f"Type checking failed: {e!s}"}
 
@@ -1865,7 +1865,7 @@ def _check_types_pyright(path: Path, strict: bool) -> dict[str, Any]:
     except subprocess.TimeoutExpired:
         return {"success": False, "error": "Type checking timed out after 5 minutes"}
     except FileNotFoundError:
-        return {"success": False, "error": "pyright not found. Install with: pip install pyright"}
+        return {"success": False, "error": "pyright not found. Install with: uv add pyright"}
     except Exception as e:
         return {"success": False, "error": f"Type checking failed: {e!s}"}
 

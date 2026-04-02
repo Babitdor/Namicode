@@ -21,6 +21,8 @@ from langchain.tools import BaseTool
 from langchain_core.tools import StructuredTool
 from langgraph.store.memory import InMemoryStore
 
+from namicode_cli.prompts import render_template
+
 
 class MemoryEntry(TypedDict):
     """A single memory entry with attribution."""
@@ -322,35 +324,8 @@ def _create_memory_tools(author_id: str) -> list[BaseTool]:
     ]
 
 
-SHARED_MEMORY_SYSTEM_PROMPT = """
-## Shared Memory System
-
-You have access to a **shared memory store** that persists across all agents (main agent and subagents).
-
-### Memory Tools Available:
-- `write_memory(key, content, tags?)` - Store information with your author attribution
-- `read_memory(key)` - Retrieve a specific memory (shows who wrote it)
-- `list_memories(tag_filter?)` - See all available memories
-- `delete_memory(key)` - Remove a memory
-
-### When to Use Shared Memory:
-1. **Cross-agent communication**: Share findings between main agent and subagents
-2. **Persistent context**: Store information that should survive summarization
-3. **Research aggregation**: Subagents can write their findings for the main agent to synthesize
-4. **User preferences**: Store learned preferences that all agents should know
-
-### Best Practices:
-- Use descriptive keys (e.g., 'user-tech-stack', 'research-llm-providers', 'task-progress-summary')
-- Include relevant tags for easy filtering
-- Check existing memories before duplicating information
-- Attribute correctly - your writes will be tagged with your agent ID
-
-### Memory Attribution:
-All memories track who wrote them. When you read a memory, you'll see:
-- The author (main-agent or subagent:name)
-- When it was written
-- Any tags associated with it
-"""
+# Shared memory system prompt loaded from: namicode_cli/prompts/shared_memory.jinja
+SHARED_MEMORY_SYSTEM_PROMPT = render_template("shared_memory.jinja")
 
 
 class SharedMemoryMiddleware(AgentMiddleware):

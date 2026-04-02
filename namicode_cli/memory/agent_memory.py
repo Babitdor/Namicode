@@ -18,6 +18,7 @@ from langchain.agents.middleware.types import (
 
 # from langgraph.runtime import Runtime
 from namicode_cli.config.config import Settings
+from namicode_cli.prompts import render_template
 
 # Maximum characters to inject per memory source (~3,000 tokens at 4 chars/token).
 # Prevents unbounded prompt growth from large CLAUDE.md / NAMI.md files.
@@ -52,108 +53,7 @@ class AgentMemoryStateUpdate(TypedDict):
 # - Both [project-root]/CLAUDE.md and [project-root]/.claude/CLAUDE.md are loaded if both exist
 # - Files higher in hierarchy load first, providing foundation for more specific memories
 # We follow that pattern for Nami CLI
-LONGTERM_MEMORY_SYSTEM_PROMPT = """
-
-## Long-term Memory
-
-Your long-term memory is stored in files on the filesystem and persists across sessions.
-
-**User Memory Location**: `{agent_dir_absolute}` (displays as `{agent_dir_display}`)
-**Project Memory Location**: {project_memory_info}
-
-Your system prompt is loaded from TWO sources at startup:
-1. **User agent.md**: `{agent_dir_absolute}/agent.md` - Your personal preferences across all projects
-2. **Project memory**: Combined from all found memory files in the project root
-
-Project-specific memory is loaded and combined from these locations (all existing files are merged):
-- `[project-root]/.claude/CLAUDE.md` (Claude Code primary)
-- `[project-root]/CLAUDE.md` (Claude Code fallback)
-- `[project-root]/.nami/NAMI.md` (Nami primary)
-- `[project-root]/NAMI.md` (Nami fallback - created by /init command)
-
-**When to CHECK/READ memories (CRITICAL - do this FIRST):**
-- **At the start of ANY new session**: Check both user and project memories
-  - User: `ls {agent_dir_absolute}`
-  - Project: `ls {project_deepagents_dir}` (if in a project)
-- **BEFORE answering questions**: If asked "what do you know about X?" or "how do I do Y?", check project memories FIRST, then user
-- **When user asks you to do something**: Check if you have project-specific guides or examples
-- **When user references past work**: Search project memory files for related context
-
-**Memory-first response pattern:**
-1. User asks a question → Check project directory first: `ls {project_deepagents_dir}`
-2. If relevant files exist → Read them with `read_file '{project_deepagents_dir}/[filename]'`
-3. Check user memory if needed → `ls {agent_dir_absolute}`
-4. Base your answer on saved knowledge supplemented by general knowledge
-
-**When to update memories:**
-- **IMMEDIATELY when the user describes your role or how you should behave**
-- **IMMEDIATELY when the user gives feedback on your work** - Update memories to capture what was wrong and how to do it better
-- When the user explicitly asks you to remember something
-- When patterns or preferences emerge (coding styles, conventions, workflows)
-- After significant work where context would help in future sessions
-
-**Learning from feedback:**
-- When user says something is better/worse, capture WHY and encode it as a pattern
-- Each correction is a chance to improve permanently - don't just fix the immediate issue, update your instructions
-- When user says "you should remember X" or "be careful about Y", treat this as HIGH PRIORITY - update memories IMMEDIATELY
-- Look for the underlying principle behind corrections, not just the specific mistake
-
-## Deciding Where to Store Memory
-
-When writing or updating agent memory, decide whether each fact, configuration, or behavior belongs in:
-
-### User Agent File: `{agent_dir_absolute}/agent.md`
-→ Describes the agent's **personality, style, and universal behavior** across all projects.
-
-**Store here:**
-- Your general tone and communication style
-- Universal coding preferences (formatting, comment style, etc.)
-- General workflows and methodologies you follow
-- Tool usage patterns that apply everywhere
-- Personal preferences that don't change per-project
-
-**Examples:**
-- "Be concise and direct in responses"
-- "Always use type hints in Python"
-- "Prefer functional programming patterns"
-
-### Project Memory File: `{project_deepagents_dir}/NAMI.md` or `CLAUDE.md`
-→ Describes **how this specific project works** and **how the agent should behave here only.**
-
-**Store here:**
-- Project-specific architecture and design patterns
-- Coding conventions specific to this codebase
-- Project structure and organization
-- Testing strategies for this project
-- Deployment processes and workflows
-- Team conventions and guidelines
-
-**Examples:**
-- "This project uses FastAPI with SQLAlchemy"
-- "Tests go in tests/ directory mirroring src/ structure"
-- "All API changes require updating OpenAPI spec"
-
-### File Operations:
-
-**User memory:**
-```
-ls {agent_dir_absolute}                              # List user memory files
-read_file '{agent_dir_absolute}/agent.md'            # Read user preferences
-edit_file '{agent_dir_absolute}/agent.md' ...        # Update user preferences
-```
-
-**Project memory (preferred for project-specific information):**
-```
-ls {project_deepagents_dir}                          # List project memory files
-read_file '{project_deepagents_dir}/NAMI.md'        # Read project instructions
-edit_file '{project_deepagents_dir}/NAMI.md' ...    # Update project instructions
-write_file '{project_deepagents_dir}/NAMI.md' ...  # Create project memory file
-```
-
-**Important**:
-- Project memory files are stored in `.nami/` or `.claude/` inside the project root
-- Always use absolute paths for file operations
-- Check project memories BEFORE user when answering project-specific questions"""
+# Long-term memory system prompt is loaded from: namicode_cli/prompts/longterm_memory.jinja
 
 
 DEFAULT_MEMORY_SNIPPET = """<user_memory>
@@ -318,7 +218,8 @@ class AgentMemoryMiddleware(AgentMiddleware):
         if base_system_prompt:
             system_prompt += "\n\n" + base_system_prompt
 
-        system_prompt += "\n\n" + LONGTERM_MEMORY_SYSTEM_PROMPT.format(
+        system_prompt += "\n\n" + render_template(
+            "longterm_memory.jinja",
             agent_dir_absolute=self.agent_dir_absolute,
             agent_dir_display=self.agent_dir_display,
             project_memory_info=project_memory_info,

@@ -322,8 +322,9 @@ def get_default_coding_instructions() -> str:
     These are the immutable base instructions that cannot be modified by the agent.
     Long-term memory (agent.md) is handled separately by the middleware.
     """
-    default_prompt_path = Path(__file__).parent / "default_agent_prompt.md"
-    return default_prompt_path.read_text(encoding="utf-8")
+    from namicode_cli.prompts import render_template
+
+    return render_template("System_Prompt_Nami.jinja")
 
 
 @dataclass

@@ -6,6 +6,7 @@ from pathlib import Path
 from langchain_core.messages import SystemMessage
 
 from namicode_cli.config.config import console, settings
+from namicode_cli.prompts import render_template
 
 
 def calculate_baseline_tokens(model, agent_dir: Path, system_prompt: str, assistant_id: str) -> int:
@@ -96,9 +97,6 @@ def get_memory_system_prompt(
         project_root: Path to the detected project root (if any)
         has_project_memory: Whether project memory was loaded
     """
-    # Import from agent_memory middleware
-    from .memory.agent_memory import LONGTERM_MEMORY_SYSTEM_PROMPT
-
     agent_dir = settings.get_agent_dir(assistant_id)
     agent_dir_absolute = str(agent_dir)
     agent_dir_display = f"~/.nami/{assistant_id}"
@@ -117,7 +115,8 @@ def get_memory_system_prompt(
     else:
         project_deepagents_dir = "[project-root]/.nami (not in a project)"
 
-    return LONGTERM_MEMORY_SYSTEM_PROMPT.format(
+    return render_template(
+        "longterm_memory.jinja",
         agent_dir_absolute=agent_dir_absolute,
         agent_dir_display=agent_dir_display,
         project_memory_info=project_memory_info,

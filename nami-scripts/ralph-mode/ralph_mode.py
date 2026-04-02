@@ -6,7 +6,7 @@ Ralph is an autonomous looping pattern created by Geoff Huntley.
 Each loop starts with fresh context. The filesystem and git serve as memory.
 
 Usage:
-    uv pip install deepagents-cli
+    uv add deepagents-cli
     python ralph_mode.py "Build a Python course. Use git."
     python ralph_mode.py "Build a REST API" --iterations 5
     python ralph_mode.py "Create a CLI tool" --workdir ./my-project

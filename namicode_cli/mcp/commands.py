@@ -162,7 +162,7 @@ def _install(url: str, name: str | None = None, skip_install: bool = False) -> N
     Args:
         url: URL or package name to install
         name: Optional custom name for the server
-        skip_install: Skip the npm/pip install step (just configure)
+        skip_install: Skip the npm/uv add step (just configure)
     """
     import re
     import shutil

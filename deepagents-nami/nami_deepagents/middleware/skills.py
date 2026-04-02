@@ -99,6 +99,8 @@ from typing import TYPE_CHECKING, Annotated
 import yaml
 from langchain.agents.middleware.types import PrivateStateAttr
 
+from nami_deepagents.prompts import render_template
+
 if TYPE_CHECKING:
     from nami_deepagents.backends.protocol import BACKEND_TYPES, BackendProtocol
 
@@ -446,54 +448,13 @@ async def _alist_skills(
     return skills
 
 
-SKILLS_SYSTEM_PROMPT = """
-
-## Skills System
-
-You have access to a skills library that provides specialized capabilities and domain knowledge.
-
-{skills_locations}
-
-**Available Skills:**
-
-{skills_list}
-
----
-
-### Skills-First Protocol (MANDATORY)
-
-**Before starting ANY non-trivial task**, scan the available skills list above and ask:
-> "Does any skill's description match what the user is asking for?"
-
-If yes → read that skill's SKILL.md **immediately** using `read_file`, then follow its instructions exactly.
-If no → proceed with your default approach.
-
-This check must happen before you write any code, run any commands, or perform any research.
-
-**Pattern matching — treat these as triggers:**
-
-| User asks about… | Look for a skill named like… |
-|-----------------|------------------------------|
-| research / web search / finding info | `web-research`, `research` |
-| reviewing / auditing code | `code-review`, `review` |
-| writing tests | `test-writing`, `testing` |
-| deploying / CI / infrastructure | `deployment`, `ci-cd` |
-| documentation | `docs`, `documentation` |
-| git / version control | `git-workflow`, `git` |
-| performance / profiling | `performance` |
-| security / vulnerabilities | `security-audit` |
-| anything with a named workflow | match the workflow name |
-
-**How skills work (progressive disclosure):**
-
-1. You see the skill's name + description in the list above
-2. You call `read_file` on the path shown (e.g., `read_file("/path/to/SKILL.md")`)
-3. SKILL.md contains the full workflow, rules, and examples
-4. Follow those instructions precisely — they encode proven patterns for that domain
-5. Skills may include helper scripts in `scripts/` — always use absolute paths
-
-**Skills override your defaults.** If a skill covers the task, its instructions take precedence over general reasoning. The skill was written specifically for that scenario.
-"""
+def _get_skills_system_prompt(skills_locations: str, skills_list: str) -> str:
+    """Get the skills system prompt with the given skills locations and list."""
+    return render_template(
+        "skills.jinja",
+        skills_locations=skills_locations,
+        skills_list=skills_list,
+    )
 
 
 class SkillsMiddleware(AgentMiddleware):
@@ -535,7 +496,6 @@ class SkillsMiddleware(AgentMiddleware):
         """
         self._backend = backend
         self.sources = sources
-        self.system_prompt_template = SKILLS_SYSTEM_PROMPT
 
     def _get_backend(
         self, state: SkillsState, runtime: Runtime, config: RunnableConfig
@@ -604,7 +564,7 @@ class SkillsMiddleware(AgentMiddleware):
         skills_locations = self._format_skills_locations()
         skills_list = self._format_skills_list(skills_metadata)
 
-        skills_section = self.system_prompt_template.format(
+        skills_section = _get_skills_system_prompt(
             skills_locations=skills_locations,
             skills_list=skills_list,
         )

@@ -7,56 +7,9 @@ focusing on outcomes rather than dialogue.
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
-SUMMARIZATION_SYSTEM_PROMPT = """You are a session summarizer. Your job is to create a concise, declarative memory.md file from a conversation history.
+from namicode_cli.prompts import render_template
 
-## Rules for memory.md
-
-**MUST INCLUDE:**
-- Current goal/objective
-- Key decisions made
-- Constraints discovered during the session
-- Files that were created, modified, or examined
-- Rejected approaches and why (outcome only, not reasoning)
-- Pending TODOs or next steps
-
-**MUST NOT INCLUDE:**
-- Conversational dialogue or back-and-forth
-- Tool execution logs or stdout
-- Reasoning, thinking, or chain-of-thought
-- Restatements of rules from NAMI.md (those are already injected separately)
-- Verbatim code unless it's a critical snippet for context
-
-## Format
-
-Use markdown with clear sections:
-
-```markdown
-# Session Memory
-
-## Current Goal
-[What is the user trying to achieve?]
-
-## Key Decisions
-- [Decision 1]
-- [Decision 2]
-
-## Files Modified
-- `path/to/file.py` - [what changed]
-- `another/file.ts` - [what changed]
-
-## Constraints & Discoveries
-- [Constraint or discovery 1]
-- [Constraint or discovery 2]
-
-## Rejected Approaches
-- [Approach X] - didn't work because [outcome]
-
-## Next Steps
-- [ ] [TODO 1]
-- [ ] [TODO 2]
-```
-
-Focus on **what happened** and **what was learned**, not **how** or **why** in detail."""
+# Session summarization system prompt loaded from: namicode_cli/prompts/session_summarization.jinja
 
 
 def summarize_messages_to_memory(
@@ -80,7 +33,8 @@ def summarize_messages_to_memory(
     # Build conversation summary for the LLM
     conversation_summary = _build_conversation_summary(messages)
 
-    # Create prompt for summarization
+    # Create prompt for summarization using Jinja template
+    system_prompt = render_template("session_summarization.jinja")
     user_prompt = f"""Summarize this conversation into a declarative memory.md file.
 
 Current task: {current_task or "No specific task set"}
@@ -92,7 +46,7 @@ Generate the memory.md content following the format specified in your instructio
 
     # Call the LLM
     summary_messages = [
-        SystemMessage(content=SUMMARIZATION_SYSTEM_PROMPT),
+        SystemMessage(content=system_prompt),
         HumanMessage(content=user_prompt),
     ]
 

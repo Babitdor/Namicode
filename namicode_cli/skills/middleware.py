@@ -35,6 +35,7 @@ from langchain.agents.middleware.types import (
 )
 from langgraph.runtime import Runtime
 
+from namicode_cli.prompts import render_template
 from namicode_cli.skills.load import SkillMetadata, list_skills
 
 
@@ -52,55 +53,7 @@ class SkillsStateUpdate(TypedDict):
     """List of loaded skill metadata (name, description, path)."""
 
 
-# Skills System Documentation
-SKILLS_SYSTEM_PROMPT = """
-
-## Skills System
-
-You have access to a skills library that provides specialized capabilities and domain knowledge.
-
-{skills_locations}
-
-**Available Skills:**
-
-{skills_list}
-
----
-
-### Skills-First Protocol (MANDATORY)
-
-**Before starting ANY non-trivial task**, scan the available skills list above and ask:
-> "Does any skill's description match what the user is asking for?"
-
-If yes → read that skill's SKILL.md **immediately** using `read_file`, then follow its instructions exactly.
-If no → proceed with your default approach.
-
-This check must happen before you write any code, run any commands, or perform any research.
-
-**Pattern matching — treat these as triggers:**
-
-| User asks about… | Look for a skill named like… |
-|-----------------|------------------------------|
-| research / web search / finding info | `web-research`, `research` |
-| reviewing / auditing code | `code-review`, `review` |
-| writing tests | `test-writing`, `testing` |
-| deploying / CI / infrastructure | `deployment`, `ci-cd` |
-| documentation | `docs`, `documentation` |
-| git / version control | `git-workflow`, `git` |
-| performance / profiling | `performance` |
-| security / vulnerabilities | `security-audit` |
-| anything with a named workflow | match the workflow name |
-
-**How skills work (progressive disclosure):**
-
-1. You see the skill's name + description in the list above
-2. You call `read_file` on the path shown (e.g., `read_file("/path/to/SKILL.md")`)
-3. SKILL.md contains the full workflow, rules, and examples
-4. Follow those instructions precisely — they encode proven patterns for that domain
-5. Skills may include helper scripts in `scripts/` — always use absolute paths
-
-**Skills override your defaults.** If a skill covers the task, its instructions take precedence over general reasoning. The skill was written specifically for that scenario.
-"""
+# Skills System Documentation - loaded from: namicode_cli/prompts/skills.jinja
 
 
 class SkillsMiddleware(AgentMiddleware):
@@ -148,7 +101,6 @@ class SkillsMiddleware(AgentMiddleware):
         self.project_skills_dirs = project_skills_dirs or []
         # Store display paths for prompts
         self.user_skills_display = f"~/.nami/{assistant_id}/skills"
-        self.system_prompt_template = SKILLS_SYSTEM_PROMPT
 
     @property
     def skills_dir_display(self) -> str:
@@ -216,7 +168,9 @@ class SkillsMiddleware(AgentMiddleware):
 
         return "\n".join(lines)
 
-    def before_agent(self, state: SkillsState, runtime: Runtime) -> SkillsStateUpdate | None:
+    def before_agent(
+        self, state: SkillsState, runtime: Runtime
+    ) -> SkillsStateUpdate | None:
         """Load skills metadata before agent execution.
 
         This runs once at session start to discover available skills from both
@@ -236,7 +190,9 @@ class SkillsMiddleware(AgentMiddleware):
         if self.project_skills_dirs:
             merged: dict[str, object] = {
                 s["name"]: s  # type: ignore[index]
-                for s in list_skills(user_skills_dir=self.skills_dir, project_skills_dir=None)
+                for s in list_skills(
+                    user_skills_dir=self.skills_dir, project_skills_dir=None
+                )
             }
             for proj_dir in self.project_skills_dirs:
                 for s in list_skills(user_skills_dir=None, project_skills_dir=proj_dir):
@@ -272,8 +228,9 @@ class SkillsMiddleware(AgentMiddleware):
         skills_locations = self._format_skills_locations()
         skills_list = self._format_skills_list(skills_metadata)
 
-        # Format the skills documentation
-        skills_section = self.system_prompt_template.format(
+        # Format the skills documentation using Jinja template
+        skills_section = render_template(
+            "skills.jinja",
             skills_locations=skills_locations,
             skills_list=skills_list,
         )
@@ -307,8 +264,9 @@ class SkillsMiddleware(AgentMiddleware):
         skills_locations = self._format_skills_locations()
         skills_list = self._format_skills_list(skills_metadata)
 
-        # Format the skills documentation
-        skills_section = self.system_prompt_template.format(
+        # Format the skills documentation using Jinja template
+        skills_section = render_template(
+            "skills.jinja",
             skills_locations=skills_locations,
             skills_list=skills_list,
         )

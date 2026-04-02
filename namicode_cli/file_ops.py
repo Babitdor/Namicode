@@ -463,18 +463,15 @@ class FileOpTracker:
                         and responses[0].error is None
                     ):
                         record.after_content = responses[0].content.decode("utf-8")
-                    else:
-                        record.after_content = None
-                else:
-                    record.after_content = None
+                        return
             except Exception:
-                record.after_content = None
-        else:
-            # Fallback: direct filesystem read when no backend provided
-            if record.physical_path is None:
-                record.after_content = None
-                return
-            record.after_content = _safe_read(record.physical_path)
+                pass  # Fall through to filesystem fallback
+
+        # Fallback: direct filesystem read when no backend or backend failed
+        if record.physical_path is None:
+            record.after_content = None
+            return
+        record.after_content = _safe_read(record.physical_path)
 
     def _finalize(self, record: FileOperationRecord) -> None:
         self.completed.append(record)

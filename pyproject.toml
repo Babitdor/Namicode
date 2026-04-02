@@ -8,14 +8,13 @@ version = "0.0.14"
 description = "Agentic Coding Tool that runs in your terminal"
 authors = [{ name = "Babitdor", email = "babitdorbryan14@gmail.com" }]
 readme = {file = "README.md", content-type = "text/markdown"}
-license = { text = "MIT" }
+license = "MIT"
 keywords = ["nami", "code-cli", "nami-code", "agentic-code-cli"]
 
 requires-python = ">=3.11,<4.0"
 classifiers = [
      "Development Status :: 3 - Alpha",
      "Intended Audience :: Developers",
-     "License :: OSI Approved :: MIT License",
      "Programming Language :: Python :: 3.11",
      "Programming Language :: Python :: 3.12",
      "Programming Language :: Python :: 3.13",
@@ -141,3 +140,6 @@ warn_return_any = false
 
 [tool.uv.sources]
 nami-deepagents = { path = "./deepagents-nami" }
+
+[tool.setuptools.packages.find]
+include = ["namicode_cli*"]
