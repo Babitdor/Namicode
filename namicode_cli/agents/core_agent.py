@@ -43,11 +43,6 @@ from nami_deepagents import create_deep_agent
 from nami_deepagents.backends import CompositeBackend
 from nami_deepagents.backends.filesystem import FilesystemBackend
 from nami_deepagents.backends.sandbox import SandboxBackendProtocol
-from nami_deepagents.middleware import (
-    AskQuestionMiddleware,
-    PlanModeMiddleware,
-    SkillsMiddleware,
-)
 from nami_deepagents.middleware.subagents import SubAgent
 
 from namicode_cli.agents.default_subagents.subagents import retrieve_core_subagents
@@ -598,7 +593,8 @@ def create_agent_with_config(
     # Project-level skills directories (if in a project)
     # Supports both .claude/skills/ and .nami/skills/
     project_skills_dirs = settings.get_project_skills_dirs()
-    skill_sources.append(str(project_skills_dirs))
+    # Extend with each path as a string (not str(list) which would be wrong)
+    skill_sources.extend(str(p) for p in project_skills_dirs)
 
     # Use shared MCP middleware (singleton pattern avoids reconnecting for subagents)
     mcp_middleware = get_shared_mcp_middleware()

@@ -46,6 +46,16 @@ Your previous work is in the filesystem. Continue making progress toward complet
 - [ ] Do I need to look something up? → Use `web-research` or `docs_search`
 - [ ] Is this a complex web app? → Consider `web-artifacts-builder`
 
+**How to Invoke Skills (CRITICAL):**
+Skills are loaded from your system prompt. To use a skill:
+1. **Find the skill path** in the "Available Skills" section of your system prompt
+2. **Read the skill file**: `read_file("<skill_path>/SKILL.md")`
+3. **Follow the instructions** in the SKILL.md file exactly
+4. **Apply the workflow** described in the skill to your current task
+
+Example: If you see `- **testing-skills**: ... -> Read 'C:/Users/.../skills/testing-skills/SKILL.md'`
+Then call: `read_file("C:/Users/.../skills/testing-skills/SKILL.md")` and follow those instructions.
+
 ### Output Format
 End your response with:
 - **Progress Summary**: What you accomplished in this iteration
