@@ -227,7 +227,41 @@ Give each subagent complete context — they have no conversation history. State
 
 ### generate_image
 
-`generate_image(prompt, model="flux-schnell", aspect_ratio="1:1")` — generate images via Replicate.
+`generate_image(prompt, backend="replicate", model="flux-schnell", aspect_ratio="1:1", seed=None, cfg_scale=None, negative_prompt=None, output_path=None)` — generate images via Replicate or NVIDIA GenAI (Stable Diffusion 3 Medium).
+
+**Backends:**
+- `"replicate"` (default): Uses Replicate API with Flux models
+- `"nvidia"`: Uses NVIDIA GenAI API with Stable Diffusion 3 Medium
+
+**Parameters:**
+- `prompt` (str): Text description of the image to generate
+- `backend` (str): Backend to use - `"replicate"` or `"nvidia"` (default: `"replicate"`)
+- `model` (str): Model name for Replicate backend (default: `"flux-schnell"`)
+- `aspect_ratio` (str): Output dimensions - `"1:1"`, `"16:9"`, `"9:16"`, `"4:3"`, `"3:4"` (default: `"1:1"`)
+- `seed` (int, optional): Random seed for reproducibility
+- `cfg_scale` (float, optional): Classifier-free guidance scale (NVIDIA default: `3.5`)
+- `negative_prompt` (str, optional): Description of elements to avoid
+- `output_path` (str, optional): File path to save the generated image
+
+**NVIDIA-specific defaults:**
+- `cfg_scale=3.5` (if not specified)
+- `steps=30` (fixed for NVIDIA)
+
+**Aspect ratios by backend:**
+- Replicate: `"1:1"`, `"16:9"`, `"9:16"`, `"4:3"`, `"3:4"`
+- NVIDIA: `"1:1"`, `"16:9"`, `"9:16"`, `"4:3"`, `"3:4"`
+
+**Usage examples:**
+```python
+# Replicate (default)
+generate_image("A futuristic city with neon lights", backend="replicate")
+
+# NVIDIA GenAI (Stable Diffusion 3 Medium)
+generate_image("A futuristic city with neon lights", backend="nvidia")
+
+# With custom parameters
+generate_image("A serene mountain landscape", aspect_ratio="16:9", seed=42, backend="nvidia")
+```
 
 ### run_tests_tool
 

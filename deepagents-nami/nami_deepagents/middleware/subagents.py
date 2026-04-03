@@ -254,6 +254,7 @@ def _get_subagents(
     if explore_agent:
         explore_subagent = create_agent(
             default_model,
+            name="explore",
             system_prompt=EXPLORE_AGENT_PROMPT,
             tools=_filter_tools(EXPLORE_AGENT_TOOLS),
             middleware=[*default_subagent_middleware],
@@ -266,6 +267,7 @@ def _get_subagents(
     if plan_agent:
         plan_subagent = create_agent(
             default_model,
+            name="plan",
             system_prompt=PLAN_AGENT_PROMPT,
             tools=_filter_tools(PLAN_AGENT_TOOLS),
             middleware=[*default_subagent_middleware],
@@ -278,6 +280,7 @@ def _get_subagents(
     if verification_agent:
         verification_subagent = create_agent(
             default_model,
+            name="verification",
             system_prompt=VERIFICATION_AGENT_PROMPT,
             tools=_filter_tools(VERIFICATION_AGENT_TOOLS),
             middleware=[*default_subagent_middleware],

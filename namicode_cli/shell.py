@@ -45,6 +45,72 @@ from langchain.tools import ToolRuntime, tool
 from langchain_core.messages import ToolMessage
 from langchain_core.tools.base import ToolException
 
+
+def _convert_unix_command_to_windows(command: str) -> str:
+    """Convert Unix-style commands to Windows-compatible commands.
+    
+    This function transforms common Unix commands to work on Windows:
+    - mkdir -p -> mkdir (Windows creates parent dirs automatically)
+    - rm -rf -> rmdir /s /q or del /s /q
+    - rm -r -> rmdir /s /q or del /s /q
+    - cp -r -> xcopy /e /i /y
+    - touch -> type nul >
+    
+    Args:
+        command: The Unix-style command to convert
+        
+    Returns:
+        Windows-compatible command string
+    """
+    if sys.platform != "win32":
+        return command
+    
+    # Convert mkdir -p to Windows mkdir (Windows creates parent dirs automatically)
+    # Pattern: mkdir -p "path" or mkdir -p path
+    command = re.sub(
+        r'\bmkdir\s+-p\s+',
+        'mkdir ',
+        command,
+        flags=re.IGNORECASE
+    )
+    
+    # Convert rm -rf to Windows rmdir /s /q
+    # Pattern: rm -rf path or rm -rf "path"
+    command = re.sub(
+        r'\brm\s+-rf\s+',
+        'rmdir /s /q ',
+        command,
+        flags=re.IGNORECASE
+    )
+    
+    # Convert rm -r to Windows rmdir /s /q
+    command = re.sub(
+        r'\brm\s+-r\s+',
+        'rmdir /s /q ',
+        command,
+        flags=re.IGNORECASE
+    )
+    
+    # Convert cp -r to Windows xcopy
+    # Pattern: cp -r source dest
+    command = re.sub(
+        r'\bcp\s+-r\s+',
+        'xcopy /e /i /y ',
+        command,
+        flags=re.IGNORECASE
+    )
+    
+    # Convert touch to Windows type nul >
+    # Pattern: touch filename
+    command = re.sub(
+        r'\btouch\s+',
+        'type nul > ',
+        command,
+        flags=re.IGNORECASE
+    )
+    
+    return command
+
 # Patterns that indicate a line is an interactive prompt requiring user input
 PROMPT_PATTERNS = [
     r"\(y/n\)",  # Yes/No prompts
@@ -277,6 +343,45 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         self._tool_name = "shell"
         self._env = ShellMiddleware._sanitize_env(env if env is not None else os.environ.copy())
         self._workspace_root = workspace_root
+        
+        # Track background processes for cleanup
+        self._background_processes: list[asyncio.subprocess.Process] = []
+        
+        # Register cleanup on exit
+        import atexit
+        atexit.register(self._cleanup_background_processes)
+
+    def _cleanup_background_processes(self) -> None:
+        """Clean up background processes before exit to prevent asyncio errors."""
+        for process in self._background_processes:
+            try:
+                if process.returncode is None:
+                    # Process is still running, terminate it
+                    process.terminate()
+                    # Try to wait for it to finish (with timeout)
+                    try:
+                        import time
+                        start = time.time()
+                        while process.returncode is None and time.time() - start < 1.0:
+                            time.sleep(0.1)
+                    except Exception:
+                        pass
+            except Exception:
+                # Ignore errors during cleanup
+                pass
+        self._background_processes.clear()
+    
+    def _remove_completed_process(self, process: asyncio.subprocess.Process) -> None:
+        """Remove a completed process from tracking.
+        
+        Args:
+            process: The process to remove from tracking
+        """
+        try:
+            if process in self._background_processes:
+                self._background_processes.remove(process)
+        except Exception:
+            pass
 
         # Build description with working directory information
         description = (
@@ -351,6 +456,9 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         if not command or not isinstance(command, str):
             msg = "Shell tool expects a non-empty command string."
             raise ToolException(msg)
+
+        # Convert Unix commands to Windows-compatible commands
+        command = _convert_unix_command_to_windows(command)
 
         dangerous, reason = is_dangerous_command(command)
         if dangerous:
@@ -450,6 +558,9 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         if not command or not isinstance(command, str):
             msg = "Shell tool expects a non-empty command string."
             raise ToolException(msg)
+
+        # Convert Unix commands to Windows-compatible commands
+        command = _convert_unix_command_to_windows(command)
 
         dangerous, reason = is_dangerous_command(command)
         if dangerous:
@@ -718,6 +829,9 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
             msg = "Shell tool expects a non-empty command string."
             raise ToolException(msg)
 
+        # Convert Unix commands to Windows-compatible commands
+        command = _convert_unix_command_to_windows(command)
+
         dangerous, reason = is_dangerous_command(command)
         if dangerous:
             blocked_msg = (
@@ -814,6 +928,9 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
             cwd=self._workspace_root,
             env=self._env,
         )
+        
+        # Track background process for cleanup
+        self._background_processes.append(process)
 
         # Register with ProcessManager for proper cleanup on exit
         manager = ProcessManager.get_instance()
@@ -905,6 +1022,8 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
             try:
                 if process.stdin:
                     process.stdin.close()
+                # Remove from tracking since it's completed
+                self._remove_completed_process(process)
             except Exception:
                 pass
 

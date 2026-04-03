@@ -46,10 +46,34 @@ warnings.filterwarnings(
 
 import argparse
 import asyncio
+import io
+import logging
 import signal
 import sys
 import time
 from pathlib import Path
+
+# Fix Windows console encoding to handle Unicode characters
+# This must be done before any output is written
+if sys.platform == "win32":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+
+# Configure logging to a file for troubleshooting
+# Logs are saved to ~/.nami/logs/nami.log
+log_dir = Path.home() / ".nami" / "logs"
+log_dir.mkdir(parents=True, exist_ok=True)
+log_file = log_dir / "nami.log"
+
+# Configure file handler for warnings
+file_handler = logging.FileHandler(log_file, mode="a", encoding="utf-8")
+file_handler.setLevel(logging.WARNING)
+file_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+
+# Configure root logger
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.WARNING)
+root_logger.addHandler(file_handler)
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.store.memory import InMemoryStore

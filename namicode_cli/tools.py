@@ -969,6 +969,221 @@ REPLICATE_MODELS = {
 }
 
 
+# =============================================================================
+# NVIDIA GenAI API (Stable Diffusion 3 Medium)
+# =============================================================================
+
+# NVIDIA GenAI API endpoint for Stable Diffusion 3 Medium
+NVIDIA_API_ENDPOINT = "https://ai.api.nvidia.com/v1/genai/stabilityai/stable-diffusion-3-medium"
+
+# Available aspect ratios for NVIDIA API
+NVIDIA_ASPECT_RATIOS = {
+    "1:1": "1:1",
+    "16:9": "16:9",
+    "9:16": "9:16",
+    "4:3": "4:3",
+    "3:4": "3:4",
+    "21:9": "21:9",
+}
+
+
+def generate_image_nvidia(
+    prompt: str,
+    output_path: str | None = None,
+    cfg_scale: float = 3.5,
+    aspect_ratio: str = "1:1",
+    seed: int = 0,
+    steps: int = 30,
+    negative_prompt: str = "",
+) -> dict[str, Any]:
+    """Generate an image using NVIDIA GenAI API (Stable Diffusion 3 Medium).
+
+    This tool generates high-quality images from text descriptions using
+    NVIDIA's Stable Diffusion 3 Medium model through the NVIDIA GenAI API.
+
+    Args:
+        prompt: Text description of the image to generate. Be specific and detailed.
+        output_path: Path to save the image. If not provided, saves to current directory
+                     with timestamp (e.g., "generated_20240115_143022.png")
+        cfg_scale: Classifier-Free Guidance scale (1.0-10.0). Higher values follow prompt more strictly.
+        aspect_ratio: Output dimensions - "1:1", "16:9", "9:16", "4:3", "3:4", "21:9"
+        seed: Random seed for reproducibility (0 for random)
+        steps: Number of inference steps (10-100). More steps = higher quality but slower
+        negative_prompt: Description of elements to avoid in the image
+
+    Returns:
+        Dictionary with:
+        - success: bool - Whether generation succeeded
+        - file_path: str | None - Path to saved image (if successful)
+        - seed: int - Seed used for generation
+        - error: str - Error message (if failed)
+
+    Example:
+        >>> generate_image_nvidia("A futuristic city with neon lights", output_path="city.png")
+        {'success': True, 'file_path': 'B:/path/to/city.png', 'seed': 12345}
+    """
+    # Get API key
+    from namicode_cli.onboarding import SecretManager
+
+    secret_manager = SecretManager()
+    api_key = secret_manager.get_secret("nvidia_api_key") or os.environ.get("NVIDIA_API_KEY")
+
+    if not api_key:
+        return {
+            "success": False,
+            "error": (
+                "NVIDIA_API_KEY not configured.\n\n"
+                "To set up NVIDIA GenAI API:\n"
+                "1. Sign up at https://developer.nvidia.com/api-access\n"
+                "2. Get your API key from the AI Foundation section\n"
+                "3. Configure it with: nami secrets set nvidia_api_key\n"
+                "   Or set environment variable: export NVIDIA_API_KEY=your-key-here\n\n"
+                "NVIDIA GenAI API provides access to Stable Diffusion 3 and other models."
+            ),
+        }
+
+    # Validate aspect ratio
+    if aspect_ratio not in NVIDIA_ASPECT_RATIOS:
+        return {
+            "success": False,
+            "error": f"Invalid aspect_ratio '{aspect_ratio}'. Valid options: {list(NVIDIA_ASPECT_RATIOS.keys())}",
+        }
+
+    # Validate parameters
+    if not (1.0 <= cfg_scale <= 10.0):
+        return {
+            "success": False,
+            "error": f"cfg_scale must be between 1.0 and 10.0, got {cfg_scale}",
+        }
+    if not (10 <= steps <= 100):
+        return {
+            "success": False,
+            "error": f"steps must be between 10 and 100, got {steps}",
+        }
+
+    # Build request headers
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+    # Build request body
+    payload = {
+        "prompt": prompt,
+        "cfg_scale": cfg_scale,
+        "aspect_ratio": aspect_ratio,
+        "seed": seed if seed > 0 else None,  # None for random seed
+        "steps": steps,
+        "negative_prompt": negative_prompt,
+    }
+
+    # Remove None values from payload
+    payload = {k: v for k, v in payload.items() if v is not None}
+
+    try:
+        # Make API request
+        response = requests.post(
+            NVIDIA_API_ENDPOINT,
+            headers=headers,
+            json=payload,
+            timeout=120,  # 2 minutes for image generation
+        )
+
+        # Check for HTTP errors
+        response.raise_for_status()
+
+        # Parse response
+        result = response.json()
+
+        # Handle different response formats
+        # NVIDIA API can return: {"artifacts": [{"base64": "..."}]} or {"image": "base64..."}
+        image_data = None
+        
+        # Format 1: {"artifacts": [{"base64": "..."}]}
+        if "artifacts" in result and len(result["artifacts"]) > 0:
+            artifact = result["artifacts"][0]
+            if "base64" in artifact:
+                import base64
+                image_data = base64.b64decode(artifact["base64"])
+                actual_seed = artifact.get("seed", seed) if "seed" in artifact else seed
+        
+        # Format 2: {"image": "base64..."}
+        elif "image" in result:
+            import base64
+            image_data = base64.b64decode(result["image"])
+            actual_seed = result.get("seed", seed)
+        
+        if image_data:
+            # Determine output path
+            if output_path is None:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                output_path = f"generated_{timestamp}.png"
+
+            # Save image
+            output_file = Path(output_path)
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            output_file.write_bytes(image_data)
+
+            return {
+                "success": True,
+                "file_path": str(output_file.absolute()),
+                "seed": actual_seed,
+                "prompt": prompt[:100] + "..." if len(prompt) > 100 else prompt,
+            }
+
+        return {
+            "success": False,
+            "error": f"No image data in API response. Response keys: {list(result.keys())}",
+        }
+
+    except requests.exceptions.HTTPError as e:
+        error_msg = str(e)
+        status_code = e.response.status_code if hasattr(e, "response") else "unknown"
+
+        if status_code == 401:
+            return {
+                "success": False,
+                "error": "Invalid NVIDIA API key. Please check your NVIDIA_API_KEY.",
+            }
+        elif status_code == 429:
+            return {
+                "success": False,
+                "error": "Rate limit exceeded. Please try again later.",
+            }
+        elif status_code == 500:
+            return {
+                "success": False,
+                "error": "NVIDIA API server error. Please try again.",
+            }
+
+        return {
+            "success": False,
+            "error": f"HTTP {status_code} error: {error_msg}",
+        }
+
+    except requests.exceptions.Timeout:
+        return {
+            "success": False,
+            "error": "Request timed out. The server took too long to respond.",
+        }
+    except requests.exceptions.ConnectionError:
+        return {
+            "success": False,
+            "error": "Connection error. Please check your internet connection.",
+        }
+    except json.JSONDecodeError as e:
+        return {
+            "success": False,
+            "error": f"Invalid JSON response from API: {e}",
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Error generating image: {e!s}",
+        }
+
+
 def generate_image(
     prompt: str,
     output_path: str | None = None,
@@ -977,25 +1192,31 @@ def generate_image(
     output_format: str = "png",
     num_outputs: int = 1,
     seed: int | None = None,
+    backend: str = "replicate",
+    cfg_scale: float | None = None,
+    steps: int | None = None,
+    negative_prompt: str | None = None,
 ) -> dict[str, Any]:
-    """Generate an image using Replicate API (open source models like FLUX and SDXL).
+    """Generate an image using Replicate or NVIDIA GenAI API.
 
     IMPORTANT: This tool generates images from text descriptions using open source
-    models like FLUX and SDXL. Free tier includes 50 generations per month.
+    models (Replicate) or NVIDIA's Stable Diffusion 3 Medium.
 
     Args:
         prompt: Text description of the image to generate. Be specific and detailed.
         output_path: Path to save the image. If not provided, saves to current directory
                      with timestamp (e.g., "generated_20240115_143022.png")
         model: Model to use:
-            - "flux-schnell" (default) - Fast FLUX model, ~1.2 seconds
-            - "flux-dev" - Higher quality FLUX, slower
-            - "sdxl" - Stable Diffusion XL
-            - "sdxl-turbo" - Fast SDXL variant
+            - Replicate: "flux-schnell" (default for Replicate), "flux-dev", "sdxl", "sdxl-turbo"
+            - NVIDIA: "stable-diffusion-3-medium" (default for NVIDIA)
         aspect_ratio: Output dimensions - "1:1", "16:9", "9:16", "4:3", "3:4", "21:9"
-        output_format: Image format - "png", "jpg", "webp"
-        num_outputs: Number of images to generate (1-4)
+        output_format: Image format - "png", "jpg", "webp" (Replicate only)
+        num_outputs: Number of images to generate (1-4) (Replicate only)
         seed: Random seed for reproducibility (optional)
+        backend: API backend - "replicate" or "nvidia"
+        cfg_scale: Classifier-Free Guidance scale (1.0-10.0) (NVIDIA only, default: 3.5)
+        steps: Number of inference steps (10-100) (NVIDIA only, default: 30)
+        negative_prompt: Description of elements to avoid in the image (NVIDIA only)
 
     Returns:
         Dictionary with:
@@ -1003,7 +1224,28 @@ def generate_image(
         - file_path: str | list[str] - Path(s) to saved image(s)
         - model: str - Model used
         - error: str - Error message (if failed)
+
+    Note:
+        - For NVIDIA backend: Set NVIDIA_API_KEY environment variable or run
+          "nami secrets set nvidia_api_key"
     """
+    # Dispatch to appropriate backend
+    if backend == "nvidia":
+        return generate_image_nvidia(
+            prompt=prompt,
+            output_path=output_path,
+            cfg_scale=cfg_scale if cfg_scale is not None else 3.5,
+            aspect_ratio=aspect_ratio,
+            seed=seed if seed is not None else 0,
+            steps=steps if steps is not None else 30,
+            negative_prompt=negative_prompt if negative_prompt is not None else "",
+        )
+    elif backend != "replicate":
+        return {
+            "success": False,
+            "error": f"Invalid backend '{backend}'. Valid options: 'replicate', 'nvidia'",
+        }
+
     try:
         import replicate
     except ImportError:
@@ -1026,8 +1268,8 @@ def generate_image(
             "error": "REPLICATE_API_TOKEN not configured. Get your free API key at https://replicate.com/account/api-tokens",
         }
 
-    # Validate model
-    if model not in REPLICATE_MODELS:
+    # Validate model (only for Replicate backend)
+    if backend == "replicate" and model not in REPLICATE_MODELS:
         return {
             "success": False,
             "error": f"Invalid model '{model}'. Valid options: {list(REPLICATE_MODELS.keys())}",
@@ -1091,7 +1333,7 @@ def generate_image(
             # Handle different output types
             if hasattr(img_output, "read"):
                 # FileOutput object
-                output_file.write_bytes(img_output.read())
+                output_file.write_bytes(img_output.read()) # type: ignore
             elif isinstance(img_output, str) and img_output.startswith("http"):
                 # URL - download it
                 response = requests.get(img_output, timeout=60)
@@ -1099,7 +1341,7 @@ def generate_image(
                 output_file.write_bytes(response.content)
             else:
                 # Assume bytes
-                output_file.write_bytes(img_output)
+                output_file.write_bytes(img_output) # type: ignore
 
             saved_paths.append(str(output_file.absolute()))
 

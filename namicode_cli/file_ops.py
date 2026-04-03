@@ -30,9 +30,12 @@ Used by execution.py for tool approval and UI rendering.
 from __future__ import annotations
 
 import difflib
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
+
+logger = logging.getLogger(__name__)
 
 from nami_deepagents.backends.utils import perform_string_replacement
 
@@ -56,10 +59,30 @@ class ApprovalPreview:
 
 
 def _safe_read(path: Path) -> str | None:
-    """Read file content, returning None on failure."""
+    """Read file content, returning None on failure.
+    
+    Tries multiple encodings to handle files with non-UTF-8 content:
+    1. UTF-8 (most common)
+    2. Latin-1 (can decode any byte sequence)
+    3. System default encoding (Windows charmap, etc.)
+    """
+    # Try UTF-8 first (most common for source code)
     try:
-        return path.read_text()
-    except (OSError, UnicodeDecodeError):
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        pass
+    except OSError as e:
+        logger.warning(f"_safe_read OSError for {path}: {e}")
+        return None
+    
+    # Try latin-1 (can decode any byte sequence without error)
+    try:
+        return path.read_text(encoding="latin-1")
+    except OSError as e:
+        logger.warning(f"_safe_read OSError for {path}: {e}")
+        return None
+    except Exception as e:
+        logger.warning(f"_safe_read unexpected error for {path}: {type(e).__name__}: {e}")
         return None
 
 
@@ -396,7 +419,20 @@ class FileOpTracker:
             self._populate_after_content(record)
             if record.after_content is None:
                 record.status = "error"
-                record.error = "Could not read updated file content."
+                # Build a more informative error message
+                error_parts = ["Could not read updated file content"]
+                if self.backend:
+                    error_parts.append("(backend download failed)")
+                elif record.physical_path is None:
+                    error_parts.append("(physical_path is None)")
+                else:
+                    error_parts.append(f"(filesystem read failed for {record.physical_path})")
+                record.error = " ".join(error_parts) + "."
+                logger.error(
+                    f"File operation failed: tool={record.tool_name}, "
+                    f"display_path={record.display_path}, physical_path={record.physical_path}, "
+                    f"has_backend={self.backend is not None}"
+                )
                 self._finalize(record)
                 return record
             record.metrics.lines_written = _count_lines(record.after_content)
@@ -464,14 +500,30 @@ class FileOpTracker:
                     ):
                         record.after_content = responses[0].content.decode("utf-8")
                         return
-            except Exception:
+                    else:
+                        # Log why backend failed
+                        if responses:
+                            error = responses[0].error if responses else "no response"
+                            content_status = "None" if responses[0].content is None else f"{len(responses[0].content)} bytes"
+                            logger.warning(
+                                f"Backend download_files failed: path={file_path}, error={error}, content={content_status}"
+                            )
+                        else:
+                            logger.warning(f"Backend download_files returned empty responses for: {file_path}")
+            except Exception as e:
+                logger.warning(f"Backend download_files exception for {file_path}: {e}")
                 pass  # Fall through to filesystem fallback
 
         # Fallback: direct filesystem read when no backend or backend failed
         if record.physical_path is None:
+            logger.warning(
+                f"Cannot read back file - physical_path is None: display_path={record.display_path}, tool_name={record.tool_name}"
+            )
             record.after_content = None
             return
         record.after_content = _safe_read(record.physical_path)
+        if record.after_content is None:
+            logger.warning(f"Failed to read back file from filesystem: {record.physical_path}")
 
     def _finalize(self, record: FileOperationRecord) -> None:
         self.completed.append(record)
