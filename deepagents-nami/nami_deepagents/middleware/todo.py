@@ -150,7 +150,7 @@ def _parse_todos(todos_input: list[Todo] | str) -> list[Todo]:
     raise ValueError(f"Expected list or JSON string, got {type(todos_input).__name__}")
 
 
-def _validate_todo(todo: dict) -> Todo:
+def _validate_todo(todo: dict[str, Any] | Todo) -> Todo:
     """Validate and normalize a todo item.
 
     Args:
