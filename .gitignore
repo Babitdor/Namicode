@@ -122,5 +122,3 @@ package-lock.json
 yarn.lock
 
 # Project directories (external projects)
-Hoeman/
-hoeman-landing-page/
