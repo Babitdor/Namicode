@@ -11,7 +11,6 @@ from nami_deepagents.middleware.subagents import (
     SubAgent,
     SubAgentMiddleware,
 )
-from nami_deepagents.middleware.todo import TodoListMiddleware
 
 __all__ = [
     "AskQuestionMiddleware",
@@ -23,5 +22,4 @@ __all__ = [
     "SkillsMiddleware",
     "SubAgent",
     "SubAgentMiddleware",
-    "TodoListMiddleware",
 ]

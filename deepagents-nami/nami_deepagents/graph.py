@@ -8,7 +8,7 @@ from langchain.agents.middleware import (
     HumanInTheLoopMiddleware,
     InterruptOnConfig,
 )
-from nami_deepagents.middleware.todo import TodoListMiddleware
+from langchain.agents.middleware.todo import TodoListMiddleware
 from langchain.agents.middleware import ContextEditingMiddleware, ClearToolUsesEdit
 from langchain.agents.middleware import ModelRetryMiddleware, ToolRetryMiddleware
 from langgraph.errors import GraphInterrupt
