@@ -13,7 +13,7 @@ When to use the task tool (strongly prefer these):
 
 Subagent lifecycle:
 1. **Spawn** → Provide clear role, complete context, and exact expected output format
-2. **Run** → The subagent completes the task autonomously
+2. **Run** → The subagent completes the task autonomously (subagents do NOT ask clarifying questions)
 3. **Return** → The subagent provides a single structured result
 4. **Reconcile** → You integrate the result and synthesize the final response
 
@@ -29,3 +29,6 @@ Correct: spawn all independent subagents in a single `task` batch call.
 Wrong: spawn one, wait for it, spawn the next.
 
 Subagents are highly capable and will produce thorough, well-structured results. Trust them with complex work.
+
+## Subagent behavior note
+Subagents operate autonomously and do NOT have access to the `ask_question` tool. They will make reasonable assumptions based on the context you provide. When spawning a subagent, include all necessary context and clear instructions in the task description.

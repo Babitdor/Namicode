@@ -361,8 +361,56 @@ async def stop_server(
     return False
 
 
-def list_servers() -> list[ServerInfo]:
+def scan_external_servers(
+    ports: list[int] | None = None,
+    timeout: float = 0.1,
+) -> list[ServerInfo]:
+    """Scan for external servers running on common ports.
+
+    This detects servers NOT started through the CLI's ProcessManager.
+    Useful for discovering servers started externally (e.g., npm run dev in another terminal).
+
+    Args:
+        ports: List of ports to scan (default: common dev server ports)
+        timeout: Connection timeout in seconds
+
+    Returns:
+        List of ServerInfo for detected external servers
+    """
+    if ports is None:
+        # Common dev server ports to scan
+        ports = [3000, 3001, 3002, 4000, 5000, 5173, 5174, 8000, 8080, 8888]
+
+    external_servers = []
+    for port in ports:
+        if is_port_in_use(port):
+            # Try to connect and get basic info
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.settimeout(timeout)
+                    result = s.connect_ex(("localhost", port))
+                    if result == 0:
+                        external_servers.append(
+                            ServerInfo(
+                                pid=0,  # Unknown PID
+                                name=f"external-server-{port}",
+                                url=f"http://localhost:{port}",
+                                port=port,
+                                status=ProcessStatus.HEALTHY,
+                                command="(external - not managed by CLI)",
+                            )
+                        )
+            except Exception:
+                pass  # Port in use but can't connect, skip
+
+    return external_servers
+
+
+def list_servers(include_external: bool = False) -> list[ServerInfo]:
     """List all running dev servers.
+
+    Args:
+        include_external: If True, also scan for external servers on common ports
 
     Returns:
         List of ServerInfo for running servers
@@ -371,6 +419,8 @@ def list_servers() -> list[ServerInfo]:
     processes = manager.list_processes(alive_only=True)
 
     servers = []
+    managed_ports = set()
+
     for info in processes:
         if info.port is not None:
             servers.append(
@@ -383,6 +433,15 @@ def list_servers() -> list[ServerInfo]:
                     command=info.command,
                 )
             )
+            managed_ports.add(info.port)
+
+    # Scan for external servers if requested
+    if include_external:
+        external = scan_external_servers()
+        # Filter out ports already managed by CLI
+        for server in external:
+            if server.port not in managed_ports:
+                servers.append(server)
 
     return servers
 

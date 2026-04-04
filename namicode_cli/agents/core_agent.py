@@ -58,7 +58,7 @@ from namicode_cli.config.config import (
 from namicode_cli.integrations.sandbox_factory import get_default_working_dir
 from namicode_cli.mcp import get_shared_mcp_middleware
 from namicode_cli.memory.agent_memory import AgentMemoryMiddleware
-from namicode_cli.memory.shared_memory import (
+from nami_deepagents.middleware.shared_memory import (
     SharedMemoryMiddleware,
     reset_shared_memory_store,
 )
@@ -599,11 +599,36 @@ def create_agent_with_config(
     # Use shared MCP middleware (singleton pattern avoids reconnecting for subagents)
     mcp_middleware = get_shared_mcp_middleware()
 
+    # Determine workspace root for path containment
+    workspace_root = settings.project_root or Path.cwd()
+
+    # Build list of allowed directories for filesystem access
+    # This includes the workspace root plus user directories like skills, memory, etc.
+    allowed_prefixes = [str(workspace_root)]
+    
+    # Add user skills directory (~/.nami/skills/)
+    if skills_dir:
+        allowed_prefixes.append(str(skills_dir))
+    
+    # Add project skills directories
+    for skills_path in project_skills_dirs:
+        allowed_prefixes.append(str(skills_path))
+    
+    # Add user agent directory (~/.nami/<agent>/) for memory files
+    agent_dir = settings.get_agent_dir(assistant_id)
+    if agent_dir:
+        allowed_prefixes.append(str(agent_dir))
+
     # CONDITIONAL SETUP: Local vs Remote Sandbox
     if sandbox is None:
         # ========== LOCAL MODE ==========
-        # Backend: Local filesystem for code (no virtual routes)
-        backend = FilesystemBackend()  # Current working directory
+        # Backend: Local filesystem for code with path containment to allowed directories
+        # This prevents the agent from writing outside allowed directories
+        backend = FilesystemBackend(
+            root_dir=str(workspace_root),
+            virtual_mode=False,  # Use real filesystem paths
+            allowed_prefixes=allowed_prefixes,  # Allow workspace + user directories
+        )
 
     else:
         # ========== REMOTE SANDBOX MODE ==========
@@ -620,7 +645,7 @@ def create_agent_with_config(
         mcp_middleware,
         SharedMemoryMiddleware(author_id="main-agent"),
         ShellMiddleware(
-            workspace_root=str(Path.cwd()),
+            workspace_root=str(workspace_root),
             env=dict(os.environ),
         ),
         AgentMemoryMiddleware(

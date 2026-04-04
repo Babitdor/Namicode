@@ -13,15 +13,12 @@ from typing import NotRequired, TypedDict
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
-    AgentState,
     ModelRequest,
     ModelResponse,
 )
 from langchain.tools import BaseTool
 from langchain_core.tools import StructuredTool
 from langgraph.store.memory import InMemoryStore
-
-from namicode_cli.prompts import render_template
 
 
 class MemoryEntry(TypedDict):
@@ -40,7 +37,7 @@ class MemoryEntry(TypedDict):
     """Optional tags for categorization."""
 
 
-class SharedMemoryState(AgentState):
+class SharedMemoryState(TypedDict):
     """State schema for shared memory middleware."""
 
     shared_memories: NotRequired[dict[str, MemoryEntry]]
@@ -48,7 +45,12 @@ class SharedMemoryState(AgentState):
 
 
 # Module-level shared memory store
+# This is shared across all instances of SharedMemoryMiddleware
 _shared_memory_store: InMemoryStore | None = None
+
+
+# Namespace for shared memories
+MEMORY_NAMESPACE = ("shared_memory",)
 
 
 def get_shared_memory_store() -> InMemoryStore:
@@ -90,10 +92,6 @@ def restore_shared_memory(data: dict[str, dict]) -> None:
     store = get_shared_memory_store()
     for key, value in data.items():
         store.put(MEMORY_NAMESPACE, key, value)
-
-
-# Namespace for shared memories
-MEMORY_NAMESPACE = ("shared_memory",)
 
 
 def write_memory(
@@ -227,7 +225,7 @@ def _create_memory_tools(author_id: str) -> list[BaseTool]:
     """Create memory tools with the specified author ID baked in.
 
     Args:
-        author_id: The identifier for the author (e.g., 'main-agent' or 'subagent:researcher').
+        author_id: The identifier for the author (e.g., 'main-agent' or 'subagent').
 
     Returns:
         List of memory tools.
@@ -324,8 +322,35 @@ def _create_memory_tools(author_id: str) -> list[BaseTool]:
     ]
 
 
-# Shared memory system prompt loaded from: namicode_cli/prompts/shared_memory.jinja
-SHARED_MEMORY_SYSTEM_PROMPT = render_template("shared_memory.jinja")
+# Default system prompt for shared memory
+SHARED_MEMORY_SYSTEM_PROMPT = """## Shared Memory System
+
+You have access to a **shared memory store** that persists across all agents (main agent and subagents).
+
+### Memory Tools Available:
+- `write_memory(key, content, tags?)` - Store information with your author attribution
+- `read_memory(key)` - Retrieve a specific memory (shows who wrote it)
+- `list_memories(tag_filter?)` - See all available memories
+- `delete_memory(key)` - Remove a memory
+
+### When to Use Shared Memory:
+1. **Cross-agent communication**: Share findings between main agent and subagents
+2. **Persistent context**: Store information that should survive summarization
+3. **Research aggregation**: Subagents can write their findings for the main agent to synthesize
+4. **User preferences**: Store learned preferences that all agents should know
+
+### Best Practices:
+- Use descriptive keys (e.g., 'user-tech-stack', 'research-llm-providers', 'task-progress-summary')
+- Include relevant tags for easy filtering
+- Check existing memories before duplicating information
+- Attribute correctly - your writes will be tagged with your agent ID
+
+### Memory Attribution:
+All memories track who wrote them. When you read a memory, you'll see:
+- The author (main-agent or subagent)
+- When it was written
+- Any tags associated with it
+"""
 
 
 class SharedMemoryMiddleware(AgentMiddleware):
@@ -338,7 +363,7 @@ class SharedMemoryMiddleware(AgentMiddleware):
     4. Injects system prompt instructions for using shared memory
 
     Args:
-        author_id: The identifier for this agent's writes (e.g., 'main-agent', 'subagent:researcher').
+        author_id: The identifier for this agent's writes (e.g., 'main-agent', 'subagent').
         include_system_prompt: Whether to inject the shared memory system prompt.
     """
 
@@ -352,7 +377,7 @@ class SharedMemoryMiddleware(AgentMiddleware):
         """Initialize the SharedMemoryMiddleware.
 
         Args:
-            author_id: Identifier for attribution (e.g., 'main-agent' or 'subagent:researcher').
+            author_id: Identifier for attribution (e.g., 'main-agent' or 'subagent').
             include_system_prompt: Whether to add memory instructions to system prompt.
         """
         super().__init__()

@@ -402,3 +402,97 @@ class TestListServersTool:
 
         # Clean up
         await manager.stop_all()
+
+
+class TestScanExternalServers:
+    """Tests for scan_external_servers function."""
+
+    def test_scan_external_servers_no_servers(self) -> None:
+        """Test scanning when no external servers are running."""
+        from namicode_cli.server_runner.dev_server import scan_external_servers
+
+        # Scan ports that are unlikely to be in use
+        servers = scan_external_servers(ports=[59990, 59991, 59992])
+        assert servers == []
+
+    def test_scan_external_servers_with_port_in_use(self) -> None:
+        """Test scanning detects a port in use."""
+        import socket
+
+        from namicode_cli.server_runner.dev_server import scan_external_servers
+
+        # Start a simple server on a test port
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("localhost", 59993))
+            s.listen(1)
+
+            # Scan the port we just bound
+            servers = scan_external_servers(ports=[59993])
+
+            # Should detect the server
+            assert len(servers) == 1
+            assert servers[0].port == 59993
+            assert servers[0].pid == 0  # External server has unknown PID
+            assert "external" in servers[0].name
+
+    def test_scan_external_servers_timeout(self) -> None:
+        """Test that timeout parameter works."""
+        from namicode_cli.server_runner.dev_server import scan_external_servers
+
+        # Should complete quickly with short timeout
+        servers = scan_external_servers(ports=[59994], timeout=0.01)
+        assert isinstance(servers, list)
+
+
+class TestListServersWithExternal:
+    """Tests for list_servers with include_external parameter."""
+
+    def setup_method(self) -> None:
+        """Reset singleton before each test."""
+        ProcessManager.reset_instance()
+
+    def teardown_method(self) -> None:
+        """Clean up after each test."""
+        ProcessManager.reset_instance()
+
+    def test_list_servers_include_external_false(self) -> None:
+        """Test list_servers without external servers."""
+        servers = list_servers(include_external=False)
+        assert isinstance(servers, list)
+
+    def test_list_servers_include_external_true(self) -> None:
+        """Test list_servers with external servers."""
+        servers = list_servers(include_external=True)
+        assert isinstance(servers, list)
+
+    @pytest.mark.asyncio
+    async def test_list_servers_merges_external_with_managed(self) -> None:
+        """Test that list_servers merges external and managed servers."""
+        import sys
+
+        manager = ProcessManager.get_instance()
+
+        # Start a managed process
+        if sys.platform == "win32":
+            command = "cmd /c ping -n 100 localhost"
+        else:
+            command = "sleep 100"
+
+        await manager.start_process(
+            command,
+            name="managed-server",
+            port=3000,
+            working_dir=".",
+        )
+
+        try:
+            # List servers with external
+            servers = list_servers(include_external=True)
+
+            # Should include the managed server
+            managed = [s for s in servers if s.pid > 0]
+            assert len(managed) == 1
+            assert managed[0].name == "managed-server"
+
+        finally:
+            await manager.stop_all()

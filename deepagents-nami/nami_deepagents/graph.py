@@ -39,6 +39,7 @@ from nami_deepagents.middleware.subagents import (
     SubAgent,
     SubAgentMiddleware,
 )
+from nami_deepagents.middleware.shared_memory import SharedMemoryMiddleware
 
 BASE_AGENT_PROMPT = "In order to complete the objective that the user asks of you, you have access to a number of standard tools."
 
@@ -154,8 +155,12 @@ def create_deep_agent(
         trim_tokens_to_summarize = 35000
 
     # Build middleware stack for subagents (includes skills if provided)
+    # Note: SharedMemoryMiddleware is added to enable cross-agent memory sharing
+    # between main agent and subagents. All subagents use author_id="subagent"
+    # for attribution (main agent uses "main-agent").
     subagent_middleware: list[AgentMiddleware] = [
-        TodoListMiddleware(),
+        TodoListMiddleware(), # type: ignore
+        SharedMemoryMiddleware(author_id="subagent"),
     ]
 
     backend = backend if backend is not None else (lambda rt: StateBackend(rt))
@@ -189,7 +194,7 @@ def create_deep_agent(
 
     # Build main agent middleware stack
     deepagent_middleware: list[AgentMiddleware] = [
-        TodoListMiddleware(),
+        TodoListMiddleware(),  # type: ignore
     ]
     if memory is not None:
         deepagent_middleware.append(MemoryMiddleware(backend=backend, sources=memory))

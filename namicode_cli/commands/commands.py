@@ -23,7 +23,6 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from namicode_cli.agents.named_agents import create_subagent
 from namicode_cli.config import config as config_module
 from namicode_cli.config.config import (
     COLORS,
@@ -1053,8 +1052,8 @@ async def _handle_servers_command(session_state) -> bool:
     console.print("[bold]Dev Server Management[/bold]", style=COLORS["primary"])
     console.print()
 
-    # Get running servers
-    servers = list_servers()
+    # Get running servers (including external servers not managed by CLI)
+    servers = list_servers(include_external=True)
 
     if not servers:
         console.print("[yellow]No dev servers running[/yellow]")
@@ -1070,7 +1069,16 @@ async def _handle_servers_command(session_state) -> bool:
     table.add_column("Status")
     table.add_column("Command", style="dim")
 
+    # Separate managed and external servers for display
+    managed_servers = []
+    external_servers = []
     for server in servers:
+        if server.pid == 0 and "external" in server.name:
+            external_servers.append(server)
+        else:
+            managed_servers.append(server)
+
+    for server in managed_servers:
         status_style = "green" if server.status.value == "healthy" else "yellow"
         table.add_row(
             str(server.pid),
@@ -1080,14 +1088,26 @@ async def _handle_servers_command(session_state) -> bool:
             server.command[:40] + "..." if len(server.command) > 40 else server.command,
         )
 
+    for server in external_servers:
+        status_style = "green" if server.status.value == "healthy" else "yellow"
+        table.add_row(
+            "[dim]external[/dim]",
+            f"[dim]{server.name}[/dim]",
+            server.url,
+            f"[{status_style}]{server.status.value}[/{status_style}]",
+            "[dim](not managed by CLI)[/dim]",
+        )
+
     console.print(table)
+    if external_servers:
+        console.print("[dim]Note: External servers (marked 'external') were started outside this CLI and cannot be stopped here.[/dim]")
     console.print()
 
     # Show menu
     console.print("What would you like to do?", style=COLORS["primary"])
     console.print("  1. Open server in browser")
-    console.print("  2. Stop a server")
-    console.print("  3. Stop all servers")
+    console.print("  2. Stop a server (managed only)")
+    console.print("  3. Stop all servers (managed only)")
     console.print("  4. Cancel")
     console.print()
 
@@ -1130,34 +1150,45 @@ async def _handle_servers_command(session_state) -> bool:
             else:
                 console.print("[red]Failed to stop server[/red]")
         else:
-            console.print()
-            console.print(
-                "[bold]Select server to stop:[/bold]", style=COLORS["primary"]
-            )
-            for i, server in enumerate(servers, 1):
-                console.print(f"  {i}. {server.name} (PID: {server.pid})")
-            console.print()
-            server_choice = (await ps.prompt_async("Choose server number: ")).strip()
-            try:
-                idx = int(server_choice) - 1
-                if 0 <= idx < len(servers):
-                    result = await stop_server(pid=servers[idx].pid)
-                    if result:
-                        console.print(
-                            f"[green]✓ Stopped server '{servers[idx].name}'[/green]"
-                        )
+            # Only show managed servers for stopping
+            stoppable_servers = [s for s in servers if s.pid > 0]
+            if not stoppable_servers:
+                console.print("[yellow]No managed servers to stop[/yellow]")
+                console.print("[dim]External servers must be stopped manually[/dim]")
+            else:
+                console.print()
+                console.print(
+                    "[bold]Select server to stop:[/bold]", style=COLORS["primary"]
+                )
+                for i, server in enumerate(stoppable_servers, 1):
+                    console.print(f"  {i}. {server.name} (PID: {server.pid})")
+                console.print()
+                server_choice = (await ps.prompt_async("Choose server number: ")).strip()
+                try:
+                    idx = int(server_choice) - 1
+                    if 0 <= idx < len(stoppable_servers):
+                        result = await stop_server(pid=stoppable_servers[idx].pid)
+                        if result:
+                            console.print(
+                                f"[green]✓ Stopped server '{stoppable_servers[idx].name}'[/green]"
+                            )
+                        else:
+                            console.print("[red]Failed to stop server[/red]")
                     else:
-                        console.print("[red]Failed to stop server[/red]")
-                else:
+                        console.print("[yellow]Invalid choice[/yellow]")
+                except ValueError:
                     console.print("[yellow]Invalid choice[/yellow]")
-            except ValueError:
-                console.print("[yellow]Invalid choice[/yellow]")
 
     elif choice == "3":
-        # Stop all servers
+        # Stop all managed servers
         manager = ProcessManager.get_instance()
         count = await manager.stop_all()
-        console.print(f"[green]✓ Stopped {count} server(s)[/green]")
+        if count > 0:
+            console.print(f"[green]✓ Stopped {count} managed server(s)[/green]")
+        else:
+            console.print("[yellow]No managed servers to stop[/yellow]")
+        if external_servers:
+            console.print(f"[dim]Note: {len(external_servers)} external server(s) still running[/dim]")
 
     console.print()
     return True
@@ -1927,80 +1958,6 @@ async def _agents_delete_interactive(ps, settings) -> bool:
 
     console.print()
     return True
-
-
-def invoke_subagent(
-    agent_name: str,
-    settings: Settings,
-    store: InMemoryStore | None = None,
-    checkpointer: InMemorySaver | None = None,
-) -> tuple[Pregel, CompositeBackend]:
-    """Invoke a custom agent (using @ <agentname>) as an isolated subagent using the deepagents SubAgent pattern.
-
-    This follows the LangGraph subagent architecture where:
-    - Each subagent has its own isolated execution environment
-    - Subagents are configured with their own system prompt and tools
-    - Subagents get the SAME tools as the main agent (filesystem, shell, web, etc.)
-    - Results return to the main agent for reconciliation
-    - UI observability shows tool calls as they happen (like main agent)
-
-    Args:
-        agent_name: Name of the agent to invoke
-        query: The task/query for the agent
-        main_agent: Reference to main agent (kept for API consistency)
-        settings: Settings instance
-        session_state: Current session state (reserved for future state access)
-        backend: Optional backend for filesystem operations (CompositeBackend)
-
-    Returns:
-        Agent's response/result as string
-    """
-    from namicode_cli.config.config import (
-        parse_agent_color,
-        set_agent_color,
-    )
-    from namicode_cli.config.config import (
-        settings as global_settings,
-    )
-    from namicode_cli.config.model_create import create_model
-    from namicode_cli.server_runner.dev_server import (
-        list_servers_tool,
-        start_dev_server_tool,
-        stop_server_tool,
-    )
-    from namicode_cli.server_runner.test_runner import run_tests_tool
-    from namicode_cli.tools import fetch_url, http_request, web_search
-
-    # Load and register agent color from agent.md frontmatter
-    agent_location = settings.find_agent(agent_name)
-    if agent_location:
-        agent_dir, _scope = agent_location
-        agent_md_path = agent_dir / "agent.md"
-        color = parse_agent_color(agent_md_path)
-        if color:
-            set_agent_color(agent_name, color)
-
-    tools = [
-        http_request,
-        fetch_url,
-        run_tests_tool,
-        start_dev_server_tool,
-        stop_server_tool,
-        list_servers_tool,
-    ]
-    if global_settings.has_tavily:
-        tools.append(web_search)
-
-    subagent, subagent_backend = create_subagent(
-        agent_name=agent_name,
-        tools=tools,
-        model=create_model(),
-        checkpointer=checkpointer,
-        settings=settings,
-        store=store,
-    )
-
-    return subagent, subagent_backend
 
 
 async def _generate_agent_system_prompt(

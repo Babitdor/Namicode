@@ -9,8 +9,8 @@ from nami_deepagents.middleware.planning import (
     PlanModeMiddleware,
     PlanModeState,
     QuestionRequest,
-    _create_ask_question_tool,
 )
+from nami_deepagents.middleware.ask_question import _create_ask_question_tool
 
 from namicode_cli.states.Session import SessionState
 from namicode_cli.ui.question_prompt import (
@@ -29,7 +29,7 @@ class TestPlanModeMiddleware:
         assert middleware.include_system_prompt is True
         assert len(middleware.tools) == 2
         tool_names = {t.name for t in middleware.tools}
-        assert tool_names == {"ask_question", "exit_plan_mode"}
+        assert tool_names == {"decide_complexity", "exit_plan_mode"}
 
     def test_middleware_initialization_enabled(self):
         """Test middleware can start with plan mode enabled."""
@@ -271,19 +271,15 @@ class TestSystemPrompts:
 
     def test_plan_mode_prompt_content(self):
         """Test plan mode prompt has expected content."""
-        assert "Plan Mode" in PLAN_MODE_SYSTEM_PROMPT
-        assert "ask_question" in PLAN_MODE_SYSTEM_PROMPT
-        assert "write_todos" in PLAN_MODE_SYSTEM_PROMPT
+        assert "PLAN MODE" in PLAN_MODE_SYSTEM_PROMPT
+        assert "exit_plan_mode" in PLAN_MODE_SYSTEM_PROMPT
+        assert "investigation" in PLAN_MODE_SYSTEM_PROMPT.lower()
 
     def test_ask_question_prompt_content(self):
         """Test ask_question prompt has expected content."""
         assert "ask_question" in ASK_QUESTION_SYSTEM_PROMPT
-        assert (
-            "Structured" in ASK_QUESTION_SYSTEM_PROMPT or "structured" in ASK_QUESTION_SYSTEM_PROMPT
-        )
-        assert (
-            "Open-ended" in ASK_QUESTION_SYSTEM_PROMPT or "open-ended" in ASK_QUESTION_SYSTEM_PROMPT
-        )
+        assert "multiple-choice" in ASK_QUESTION_SYSTEM_PROMPT.lower() or "structured" in ASK_QUESTION_SYSTEM_PROMPT.lower()
+        assert "options" in ASK_QUESTION_SYSTEM_PROMPT.lower()
 
 
 class TestComplexityAnalysis:

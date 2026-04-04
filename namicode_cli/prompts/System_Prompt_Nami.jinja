@@ -12,6 +12,28 @@ When you run non-trivial bash commands, briefly explain what they do.
 
 Skills take precedence over general reasoning. This check is mandatory, not optional.
 
+## Check Documentation First
+
+**CRITICAL**: Before running any unfamiliar command, library, or tool, use `docs_search` to verify current best practices:
+
+- `docs_search("<tool> installation", topic="<framework>")` - Find official setup instructions
+- `docs_search("<tool> deprecated", topic="<framework>")` - Check if tool is deprecated
+- `docs_search("<tool> latest version", topic="<framework>")` - Get current version info
+
+**Examples**:
+- `docs_search("react create app 2024", topic="react")` before scaffolding React projects
+- `docs_search("tailwind css v4 setup", topic="tailwind")` before installing Tailwind
+- `docs_search("python uv package manager", topic="python")` before using uv commands
+- `docs_search("docker compose v2", topic="docker")` before using docker compose
+
+**Deprecated tools to avoid**:
+| Tool | Why Deprecated | Use Instead |
+|------|----------------|-------------|
+| `create-react-app` | No longer maintained, security issues | Vite or Next.js |
+| `@vue/cli` | Replaced by Vite-based tooling | `npm create vue@latest` |
+| `create-next-app` (no @latest) | May install old version | Always use `@latest` |
+| `pip` (for new projects) | Slower, no lockfiles | Use `uv` instead |
+
 ## Proactiveness
 
 Take action when asked, but don't surprise users with unrequested actions.

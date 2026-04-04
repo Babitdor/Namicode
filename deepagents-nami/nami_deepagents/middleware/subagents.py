@@ -110,7 +110,13 @@ def clear_subagent_colors() -> None:
     _subagent_colors.clear()
 
 
-DEFAULT_SUBAGENT_PROMPT = "In order to complete the objective that the user asks of you, you have access to a number of standard tools."
+DEFAULT_SUBAGENT_PROMPT = """In order to complete the objective that the user asks of you, you have access to a number of standard tools.
+
+## Important Guidelines
+- **Do NOT ask clarifying questions** - Make reasonable assumptions based on available context and proceed autonomously
+- If information is missing, make the most logical assumption and document it in your response
+- Focus on completing the task efficiently without waiting for user input
+- Provide clear, actionable results that the main agent can use"""
 
 # State keys that should be excluded when passing state to subagents
 _EXCLUDED_STATE_KEYS = ("messages", "todos")
@@ -136,10 +142,6 @@ EXPLORE_AGENT_TOOLS = [
     "ls",
     "glob",
     "grep",
-    "git_status",
-    "git_log",
-    "git_diff",
-    "git_blame",
     "web_search",
     "fetch_url",
     "docs_search",
@@ -156,15 +158,12 @@ PLAN_AGENT_TOOLS = [
     "ls",
     "glob",
     "grep",
-    "git_status",
-    "git_log",
-    "git_diff",
-    "git_blame",
     "web_search",
     "fetch_url",
     "docs_search",
     "package_info",
-    "ask_question",
+    # Note: ask_question removed - subagents should not ask clarifying questions
+    # They should make reasonable assumptions and proceed autonomously
 ]
 
 PLAN_AGENT_DESCRIPTION = "Read-only planning agent for analyzing requirements and creating implementation plans. Cannot modify files or execute commands."
@@ -181,10 +180,9 @@ VERIFICATION_AGENT_TOOLS = [
     "ls",
     "glob",
     "grep",
-    "git_status",
-    "git_diff",
     "package_info",
-    "ask_question",
+    # Note: ask_question removed - subagents should not ask clarifying questions
+    # They should make reasonable assumptions and proceed autonomously
 ]
 
 VERIFICATION_AGENT_DESCRIPTION = "Verification and testing agent. Can write temporary scripts and run tests to verify implementation. Cannot modify existing project files."

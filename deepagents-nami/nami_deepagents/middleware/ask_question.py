@@ -4,7 +4,7 @@ This is a lightweight, always-on middleware that lets any agent pause execution
 and ask the user a question — independently of plan mode.
 
 Provides:
-- ``ask_question`` tool: structured (multiple-choice) or open-ended questions
+- ``ask_question`` tool: structured (multiple-choice) questions only
 - System prompt snippet describing when to use the tool
 
 Integration:
@@ -14,7 +14,7 @@ Integration:
 
 from __future__ import annotations
 
-from typing import Any, Literal, NotRequired, TypedDict
+from typing import Any, NotRequired, TypedDict
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
@@ -31,8 +31,6 @@ from nami_deepagents.prompts import render_template
 # Types (also imported by planning.py so they stay in one canonical place)
 # ---------------------------------------------------------------------------
 
-QuestionType = Literal["structured", "open_ended"]
-
 
 class OptionDict(TypedDict, total=False):
     """Rich option object the LLM may pass instead of a plain string."""
@@ -46,8 +44,8 @@ class QuestionRequest(TypedDict):
     """Schema for a question request from the agent."""
 
     question: str
-    question_type: QuestionType
-    options: NotRequired[list[str]]  # Required if question_type == "structured"
+    options: list[str]  # Required: at least 2 options for structured questions
+    question_type: NotRequired[str]  # "structured" for multiple-choice questions
     context: NotRequired[str]  # Why the agent is asking
 
 
@@ -55,7 +53,7 @@ class QuestionResponse(TypedDict):
     """Schema for the user's response to a question."""
 
     answer: str
-    selected_index: NotRequired[int]  # For structured questions only
+    selected_index: NotRequired[int]  # Index of selected option
 
 
 # ---------------------------------------------------------------------------
@@ -101,44 +99,39 @@ def _normalize_options(
 
 def _ask_question(
     question: str,
-    question_type: QuestionType = "open_ended",
-    options: list[str | dict[str, Any]] | None = None,
+    options: list[str | dict[str, Any]],
     context: str | None = None,
 ) -> str:
-    """Ask the user a question and wait for their response.
+    """Ask the user a multiple-choice question and wait for their response.
 
     Use this tool when you need clarification or user input before proceeding.
     The execution will pause until the user responds.
 
+    IMPORTANT: This tool ONLY accepts structured (multiple-choice) questions.
+    You MUST provide at least 2 options for the user to choose from.
+    An "Other" option is automatically added for free-form input if needed.
+
     Args:
         question: The question to ask the user.
-        question_type: Either "structured" (multiple choice) or "open_ended" (free text).
-        options: List of options for structured questions. Each option may be a plain
+        options: List of options for the user to choose from. Each option may be a plain
             string or a dict with ``label``, ``value``, and optional ``description`` keys.
-            Required if question_type is "structured".
+            At least 2 options are required.
         context: Optional explanation of why you're asking this question.
 
     Returns:
-        The user's response as a string.
+        The user's selected option as a string.
     """
-    if question_type == "structured" and not options:
-        return "Error: 'options' is required for structured questions."
-
-    if question_type == "structured" and options and len(options) < 2:
-        return "Error: Structured questions need at least 2 options."
+    if not options or len(options) < 2:
+        return "Error: At least 2 options are required for ask_question. Provide multiple choices for the user."
 
     # Normalise to display strings; keep a mapping back to intended values
-    value_map: dict[str, str] = {}
-    display_options: list[str] | None = None
-    if options:
-        display_options, value_map = _normalize_options(options)
+    display_options, value_map = _normalize_options(options)
 
     question_request: QuestionRequest = {
         "question": question,
-        "question_type": question_type,
+        "options": display_options,
+        "question_type": "structured",  # Always structured for ask_question tool
     }
-    if display_options:
-        question_request["options"] = display_options
     if context:
         question_request["context"] = context
 
@@ -165,11 +158,10 @@ def _create_ask_question_tool() -> BaseTool:
         name="ask_question",
         func=_ask_question,
         description=(
-            "Ask the user one or more questions when you need clarification or input before proceeding. "
-            "Each question can be 'structured' (multiple choice — an 'Other' option is always available) "
-            "or 'open_ended' (free-form text). "
+            "Ask the user a multiple-choice question when you need clarification before proceeding. "
+            "IMPORTANT: This tool ONLY accepts structured (multiple-choice) questions. "
+            "You MUST provide at least 2 options for the user to choose from. "
             "Use this tool sparingly: only when you genuinely need information you cannot determine from context. "
-            "Group related questions into a single call rather than making multiple sequential calls. "
             "Never ask questions you can answer yourself from the available context. "
             "Execution pauses until the user responds."
         ),
@@ -188,7 +180,7 @@ class AskQuestionMiddleware(AgentMiddleware[AgentState, Any]):
     plan mode is enabled — can pause and ask for clarification.
 
     Provides:
-    - ``ask_question`` tool (structured or open-ended)
+    - ``ask_question`` tool (structured multiple-choice questions only)
     - ``ASK_QUESTION_SYSTEM_PROMPT`` injected into the system prompt
 
     Usage::
@@ -228,5 +220,4 @@ __all__ = [
     "OptionDict",
     "QuestionRequest",
     "QuestionResponse",
-    "QuestionType",
 ]

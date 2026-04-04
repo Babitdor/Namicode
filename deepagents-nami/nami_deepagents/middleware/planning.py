@@ -43,9 +43,9 @@ import re
 from dataclasses import dataclass
 
 from nami_deepagents.middleware.ask_question import (
+    ASK_QUESTION_SYSTEM_PROMPT,
     QuestionRequest,
     QuestionResponse,
-    QuestionType,
 )
 
 logger = logging.getLogger(__name__)
@@ -95,11 +95,6 @@ ALLOWED_TOOLS_IN_PLAN_MODE = {
     "ls",
     "glob",
     "grep",
-    # Git read operations
-    "git_status",
-    "git_log",
-    "git_diff",
-    "git_blame",
     # Web search/fetch
     "web_search",
     "duckduckgo_search",
@@ -340,9 +335,9 @@ __all__ = [
     "PlanModeMiddleware",
     "PlanModeState",
     "PlanModeStateUpdate",
+    "ASK_QUESTION_SYSTEM_PROMPT",
     "QuestionRequest",
     "QuestionResponse",
-    "QuestionType",
     "BLOCKED_TOOLS_IN_PLAN_MODE",
     "ALLOWED_TOOLS_IN_PLAN_MODE",
 ]

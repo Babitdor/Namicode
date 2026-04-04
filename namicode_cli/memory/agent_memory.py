@@ -1,7 +1,9 @@
 """Middleware for loading agent-specific long-term memory into the system prompt."""
 
 import contextlib
+import os
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import TypedDict, cast
 
 try:
@@ -114,6 +116,37 @@ class AgentMemoryMiddleware(AgentMiddleware):
         # Track which project memory files were loaded (for display in prompt)
         self.loaded_project_memory_sources: list[str] = []
 
+        # Track file modification times for hot-reloading
+        self._last_mtimes: dict[str, float] = {}
+
+        # Cache for loaded memory content
+        self._cached_user_memory: str | None = None
+        self._cached_project_memory: str | None = None
+
+    def _get_file_mtime(self, path: Path) -> float | None:
+        """Get modification time for a file, or None if it doesn't exist."""
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            return None
+
+    def _files_changed(self, paths: list[Path]) -> bool:
+        """Check if any files have been modified since last load."""
+        for path in paths:
+            current_mtime = self._get_file_mtime(path)
+            if current_mtime is not None:
+                last_mtime = self._last_mtimes.get(str(path))
+                if last_mtime is None or current_mtime > last_mtime:
+                    return True
+        return False
+
+    def _record_mtimes(self, paths: list[Path]) -> None:
+        """Record modification times for all paths."""
+        for path in paths:
+            mtime = self._get_file_mtime(path)
+            if mtime is not None:
+                self._last_mtimes[str(path)] = mtime
+
     def before_agent(  # type: ignore
         self,
         state: AgentMemoryState,
@@ -123,9 +156,9 @@ class AgentMemoryMiddleware(AgentMiddleware):
 
         Loads both user agent.md and project-specific memory files if available.
         Project memory is combined from multiple sources (CLAUDE.md, NAMI.md).
-        Only loads if not already present in state.
 
-        Dynamically checks for file existence on every call to catch user updates.
+        Hot-reload: Automatically reloads memory files when they change on disk.
+        Tracks modification times and reloads when files are updated.
 
         Args:
             state: Current agent state.
@@ -136,9 +169,16 @@ class AgentMemoryMiddleware(AgentMiddleware):
         """
         result: AgentMemoryStateUpdate = {}
 
-        # Load user memory if not already in state
-        if "user_memory" not in state:
-            user_path = self.settings.get_user_agent_md_path(self.assistant_id)
+        # Gather all memory file paths to check for changes
+        user_path = self.settings.get_user_agent_md_path(self.assistant_id)
+        project_paths = self.settings.get_project_agent_md_paths() if not self.skip_project_memory else []
+        all_paths = [user_path] + list(project_paths)
+
+        # Check if any files have changed (hot-reload)
+        needs_reload = self._files_changed(all_paths)
+
+        # Load user memory if not in state or if file changed
+        if needs_reload or "user_memory" not in state:
             if user_path.exists():
                 with contextlib.suppress(OSError, UnicodeDecodeError):
                     content = user_path.read_text(encoding="utf-8")
@@ -146,9 +186,8 @@ class AgentMemoryMiddleware(AgentMiddleware):
                         content = content[:MAX_MEMORY_CHARS] + _MEMORY_TRUNCATION_NOTICE
                     result["user_memory"] = content
 
-        # Load project memory from ALL available sources if not already in state
-        if not self.skip_project_memory and "project_memory" not in state:
-            project_paths = self.settings.get_project_agent_md_paths()
+        # Load project memory from ALL available sources if not in state or if files changed
+        if not self.skip_project_memory and (needs_reload or "project_memory" not in state):
             combined_memories: list[str] = []
             self.loaded_project_memory_sources = []
 
@@ -167,6 +206,9 @@ class AgentMemoryMiddleware(AgentMiddleware):
 
             if combined_memories:
                 result["project_memory"] = "\n\n---\n\n".join(combined_memories)
+
+        # Record modification times after successful load
+        self._record_mtimes(all_paths)
 
         return result
 

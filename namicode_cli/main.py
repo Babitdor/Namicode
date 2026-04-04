@@ -598,7 +598,7 @@ async def simple_cli(
 
                 # Capture shared memory for persistence
                 try:
-                    from namicode_cli.memory.shared_memory import save_shared_memory
+                    from nami_deepagents.middleware.shared_memory import save_shared_memory
 
                     shared_memory_data = save_shared_memory()
                 except Exception:
@@ -1216,7 +1216,7 @@ async def main(
 
             # Restore shared memory if available
             if session_data.shared_memory:
-                from namicode_cli.memory.shared_memory import restore_shared_memory
+                from nami_deepagents.middleware.shared_memory import restore_shared_memory
 
                 restore_shared_memory(session_data.shared_memory)
 

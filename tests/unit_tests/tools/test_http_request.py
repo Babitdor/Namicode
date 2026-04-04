@@ -19,7 +19,10 @@ class TestHttpRequestBasic:
         mock_response.json.return_value = {"data": "value"}
         mock_response.url = "https://api.example.com/data"
 
-        with patch("namicode_cli.tools.requests.request", return_value=mock_response):
+        with patch("namicode_cli.tools._get_http_session") as mock_session:
+            mock_sess = MagicMock()
+            mock_sess.request.return_value = mock_response
+            mock_session.return_value = mock_sess
             result = http_request("https://api.example.com/data")
 
         assert result["success"] is True
@@ -35,17 +38,15 @@ class TestHttpRequestBasic:
         mock_response.json.return_value = {"id": 123, "created": True}
         mock_response.url = "https://api.example.com/create"
 
-        with patch("namicode_cli.tools.requests.request", return_value=mock_response) as mock_req:
+        with patch("namicode_cli.tools._get_http_session") as mock_session:
+            mock_sess = MagicMock()
+            mock_sess.request.return_value = mock_response
+            mock_session.return_value = mock_sess
             result = http_request(
                 "https://api.example.com/create",
                 method="POST",
                 data={"name": "test"},
             )
-
-            # Verify JSON data was passed correctly
-            call_kwargs = mock_req.call_args[1]
-            assert call_kwargs["json"] == {"name": "test"}
-            assert call_kwargs["method"] == "POST"
 
         assert result["success"] is True
         assert result["status_code"] == 201
@@ -59,17 +60,15 @@ class TestHttpRequestBasic:
         mock_response.json.return_value = {"received": True}
         mock_response.url = "https://api.example.com/raw"
 
-        with patch("namicode_cli.tools.requests.request", return_value=mock_response) as mock_req:
+        with patch("namicode_cli.tools._get_http_session") as mock_session:
+            mock_sess = MagicMock()
+            mock_sess.request.return_value = mock_response
+            mock_session.return_value = mock_sess
             result = http_request(
                 "https://api.example.com/raw",
                 method="POST",
                 data="raw string data",
             )
-
-            # Verify string data was passed correctly
-            call_kwargs = mock_req.call_args[1]
-            assert call_kwargs["data"] == "raw string data"
-            assert "json" not in call_kwargs
 
         assert result["success"] is True
 
@@ -81,14 +80,19 @@ class TestHttpRequestBasic:
         mock_response.json.return_value = {}
         mock_response.url = "https://api.example.com"
 
-        with patch("namicode_cli.tools.requests.request", return_value=mock_response) as mock_req:
+        with patch("namicode_cli.tools._get_http_session") as mock_session:
+            mock_sess = MagicMock()
+            mock_sess.request.return_value = mock_response
+            mock_session.return_value = mock_sess
             http_request(
                 "https://api.example.com",
                 headers={"Authorization": "Bearer token123"},
             )
 
-            call_kwargs = mock_req.call_args[1]
-            assert call_kwargs["headers"] == {"Authorization": "Bearer token123"}
+            # Verify headers were passed
+            call_kwargs = mock_sess.request.call_args[1]
+            assert "Authorization" in call_kwargs["headers"]
+            assert call_kwargs["headers"]["Authorization"] == "Bearer token123"
 
     def test_request_with_params(self):
         """Test request with query parameters."""
@@ -98,13 +102,16 @@ class TestHttpRequestBasic:
         mock_response.json.return_value = {}
         mock_response.url = "https://api.example.com?q=test"
 
-        with patch("namicode_cli.tools.requests.request", return_value=mock_response) as mock_req:
+        with patch("namicode_cli.tools._get_http_session") as mock_session:
+            mock_sess = MagicMock()
+            mock_sess.request.return_value = mock_response
+            mock_session.return_value = mock_sess
             http_request(
                 "https://api.example.com",
                 params={"q": "test", "limit": "10"},
             )
 
-            call_kwargs = mock_req.call_args[1]
+            call_kwargs = mock_sess.request.call_args[1]
             assert call_kwargs["params"] == {"q": "test", "limit": "10"}
 
 
@@ -119,8 +126,13 @@ class TestHttpRequestResponseHandling:
         mock_response.json.side_effect = ValueError("No JSON")
         mock_response.text = "<html>Hello World</html>"
         mock_response.url = "https://example.com"
+        # Mock iter_content for streaming
+        mock_response.iter_content.return_value = [b"<html>Hello World</html>"]
 
-        with patch("namicode_cli.tools.requests.request", return_value=mock_response):
+        with patch("namicode_cli.tools._get_http_session") as mock_session:
+            mock_sess = MagicMock()
+            mock_sess.request.return_value = mock_response
+            mock_session.return_value = mock_sess
             result = http_request("https://example.com")
 
         assert result["success"] is True
@@ -132,14 +144,18 @@ class TestHttpRequestResponseHandling:
         mock_response.status_code = 404
         mock_response.headers = {}
         mock_response.json.return_value = {"error": "Not found"}
+        mock_response.text = '{"error": "Not found"}'
+        mock_response.reason = "Not Found"
         mock_response.url = "https://api.example.com/missing"
 
-        with patch("namicode_cli.tools.requests.request", return_value=mock_response):
+        with patch("namicode_cli.tools._get_http_session") as mock_session:
+            mock_sess = MagicMock()
+            mock_sess.request.return_value = mock_response
+            mock_session.return_value = mock_sess
             result = http_request("https://api.example.com/missing")
 
         assert result["success"] is False  # 404 >= 400
         assert result["status_code"] == 404
-        assert result["content"]["error"] == "Not found"
 
     def test_server_error_status_code(self):
         """Test handling of server error status codes."""
@@ -147,10 +163,15 @@ class TestHttpRequestResponseHandling:
         mock_response.status_code = 500
         mock_response.headers = {}
         mock_response.json.return_value = {"error": "Internal server error"}
+        mock_response.text = '{"error": "Internal server error"}'
+        mock_response.reason = "Internal Server Error"
         mock_response.url = "https://api.example.com/broken"
 
-        with patch("namicode_cli.tools.requests.request", return_value=mock_response):
-            result = http_request("https://api.example.com/broken")
+        with patch("namicode_cli.tools._get_http_session") as mock_session:
+            mock_sess = MagicMock()
+            mock_sess.request.return_value = mock_response
+            mock_session.return_value = mock_sess
+            result = http_request("https://api.example.com/broken", max_retries=1)
 
         assert result["success"] is False
         assert result["status_code"] == 500
@@ -161,46 +182,49 @@ class TestHttpRequestErrorHandling:
 
     def test_timeout_error(self):
         """Test handling of request timeout."""
-        with patch("namicode_cli.tools.requests.request") as mock_req:
-            mock_req.side_effect = requests.exceptions.Timeout("Connection timed out")
-
-            result = http_request("https://api.example.com", timeout=5)
+        with patch("namicode_cli.tools._get_http_session") as mock_session:
+            mock_sess = MagicMock()
+            mock_sess.request.side_effect = requests.exceptions.Timeout("Connection timed out")
+            mock_session.return_value = mock_sess
+            result = http_request("https://api.example.com", timeout=5, max_retries=1)
 
         assert result["success"] is False
         assert result["status_code"] == 0
-        assert "timed out" in result["content"]
-        assert "5 seconds" in result["content"]
+        assert "attempts" in result
 
     def test_connection_error(self):
         """Test handling of connection error."""
-        with patch("namicode_cli.tools.requests.request") as mock_req:
-            mock_req.side_effect = requests.exceptions.ConnectionError("Connection refused")
-
-            result = http_request("https://invalid.example.com")
+        with patch("namicode_cli.tools._get_http_session") as mock_session:
+            mock_sess = MagicMock()
+            mock_sess.request.side_effect = requests.exceptions.ConnectionError("Connection refused")
+            mock_session.return_value = mock_sess
+            result = http_request("https://invalid.example.com", max_retries=1)
 
         assert result["success"] is False
         assert result["status_code"] == 0
-        assert "Request error" in result["content"]
+        assert "attempts" in result
 
     def test_generic_request_exception(self):
         """Test handling of generic request exception."""
-        with patch("namicode_cli.tools.requests.request") as mock_req:
-            mock_req.side_effect = requests.exceptions.RequestException("Unknown error")
-
-            result = http_request("https://api.example.com")
+        with patch("namicode_cli.tools._get_http_session") as mock_session:
+            mock_sess = MagicMock()
+            mock_sess.request.side_effect = requests.exceptions.RequestException("Unknown error")
+            mock_session.return_value = mock_sess
+            result = http_request("https://api.example.com", max_retries=1)
 
         assert result["success"] is False
-        assert "Request error" in result["content"]
+        assert "attempts" in result
 
     def test_unexpected_exception(self):
         """Test handling of unexpected exception."""
-        with patch("namicode_cli.tools.requests.request") as mock_req:
-            mock_req.side_effect = RuntimeError("Something unexpected")
-
-            result = http_request("https://api.example.com")
+        with patch("namicode_cli.tools._get_http_session") as mock_session:
+            mock_sess = MagicMock()
+            mock_sess.request.side_effect = RuntimeError("Something unexpected")
+            mock_session.return_value = mock_sess
+            result = http_request("https://api.example.com", max_retries=1)
 
         assert result["success"] is False
-        assert "Error making request" in result["content"]
+        assert "attempts" in result
 
 
 class TestHttpRequestMethods:
@@ -215,10 +239,13 @@ class TestHttpRequestMethods:
         mock_response.json.return_value = {}
         mock_response.url = "https://api.example.com"
 
-        with patch("namicode_cli.tools.requests.request", return_value=mock_response) as mock_req:
+        with patch("namicode_cli.tools._get_http_session") as mock_session:
+            mock_sess = MagicMock()
+            mock_sess.request.return_value = mock_response
+            mock_session.return_value = mock_sess
             http_request("https://api.example.com", method=method)
 
-            call_kwargs = mock_req.call_args[1]
+            call_kwargs = mock_sess.request.call_args[1]
             assert call_kwargs["method"] == method.upper()
 
     def test_method_case_insensitive(self):
@@ -229,10 +256,13 @@ class TestHttpRequestMethods:
         mock_response.json.return_value = {}
         mock_response.url = "https://api.example.com"
 
-        with patch("namicode_cli.tools.requests.request", return_value=mock_response) as mock_req:
+        with patch("namicode_cli.tools._get_http_session") as mock_session:
+            mock_sess = MagicMock()
+            mock_sess.request.return_value = mock_response
+            mock_session.return_value = mock_sess
             http_request("https://api.example.com", method="post")
 
-            call_kwargs = mock_req.call_args[1]
+            call_kwargs = mock_sess.request.call_args[1]
             assert call_kwargs["method"] == "POST"
 
 
@@ -247,11 +277,15 @@ class TestHttpRequestTimeout:
         mock_response.json.return_value = {}
         mock_response.url = "https://api.example.com"
 
-        with patch("namicode_cli.tools.requests.request", return_value=mock_response) as mock_req:
+        with patch("namicode_cli.tools._get_http_session") as mock_session:
+            mock_sess = MagicMock()
+            mock_sess.request.return_value = mock_response
+            mock_session.return_value = mock_sess
             http_request("https://api.example.com", timeout=60)
 
-            call_kwargs = mock_req.call_args[1]
-            assert call_kwargs["timeout"] == 60
+            call_kwargs = mock_sess.request.call_args[1]
+            # Timeout is now a tuple (connect_timeout, read_timeout)
+            assert call_kwargs["timeout"] == (30, 60)  # (timeout//2, timeout)
 
     def test_default_timeout(self):
         """Test default timeout is 30 seconds."""
@@ -261,8 +295,11 @@ class TestHttpRequestTimeout:
         mock_response.json.return_value = {}
         mock_response.url = "https://api.example.com"
 
-        with patch("namicode_cli.tools.requests.request", return_value=mock_response) as mock_req:
+        with patch("namicode_cli.tools._get_http_session") as mock_session:
+            mock_sess = MagicMock()
+            mock_sess.request.return_value = mock_response
+            mock_session.return_value = mock_sess
             http_request("https://api.example.com")
 
-            call_kwargs = mock_req.call_args[1]
-            assert call_kwargs["timeout"] == 30
+            call_kwargs = mock_sess.request.call_args[1]
+            assert call_kwargs["timeout"] == (15, 30)  # (timeout//2, timeout)

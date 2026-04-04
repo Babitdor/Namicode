@@ -45,6 +45,31 @@ from namicode_cli.config.config import settings
 tavily_client = TavilyClient(api_key=settings.tavily_api_key) if settings.has_tavily else None
 
 
+# Session for http_request (separate from fetch_url to avoid conflicts)
+_http_request_session: requests.Session | None = None
+
+
+def _get_http_session() -> requests.Session:
+    """Get or create a reusable requests session for http_request with connection pooling."""
+    global _http_request_session
+    if _http_request_session is None:
+        _http_request_session = requests.Session()
+        # Configure retry strategy for transient failures
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        _http_request_session.mount("http://", adapter)
+        _http_request_session.mount("https://", adapter)
+    return _http_request_session
+
+
 def http_request(
     url: str,
     method: str = "GET",
@@ -52,72 +77,269 @@ def http_request(
     data: str | dict | None = None,
     params: dict[str, str] | None = None,
     timeout: int = 30,
+    max_retries: int = 3,
+    follow_redirects: bool = True,
+    verify_ssl: bool = True,
+    auth: tuple[str, str] | None = None,
+    cookies: dict[str, str] | None = None,
+    max_content_size: int = 10 * 1024 * 1024,  # 10MB default
+    user_agent: str = "browser",
+    stream: bool = False,
 ) -> dict[str, Any]:
-    """Make HTTP requests to APIs and web services.
+    """Make HTTP requests to APIs and web services with enhanced reliability.
+
+    Enhanced version with retry logic, connection pooling, and better error handling.
 
     Args:
         url: Target URL
-        method: HTTP method (GET, POST, PUT, DELETE, etc.)
+        method: HTTP method (GET, POST, PUT, DELETE, PATCH, etc.)
         headers: HTTP headers to include
-        data: Request body data (string or dict)
+        data: Request body data (string or dict). Dict is sent as JSON.
         params: URL query parameters
-        timeout: Request timeout in seconds
+        timeout: Request timeout in seconds (default: 30)
+        max_retries: Maximum number of retry attempts (default: 3)
+        follow_redirects: Whether to follow HTTP redirects (default: True)
+        verify_ssl: Whether to verify SSL certificates (default: True)
+        auth: Tuple of (username, password) for basic authentication
+        cookies: Dictionary of cookies to send
+        max_content_size: Maximum response content size in bytes (default: 10MB)
+        user_agent: User agent type - "browser" for real browser UA, "bot" for bot UA,
+                   or provide custom string (default: "browser")
+        stream: Whether to stream the response (useful for large files)
 
     Returns:
-        Dictionary with response data including status, headers, and content
+        Dictionary with response data including:
+        - success: Whether the request succeeded (status < 400)
+        - status_code: HTTP status code
+        - headers: Response headers
+        - content: Response body (parsed JSON if possible, otherwise text)
+        - url: Final URL after redirects
+        - attempts: Number of attempts made
+        - elapsed_time: Request duration in seconds
+
+    Example:
+        # Simple GET request
+        http_request("https://api.example.com/data")
+
+        # POST with JSON body
+        http_request(
+            "https://api.example.com/users",
+            method="POST",
+            data={"name": "John", "email": "john@example.com"}
+        )
+
+        # With authentication
+        http_request(
+            "https://api.example.com/protected",
+            auth=("username", "password")
+        )
     """
-    try:
-        kwargs = {"url": url, "method": method.upper(), "timeout": timeout}
+    import random
+    import time
 
-        if headers:
-            kwargs["headers"] = headers
-        if params:
-            kwargs["params"] = params
-        if data:
-            if isinstance(data, dict):
-                kwargs["json"] = data
-            else:
-                kwargs["data"] = data
+    start_time = time.time()
 
-        response = requests.request(**kwargs)
+    # Build headers
+    request_headers = {
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+    }
+
+    # Set User-Agent
+    if user_agent == "browser":
+        request_headers["User-Agent"] = random.choice(_BROWSER_USER_AGENTS)
+    elif user_agent == "bot":
+        request_headers["User-Agent"] = "Mozilla/5.0 (compatible; DeepAgents/1.0)"
+    else:
+        request_headers["User-Agent"] = user_agent
+
+    # Merge custom headers
+    if headers:
+        request_headers.update(headers)
+
+    # Get session with connection pooling
+    session = _get_http_session()
+
+    last_error: Exception | None = None
+    attempts = 0
+
+    for attempt in range(max_retries):
+        attempts = attempt + 1
 
         try:
-            content = response.json()
-        except:
-            content = response.text
+            kwargs: dict[str, Any] = {
+                "url": url,
+                "method": method.upper(),
+                "headers": request_headers,
+                "timeout": (timeout // 2, timeout),  # (connect timeout, read timeout)
+                "allow_redirects": follow_redirects,
+                "verify": verify_ssl,
+                "stream": stream or (max_content_size > 0),  # Stream if size limit set
+            }
 
-        return {
-            "success": response.status_code < 400,
-            "status_code": response.status_code,
-            "headers": dict(response.headers),
-            "content": content,
-            "url": response.url,
-        }
+            if params:
+                kwargs["params"] = params
 
-    except requests.exceptions.Timeout:
-        return {
-            "success": False,
-            "status_code": 0,
-            "headers": {},
-            "content": f"Request timed out after {timeout} seconds",
-            "url": url,
-        }
-    except requests.exceptions.RequestException as e:
-        return {
-            "success": False,
-            "status_code": 0,
-            "headers": {},
-            "content": f"Request error: {e!s}",
-            "url": url,
-        }
-    except Exception as e:
-        return {
-            "success": False,
-            "status_code": 0,
-            "headers": {},
-            "content": f"Error making request: {e!s}",
-            "url": url,
-        }
+            if data:
+                if isinstance(data, dict):
+                    kwargs["json"] = data
+                    # Set Content-Type if not already set
+                    if "Content-Type" not in request_headers:
+                        request_headers["Content-Type"] = "application/json"
+                else:
+                    kwargs["data"] = data
+
+            if auth:
+                kwargs["auth"] = auth
+
+            if cookies:
+                kwargs["cookies"] = cookies
+
+            response = session.request(**kwargs)
+
+            # Check for HTTP errors (4xx, 5xx)
+            if response.status_code >= 400:
+                status_code = response.status_code
+                # Retry on server errors (5xx) and rate limiting (429)
+                if (status_code >= 500 or status_code == 429) and attempt < max_retries - 1:
+                    last_error = requests.exceptions.HTTPError(f"HTTP {status_code}")
+                    time.sleep(2 ** (attempt + 1))  # Exponential backoff
+                    continue
+
+                # Try to get error details from response
+                try:
+                    error_content = response.json()
+                    error_msg = error_content.get("message", error_content.get("error", str(error_content)))
+                except Exception:
+                    error_msg = response.text[:500] if response.text else response.reason
+
+                elapsed = time.time() - start_time
+                return {
+                    "success": False,
+                    "status_code": status_code,
+                    "headers": dict(response.headers),
+                    "content": error_msg,
+                    "url": str(response.url),
+                    "attempts": attempts,
+                    "elapsed_time": round(elapsed, 3),
+                }
+
+            # Handle streaming or size-limited responses
+            if stream or max_content_size > 0:
+                content_length = response.headers.get("Content-Length")
+                if content_length and int(content_length) > max_content_size:
+                    elapsed = time.time() - start_time
+                    return {
+                        "success": False,
+                        "status_code": response.status_code,
+                        "headers": dict(response.headers),
+                        "content": f"Response too large: {int(content_length) / 1024 / 1024:.2f}MB exceeds {max_content_size / 1024 / 1024:.2f}MB limit",
+                        "url": str(response.url),
+                        "attempts": attempts,
+                        "elapsed_time": round(elapsed, 3),
+                    }
+
+                # Download with size check
+                chunks = []
+                total_size = 0
+                for chunk in response.iter_content(chunk_size=8192):
+                    total_size += len(chunk)
+                    if total_size > max_content_size:
+                        elapsed = time.time() - start_time
+                        return {
+                            "success": False,
+                            "status_code": response.status_code,
+                            "headers": dict(response.headers),
+                            "content": f"Response exceeded {max_content_size / 1024 / 1024:.2f}MB limit during download",
+                            "url": str(response.url),
+                            "attempts": attempts,
+                            "elapsed_time": round(elapsed, 3),
+                        }
+                    chunks.append(chunk)
+
+                raw_content = b"".join(chunks)
+                # Try to decode as text
+                try:
+                    text_content = raw_content.decode("utf-8")
+                except UnicodeDecodeError:
+                    # Return base64 for binary content
+                    import base64
+
+                    text_content = base64.b64encode(raw_content).decode("ascii")
+
+                # Try to parse as JSON
+                try:
+                    content = response.json()
+                except Exception:
+                    content = text_content
+            else:
+                # Non-streaming response
+                try:
+                    content = response.json()
+                except Exception:
+                    content = response.text
+
+            elapsed = time.time() - start_time
+            return {
+                "success": True,
+                "status_code": response.status_code,
+                "headers": dict(response.headers),
+                "content": content,
+                "url": str(response.url),
+                "attempts": attempts,
+                "elapsed_time": round(elapsed, 3),
+                "content_type": response.headers.get("Content-Type", ""),
+            }
+
+        except requests.exceptions.Timeout as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                time.sleep(2 ** (attempt + 1))
+                continue
+
+        except requests.exceptions.SSLError as e:
+            elapsed = time.time() - start_time
+            return {
+                "success": False,
+                "status_code": 0,
+                "headers": {},
+                "content": f"SSL certificate verification failed: {e!s}. Try setting verify_ssl=False if you trust this server.",
+                "url": url,
+                "attempts": attempts,
+                "elapsed_time": round(elapsed, 3),
+            }
+
+        except requests.exceptions.ConnectionError as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                time.sleep(2 ** (attempt + 1))
+                continue
+
+        except requests.exceptions.RequestException as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                time.sleep(2 ** (attempt + 1))
+                continue
+
+        except Exception as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                time.sleep(2 ** (attempt + 1))
+                continue
+
+    # All retries exhausted
+    elapsed = time.time() - start_time
+    return {
+        "success": False,
+        "status_code": 0,
+        "headers": {},
+        "content": f"Request failed after {attempts} attempts: {last_error!s}",
+        "url": url,
+        "attempts": attempts,
+        "elapsed_time": round(elapsed, 3),
+    }
 
 
 def web_search(
@@ -550,8 +772,53 @@ def docs_search(
         }
 
 
-def fetch_url(url: str, timeout: int = 30) -> dict[str, Any]:
+# Session-level connection pool for better performance
+_fetch_url_session: requests.Session | None = None
+
+
+def _get_fetch_session() -> requests.Session:
+    """Get or create a reusable requests session with connection pooling."""
+    global _fetch_url_session
+    if _fetch_url_session is None:
+        _fetch_url_session = requests.Session()
+        # Configure retry strategy for transient failures
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET", "HEAD"],
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        _fetch_url_session.mount("http://", adapter)
+        _fetch_url_session.mount("https://", adapter)
+    return _fetch_url_session
+
+
+# Common browser user agents for rotation
+_BROWSER_USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
+]
+
+
+def fetch_url(
+    url: str,
+    timeout: int = 30,
+    max_retries: int = 3,
+    headers: dict[str, str] | None = None,
+    follow_redirects: bool = True,
+    max_content_size: int = 10 * 1024 * 1024,  # 10MB default
+    verify_ssl: bool = True,
+    user_agent: str = "browser",
+) -> dict[str, Any]:
     """Fetch content from a URL and convert HTML to markdown format.
+
+    Enhanced version with retry logic, connection pooling, and better error handling.
 
     This tool fetches web page content and converts it to clean markdown text,
     making it easy to read and process HTML content. After receiving the markdown,
@@ -560,6 +827,13 @@ def fetch_url(url: str, timeout: int = 30) -> dict[str, Any]:
     Args:
         url: The URL to fetch (must be a valid HTTP/HTTPS URL)
         timeout: Request timeout in seconds (default: 30)
+        max_retries: Maximum number of retry attempts (default: 3)
+        headers: Additional HTTP headers to include
+        follow_redirects: Whether to follow HTTP redirects (default: True)
+        max_content_size: Maximum content size in bytes (default: 10MB)
+        verify_ssl: Whether to verify SSL certificates (default: True)
+        user_agent: User agent type - "browser" for real browser UA, "bot" for bot UA,
+                   or provide custom string (default: "browser")
 
     Returns:
         Dictionary containing:
@@ -568,6 +842,8 @@ def fetch_url(url: str, timeout: int = 30) -> dict[str, Any]:
         - markdown_content: The page content converted to markdown
         - status_code: HTTP status code
         - content_length: Length of the markdown content in characters
+        - attempts: Number of attempts made (useful for debugging retries)
+        - final_url: The final URL after any redirects
 
     IMPORTANT: After using this tool:
     1. Read through the markdown content
@@ -575,25 +851,197 @@ def fetch_url(url: str, timeout: int = 30) -> dict[str, Any]:
     3. Synthesize this into a clear, natural language response
     4. NEVER show the raw markdown to the user unless specifically requested
     """
-    try:
-        response = requests.get(
-            url,
-            timeout=timeout,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; DeepAgents/1.0)"},
-        )
-        response.raise_for_status()
+    import random
+    import time
 
-        # Convert HTML content to markdown
-        markdown_content = markdownify(response.text)
+    # Build headers
+    request_headers = {
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+    }
 
-        return {
-            "url": str(response.url),
-            "markdown_content": markdown_content,
-            "status_code": response.status_code,
-            "content_length": len(markdown_content),
-        }
-    except Exception as e:
-        return {"error": f"Fetch URL error: {e!s}", "url": url}
+    # Set User-Agent
+    if user_agent == "browser":
+        request_headers["User-Agent"] = random.choice(_BROWSER_USER_AGENTS)
+    elif user_agent == "bot":
+        request_headers["User-Agent"] = "Mozilla/5.0 (compatible; DeepAgents/1.0)"
+    else:
+        request_headers["User-Agent"] = user_agent
+
+    # Merge custom headers
+    if headers:
+        request_headers.update(headers)
+
+    # Get session with connection pooling
+    session = _get_fetch_session()
+
+    last_error: Exception | None = None
+    attempts = 0
+
+    for attempt in range(max_retries):
+        attempts = attempt + 1
+
+        try:
+            # Use separate timeouts for connect and read
+            response = session.get(
+                url,
+                headers=request_headers,
+                timeout=(timeout // 2, timeout),  # (connect timeout, read timeout)
+                allow_redirects=follow_redirects,
+                stream=True,  # Stream to check content size before downloading all
+                verify=verify_ssl,
+            )
+
+            # Check for HTTP errors (4xx, 5xx)
+            if response.status_code >= 400:
+                status_code = response.status_code
+                # Retry on server errors (5xx)
+                if status_code >= 500 and attempt < max_retries - 1:
+                    last_error = requests.exceptions.HTTPError(f"HTTP {status_code}")
+                    time.sleep(2 ** (attempt + 1))
+                    continue
+                # Client errors (4xx) don't benefit from retry
+                return {
+                    "success": False,
+                    "error": f"HTTP error {status_code}: {response.reason}",
+                    "url": url,
+                    "status_code": status_code,
+                    "attempts": attempts,
+                }
+
+            # Check content size before downloading
+            content_length = response.headers.get("Content-Length")
+            if content_length and int(content_length) > max_content_size:
+                return {
+                    "success": False,
+                    "error": f"Content too large: {int(content_length) / 1024 / 1024:.2f}MB exceeds {max_content_size / 1024 / 1024:.2f}MB limit",
+                    "url": url,
+                    "status_code": response.status_code,
+                    "attempts": attempts,
+                }
+
+            # Check content type
+            content_type = response.headers.get("Content-Type", "")
+            if content_type and not any(
+                ct in content_type.lower()
+                for ct in ["text/html", "text/plain", "application/xhtml", "text/xml"]
+            ):
+                # For non-HTML content, return raw text with warning
+                if "application/json" in content_type.lower():
+                    # JSON content - return as-is
+                    content = response.text
+                    return {
+                        "success": True,
+                        "url": str(response.url),
+                        "markdown_content": f"```json\n{content}\n```",
+                        "status_code": response.status_code,
+                        "content_length": len(content),
+                        "content_type": content_type,
+                        "attempts": attempts,
+                    }
+                # Other binary content
+                return {
+                    "success": False,
+                    "error": f"Unsupported content type: {content_type}. This tool is designed for HTML/text content.",
+                    "url": url,
+                    "status_code": response.status_code,
+                    "content_type": content_type,
+                    "attempts": attempts,
+                }
+
+            # Download content with size check
+            chunks = []
+            total_size = 0
+            for chunk in response.iter_content(chunk_size=8192, decode_unicode=True):
+                total_size += len(chunk)
+                if total_size > max_content_size:
+                    return {
+                        "success": False,
+                        "error": f"Content exceeded {max_content_size / 1024 / 1024:.2f}MB limit during download",
+                        "url": url,
+                        "status_code": response.status_code,
+                        "attempts": attempts,
+                    }
+                chunks.append(chunk)
+
+            content = "".join(chunks)
+
+            # Handle encoding
+            if response.encoding and response.encoding.lower() not in ["utf-8", "utf8"]:
+                try:
+                    content = content.encode(response.encoding).decode("utf-8", errors="replace")
+                except (UnicodeDecodeError, UnicodeEncodeError):
+                    pass  # Keep original content
+
+            # Convert HTML content to markdown
+            markdown_content = markdownify(content)
+
+            return {
+                "success": True,
+                "url": str(response.url),
+                "final_url": str(response.url),
+                "markdown_content": markdown_content,
+                "status_code": response.status_code,
+                "content_length": len(markdown_content),
+                "content_type": response.headers.get("Content-Type", ""),
+                "attempts": attempts,
+            }
+
+        except requests.exceptions.Timeout as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                time.sleep(2 ** (attempt + 1))  # Exponential backoff: 2s, 4s, 8s
+                continue
+
+        except requests.exceptions.SSLError as e:
+            # SSL errors are usually not transient - don't retry
+            return {
+                "success": False,
+                "error": f"SSL certificate verification failed: {e!s}. Try setting verify_ssl=False if you trust this site.",
+                "url": url,
+                "attempts": attempts,
+            }
+
+        except requests.exceptions.ConnectionError as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                time.sleep(2 ** (attempt + 1))
+                continue
+
+        except requests.exceptions.HTTPError as e:
+            # HTTP errors (4xx, 5xx) - retry on server errors
+            if hasattr(e, "response") and e.response is not None:
+                status_code = e.response.status_code
+                if status_code >= 500 and attempt < max_retries - 1:
+                    last_error = e
+                    time.sleep(2 ** (attempt + 1))
+                    continue
+                # Client errors (4xx) don't benefit from retry
+                return {
+                    "success": False,
+                    "error": f"HTTP error {status_code}: {e!s}",
+                    "url": url,
+                    "status_code": status_code,
+                    "attempts": attempts,
+                }
+            last_error = e
+
+        except Exception as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                time.sleep(2 ** (attempt + 1))
+                continue
+
+    # All retries exhausted
+    return {
+        "success": False,
+        "error": f"Failed after {attempts} attempts: {last_error!s}",
+        "url": url,
+        "attempts": attempts,
+    }
 
 
 def execute_in_e2b(

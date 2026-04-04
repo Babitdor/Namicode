@@ -207,6 +207,48 @@ LONG_RUNNING_COMMANDS = [
     "docker-compose up",
 ]
 
+# Commands that are known to be interactive and require user input.
+# These will automatically use interactive mode to handle prompts.
+INTERACTIVE_COMMANDS = [
+    # Project scaffolding tools
+    "create-next-app",
+    "create-react-app",
+    "create-vite",
+    "npm init",
+    "yarn init",
+    "pnpm init",
+    "npx create-next-app",
+    "npx create-react-app",
+    "npx create-vite",
+    "npm create vite",
+    "yarn create vite",
+    "pnpm create vite",
+    # Framework CLIs
+    "ng new",  # Angular CLI
+    "vue create",  # Vue CLI
+    "nuxt init",  # Nuxt
+    "remix create",  # Remix
+    "astro create",  # Astro
+    "svelte-create",  # Svelte
+    # Package managers with prompts
+    "npm install -g",  # May prompt for permissions
+    "yarn global add",
+    # Git commands that can be interactive
+    "git rebase -i",
+    "git add -p",  # Interactive staging
+    "git stash -p",  # Interactive stash
+    # Other interactive tools
+    "django-admin startproject",
+    "rails new",
+    "cargo new",
+    "go mod init",
+    # Configuration tools
+    "tsconfig.json",  # TypeScript init
+    "eslint --init",
+    "prettier --init",
+    "husky install",
+]
+
 # Commands that are destructive, irreversible, or enable remote code execution.
 # These are hard-blocked before any subprocess is spawned.
 DANGEROUS_PATTERNS = [
@@ -311,6 +353,22 @@ def is_long_running_command(command: str) -> bool:
     return any(pattern in command_lower for pattern in LONG_RUNNING_COMMANDS)
 
 
+def is_interactive_command(command: str) -> bool:
+    """Detect if a command is known to be interactive and requires user input.
+
+    These commands typically prompt the user for configuration options,
+    project names, framework selections, etc.
+
+    Args:
+        command: The command to check.
+
+    Returns:
+        True if this is a known interactive command.
+    """
+    command_lower = command.lower()
+    return any(pattern in command_lower for pattern in INTERACTIVE_COMMANDS)
+
+
 class ShellMiddleware(AgentMiddleware[AgentState, Any]):
     """Give basic shell access to agents via the shell.
 
@@ -351,6 +409,55 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         import atexit
         atexit.register(self._cleanup_background_processes)
 
+        # Build description with working directory information
+        description = (
+            f"Execute a shell command directly on the host. Commands will run in "
+            f"the working directory: {self._workspace_root}. Each command runs in a fresh shell "
+            f"environment with the current process's environment variables. Commands may "
+            f"be truncated if they exceed the configured timeout or output limits. "
+            f"Use interactive=True for commands that may prompt for user input "
+            f"(e.g., npx create-next-app, npm init, git rebase -i). "
+            f"Use background=True for long-running commands like dev servers "
+            f"(e.g., npm run dev, vite, flask run) - returns when server is ready."
+        )
+
+        @tool(self._tool_name, description=description)
+        def shell_tool(
+            command: str,
+            runtime: ToolRuntime[None, AgentState],
+            interactive: bool = False,  # noqa: FBT001, FBT002
+            background: bool = False,  # noqa: FBT001, FBT002
+        ) -> ToolMessage | str:
+            """Execute a shell command.
+
+            Args:
+                command: The shell command to execute.
+                interactive: If True, run in interactive mode allowing user to
+                    respond to prompts. Use for commands like npx create-next-app,
+                    npm init, or any command that may ask for user input.
+                    Note: Many interactive commands are auto-detected and will
+                    automatically use interactive mode.
+                background: If True, run as a background process and return when
+                    server is ready (for long-running commands like npm run dev,
+                    vite, flask run). The process continues running in background.
+            """
+            # Auto-detect interactive commands
+            if not interactive and is_interactive_command(command):
+                interactive = True
+
+            if background or is_long_running_command(command):
+                return self._run_background_shell_command(
+                    command, tool_call_id=runtime.tool_call_id
+                )
+            if interactive:
+                return self._run_interactive_shell_command(
+                    command, tool_call_id=runtime.tool_call_id
+                )
+            return self._run_shell_command(command, tool_call_id=runtime.tool_call_id)
+
+        self._shell_tool = shell_tool
+        self.tools = [self._shell_tool]
+
     def _cleanup_background_processes(self) -> None:
         """Clean up background processes before exit to prevent asyncio errors."""
         for process in self._background_processes:
@@ -383,49 +490,6 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         except Exception:
             pass
 
-        # Build description with working directory information
-        description = (
-            f"Execute a shell command directly on the host. Commands will run in "
-            f"the working directory: {workspace_root}. Each command runs in a fresh shell "
-            f"environment with the current process's environment variables. Commands may "
-            f"be truncated if they exceed the configured timeout or output limits. "
-            f"Use interactive=True for commands that may prompt for user input "
-            f"(e.g., npx create-next-app, npm init, git rebase -i). "
-            f"Use background=True for long-running commands like dev servers "
-            f"(e.g., npm run dev, vite, flask run) - returns when server is ready."
-        )
-
-        @tool(self._tool_name, description=description)
-        def shell_tool(
-            command: str,
-            runtime: ToolRuntime[None, AgentState],
-            interactive: bool = False,  # noqa: FBT001, FBT002
-            background: bool = False,  # noqa: FBT001, FBT002
-        ) -> ToolMessage | str:
-            """Execute a shell command.
-
-            Args:
-                command: The shell command to execute.
-                interactive: If True, run in interactive mode allowing user to
-                    respond to prompts. Use for commands like npx create-next-app,
-                    npm init, or any command that may ask for user input.
-                background: If True, run as a background process and return when
-                    server is ready (for long-running commands like npm run dev,
-                    vite, flask run). The process continues running in background.
-            """
-            if background or is_long_running_command(command):
-                return self._run_background_shell_command(
-                    command, tool_call_id=runtime.tool_call_id
-                )
-            if interactive:
-                return self._run_interactive_shell_command(
-                    command, tool_call_id=runtime.tool_call_id
-                )
-            return self._run_shell_command(command, tool_call_id=runtime.tool_call_id)
-
-        self._shell_tool = shell_tool
-        self.tools = [self._shell_tool]
-
     @staticmethod
     def _sanitize_env(env: dict[str, str]) -> dict[str, str]:
         """Remove env vars that can redirect interpreter or import resolution.
@@ -445,6 +509,11 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         tool_call_id: str | None,
     ) -> ToolMessage | str:
         """Execute a shell command and return the result.
+
+        This method uses dynamic prompt detection:
+        1. Run the command with a short initial timeout
+        2. If output contains a prompt pattern, automatically switch to interactive mode
+        3. Otherwise, continue with normal execution
 
         Args:
             command: The shell command to execute.
@@ -485,22 +554,23 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
             except Exception:
                 pass  # never block execution due to snapshot failure
 
+        # Phase 1: Try running with a short timeout to detect prompts
+        prompt_detection_timeout = 5.0  # Short timeout to detect prompts
         try:
             result = subprocess.run(  # noqa: S602
                 command,
                 check=False,
                 shell=True,
                 capture_output=True,
-                timeout=self._timeout,
+                timeout=prompt_detection_timeout,
                 env=self._env,
                 cwd=self._workspace_root,
             )
 
-            # Decode bytes → str with UTF-8 (replace errors for Windows compat)
+            # Command completed quickly - return result
             stdout = (result.stdout or b"").decode("utf-8", errors="replace")
             stderr = (result.stderr or b"").decode("utf-8", errors="replace")
 
-            # Combine stdout and stderr
             output_parts = []
             if stdout.strip():
                 output_parts.append(stdout)
@@ -510,28 +580,95 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
 
             output = "\n".join(output_parts) if output_parts else "<no output>"
 
-            # Truncate output if needed
             if len(output) > self._max_output_bytes:
                 output = output[: self._max_output_bytes]
                 output += f"\n\n... Output truncated at {self._max_output_bytes} bytes."
 
-            # Add exit code info if non-zero
             if result.returncode != 0:
                 output = f"{output.rstrip()}\n\nExit code: {result.returncode}"
                 status = "error"
             else:
                 status = "success"
 
-        except subprocess.TimeoutExpired:
-            output = f"Error: Command timed out after {self._timeout:.1f} seconds."
-            status = "error"
+            return ToolMessage(
+                content=output,
+                tool_call_id=tool_call_id,
+                name=self._tool_name,
+                status=status,
+            )
 
-        return ToolMessage(
-            content=output,
-            tool_call_id=tool_call_id,
-            name=self._tool_name,
-            status=status,
-        )
+        except subprocess.TimeoutExpired as e:
+            # Command timed out - check if it's waiting for input
+            partial_output = ""
+            if e.stdout:
+                partial_output = e.stdout.decode("utf-8", errors="replace")
+            if e.stderr:
+                stderr = e.stderr.decode("utf-8", errors="replace")
+                if stderr.strip():
+                    partial_output += "\n" + "\n".join(f"[stderr] {line}" for line in stderr.strip().split("\n"))
+
+            # Check if the partial output contains a prompt pattern
+            if partial_output and is_interactive_prompt(partial_output):
+                # Prompt detected - switch to interactive mode
+                sys.stdout.write("\n\033[1;33m⚠ Interactive prompt detected. Switching to interactive mode...\033[0m\n")
+                sys.stdout.write(partial_output)
+                sys.stdout.flush()
+                return self._run_interactive_shell_command(
+                    command,
+                    tool_call_id=tool_call_id,
+                    initial_output=partial_output,
+                )
+
+            # No prompt detected - it's just a slow command, let it continue
+            # Run again with full timeout
+            try:
+                result = subprocess.run(  # noqa: S602
+                    command,
+                    check=False,
+                    shell=True,
+                    capture_output=True,
+                    timeout=self._timeout,
+                    env=self._env,
+                    cwd=self._workspace_root,
+                )
+
+                stdout = (result.stdout or b"").decode("utf-8", errors="replace")
+                stderr = (result.stderr or b"").decode("utf-8", errors="replace")
+
+                output_parts = []
+                if stdout.strip():
+                    output_parts.append(stdout)
+                if stderr.strip():
+                    stderr_lines = stderr.strip().split("\n")
+                    output_parts.extend(f"[stderr] {line}" for line in stderr_lines)
+
+                output = "\n".join(output_parts) if output_parts else "<no output>"
+
+                if len(output) > self._max_output_bytes:
+                    output = output[: self._max_output_bytes]
+                    output += f"\n\n... Output truncated at {self._max_output_bytes} bytes."
+
+                if result.returncode != 0:
+                    output = f"{output.rstrip()}\n\nExit code: {result.returncode}"
+                    status = "error"
+                else:
+                    status = "success"
+
+                return ToolMessage(
+                    content=output,
+                    tool_call_id=tool_call_id,
+                    name=self._tool_name,
+                    status=status,
+                )
+
+            except subprocess.TimeoutExpired:
+                output = f"Error: Command timed out after {self._timeout:.1f} seconds."
+                return ToolMessage(
+                    content=output,
+                    tool_call_id=tool_call_id,
+                    name=self._tool_name,
+                    status="error",
+                )
 
     def _run_interactive_shell_command(
         self,
@@ -539,6 +676,7 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         *,
         tool_call_id: str | None,
         input_callback: Callable[[str], str] | None = None,
+        initial_output: str | None = None,
     ) -> ToolMessage | str:
         """Execute a shell command in interactive mode with real-time I/O.
 
@@ -551,6 +689,8 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
             input_callback: Optional callback to get user input. If None, uses
                 the default console input. The callback receives the prompt text
                 and should return the user's response.
+            initial_output: Optional output already captured from a previous
+                execution attempt (used when switching to interactive mode).
 
         Returns:
             A ToolMessage with the command output or an error message.
@@ -590,6 +730,7 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
                             command,
                             tool_call_id=tool_call_id,
                             input_callback=input_callback,
+                            initial_output=initial_output,
                         ),
                     )
                     return future.result(timeout=self._timeout)
@@ -600,6 +741,7 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
                         command,
                         tool_call_id=tool_call_id,
                         input_callback=input_callback,
+                        initial_output=initial_output,
                     )
                 )
         except TimeoutError:
@@ -623,6 +765,7 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         *,
         tool_call_id: str | None,
         input_callback: Callable[[str], str] | None = None,
+        initial_output: str | None = None,
     ) -> ToolMessage:
         """Async implementation of interactive shell execution.
 
@@ -630,12 +773,27 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
             command: The shell command to execute.
             tool_call_id: The tool call ID for creating a ToolMessage.
             input_callback: Optional callback to get user input.
+            initial_output: Optional output already captured from a previous
+                execution attempt (used when switching to interactive mode).
 
         Returns:
             A ToolMessage with the command output.
         """
         output_lines: list[str] = []
         status = "success"
+
+        # Include any initial output from previous execution
+        if initial_output:
+            output_lines.append(initial_output)
+            # Check if initial output contains a prompt that needs response
+            if is_interactive_prompt(initial_output):
+                sys.stdout.write(initial_output)
+                sys.stdout.flush()
+                if input_callback:
+                    user_input = input_callback(initial_output)
+                else:
+                    user_input = self._get_user_input(initial_output)
+                output_lines.append(f"> {user_input}")
 
         # Use cmd.exe on Windows, bash/sh on Unix
         if sys.platform == "win32":
