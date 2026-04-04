@@ -19,6 +19,14 @@ TOOL_ICONS: dict[str, str] = {
     "ls": "📁",
     "glob": "🔍",
     "grep": "🔎",
+    # Serena MCP tools (capitalized names)
+    "Read": "📖",
+    "Write": "✏️",
+    "Edit": "✂️",
+    "List": "📁",
+    "Glob": "🔍",
+    "Grep": "🔎",
+    "Search": "🔍",
     # Shell
     "shell": "⚡",
     "execute": "🔧",
@@ -84,9 +92,18 @@ TOOL_CATEGORIES: dict[str, str] = {
     "ls": "files_read",
     "glob": "files_read",
     "grep": "files_read",
+    # Serena MCP tools (capitalized names)
+    "Read": "files_read",
+    "List": "files_read",
+    "Glob": "files_read",
+    "Grep": "files_read",
+    "Search": "files_read",
     # Files written
     "write_file": "files_written",
     "edit_file": "files_written",
+    # Serena MCP tools (capitalized names)
+    "Write": "files_written",
+    "Edit": "files_written",
     # Search
     "web_search": "search",
     "duckduckgo_search": "search",

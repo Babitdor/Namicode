@@ -103,7 +103,7 @@ def format_tool_display(tool_name: str, tool_args: dict) -> str:
             return truncate_value(path_str, max_length)
 
     # Tool-specific formatting - show the most important argument(s)
-    if tool_name in ("read_file", "write_file", "edit_file"):
+    if tool_name in ("read_file", "write_file", "edit_file", "Read", "Write", "Edit"):
         # File operations: show the primary file path argument (file_path or path)
         path_value = tool_args.get("file_path")
         if path_value is None:
@@ -312,7 +312,7 @@ def format_tool_result_preview(
     whose results are already rendered elsewhere (file operations).
     """
     # File ops have their own rich render_file_operation — skip them
-    if tool_name in ("read_file", "write_file", "edit_file"):
+    if tool_name in ("read_file", "write_file", "edit_file", "Read", "Write", "Edit"):
         return None
 
     # Task (subagent) results are handled by completion banners — skip preview

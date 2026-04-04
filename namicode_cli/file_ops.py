@@ -299,7 +299,12 @@ class FileOpTracker:
     def start_operation(
         self, tool_name: str, args: dict[str, Any], tool_call_id: str | None
     ) -> None:
-        if tool_name not in {"read_file", "write_file", "edit_file"}:
+        # Handle both lowercase (nami-code) and capitalized (Serena MCP) tool names
+        file_read_tools = {"read_file", "Read"}
+        file_write_tools = {"write_file", "edit_file", "Write", "Edit"}
+        all_file_tools = file_read_tools | file_write_tools
+
+        if tool_name not in all_file_tools:
             return
         path_str = str(args.get("file_path") or args.get("path") or "")
         display_path = format_display_path(path_str)
@@ -310,7 +315,7 @@ class FileOpTracker:
             tool_call_id=tool_call_id,
             args=args,
         )
-        if tool_name in {"write_file", "edit_file"}:
+        if tool_name in {"write_file", "edit_file", "Write", "Edit"}:
             if self.backend and path_str:
                 try:
                     responses = self.backend.download_files([path_str])  # type: ignore
@@ -349,7 +354,7 @@ class FileOpTracker:
         record.args.update(args)
 
         # If we haven't captured before_content yet, try again now that we might have the path
-        if record.before_content is None and record.tool_name in {"write_file", "edit_file"}:
+        if record.before_content is None and record.tool_name in {"write_file", "edit_file", "Write", "Edit"}:
             path_str = str(record.args.get("file_path") or record.args.get("path") or "")
             if path_str:
                 record.display_path = format_display_path(path_str)
@@ -399,7 +404,7 @@ class FileOpTracker:
 
         record.status = "success"
 
-        if record.tool_name == "read_file":
+        if record.tool_name in {"read_file", "Read"}:
             record.read_output = content_text
             lines = _count_lines(content_text)
             record.metrics.lines_read = lines
@@ -457,7 +462,7 @@ class FileOpTracker:
                 )
                 record.metrics.lines_added = additions
                 record.metrics.lines_removed = deletions
-            elif record.tool_name == "write_file" and (record.before_content or "") == "":
+            elif record.tool_name in {"write_file", "Write"} and (record.before_content or "") == "":
                 record.metrics.lines_added = record.metrics.lines_written
             record.metrics.bytes_written = len(record.after_content.encode("utf-8"))
             if record.diff is None and (record.before_content or "") != record.after_content:
@@ -479,9 +484,13 @@ class FileOpTracker:
         if not file_path:
             return
 
+        # Normalize tool name for comparison (handle both lowercase and capitalized)
+        normalized_tool = tool_name.lower() if tool_name in {"Write", "Edit", "Read"} else tool_name
+
         # Mark all active records that match
         for record in self.active.values():
-            if record.tool_name == tool_name:
+            record_tool = record.tool_name.lower() if record.tool_name in {"Write", "Edit", "Read"} else record.tool_name
+            if record_tool == normalized_tool:
                 record_path = record.args.get("file_path") or record.args.get("path")
                 if record_path == file_path:
                     record.hitl_approved = True
