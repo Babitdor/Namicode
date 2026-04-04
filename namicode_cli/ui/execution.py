@@ -1,292 +1,30 @@
-"""Task execution and streaming logic for the CLI.
-
-This module handles the execution of deep agent tasks and streaming of results
-to the terminal. It provides:
-
-- Streaming execution of agent tasks with real-time output
-- Human-in-the-loop approval for destructive operations
-- Tool call visualization and diff previews
-- Error handling and recovery
-- Context window management and token tracking
-
-Key Components:
-- execute_task(): Main task execution with streaming
-- prompt_for_tool_approval(): Interactive approval UI for tool calls
-- process_streaming_response(): Handle streaming agent responses
-- render_tool_message(): Display tool execution results
-
-The execution flow:
-1. Execute agent with streaming enabled
-2. Process tool calls and request approval if needed
-3. Render tool results and output to terminal
-4. Track token usage and context window
-5. Handle errors and provide recovery options
-- UI rendering functions for formatted output
-- Token usage tracking and context management
-"""
+"""Task execution and streaming logic for the CLI."""
 
 import asyncio
 import json
-import sys
 import time
 import uuid
 from pathlib import Path
 
-from langchain.agents.middleware.human_in_the_loop import (
-    ActionRequest,
-    ApproveDecision,
-    Decision,
-    HITLRequest,
-    HITLResponse,
-    RejectDecision,
-)
+from langchain.agents.middleware.human_in_the_loop import HITLRequest, HITLResponse
 from langchain_core.messages import HumanMessage, ToolMessage
 from langgraph.types import Command, Interrupt
 from pydantic import TypeAdapter, ValidationError
-from rich import box
 from rich.markdown import Markdown
-from rich.panel import Panel
 from rich.text import Text
 
+from namicode_cli.vixie.server import set_idle as vixie_set_idle, set_thinking as vixie_set_thinking, set_working as vixie_set_working
 from namicode_cli.config.config import COLORS, console, get_agent_color
-from namicode_cli.config.model_create import get_current_model_name
-from namicode_cli.errors.handlers import ErrorHandler
-from namicode_cli.file_ops import (
-    build_approval_preview,
-    get_session_file_op_tracker,
-)
-from namicode_cli.image_utils import create_multimodal_content
-from namicode_cli.input import ImageTracker, parse_file_mentions
-from namicode_cli.ui.question_prompt import QuestionResponse, handle_agent_question
-from namicode_cli.ui.ui_elements import (
-    TokenTracker,
-    format_tool_display,
-    format_tool_message_content,
-    format_tool_result_preview,
-    render_diff_block,
-    render_file_operation,
-    render_todo_list,
-)
-from namicode_cli.vision import model_supports_vision, suggest_vision_model
-
-# Plan mode blocking - imported here to enforce plan mode at execution layer
-# since wrap_tool_call in PlanModeMiddleware may not be invoked properly
-from nami_deepagents.middleware.planning import (
-    BLOCKED_TOOLS_IN_PLAN_MODE,
-    _is_plan_file_path,
-)
+from namicode_cli.file_ops import get_session_file_op_tracker
+from namicode_cli.input import ImageTracker
+from namicode_cli.ui.hitl_approval import process_hitl_approval
+from namicode_cli.ui.input_preparation import build_agent_config, get_agent_display_name, prepare_input_content
+from namicode_cli.ui.interrupt_handlers import handle_plan_approval_interrupt, handle_question_interrupt
+from namicode_cli.ui.streaming import TOOL_CATEGORIES, TOOL_ICONS, format_condensed_activity, is_internal_context_text
+from namicode_cli.ui.subagent_tracking import SubagentTracker, format_duration, get_status_icon
+from namicode_cli.ui.ui_elements import TokenTracker, format_tool_display, format_tool_message_content, format_tool_result_preview, render_file_operation, render_todo_list
 
 _HITL_REQUEST_ADAPTER = TypeAdapter(HITLRequest)
-
-
-# Tool icons for display
-TOOL_ICONS: dict[str, str] = {
-    # File operations
-    "read_file": "📖",
-    "write_file": "✏️",
-    "edit_file": "✂️",
-    "ls": "📁",
-    "glob": "🔍",
-    "grep": "🔎",
-    # Shell
-    "shell": "⚡",
-    "execute": "🔧",
-    # Web
-    "web_search": "🌐",
-    "duckduckgo_search": "🦆",
-    "fetch_url": "🔗",
-    "http_request": "🌐",
-    # Task
-    "task": "🤖",
-    # Todos
-    "write_todos": "📋",
-    # Server management
-    "start_dev_server": "🚀",
-    "stop_server": "🛑",
-    "list_servers": "📋",
-    # Test runner
-    "run_tests": "🧪",
-    # Memory
-    "write_memory": "💾",
-    "read_memory": "📖",
-    "list_memories": "📑",
-    "delete_memory": "🗑️",
-    # Code quality
-    "lint_code": "🔍",
-    "check_types": "🔎",
-    "package_info": "📦",
-    # Question/Plan
-    "ask_question": "❓",
-    "exit_plan_mode": "✅",
-    # Browser
-    "browser_navigate": "🌐",
-    "browser_click": "👆",
-    "browser_type": "⌨️",
-    "browser_screenshot": "📸",
-    "browser_query": "❓",
-    "browser_get_content": "📄",
-    "browser_get_url": "🔗",
-    # Recovery
-    "list_trash": "🗑️",
-    "restore_file": "♻️",
-}
-
-
-def prompt_for_tool_approval(
-    action_request: ActionRequest,
-    assistant_id: str | None,
-) -> Decision | dict:
-    """Prompt user to approve/reject a tool action with interactive menu.
-
-    Uses a cross-platform prompt_toolkit-based menu with arrow key navigation
-    that works consistently on Windows, Linux, and Mac.
-
-    Args:
-        action_request: The action request containing tool name, args, and description.
-        assistant_id: Optional assistant ID for context.
-
-    Returns:
-        Decision (ApproveDecision or RejectDecision) OR
-        dict with {"type": "auto_approve_all"} to switch to auto-approve mode
-    """
-    description = action_request.get("description", "No description available")
-    name = action_request["name"]
-    args = action_request["args"]
-    preview = build_approval_preview(name, args, assistant_id) if name else None
-
-    body_lines = []
-    if preview:
-        body_lines.append(f"[bold]{preview.title}[/bold]")
-        body_lines.extend(preview.details)
-        if preview.error:
-            body_lines.append(f"[red]{preview.error}[/red]")
-    else:
-        body_lines.append(description)
-
-    # Display action info first
-    console.print(
-        Panel(
-            "[bold yellow]Tool Action Requires Approval[/bold yellow]\n\n"
-            + "\n".join(body_lines),
-            border_style="yellow",
-            box=box.ROUNDED,
-            padding=(0, 1),
-        )
-    )
-    if preview and preview.diff and not preview.error:
-        console.print()
-        render_diff_block(preview.diff, preview.diff_title or preview.title)
-
-    options = ["approve", "reject", "auto-accept all going forward"]
-    selected = 0  # Start with approve selected
-
-    try:
-        # Import termios/tty only when needed (Unix-only modules)
-        import termios
-        import tty
-
-        fd = sys.stdin.fileno()
-        old_settings = termios.tcgetattr(fd)  # type: ignore
-
-        try:
-            tty.setraw(fd)  # type: ignore
-            # Hide cursor during menu interaction
-            sys.stdout.write("\033[?25l")
-            sys.stdout.flush()
-
-            # Initial render flag
-            first_render = True
-
-            while True:
-                if not first_render:
-                    # Move cursor back to start of menu (up 3 lines, then to start of line)
-                    sys.stdout.write("\033[3A\r")
-
-                first_render = False
-
-                # Display options vertically with ANSI color codes
-                for i, option in enumerate(options):
-                    sys.stdout.write("\r\033[K")  # Clear line from cursor to end
-
-                    if i == selected:
-                        if option == "approve":
-                            # Green bold with filled checkbox
-                            sys.stdout.write("\033[1;32m☑ Approve\033[0m\n")
-                        elif option == "reject":
-                            # Red bold with filled checkbox
-                            sys.stdout.write("\033[1;31m☑ Reject\033[0m\n")
-                        else:
-                            # Blue bold with filled checkbox for auto-accept
-                            sys.stdout.write(
-                                "\033[1;34m☑ Auto-accept all going forward\033[0m\n"
-                            )
-                    elif option == "approve":
-                        # Dim with empty checkbox
-                        sys.stdout.write("\033[2m☐ Approve\033[0m\n")
-                    elif option == "reject":
-                        # Dim with empty checkbox
-                        sys.stdout.write("\033[2m☐ Reject\033[0m\n")
-                    else:
-                        # Dim with empty checkbox
-                        sys.stdout.write(
-                            "\033[2m☐ Auto-accept all going forward\033[0m\n"
-                        )
-
-                sys.stdout.flush()
-
-                # Read key
-                char = sys.stdin.read(1)
-
-                if char == "\x1b":  # ESC sequence (arrow keys)
-                    next1 = sys.stdin.read(1)
-                    next2 = sys.stdin.read(1)
-                    if next1 == "[":
-                        if next2 == "B":  # Down arrow
-                            selected = (selected + 1) % len(options)
-                        elif next2 == "A":  # Up arrow
-                            selected = (selected - 1) % len(options)
-                elif char in {"\r", "\n"}:  # Enter
-                    sys.stdout.write("\r\n")  # Move to start of line and add newline
-                    break
-                elif char == "\x03":  # Ctrl+C
-                    sys.stdout.write("\r\n")  # Move to start of line and add newline
-                    raise KeyboardInterrupt
-                elif char.lower() == "a":
-                    selected = 0
-                    sys.stdout.write("\r\n")  # Move to start of line and add newline
-                    break
-                elif char.lower() == "r":
-                    selected = 1
-                    sys.stdout.write("\r\n")  # Move to start of line and add newline
-                    break
-
-        finally:
-            # Show cursor again
-            sys.stdout.write("\033[?25h")
-            sys.stdout.flush()
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)  # type: ignore
-
-    except (ImportError, AttributeError, Exception):
-        # Fallback for non-Unix systems (ImportError when termios/tty not available)
-        # or any other terminal-related errors
-        console.print("  ☐ (A)pprove  (default)")
-        console.print("  ☐ (R)eject")
-        console.print("  ☐ (Auto)-accept all going forward")
-        choice = input("\nChoice (A/R/Auto, default=Approve): ").strip().lower()
-        if choice in {"r", "reject"}:
-            selected = 1
-        elif choice in {"auto", "auto-accept"}:
-            selected = 2
-        else:
-            selected = 0
-
-    # Return decision based on selection
-    if selected == 0:
-        return ApproveDecision(type="approve")
-    if selected == 1:
-        return RejectDecision(type="reject", message="User rejected the command")
-    # Return special marker for auto-approve mode
-    return {"type": "auto_approve_all"}
 
 
 async def execute_task(  # type: ignore
@@ -301,92 +39,14 @@ async def execute_task(  # type: ignore
     seen_message_ids: set[str] | None = None,
 ) -> None:
     """Execute any task by passing it directly to the AI agent."""
-    # Initialize error handler for this execution
-    error_handler = ErrorHandler()
+    message_content = await prepare_input_content(user_input, image_tracker)
 
-    # Parse file mentions and inject content if any
-    prompt_text, mentioned_files = parse_file_mentions(user_input)
-
-    if mentioned_files:
-        context_parts = [prompt_text, "\n\n## Referenced Files\n"]
-        for file_path in mentioned_files:
-            try:
-                content = file_path.read_text()
-                # Limit file content to reasonable size
-                if len(content) > 50000:
-                    content = content[:50000] + "\n... (file truncated)"
-                context_parts.append(
-                    f"\n### {file_path.name}\nPath: `{file_path}`\n```\n{content}\n```"
-                )
-            except Exception as e:
-                # Use error handler for better error messages
-                recovery = await error_handler.handle(
-                    e,
-                    context={"file_name": str(file_path), "file_path": str(file_path)},
-                )
-                error_msg = f"\n### {file_path.name}\n[{recovery.message}]"
-                if recovery.suggestion:
-                    error_msg += f"\n{recovery.suggestion}"
-                context_parts.append(error_msg)
-
-        final_input = "\n".join(context_parts)
-    else:
-        final_input = prompt_text
-
-    # Include images in the message content
-    images_to_send = []
-    if image_tracker:
-        images_to_send = image_tracker.get_images()
-    if images_to_send:
-        # Check if current model supports vision
-        current_model = get_current_model_name()
-        if not model_supports_vision(current_model):
-            suggested = suggest_vision_model(current_model)
-            console.print()
-            console.print(
-                f"[yellow]Warning: Current model '{current_model}' may not support images.[/yellow]"
-            )
-            if suggested:
-                console.print(
-                    f"[dim]Consider using a vision model like '{suggested}'[/dim]"
-                )
-                console.print("[dim]Use /model to change models.[/dim]")
-            console.print()
-        message_content = create_multimodal_content(final_input, images_to_send)
-    else:
-        message_content = final_input
-
-    # Subagents always get a fresh thread_id so they start with an empty
-    # checkpoint, isolated from the main agent's conversation history.
     thread_id = str(uuid.uuid4()) if is_subagent else session_state.thread_id
-    config = {
-        "configurable": {"thread_id": thread_id},
-        # Metadata is passed through to LangSmith as filterable run metadata.
-        # thread_id lets you correlate all runs in a session; assistant_id identifies the agent.
-        "metadata": {
-            "thread_id": thread_id,
-            **({"assistant_id": assistant_id} if assistant_id else {}),
-        },
-        # run_name becomes the trace name in LangSmith (replaces generic "LangGraph").
-        "run_name": assistant_id or "nami-agent",
-        # tags appear as filterable labels on every run in this session.
-        "tags": ["nami", assistant_id] if assistant_id else ["nami"],
-    }
+    config = build_agent_config(thread_id, assistant_id)
 
-    # Display agent names properly
-    agent_display_name = assistant_id
+    agent_display_name = get_agent_display_name(assistant_id)
+    agent_colors = get_agent_color(assistant_id) if assistant_id and is_subagent else COLORS["agent"]
 
-    if assistant_id == "nami-agent":
-        agent_display_name = "Nami"
-
-    if assistant_id == "ralph":
-        agent_display_name = "Ralph"
-    # Use agent-specific color if available, otherwise fall back to defaults
-    if assistant_id and is_subagent:
-        agent_colors = get_agent_color(assistant_id)
-    else:
-        agent_colors = COLORS["agent"]
-    # Track user message for /context command
     if token_tracker:
         token_tracker.increment_user_messages()
 
@@ -395,10 +55,17 @@ async def execute_task(  # type: ignore
     captured_output_tokens = 0
     captured_cache_read_tokens = 0
     captured_cache_creation_tokens = 0
-    current_todos = None  # Track current todo list state
-    _prev_auto_approve: bool | None = (
-        None  # Saved auto_approve for plan execution restore
-    )
+    current_todos = None
+    _prev_auto_approve: bool | None = None
+
+    try:
+        import logging as _vixie_logging
+        _vixie_logging.getLogger("vixie").info("Setting Vixie state to THINKING")
+        await vixie_set_thinking()
+        _vixie_logging.getLogger("vixie").info("Vixie state set to THINKING complete")
+    except Exception as e:
+        import logging as _logging
+        _logging.getLogger("vixie").warning(f"Failed to set Vixie state: {e}")
 
     status = console.status(
         f"[bold {agent_colors}]{agent_display_name} is thinking...",
@@ -412,304 +79,66 @@ async def execute_task(  # type: ignore
         assistant_id=assistant_id, backend=backend
     )
 
-    # Track which tool calls we've displayed to avoid duplicates
     displayed_tool_ids = set()
-    # Buffer partial tool-call chunks keyed by streaming index
     tool_call_buffers: dict[str | int, dict] = {}
-    # Buffer assistant text so we can render complete markdown segments
     pending_text = ""
-    # Flag: SummarizationMiddleware just compacted — suppress the model's next
-    # text response unconditionally (it will echo the SESSION INTENT structure).
     _post_summarization = False
-    # Track task tool calls for subagent banner display: {tool_call_id: (subagent_type, description)}
-    active_subagents: dict[str, tuple[str, str, float]] = (
-        {}
-    )  # tool_call_id -> (type, desc, start_time)
-    # Track tool names by tool_call_id for reliable ToolMessage handling
     tool_call_to_name: dict[str, str] = {}
-    # Track subagent nesting for indentation: [(tool_call_id, subagent_type), ...]
-    subagent_stack: list[tuple[str, str]] = []
-    # Track subagent activity by LangGraph namespace (lazily created on first tool call)
-    subagent_activity_by_ns: dict[tuple, dict] = {}
-    # Map LangGraph namespace -> tool_call_id (populated when we see the first ToolMessage from a subagent)
-    lg_ns_to_tool_call_id: dict[tuple, str] = {}
-    # Guard: prevent double dispatch when tool_call_chunk arrives multiple times
-    _dispatched_subagents: set[str] = set()
-    # Track when each tool call was first displayed (for elapsed-time display)
-    tool_call_start_times: dict[str, float] = {}
-    # Track the AI message ID whose text is currently in pending_text (for dedup)
     current_ai_message_id: str | None = None
-    # Track last displayed activity line for each subagent (for in-place updates)
-    subagent_last_line: dict[tuple, str] = {}
-    # Deferred subagent completion banners — printed together just before main-agent synthesis
-    pending_completions: list[dict] = []
 
-    # Debug logging helper - enabled via NAMI_DEBUG environment variable
     import os as _os
     _DEBUG_ENABLED = _os.environ.get("NAMI_DEBUG", "").lower() in ("1", "true", "yes")
 
     def _dbg(tag: str, msg: str) -> None:
-        pass  # Placeholder - replaced below if debug enabled
+        pass
 
     if _DEBUG_ENABLED:
         import datetime as _dt
-
         _DBG_PATH = Path("_nami_debug.log")
-
         def _dbg(tag: str, msg: str) -> None:  # type: ignore
             with open(_DBG_PATH, "a", encoding="utf-8") as f:
                 f.write(f"[{_dt.datetime.now():%H:%M:%S.%f}] [{tag}] {msg}\n")
 
-    _dbg(
-        "START",
-        f"=== new execute_task ===  plan_mode={getattr(session_state, 'plan_mode_enabled', '?')}",
-    )
+    _dbg("START", f"=== new execute_task ===  plan_mode={getattr(session_state, 'plan_mode_enabled', '?')}")
 
-    # Tool category icons for summary display
-    TOOL_CATEGORY_ICONS: dict[str, str] = {
-        "files_read": "📖",
-        "files_written": "✏️",
-        "search": "🔎",
-        "web": "🌐",
-        "shell": "⚡",
-        "tests": "🧪",
-        "server": "🚀",
-        "git": "📊",
-        "browser": "🌐",
-        "memory": "💾",
-        "other": "🔧",
-    }
-
-    # Tool category mapping for summary categorization
-    TOOL_CATEGORIES: dict[str, str] = {
-        # Files read
-        "read_file": "files_read",
-        "ls": "files_read",
-        "glob": "files_read",
-        "grep": "files_read",
-        # Files written
-        "write_file": "files_written",
-        "edit_file": "files_written",
-        # Search
-        "web_search": "search",
-        "duckduckgo_search": "search",
-        "docs_search": "search",
-        # Web
-        "fetch_url": "web",
-        "http_request": "web",
-        # Recovery
-        "list_trash": "recovery",
-        "restore_file": "recovery",
-        # Shell
-        "shell": "shell",
-        "execute": "shell",
-        "execute_bash": "shell",
-        # Tests
-        "run_tests": "tests",
-        # Server
-        "start_dev_server": "server",
-        "stop_server": "server",
-        "list_servers": "server",
-        # Browser
-        "browser_navigate": "browser",
-        "browser_click": "browser",
-        "browser_screenshot": "browser",
-        "browser_type": "browser",
-        "browser_query": "browser",
-        "browser_fill_form": "browser",
-        "browser_upload": "browser",
-        # Memory
-        "write_memory": "memory",
-        "read_memory": "memory",
-        "list_memories": "memory",
-        "delete_memory": "memory",
-    }
-
-    # Category display order for summary
-    CATEGORY_ORDER = [
-        "files_read",
-        "files_written",
-        "search",
-        "web",
-        "shell",
-        "tests",
-        "server",
-        "git",
-        "browser",
-        "memory",
-    ]
-
-    def get_subagent_indent() -> str:
-        """Get indentation based on current subagent nesting depth."""
-        return "  " * len(subagent_stack)
-
-    def format_condensed_activity(activity: dict, max_items: int = 3) -> str:
-        """Format a condensed activity summary for display.
-
-        Shows key files/operations in a compact format:
-        - File paths: "auth.py, utils.py, +2 more"
-        - Categories: "🔎 3 searches • 🌐 2 web"
-        """
-        parts = []
-
-        # Show file operations with paths (most useful)
-        files_read = activity.get("files_read", [])
-        if files_read:
-            # Get just filenames, not full paths
-            filenames = [Path(f).name for f in files_read[:max_items]]
-            remaining = len(files_read) - max_items
-            if remaining > 0:
-                parts.append(f"📖 {', '.join(filenames)}, +{remaining}")
-            else:
-                parts.append(f"📖 {', '.join(filenames)}")
-
-        files_written = activity.get("files_written", [])
-        if files_written:
-            filenames = [Path(f).name for f in files_written[:max_items]]
-            remaining = len(files_written) - max_items
-            if remaining > 0:
-                parts.append(f"✏️ {', '.join(filenames)}, +{remaining}")
-            else:
-                parts.append(f"✏️ {', '.join(filenames)}")
-
-        # Show other categories as counts
-        categories = activity.get("categories", {})
-        for cat in CATEGORY_ORDER:
-            if cat in ("files_read", "files_written"):
-                continue  # Already handled above
-            count = categories.get(cat, 0)
-            if count > 0:
-                icon = TOOL_CATEGORY_ICONS.get(cat, "🔧")
-                parts.append(f"{icon} {count}")
-
-        # Show errors count
-        errors = activity.get("errors", [])
-        if errors:
-            parts.append(f"❌ {len(errors)}")
-
-        return " • ".join(parts) if parts else "starting..."
-
-    def flush_pending_completions() -> None:
-        """Print all deferred subagent completion banners as one compact block."""
-        nonlocal spinner_active
-        _dbg("FLUSH-COMP", f"count={len(pending_completions)}")
-        if not pending_completions:
-            return
-        if spinner_active:
-            status.stop()
-            spinner_active = False
-        console.print()
-        for comp in pending_completions:
-            icon = comp["status_icon"]
-            name = comp["subagent_type"]
-            dur = comp["duration_str"]
-            cond = comp["condensed"]
-            color = comp["subagent_color"]
-            if cond:
-                console.print(f"  {icon} {name}{dur}: {cond}", style=color)
-            else:
-                console.print(f"  {icon} {name}{dur}", style=color)
-        pending_completions.clear()
-        console.print()
-
-    # Internal context keywords the LLM writes as scratchpad text before tool calls.
-    # Matched case-insensitively after stripping any leading markdown heading markers (# ## ###).
-    # These are not user-facing and should be stripped from display.
-    _INTERNAL_CONTEXT_KEYWORDS = (
-        "extracted context",
-        "context summary",
-        "current goal",
-        "current task",
-        "task context",
-        "planning context",
-        "internal context",
-        "working context",
-        "session intent",
-        "session context",
-        "session summary",
-        "agent context",
-        "agent state",
-        # LLM-generated project preamble before tool calls (e.g. "**Project:** Nami-Code...")
-        "project:",
-        "project overview",
-    )
+    subagent_tracker = SubagentTracker()
 
     def flush_text_buffer(*, final: bool = False) -> None:
         """Flush accumulated assistant text as rendered markdown when appropriate."""
         nonlocal pending_text, spinner_active, has_responded, current_ai_message_id, _post_summarization
-        _dbg(
-            "FLUSH-TEXT",
-            f"final={final} pending_len={len(pending_text)} ai_msg_id={current_ai_message_id} has_responded={has_responded} post_summarization={_post_summarization}",
-        )
+        _dbg("FLUSH-TEXT", f"final={final} pending_len={len(pending_text)} ai_msg_id={current_ai_message_id} has_responded={has_responded} post_summarization={_post_summarization}")
         if not final or not pending_text.strip():
             return
 
-        # If SummarizationMiddleware just ran, the model's next text response MAY be
-        # an echo of the SESSION INTENT / SUMMARY / ARTIFACTS / NEXT STEPS structure.
-        # Only suppress if the text actually looks like that echo — not if it's the
-        # real user-facing response (which happens when summarization runs right before
-        # the final model call).
         if _post_summarization:
-            _post_summarization = False  # Always clear the flag
-            _ps_stripped = pending_text.lstrip().lstrip("#*_").lstrip()
-            _is_echo = any(
-                _ps_stripped.lower().startswith(kw) for kw in _INTERNAL_CONTEXT_KEYWORDS
-            )
-            if _is_echo:
-                _dbg(
-                    "FLUSH-POST-SUMMARIZATION",
-                    f"suppressing post-compaction echo ({len(pending_text)} chars)",
-                )
+            _post_summarization = False
+            if is_internal_context_text(pending_text):
+                _dbg("FLUSH-POST-SUMMARIZATION", f"suppressing post-compaction echo ({len(pending_text)} chars)")
                 pending_text = ""
                 current_ai_message_id = None
                 return
-            # Not an echo — fall through and display the actual response
 
-        # Detect internal context/scratchpad text the LLM writes before tool calls.
-        # Normalize by stripping leading markdown heading markers (# / ## / ###) and
-        # bold markers (** / __) and whitespace, then check case-insensitively against
-        # known internal keywords. In verbose mode: show full content.
-        stripped = pending_text.lstrip()
-        _heading_stripped = stripped.lstrip("#*_").lstrip()
-        _is_internal = any(
-            _heading_stripped.lower().startswith(kw)
-            for kw in _INTERNAL_CONTEXT_KEYWORDS
-        )
-        if _is_internal:
-            _dbg(
-                "FLUSH-INTERNAL",
-                f"internal text ({len(pending_text)} chars), verbose={session_state.verbose}: {pending_text[:80]!r}",
-            )
+        if is_internal_context_text(pending_text):
+            _dbg("FLUSH-INTERNAL", f"internal text ({len(pending_text)} chars), verbose={session_state.verbose}: {pending_text[:80]!r}")
             if not session_state.verbose:
-                # Persist scratchpad to .nami/context.md so the LLM can reflect on it
                 try:
-                    from namicode_cli.config.config import (  # noqa: PLC0415
-                        settings as _settings,
-                    )
-
+                    from namicode_cli.config.config import settings as _settings
                     _nami_dir = _settings.ensure_project_deepagents_dir()
                     if _nami_dir:
-                        (_nami_dir / "context.md").write_text(
-                            pending_text, encoding="utf-8"
-                        )
+                        (_nami_dir / "context.md").write_text(pending_text, encoding="utf-8")
                 except Exception:
                     pass
                 pending_text = ""
                 current_ai_message_id = None
                 return
-            # Verbose mode: fall through to display the full content
 
-        # Skip if this specific AI message was already shown via the updates stream.
-        # Use per-message-ID deduplication so subsequent responses in the same turn
-        # (e.g. after tool calls) are NOT suppressed.
-        if current_ai_message_id and current_ai_message_id in seen_message_ids:
+        if current_ai_message_id and seen_message_ids and current_ai_message_id in seen_message_ids:
             _dbg("FLUSH-SKIP", f"dedup: msg_id={current_ai_message_id} already seen")
             pending_text = ""
             current_ai_message_id = None
             return
 
-        # Show all deferred subagent completions together before the synthesis response
-        flush_pending_completions()
+        subagent_tracker.flush_completions(spinner_active, status)
         if spinner_active:
             status.stop()
             spinner_active = False
@@ -721,30 +150,20 @@ async def execute_task(  # type: ignore
         markdown = Markdown(pending_text.rstrip())
         console.print(agent_display_name, style=agent_colors)
         console.print(markdown, justify="full")
-        # Mark this message as shown so the updates stream won't duplicate it
-        if current_ai_message_id:
+        if current_ai_message_id and seen_message_ids:
             seen_message_ids.add(current_ai_message_id)
             current_ai_message_id = None
         pending_text = ""
 
-    # Stream input - may need to loop if there are interrupts
     stream_input = {"messages": [{"role": "user", "content": message_content}]}
-    # Dedup state persists across HITL resume iterations AND across turns
-    # (when caller passes a persistent set) so re-emitted messages/tool-calls
-    # from agent state are not displayed a second time.
     if seen_message_ids is None:
         seen_message_ids = set()
 
-    # Snapshot message count before streaming to detect auto-compaction
     pre_stream_msg_count: int | None = None
     try:
         _pre_state = await agent.aget_state(config)
         _pre_msgs = _pre_state.values.get("messages", [])
         pre_stream_msg_count = len(_pre_msgs)
-        # Pre-seed seen_message_ids with all existing state message IDs.
-        # The messages stream replays ALL state messages at the start of each
-        # astream() call; without this, old HumanMessages and AIMessages would
-        # be re-displayed on every turn.
         for _m in _pre_msgs:
             _mid = getattr(_m, "id", None)
             if _mid:
@@ -752,8 +171,6 @@ async def execute_task(  # type: ignore
     except Exception:
         pass
 
-    # Track current astream generator so it can be closed in interrupt handlers
-    # before aupdate_state is called — releasing the checkpointer lock first.
     _current_stream_gen: object = None
 
     try:
@@ -769,14 +186,8 @@ async def execute_task(  # type: ignore
             )  # State updates to apply atomically on resume
             suppress_resumed_output = False
             # Reset per-iteration tracking (in-progress state only)
-            active_subagents.clear()
-            subagent_stack.clear()
-            subagent_activity_by_ns.clear()
-            lg_ns_to_tool_call_id.clear()
-            _dispatched_subagents.clear()
-            tool_call_start_times.clear()
+            subagent_tracker.clear()
             current_ai_message_id = None
-            pending_completions.clear()
             _dbg("ITER-RESET", "clearing per-iteration state")
             # Track all pending interrupts: {interrupt_id: request_data}
             pending_interrupts: dict[str, HITLRequest] = {}
@@ -845,53 +256,17 @@ async def execute_task(  # type: ignore
                                     isinstance(interrupt_value, dict)
                                     and interrupt_value.get("type") == "question"
                                 ):
-                                    # Handle question interrupt immediately
-                                    question_request = interrupt_value.get(
-                                        "request", {}
+                                    # Handle question interrupt using the module
+                                    question_request = interrupt_value.get("request", {})
+                                    response, spinner_active = await handle_question_interrupt(
+                                        question_request=question_request,
+                                        auto_approve=session_state.auto_approve,
+                                        spinner_active=spinner_active,
+                                        status=status,
                                     )
 
-                                    if spinner_active:
-                                        status.stop()
-                                        spinner_active = False
-
-                                    # Auto-answer questions in background/auto-approve mode
-                                    # to avoid blocking the main CLI with prompts
-                                    if session_state.auto_approve:
-                                        # Auto-select first option for structured questions,
-                                        # or provide a generic response for open questions
-                                        question_type = question_request.get(
-                                            "question_type", "open_ended"
-                                        )
-                                        options = question_request.get("options", [])
-
-                                        if question_type == "structured" and options:
-                                            # Pick the first option as default
-                                            response = QuestionResponse(
-                                                answer=options[0],
-                                                selected_index=0,
-                                            )
-                                            console.print(
-                                                f"[dim][Background mode] Auto-selected: {options[0]}[/dim]"
-                                            )
-                                        else:
-                                            # Provide a generic response for open questions
-                                            response = QuestionResponse(
-                                                answer="Please proceed with a reasonable default approach.",
-                                                selected_index=None,
-                                            )
-                                            console.print(
-                                                "[dim][Background mode] Auto-responded to open question[/dim]"
-                                            )
-                                    else:
-                                        # Handle the question and get user response
-                                        response = await handle_agent_question(
-                                            question_request
-                                        )
-
                                     # Create a question response to resume with
-                                    hitl_response[interrupt_obj.id] = {
-                                        "response": response
-                                    }
+                                    hitl_response[interrupt_obj.id] = response
                                     interrupt_occurred = True
 
                                     # Restart spinner
@@ -906,192 +281,36 @@ async def execute_task(  # type: ignore
                                     isinstance(interrupt_value, dict)
                                     and interrupt_value.get("type") == "plan_approval"
                                 ):
-                                    _dbg(
-                                        "PLAN-APPROVE", "entering plan approval dialog"
+                                    # Handle plan approval using the module
+                                    (
+                                        response,
+                                        occurred,
+                                        spinner_active,
+                                        cmd_state_update,
+                                    ) = await handle_plan_approval_interrupt(
+                                        current_todos=current_todos,
+                                        session_state=session_state,
+                                        spinner_active=spinner_active,
+                                        status=status,
+                                        dbg_func=_dbg,
                                     )
-                                    if spinner_active:
-                                        status.stop()
-                                        spinner_active = False
-
-                                    # Import and show plan approval dialog
-                                    from namicode_cli.ui.question_prompt import (
-                                        prompt_for_plan_approval,
-                                    )
-
-                                    console.print()
-                                    console.print(
-                                        "[cyan]Planning complete.[/cyan] Review the plan:",
-                                        style="bold",
-                                    )
-
-                                    # --- Resolve plan content and file path ---
-                                    # Two cases:
-                                    # 1. Agent wrote .nami/plans/plan.md directly (new flow) — read it
-                                    # 2. Agent used write_todos (old flow) — convert todos to markdown and save
-                                    _plan_content: str | None = None
-                                    _plan_path = None
-                                    try:
-                                        from pathlib import Path as _Path
-
-                                        from namicode_cli.config.config import (
-                                            settings as _settings,
-                                        )
-
-                                        _nami_dir = (
-                                            _settings.ensure_project_deepagents_dir()
-                                        )
-                                        if not _nami_dir:
-                                            _nami_dir = _Path.cwd() / ".nami"
-
-                                        # Case 1: agent wrote plan.md directly
-                                        _direct_plan = _nami_dir / "plans" / "plan.md"
-                                        if _direct_plan.exists():
-                                            _plan_content = _direct_plan.read_text(
-                                                encoding="utf-8"
-                                            )
-                                            _plan_path = _direct_plan
-
-                                        # Case 2: todos-based plan (fallback)
-                                        if not _plan_content and current_todos:
-                                            from namicode_cli.plans import (
-                                                todos_to_markdown as _todos_to_markdown,
-                                                write_plan_file as _write_plan_file,
-                                            )
-
-                                            _nami_dir.mkdir(parents=True, exist_ok=True)
-                                            _plan_path = _write_plan_file(
-                                                current_todos, _nami_dir
-                                            )
-                                            _plan_content = _todos_to_markdown(
-                                                current_todos
-                                            )
-
-                                        if _plan_path:
-                                            try:
-                                                _rel = _plan_path.relative_to(
-                                                    _Path.cwd()
-                                                )
-                                            except ValueError:
-                                                _rel = _plan_path
-                                            console.print(
-                                                f"[dim]Plan file → {_rel}[/dim]"
-                                            )
-                                    except Exception as _e:
-                                        _dbg(
-                                            "PLAN-SAVE-ERROR",
-                                            f"Failed to resolve plan file: {_e}",
-                                        )
-
-                                    # --- Render plan content inline (like Claude Code) ---
-                                    if _plan_content:
-                                        try:
-                                            from rich.markdown import (
-                                                Markdown as _Markdown,
-                                            )
-                                            from rich.rule import Rule as _Rule
-
-                                            console.print(_Rule(style="cyan dim"))
-                                            _lines = _plan_content.splitlines()
-                                            _MAX = 80
-                                            if len(_lines) > _MAX:
-                                                _shown = "\n".join(_lines[:_MAX])
-                                                console.print(_Markdown(_shown))
-                                                console.print(
-                                                    f"[dim]... {len(_lines) - _MAX} more lines"
-                                                    f" — open the plan file to see the full plan[/dim]"
-                                                )
-                                            else:
-                                                console.print(_Markdown(_plan_content))
-                                            console.print(_Rule(style="cyan dim"))
-                                            console.print()
-                                        except Exception as _e:
-                                            _dbg(
-                                                "PLAN-RENDER-ERROR",
-                                                f"Failed to render plan: {_e}",
-                                            )
-
-                                    result = prompt_for_plan_approval(
-                                        todos=current_todos if current_todos else None,
-                                        plan_summary=None,
-                                    )
-
-                                    _dbg(
-                                        "PLAN-RESULT",
-                                        f"approved={result['approved']} action={result.get('action', '?')}",
-                                    )
-                                    if result["approved"]:
-                                        # User approved - exit plan mode.
-                                        # Set plan_mode_enabled=False via command_state_update
-                                        # so it is applied ATOMICALLY when the graph resumes.
-                                        # (aupdate_state would create a new checkpoint that
-                                        # Command(resume=...) would NOT pick up — causing the
-                                        # agent to resume still in plan mode and loop.)
-                                        session_state.plan_mode_enabled = False
-                                        command_state_update["plan_mode_enabled"] = (
-                                            False
-                                        )
-
-                                        if result["action"] == "proceed_auto":
-                                            # Auto-accept: temporarily enable auto-approve
-                                            _prev_auto_approve = (
-                                                session_state.auto_approve
-                                            )
-                                            session_state.auto_approve = True
-                                            hitl_response[interrupt_obj.id] = {
-                                                "approved": True,
-                                                "mode": "auto",
-                                            }
-                                        else:
-                                            # Manual-accept: ensure HITL is active
-                                            _prev_auto_approve = (
-                                                session_state.auto_approve
-                                            )
-                                            session_state.auto_approve = False
-                                            hitl_response[interrupt_obj.id] = {
-                                                "approved": True,
-                                                "mode": "manual",
-                                            }
-                                    else:
-                                        # User rejected or wants to edit - stay in plan mode
-                                        hitl_response[interrupt_obj.id] = {
-                                            "approved": False
-                                        }
-
-                                    console.print()
-                                    interrupt_occurred = True
-
-                                    # Restart spinner
-                                    if not spinner_active:
-                                        status.start()
-                                        spinner_active = True
-
+                                    hitl_response[interrupt_obj.id] = response
+                                    interrupt_occurred = occurred
+                                    if cmd_state_update:
+                                        command_state_update.update(cmd_state_update)
                                     continue
 
-                                # Interrupt has required fields: value (HITLRequest) and id (str)
-                                # Validate the HITLRequest using TypeAdapter
                                 try:
-                                    validated_request = (
-                                        _HITL_REQUEST_ADAPTER.validate_python(
-                                            interrupt_value
-                                        )
-                                    )
-                                    pending_interrupts[interrupt_obj.id] = (
-                                        validated_request
-                                    )
+                                    validated_request = _HITL_REQUEST_ADAPTER.validate_python(interrupt_value)
+                                    pending_interrupts[interrupt_obj.id] = validated_request
                                     interrupt_occurred = True
                                 except ValidationError as e:
-                                    console.print(
-                                        f"[yellow]Warning: Invalid HITL request data: {e}[/yellow]",
-                                        style="dim",
-                                    )
+                                    console.print(f"[yellow]Warning: Invalid HITL request data: {e}[/yellow]", style="dim")
                                     raise
 
-                    # chunk_data is now set by the early loop above.
-                    # Detect SummarizationMiddleware: suppresses ## SESSION INTENT echo.
                     if chunk_data and isinstance(chunk_data, dict):
                         if "messages" in chunk_data:
                             _msgs = chunk_data["messages"]
-                            # PatchToolCallsMiddleware returns Overwrite(list) — unwrap it
                             if hasattr(_msgs, "value"):
                                 _msgs = _msgs.value
                             if not isinstance(_msgs, list):
@@ -1100,57 +319,28 @@ async def execute_task(  # type: ignore
                                 except TypeError:
                                     _msgs = []
                             for _msg in _msgs:
-                                _src = getattr(_msg, "additional_kwargs", {}).get(
-                                    "lc_source"
-                                )
+                                _src = getattr(_msg, "additional_kwargs", {}).get("lc_source")
                                 if _src == "summarization":
                                     _post_summarization = True
-                                    _dbg(
-                                        "SUMMARIZATION",
-                                        "detected summarization compaction — suppressing next AI text",
-                                    )
+                                    _dbg("SUMMARIZATION", "detected summarization compaction — suppressing next AI text")
                                     break
 
-                        # AI responses are displayed exclusively via the messages
-                        # stream (token-by-token in pending_text → flush_text_buffer).
-                        # Displaying them here too caused double-printing because IDs
-                        # can differ between the updates and messages streams.
-
-                # Handle MESSAGES stream - for content and tool calls
                 elif current_stream_mode == "messages":
-                    # Determine if this is main agent or subagent
                     is_main_agent = _namespace == ()
                     is_subagent = _namespace != ()
-
-                    # Get subagent type from namespace if this is a subagent
                     subagent_type_for_ns = None
                     if is_subagent and len(_namespace) > 0:
-                        # Namespace is like ('general-purpose',) or ('code-reviewer',)
                         subagent_type_for_ns = _namespace[0]
 
-                    # For main agent: process fully for display
-                    # For subagent: track tool calls only (no display), skip reasoning text
                     if not is_main_agent:
-                        # Subagent: track tool calls but don't display
-                        # We still need to process ToolMessage and tool_call chunks for tracking
                         pass
 
-                    # Messages stream returns (message, metadata) tuples
                     if not isinstance(data, tuple) or len(data) != 2:
                         continue
 
                     message, _metadata = data
 
-                    # Skip messages from middleware's internal LLM calls (e.g.
-                    # SummarizationMiddleware.before_model). These run as nodes in
-                    # the main graph (namespace == ()), so is_main_agent=True, but
-                    # their output is internal — never user-facing. Detected via the
-                    # langgraph_checkpoint_ns metadata field.
-                    _ckpt_ns = (
-                        _metadata.get("langgraph_checkpoint_ns", "")
-                        if isinstance(_metadata, dict)
-                        else ""
-                    )
+                    _ckpt_ns = _metadata.get("langgraph_checkpoint_ns", "") if isinstance(_metadata, dict) else ""
                     if _ckpt_ns and "before_model" in _ckpt_ns:
                         continue
 
@@ -1193,123 +383,54 @@ async def execute_task(  # type: ignore
                                 tool_content
                                 and str(tool_content).lower().startswith("error")
                             ):
-                                _err_act = subagent_activity_by_ns.get(_namespace)
-                                if _err_act:
-                                    _err_act["errors"].append(tool_name)
+                                subagent_tracker.record_error(_namespace, tool_name)
 
-                        # Special handling for task tool completion: display completion banner with summary
-                        if tool_name == "task" and tool_call_id in active_subagents:
-                            subagent_type, _, start_time = active_subagents.pop(
-                                tool_call_id
-                            )
+                        if tool_name == "task" and tool_call_id and tool_call_id in subagent_tracker.active_subagents:
+                            subagent_info = subagent_tracker.complete_subagent(tool_call_id)
+                            if subagent_info:
+                                subagent_type, _, start_time = subagent_info
+                            else:
+                                subagent_type, start_time = "unknown", time.time()
                             subagent_color = get_agent_color(subagent_type)
 
-                            # Pop from stack
-                            stack_idx = None
-                            for i, (tid, _) in enumerate(subagent_stack):
-                                if tid == tool_call_id:
-                                    stack_idx = i
-                                    break
-                            if stack_idx is not None:
-                                subagent_stack.pop(stack_idx)
+                            activity = subagent_tracker.claim_namespace_for_tool_call(_namespace, tool_call_id)
+                            status_icon = get_status_icon(tool_status == "success")
+                            duration_str = format_duration(time.time() - start_time)
 
-                            # Find activity by LangGraph namespace.
-                            # We can't directly map tool_call_id → LG namespace,
-                            # so pick the first activity dict that hasn't been
-                            # claimed yet (best-effort for same-type subagents).
-                            activity = None
-                            _matched_ns = None
-                            for _ns_key, _ns_act in list(
-                                subagent_activity_by_ns.items()
-                            ):
-                                if _ns_key not in lg_ns_to_tool_call_id:
-                                    # Unclaimed — assign to this completion
-                                    activity = _ns_act
-                                    _matched_ns = _ns_key
-                                    lg_ns_to_tool_call_id[_ns_key] = tool_call_id
-                                    break
-                            if _matched_ns:
-                                subagent_activity_by_ns.pop(_matched_ns, None)
-
-                            # Status icon
-                            status_icon = "✓" if tool_status == "success" else "✗"
-
-                            # Calculate duration from dispatch start_time
-                            elapsed = time.time() - start_time
-                            if elapsed >= 60:
-                                mins = int(elapsed // 60)
-                                secs = int(elapsed % 60)
-                                duration_str = f" ({mins}m {secs}s)"
-                            else:
-                                duration_str = f" ({int(elapsed)}s)"
-
-                            # Defer completion banner — all banners print together
-                            # just before the main agent's synthesis response
-                            pending_completions.append(
-                                {
-                                    "status_icon": status_icon,
-                                    "subagent_type": subagent_type,
-                                    "duration_str": duration_str,
-                                    "condensed": (
-                                        format_condensed_activity(activity)
-                                        if activity
-                                        else None
-                                    ),
-                                    "subagent_color": subagent_color,
-                                }
+                            subagent_tracker.add_pending_completion(
+                                status_icon=status_icon,
+                                subagent_type=subagent_type,
+                                duration_str=duration_str,
+                                condensed=format_condensed_activity(activity) if activity else None,
+                                subagent_color=subagent_color,
                             )
 
-                            # Always update spinner to show aggregation progress,
-                            # including when the last subagent finishes.
-                            remaining = len(active_subagents)
-                            done_count = len(pending_completions)
+                            remaining = subagent_tracker.get_remaining_count()
+                            done_count = subagent_tracker.get_done_count()
                             total_count = done_count + remaining
                             if remaining > 0:
-                                spinner_msg = (
-                                    f"[bold {COLORS['thinking']}]"
-                                    f"{done_count}/{total_count} subagents done, "
-                                    f"waiting for {remaining} more..."
-                                )
+                                spinner_msg = f"[bold {COLORS['thinking']}]" f"{done_count}/{total_count} subagents done, waiting for {remaining} more..."
                             else:
                                 label = "subagent" if done_count == 1 else "subagents"
-                                spinner_msg = (
-                                    f"[bold {COLORS['thinking']}]"
-                                    f"All {done_count} {label} done, synthesizing..."
-                                )
+                                spinner_msg = f"[bold {COLORS['thinking']}]All {done_count} {label} done, synthesizing..."
                             if spinner_active:
                                 status.update(spinner_msg)
                             else:
                                 status.start()
                                 spinner_active = True
                                 status.update(spinner_msg)
-
-                            # Skip generic tool result preview — completion banners
-                            # handle task tool display instead.
                             continue
 
-                        # Reset spinner message after non-task tools complete.
-                        # For task completions the message was already set above.
                         elif spinner_active:
-                            if pending_completions and active_subagents:
-                                # Still aggregating — keep current progress text
+                            pending_count = len(subagent_tracker.pending_completions)
+                            if pending_count and subagent_tracker.get_remaining_count():
                                 pass
-                            elif pending_completions:
-                                # All subagents done, synthesis imminent
-                                label = (
-                                    "subagent"
-                                    if len(pending_completions) == 1
-                                    else "subagents"
-                                )
-                                status.update(
-                                    f"[bold {COLORS['thinking']}]"
-                                    f"All {len(pending_completions)} {label} done, synthesizing..."
-                                )
+                            elif pending_count:
+                                label = "subagent" if pending_count == 1 else "subagents"
+                                status.update(f"[bold {COLORS['thinking']}]All {pending_count} {label} done, synthesizing...")
                             else:
-                                status.update(
-                                    f"[bold {COLORS['thinking']}]{agent_display_name} is thinking..."
-                                )
+                                status.update(f"[bold {COLORS['thinking']}]{agent_display_name} is thinking...")
 
-                        # Main agent: display errors and file operations
                         if is_main_agent:
                             if tool_name == "shell" and tool_status != "success":
                                 flush_text_buffer(final=True)
@@ -1318,9 +439,7 @@ async def execute_task(  # type: ignore
                                         status.stop()
                                         spinner_active = False
                                     console.print()
-                                    console.print(
-                                        tool_content, style="red", markup=False
-                                    )
+                                    console.print(tool_content, style="red", markup=False)
                                     console.print()
                             elif tool_content and isinstance(tool_content, str):
                                 stripped = tool_content.lstrip()
@@ -1330,9 +449,7 @@ async def execute_task(  # type: ignore
                                         status.stop()
                                         spinner_active = False
                                     console.print()
-                                    console.print(
-                                        tool_content, style="red", markup=False
-                                    )
+                                    console.print(tool_content, style="red", markup=False)
                                     console.print()
 
                             if record:
@@ -1346,38 +463,25 @@ async def execute_task(  # type: ignore
                                 if not spinner_active:
                                     status.start()
                                     spinner_active = True
-                            elif tool_call_id in displayed_tool_ids:
-                                # Show a one-line result preview for every other tool the user
-                                # saw announced (grep, ls, glob, execute, web_search, …).
-                                # Errors that were already printed above are skipped.
+                            elif tool_call_id and tool_call_id in displayed_tool_ids:
                                 already_printed_error = (
                                     tool_name == "shell" and tool_status != "success"
                                 ) or (
-                                    tool_content
-                                    and isinstance(tool_content, str)
-                                    and tool_content.lstrip()
-                                    .lower()
-                                    .startswith("error")
+                                    tool_content and isinstance(tool_content, str) and tool_content.lstrip().lower().startswith("error")
                                 )
                                 if not already_printed_error:
                                     elapsed = None
-                                    start = tool_call_start_times.pop(
-                                        tool_call_id, None
-                                    )
+                                    start = subagent_tracker.tool_call_start_times.pop(tool_call_id, None)
                                     if start is not None:
                                         elapsed = time.time() - start
-                                    preview = format_tool_result_preview(
-                                        tool_name, tool_content, tool_status, elapsed
-                                    )
+                                    preview = format_tool_result_preview(tool_name, tool_content, tool_status, elapsed)
                                     if preview:
                                         flush_text_buffer(final=True)
                                         if spinner_active:
                                             status.stop()
                                             spinner_active = False
                                         is_err = preview.startswith("✗")
-                                        sty = (
-                                            "red" if is_err else f"dim {COLORS['tool']}"
-                                        )
+                                        sty = "red" if is_err else f"dim {COLORS['tool']}"
                                         detail = Text()
                                         detail.append("  ⎿  ", style=sty)
                                         detail.append(preview, style=sty)
@@ -1386,17 +490,11 @@ async def execute_task(  # type: ignore
                                             status.start()
                                             spinner_active = True
 
-                        # For all other tools (web_search, http_request, etc.),
-                        # results are shown via the preview above; agent will also process them
                         continue
 
-                    # Build a normalized blocks list that works for all model families:
-                    # - Anthropic: content_blocks is a list of typed dicts
-                    # - Ollama / OpenAI / Gemini: content is a plain string, tool calls in tool_call_chunks
                     if hasattr(message, "content_blocks"):
                         blocks: list[dict] = message.content_blocks
                     else:
-                        # Synthesize blocks from flat content + tool_call_chunks
                         blocks = []
                         raw_content = getattr(message, "content", "")
                         if isinstance(raw_content, str) and raw_content:
@@ -1414,12 +512,7 @@ async def execute_task(  # type: ignore
                     if not blocks:
                         continue
 
-                    # Extract token usage — only from main agent to avoid subagent contamination
-                    if (
-                        token_tracker
-                        and is_main_agent
-                        and hasattr(message, "usage_metadata")
-                    ):
+                    if token_tracker and is_main_agent and hasattr(message, "usage_metadata"):
                         usage = message.usage_metadata
                         if usage:
                             input_toks = usage.get("input_tokens", 0)
@@ -1533,31 +626,22 @@ async def execute_task(  # type: ignore
                                 try:
                                     parsed_args = json.loads(parsed_args)
                                 except json.JSONDecodeError:
-                                    # Wait for more chunks to form valid JSON
                                     continue
                             elif parsed_args is None:
                                 continue
 
-                            # Ensure args are in dict form for formatter
                             if not isinstance(parsed_args, dict):
                                 parsed_args = {"value": parsed_args}
 
-                            _dbg(
-                                "TOOL-FLUSH",
-                                f"tool={buffer_name} pending_len={len(pending_text)} text[:80]={pending_text[:80]!r}",
-                            )
+                            _dbg("TOOL-FLUSH", f"tool={buffer_name} pending_len={len(pending_text)} text[:80]={pending_text[:80]!r}")
                             flush_text_buffer(final=True)
                             display_needed = False
                             if buffer_id is not None:
                                 if buffer_id not in displayed_tool_ids:
                                     displayed_tool_ids.add(buffer_id)
-                                    # Track tool name for reliable ToolMessage lookup
                                     tool_call_to_name[buffer_id] = buffer_name
-                                    # Record start time for elapsed-time display
-                                    tool_call_start_times[buffer_id] = time.time()
-                                    file_op_tracker.start_operation(
-                                        buffer_name, parsed_args, buffer_id
-                                    )
+                                    subagent_tracker.tool_call_start_times[buffer_id] = time.time()
+                                    file_op_tracker.start_operation(buffer_name, parsed_args, buffer_id)
                                     display_needed = True
                                 else:
                                     file_op_tracker.update_args(buffer_id, parsed_args)
@@ -1569,12 +653,14 @@ async def execute_task(  # type: ignore
                                 if buffer_name == "ask_question":
                                     continue
 
-                                icon = TOOL_ICONS.get(buffer_name, "🔧")
-                                display_str = format_tool_display(
-                                    buffer_name, parsed_args
-                                )
+                                try:
+                                    await vixie_set_working()
+                                except Exception:
+                                    pass
 
-                                # Main agent: display tool call
+                                icon = TOOL_ICONS.get(buffer_name, "🔧")
+                                display_str = format_tool_display(buffer_name, parsed_args)
+
                                 if is_main_agent:
                                     if spinner_active:
                                         status.stop()
@@ -1583,231 +669,57 @@ async def execute_task(  # type: ignore
                                     if has_responded:
                                         console.print()
 
-                                    # task tool has its own clean format — no icon prefix
                                     if buffer_name == "task":
                                         line = f"  {display_str}"
                                     else:
                                         line = f"  {icon} {display_str}"
-                                    console.print(
-                                        line,
-                                        style=f"dim {COLORS['tool']}",
-                                        markup=False,
-                                    )
+                                    console.print(line, style=f"dim {COLORS['tool']}", markup=False)
 
-                                # Subagent: track tool calls by LangGraph namespace
                                 elif is_subagent and _namespace:
-                                    # Lazily create activity dict keyed by the ACTUAL
-                                    # LangGraph namespace (e.g. ('tools:<UUID>',)).
-                                    activity = subagent_activity_by_ns.get(_namespace)
-                                    if activity is None:
-                                        activity = {
-                                            "name": subagent_type_for_ns or "subagent",
-                                            "calls": [],
-                                            "files_read": [],
-                                            "files_written": [],
-                                            "errors": [],
-                                            "categories": {},
-                                        }
-                                        subagent_activity_by_ns[_namespace] = activity
-                                    # Track call with category
-                                    category = TOOL_CATEGORIES.get(buffer_name, "other")
-                                    activity["calls"].append((buffer_name, category))
-                                    activity["categories"][category] = (
-                                        activity["categories"].get(category, 0) + 1
-                                    )
+                                    subagent_tracker.record_tool_call(_namespace, subagent_type_for_ns, buffer_name, parsed_args, TOOL_CATEGORIES)
 
-                                    # Track specific paths for file operations
-                                    if category == "files_read":
-                                        path = (
-                                            parsed_args.get("path")
-                                            or parsed_args.get("file_path")
-                                            or "?"
-                                        )
-                                        activity["files_read"].append(path)
-                                    elif category == "files_written":
-                                        path = (
-                                            parsed_args.get("path")
-                                            or parsed_args.get("file_path")
-                                            or "?"
-                                        )
-                                        activity["files_written"].append(path)
-
-                            # Special handling for task tool: compact subagent delegation
                             if buffer_name == "task" and "subagent_type" in parsed_args:
                                 subagent_type = parsed_args["subagent_type"]
                                 description = parsed_args.get("description", "")
 
-                                # Guard: only dispatch once per buffer_id
-                                if buffer_id and buffer_id not in _dispatched_subagents:
-                                    _dispatched_subagents.add(buffer_id)
-                                    active_subagents[buffer_id] = (
-                                        subagent_type,
-                                        description,
-                                        time.time(),  # start_time
-                                    )
-                                    subagent_stack.append((buffer_id, subagent_type))
-
-                                    # Restart spinner with agent-name-aware "is thinking..." style
-                                    remaining = len(active_subagents)
+                                if subagent_tracker.dispatch_subagent(buffer_id, subagent_type, description):
+                                    remaining = subagent_tracker.get_remaining_count()
                                     _subagent_color = get_agent_color(subagent_type)
                                     if remaining > 1:
-                                        status.update(
-                                            f"[bold {_subagent_color}]{remaining} agents thinking..."
-                                        )
+                                        status.update(f"[bold {_subagent_color}]{remaining} agents thinking...")
                                     else:
-                                        status.update(
-                                            f"[bold {_subagent_color}]{subagent_type} is thinking..."
-                                        )
+                                        status.update(f"[bold {_subagent_color}]{subagent_type} is thinking...")
                                     status.start()
                                     spinner_active = True
 
                     if getattr(message, "chunk_position", None) == "last":
-                        _dbg(
-                            "LAST-FLUSH",
-                            f"msg_id={getattr(message, 'id', '?')} pending_len={len(pending_text)}",
-                        )
+                        _dbg("LAST-FLUSH", f"msg_id={getattr(message, 'id', '?')} pending_len={len(pending_text)}")
                         if hasattr(message, "id"):
                             seen_message_ids.add(message.id)
                         flush_text_buffer(final=True)
 
-            # Generator completed normally — clear reference
             _current_stream_gen = None
 
-            # After streaming loop - handle interrupt if it occurred
-            _dbg(
-                "STREAM-END",
-                f"interrupt_occurred={interrupt_occurred} pending_len={len(pending_text)}",
-            )
+            _dbg("STREAM-END", f"interrupt_occurred={interrupt_occurred} pending_len={len(pending_text)}")
             flush_text_buffer(final=True)
-            # Safety net: flush any completion banners that weren't printed
-            # (e.g. if the agent responded via updates-stream and flush_text_buffer
-            # was never triggered with pending_text)
-            flush_pending_completions()
+            subagent_tracker.flush_completions(spinner_active, status)
 
-            # Handle human-in-the-loop after stream completes
-            _dbg(
-                "HITL-PRECHECK",
-                f"interrupt_occurred={interrupt_occurred} pending_count={len(pending_interrupts)} plan_mode={session_state.plan_mode_enabled}",
-            )
+            _dbg("HITL-PRECHECK", f"interrupt_occurred={interrupt_occurred} pending_count={len(pending_interrupts)} plan_mode={session_state.plan_mode_enabled}")
             if interrupt_occurred:
-                _dbg(
-                    "HITL-RESUME",
-                    f"pending_count={len(pending_interrupts)} auto_approve={session_state.auto_approve}",
-                )
+                _dbg("HITL-RESUME", f"pending_count={len(pending_interrupts)} auto_approve={session_state.auto_approve}")
                 any_rejected = False
 
                 for interrupt_id, hitl_request in pending_interrupts.items():
-                    # PLAN MODE CHECK: Reject blocked tools in plan mode BEFORE auto_approve
-                    _dbg(
-                        "HITL-INT",
-                        f"interrupt_id={interrupt_id} plan_mode={session_state.plan_mode_enabled} actions={[a.get('name') for a in hitl_request.get('action_requests', [])]}",
+                    decisions, any_rejected, spinner_active = await process_hitl_approval(
+                        hitl_request=hitl_request,
+                        session_state=session_state,
+                        assistant_id=assistant_id,
+                        backend=backend,
+                        spinner_active=spinner_active,
+                        status=status,
+                        dbg_func=_dbg,
                     )
-                    if session_state.plan_mode_enabled:
-                        blocked_actions = []
-                        for action_request in hitl_request.get("action_requests", []):
-                            tool_name = action_request.get("name", "")
-                            if tool_name in BLOCKED_TOOLS_IN_PLAN_MODE:
-                                # Allow write_file/edit_file only for plan files
-                                if tool_name in ("write_file", "edit_file"):
-                                    file_path = str(
-                                        action_request.get("args", {}).get(
-                                            "file_path", ""
-                                        )
-                                    )
-                                    if _is_plan_file_path(file_path):
-                                        continue  # Allowed
-                                blocked_actions.append(action_request)
-
-                        if blocked_actions:
-                            # Reject ALL actions in this interrupt silently
-                            if spinner_active:
-                                status.stop()
-                                spinner_active = False
-                            # Reject ALL actions in this interrupt
-                            decisions = [
-                                {
-                                    "type": "reject",
-                                    "message": "Plan mode active - tool blocked",
-                                }
-                                for _ in hitl_request.get("action_requests", [])
-                            ]
-                            hitl_response[interrupt_id] = {"decisions": decisions}
-                            any_rejected = True
-                            # Process remaining interrupts but suppress all
-                            continue
-
-                    # Check if auto-approve is enabled - but plan mode already handled above
-                    if session_state.auto_approve:
-                        # Auto-approve all commands without prompting
-                        decisions = []
-                        for action_request in hitl_request["action_requests"]:
-                            if spinner_active:
-                                status.stop()
-                                spinner_active = False
-
-                            decisions.append({"type": "approve"})
-
-                        hitl_response[interrupt_id] = {"decisions": decisions}
-
-                        # Restart spinner for continuation
-                        if not spinner_active:
-                            status.start()
-                            spinner_active = True
-                    else:
-                        # Normal HITL flow - stop spinner and prompt user
-                        if spinner_active:
-                            status.stop()
-                            spinner_active = False
-
-                        # Handle human-in-the-loop approval
-                        decisions = []
-                        for action_index, action_request in enumerate(
-                            hitl_request["action_requests"]
-                        ):
-                            decision = prompt_for_tool_approval(
-                                action_request,
-                                assistant_id,
-                            )
-
-                            # Check if user wants to switch to auto-approve mode
-                            if (
-                                isinstance(decision, dict)
-                                and decision.get("type") == "auto_approve_all"
-                            ):
-                                # Switch to auto-approve mode
-                                session_state.auto_approve = True
-                                console.print()
-                                console.print(
-                                    "[bold blue]✓ Auto-approve mode enabled[/bold blue]"
-                                )
-                                console.print(
-                                    "[dim]All future tool actions will be automatically approved.[/dim]"
-                                )
-                                console.print()
-
-                                # Approve this action and all remaining actions in the batch
-                                decisions.append({"type": "approve"})
-                                for _remaining_action in hitl_request[
-                                    "action_requests"
-                                ][action_index + 1 :]:
-                                    decisions.append({"type": "approve"})
-                                break
-                            decisions.append(decision)
-
-                            # Mark file operations as HIL-approved if user approved
-                            if decision.get("type") == "approve":
-                                tool_name = action_request.get("name")
-                                if tool_name in {"write_file", "edit_file"}:
-                                    file_op_tracker.mark_hitl_approved(
-                                        tool_name, action_request.get("args", {})
-                                    )
-
-                        if any(
-                            decision.get("type") == "reject" for decision in decisions
-                        ):
-                            any_rejected = True
-
-                        hitl_response[interrupt_id] = {"decisions": decisions}
+                    hitl_response[interrupt_id] = {"decisions": decisions}
 
                 suppress_resumed_output = any_rejected
 
@@ -1867,7 +779,11 @@ async def execute_task(  # type: ignore
             status.stop()
         console.print("\n[yellow]Interrupted by user[/yellow]")
 
-        # Ensure stream generator is closed (releases checkpointer lock)
+        try:
+            await vixie_set_idle()
+        except Exception:
+            pass
+
         _gen = _current_stream_gen
         _current_stream_gen = None
         if _gen is not None:
@@ -1880,31 +796,23 @@ async def execute_task(  # type: ignore
             await asyncio.wait_for(
                 agent.aupdate_state(
                     config=config,
-                    values={
-                        "messages": [
-                            HumanMessage(
-                                content="[The previous request was cancelled by the system]"
-                            )
-                        ]
-                    },
+                    values={"messages": [HumanMessage(content="[The previous request was cancelled by the system]")]},
                     as_node="model",
                 ),
                 timeout=3.0,
             )
         except asyncio.TimeoutError:
-            pass  # State update timed out — continue anyway
+            pass
         except Exception:
             pass
 
         return
 
     except KeyboardInterrupt:
-        # User pressed Ctrl+C - clean up and exit gracefully
         if spinner_active:
             status.stop()
         console.print("\n[yellow]Interrupted[/yellow]")
 
-        # Ensure stream generator is closed (releases checkpointer lock)
         _gen = _current_stream_gen
         _current_stream_gen = None
         if _gen is not None:
@@ -1917,43 +825,31 @@ async def execute_task(  # type: ignore
             await asyncio.wait_for(
                 agent.aupdate_state(
                     config=config,
-                    values={
-                        "messages": [
-                            HumanMessage(
-                                content="[User interrupted the previous request with Ctrl+C]"
-                            )
-                        ]
-                    },
+                    values={"messages": [HumanMessage(content="[User interrupted the previous request with Ctrl+C]")]},
                     as_node="model",
                 ),
                 timeout=3.0,
             )
         except asyncio.TimeoutError:
-            pass  # State update timed out — continue anyway
+            pass
         except Exception:
             pass
 
-        # Re-raise KeyboardInterrupt so callers (like ralph mode) can handle it
         raise
 
-    # Safety flush: show any pending subagent completions that weren't shown yet
-    # (e.g., if the main agent produced no text this turn)
-    flush_pending_completions()
+    subagent_tracker.flush_completions(spinner_active, status)
 
     if spinner_active:
         status.stop()
 
-    # Update session_state.todos if we have any
     if current_todos:
         session_state.todos = current_todos
 
-    # Restore auto_approve if it was temporarily changed for plan execution
     if _prev_auto_approve is not None:
         session_state.auto_approve = _prev_auto_approve
 
     if has_responded:
         console.print()
-        # Track token usage (display only via /tokens command)
         if token_tracker and (captured_input_tokens or captured_output_tokens):
             token_tracker.add(
                 captured_input_tokens,
@@ -1961,23 +857,22 @@ async def execute_task(  # type: ignore
                 cache_read_tokens=captured_cache_read_tokens,
                 cache_creation_tokens=captured_cache_creation_tokens,
             )
-        # Track assistant response and tool calls for /context command
         if token_tracker:
             token_tracker.increment_assistant_messages()
-            # Track tool calls (count of unique tool call IDs displayed)
             if displayed_tool_ids:
                 token_tracker.increment_tool_calls(len(displayed_tool_ids))
 
-            # Build detailed context breakdown from agent state
             try:
                 from namicode_cli.context.context_manager import build_context_breakdown
-
                 _bd_state = await agent.aget_state(config)
                 _bd_msgs = _bd_state.values.get("messages", [])
                 if _bd_msgs and token_tracker.model_name:
-                    breakdown = build_context_breakdown(
-                        _bd_msgs, token_tracker.model_name
-                    )
+                    breakdown = build_context_breakdown(_bd_msgs, token_tracker.model_name)
                     token_tracker.set_breakdown(breakdown)
             except Exception:
                 pass
+
+        try:
+            await vixie_set_idle()
+        except Exception:
+            pass

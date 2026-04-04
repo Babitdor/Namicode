@@ -17,6 +17,7 @@ from langchain_core.runnables import Runnable
 from langchain_core.tools import StructuredTool
 from langgraph.types import Command
 
+from nami_deepagents.middleware.todo import TodoListMiddleware
 from nami_deepagents.prompts import render_template
 
 
@@ -128,6 +129,9 @@ def _get_task_tool_description(available_agents: str) -> str:
         "task_tool_description.jinja", available_agents=available_agents
     )
 
+
+# Backward compatibility - default task tool description
+TASK_TOOL_DESCRIPTION = _get_task_tool_description("explore, plan, verify")
 
 TASK_SYSTEM_PROMPT = render_template("task.jinja")
 

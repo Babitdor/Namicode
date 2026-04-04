@@ -136,6 +136,9 @@ from namicode_cli.tools import (
 )
 from namicode_cli.ui.execution import execute_task
 
+# Vixie desktop pet integration
+from namicode_cli.vixie.server import start_vixie_server, stop_vixie_server
+
 from namicode_cli.process_manager import ProcessManager
 from namicode_cli.server_runner.dev_server import (
     list_servers_tool,
@@ -629,6 +632,12 @@ async def simple_cli(
     # Helper to clean up and save session on exit
     async def _cleanup_and_save_session() -> None:
         """Clean up managed processes and save session state when user exits."""
+        # Stop Vixie WebSocket server
+        try:
+            await stop_vixie_server()
+        except Exception as e:
+            console.print(f"[dim]Could not stop Vixie server: {e}[/dim]")
+        
         # Stop all managed dev servers/processes
         try:
             manager = ProcessManager.get_instance()
@@ -1124,6 +1133,10 @@ async def main(
         setup_script_path: Optional path to setup script to run in sandbox
         continue_session: If True, continue last session. If string, use as session ID.
     """
+    # Initialize Vixie WebSocket server for desktop pet integration (non-blocking)
+    # Server runs in background; if port is in use, it gracefully skips
+    await start_vixie_server()
+    
     from namicode_cli.session.session_persistence import SessionManager
     from namicode_cli.session.session_restore import restore_session
 
