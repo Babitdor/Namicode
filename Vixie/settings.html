@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vixie Settings</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      min-height: 100vh;
+      color: #e0e0e0;
+      overflow-x: hidden;
+    }
+
+    .container {
+      max-width: 480px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    /* Header */
+    .header {
+      text-align: center;
+      margin-bottom: 24px;
+    }
+
+    .header h1 {
+      font-size: 28px;
+      font-weight: 600;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 8px;
+    }
+
+    .header p {
+      color: #888;
+      font-size: 14px;
+    }
+
+    /* Connection Status Card */
+    .status-card {
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 20px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .status-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+
+    .status-title {
+      font-size: 14px;
+      font-weight: 500;
+      color: #aaa;
+    }
+
+    .status-indicator {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      animation: pulse 2s infinite;
+    }
+
+    .status-dot.connected {
+      background: #22c55e;
+      box-shadow: 0 0 10px rgba(34, 197, 94, 0.5);
+    }
+
+    .status-dot.disconnected {
+      background: #ef4444;
+      box-shadow: 0 0 10px rgba(239, 68, 68, 0.5);
+    }
+
+    .status-dot.connecting {
+      background: #f59e0b;
+      box-shadow: 0 0 10px rgba(245, 158, 11, 0.5);
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .status-text {
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    .status-text.connected { color: #22c55e; }
+    .status-text.disconnected { color: #ef4444; }
+    .status-text.connecting { color: #f59e0b; }
+
+    /* Tabs */
+    .tabs {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 20px;
+      background: rgba(255, 255, 255, 0.05);
+      padding: 4px;
+      border-radius: 10px;
+    }
+
+    .tab {
+      flex: 1;
+      padding: 10px 16px;
+      border: none;
+      background: transparent;
+      color: #888;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      border-radius: 8px;
+      transition: all 0.2s ease;
+    }
+
+    .tab:hover {
+      color: #ccc;
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .tab.active {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+    }
+
+    /* Tab Content */
+    .tab-content {
+      display: none;
+    }
+
+    .tab-content.active {
+      display: block;
+      animation: fadeIn 0.3s ease;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Form Groups */
+    .form-group {
+      margin-bottom: 20px;
+    }
+
+    .form-group label {
+      display: block;
+      font-size: 13px;
+      font-weight: 500;
+      color: #aaa;
+      margin-bottom: 8px;
+    }
+
+    .form-group input, .form-group select {
+      width: 100%;
+      padding: 12px 14px;
+      font-size: 14px;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 8px;
+      color: #e0e0e0;
+      transition: all 0.2s ease;
+    }
+
+    .form-group input:focus, .form-group select:focus {
+      outline: none;
+      border-color: #667eea;
+      background: rgba(255, 255, 255, 0.1);
+      box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.2);
+    }
+
+    .form-group input::placeholder {
+      color: #666;
+    }
+
+    .form-row {
+      display: flex;
+      gap: 12px;
+    }
+
+    .form-row .form-group {
+      flex: 1;
+    }
+
+    /* Sprite Preview */
+    .sprite-preview {
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 12px;
+      padding: 20px;
+      text-align: center;
+      margin-bottom: 20px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .sprite-preview img {
+      width: 96px;
+      height: 96px;
+      object-fit: contain;
+      image-rendering: pixelated;
+      margin-bottom: 12px;
+    }
+
+    .sprite-preview p {
+      font-size: 12px;
+      color: #888;
+    }
+
+    /* Buttons */
+    .btn-group {
+      display: flex;
+      gap: 12px;
+      margin-top: 24px;
+    }
+
+    .btn {
+      flex: 1;
+      padding: 12px 20px;
+      font-size: 14px;
+      font-weight: 600;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.1);
+      color: #ccc;
+    }
+
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.15);
+    }
+
+    .btn-test {
+      background: rgba(34, 197, 94, 0.2);
+      color: #22c55e;
+      border: 1px solid rgba(34, 197, 94, 0.3);
+    }
+
+    .btn-test:hover {
+      background: rgba(34, 197, 94, 0.3);
+    }
+
+    /* Toggle Switch */
+    .toggle-group {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .toggle-group:last-child {
+      border-bottom: none;
+    }
+
+    .toggle-label {
+      font-size: 14px;
+      color: #e0e0e0;
+    }
+
+    .toggle-desc {
+      font-size: 12px;
+      color: #888;
+      margin-top: 4px;
+    }
+
+    .toggle {
+      position: relative;
+      width: 44px;
+      height: 24px;
+    }
+
+    .toggle input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    .toggle-slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 24px;
+      transition: 0.3s;
+    }
+
+    .toggle-slider:before {
+      position: absolute;
+      content: "";
+      height: 18px;
+      width: 18px;
+      left: 3px;
+      bottom: 3px;
+      background: white;
+      border-radius: 50%;
+      transition: 0.3s;
+    }
+
+    .toggle input:checked + .toggle-slider {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    }
+
+    .toggle input:checked + .toggle-slider:before {
+      transform: translateX(20px);
+    }
+
+    /* Footer */
+    .footer {
+      text-align: center;
+      margin-top: 24px;
+      padding-top: 16px;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .footer p {
+      font-size: 12px;
+      color: #666;
+    }
+
+    .footer a {
+      color: #667eea;
+      text-decoration: none;
+    }
+
+    .footer a:hover {
+      text-decoration: underline;
+    }
+
+    /* Toast Notification */
+    .toast {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%) translateY(100px);
+      background: rgba(34, 197, 94, 0.9);
+      color: white;
+      padding: 12px 24px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      opacity: 0;
+      transition: all 0.3s ease;
+      z-index: 1000;
+    }
+
+    .toast.show {
+      transform: translateX(-50%) translateY(0);
+      opacity: 1;
+    }
+
+    .toast.error {
+      background: rgba(239, 68, 68, 0.9);
+    }
+
+    /* Preset Sprites */
+    .sprite-presets {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .preset-btn {
+      padding: 8px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .preset-btn:hover {
+      background: rgba(255, 255, 255, 0.1);
+      border-color: #667eea;
+    }
+
+    .preset-btn img {
+      width: 48px;
+      height: 48px;
+      object-fit: contain;
+      image-rendering: pixelated;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <div class="header">
+      <h1>✨ Vixie Settings</h1>
+      <p>Your desktop pet companion</p>
+    </div>
+
+    <!-- Connection Status -->
+    <div class="status-card">
+      <div class="status-header">
+        <span class="status-title">Nami-Code Connection</span>
+        <div class="status-indicator">
+          <span class="status-dot disconnected" id="status-dot"></span>
+          <span class="status-text disconnected" id="status-text">Disconnected</span>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="ws-host">Host</label>
+          <input type="text" id="ws-host" placeholder="127.0.0.1" value="127.0.0.1">
+        </div>
+        <div class="form-group">
+          <label for="ws-port">Port</label>
+          <input type="text" id="ws-port" placeholder="8765" value="8765">
+        </div>
+      </div>
+      <button class="btn btn-test" id="connect-btn" style="width: 100%; margin-top: 8px;">
+        Connect to Nami-Code
+      </button>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tabs">
+      <button class="tab active" data-tab="sprite">Sprite</button>
+      <button class="tab" data-tab="behavior">Behavior</button>
+      <button class="tab" data-tab="about">About</button>
+    </div>
+
+    <!-- Sprite Tab -->
+    <div class="tab-content active" id="sprite-tab">
+      <!-- Sprite Preview -->
+      <div class="sprite-preview">
+        <img id="sprite-preview-img" src="https://play.pokemonshowdown.com/sprites/ani-shiny/victini.gif" alt="Current Sprite">
+        <p>Current Sprite</p>
+      </div>
+
+      <div class="form-group">
+        <label for="gif-url">Custom Sprite URL</label>
+        <input type="text" id="gif-url" placeholder="Paste a GIF URL here...">
+      </div>
+
+      <div class="form-group">
+        <label>Preset Sprites</label>
+        <div class="sprite-presets">
+          <button class="preset-btn" data-sprite="victini" title="Victini">
+            <img src="https://play.pokemonshowdown.com/sprites/ani-shiny/victini.gif" alt="Victini">
+          </button>
+          <button class="preset-btn" data-sprite="mew" title="Mew">
+            <img src="https://play.pokemonshowdown.com/sprites/ani-shiny/mew.gif" alt="Mew">
+          </button>
+          <button class="preset-btn" data-sprite="sylveon" title="Sylveon">
+            <img src="https://play.pokemonshowdown.com/sprites/ani-shiny/sylveon.gif" alt="Sylveon">
+          </button>
+          <button class="preset-btn" data-sprite="rapidash" title="Rapidash">
+            <img src="https://play.pokemonshowdown.com/sprites/ani-shiny/rapidash.gif" alt="Rapidash">
+          </button>
+          <button class="preset-btn" data-sprite="alakazam" title="Alakazam">
+            <img src="https://play.pokemonshowdown.com/sprites/ani-shiny/alakazam.gif" alt="Alakazam">
+          </button>
+          <button class="preset-btn" data-sprite="chansey" title="Chansey">
+            <img src="https://play.pokemonshowdown.com/sprites/ani-shiny/chansey.gif" alt="Chansey">
+          </button>
+          <button class="preset-btn" data-sprite="umbreon" title="Umbreon">
+            <img src="https://play.pokemonshowdown.com/sprites/ani-shiny/umbreon.gif" alt="Umbreon">
+          </button>
+          <button class="preset-btn" data-sprite="espeon" title="Espeon">
+            <img src="https://play.pokemonshowdown.com/sprites/ani-shiny/espeon.gif" alt="Espeon">
+          </button>
+        </div>
+      </div>
+
+      <div class="btn-group">
+        <button class="btn btn-secondary" id="reset-sprite-btn">Reset</button>
+        <button class="btn btn-primary" id="save-sprite-btn">Save Sprite</button>
+      </div>
+    </div>
+
+    <!-- Behavior Tab -->
+    <div class="tab-content" id="behavior-tab">
+      <div class="toggle-group">
+        <div>
+          <div class="toggle-label">Enable Gravity</div>
+          <div class="toggle-desc">Pet falls to the bottom of the screen</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="gravity-toggle">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+
+      <div class="toggle-group">
+        <div>
+          <div class="toggle-label">Always on Top</div>
+          <div class="toggle-desc">Keep pet visible above all windows</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="ontop-toggle" checked>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+
+      <div class="toggle-group">
+        <div>
+          <div class="toggle-label">Sound Effects</div>
+          <div class="toggle-desc">Play sounds on interactions</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="sound-toggle">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+
+      <div class="toggle-group">
+        <div>
+          <div class="toggle-label">Show State Popups</div>
+          <div class="toggle-desc">Display state messages near pet</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="popup-toggle" checked>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+
+      <div class="form-group" style="margin-top: 20px;">
+        <label for="pet-size">Pet Size</label>
+        <select id="pet-size">
+          <option value="small">Small (80px)</option>
+          <option value="medium" selected>Medium (120px)</option>
+          <option value="large">Large (160px)</option>
+          <option value="xlarge">Extra Large (200px)</option>
+        </select>
+      </div>
+
+      <div class="btn-group">
+        <button class="btn btn-primary" id="save-behavior-btn">Save Settings</button>
+      </div>
+    </div>
+
+    <!-- About Tab -->
+    <div class="tab-content" id="about-tab">
+      <div class="sprite-preview">
+        <img src="https://play.pokemonshowdown.com/sprites/ani-shiny/victini.gif" alt="Vixie">
+        <p style="font-size: 16px; color: #e0e0e0; margin-bottom: 8px;">Vixie v1.0.0</p>
+        <p>Your AI-powered desktop pet companion</p>
+      </div>
+
+      <div style="background: rgba(255,255,255,0.05); border-radius: 12px; padding: 16px; margin-bottom: 16px;">
+        <h3 style="font-size: 14px; margin-bottom: 12px; color: #667eea;">Features</h3>
+        <ul style="list-style: none; font-size: 13px; line-height: 1.8;">
+          <li>✨ Animated Pokémon sprites</li>
+          <li>🎮 Interactive desktop pet</li>
+          <li>🔗 Nami-Code integration</li>
+          <li>⚙️ Customizable behavior</li>
+          <li>🎨 Custom sprite support</li>
+        </ul>
+      </div>
+
+      <div style="background: rgba(255,255,255,0.05); border-radius: 12px; padding: 16px;">
+        <h3 style="font-size: 14px; margin-bottom: 12px; color: #667eea;">Keyboard Shortcuts</h3>
+        <ul style="list-style: none; font-size: 13px; line-height: 1.8;">
+          <li><kbd style="background: rgba(255,255,255,0.1); padding: 2px 8px; border-radius: 4px;">Ctrl+G</kbd> Toggle gravity</li>
+          <li><kbd style="background: rgba(255,255,255,0.1); padding: 2px 8px; border-radius: 4px;">Ctrl+F</kbd> Flip pet</li>
+          <li><kbd style="background: rgba(255,255,255,0.1); padding: 2px 8px; border-radius: 4px;">Ctrl+H</kbd> Hide/Show pet</li>
+        </ul>
+      </div>
+
+      <div class="footer" style="margin-top: 20px; border-top: none; padding-top: 0;">
+        <p>Made with 💜 by Nami-Code</p>
+        <p style="margin-top: 8px;">
+          <a href="https://github.com" target="_blank">GitHub</a> • 
+          <a href="#" id="check-updates">Check for Updates</a>
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification -->
+  <div class="toast" id="toast"></div>
+
+  <script>
+    // Tab switching
+    document.querySelectorAll('.tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+        tab.classList.add('active');
+        document.getElementById(`${tab.dataset.tab}-tab`).classList.add('active');
+      });
+    });
+
+    // Toast notification
+    function showToast(message, isError = false) {
+      const toast = document.getElementById('toast');
+      toast.textContent = message;
+      toast.className = 'toast' + (isError ? ' error' : '');
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 3000);
+    }
+
+    // URL validation
+    function isValidUrl(string) {
+      try {
+        const url = new URL(string);
+        return url.protocol === 'http:' || url.protocol === 'https:';
+      } catch (_) {
+        return false;
+      }
+    }
+
+    function isImageUrl(url) {
+      return /\.(gif|jpe?g|png|webp|svg)$/i.test(url);
+    }
+
+    // Load saved settings
+    function loadSettings() {
+      // Load WebSocket config
+      const wsHost = localStorage.getItem('namiWebSocketHost') || '127.0.0.1';
+      const wsPort = localStorage.getItem('namiWebSocketPort') || '8765';
+      document.getElementById('ws-host').value = wsHost;
+      document.getElementById('ws-port').value = wsPort;
+
+      // Load behavior settings
+      const gravityEnabled = localStorage.getItem('gravityEnabled') === 'true';
+      const soundEnabled = localStorage.getItem('soundEnabled') === 'true';
+      const popupEnabled = localStorage.getItem('popupEnabled') !== 'false';
+      const petSize = localStorage.getItem('petSize') || 'medium';
+
+      document.getElementById('gravity-toggle').checked = gravityEnabled;
+      document.getElementById('sound-toggle').checked = soundEnabled;
+      document.getElementById('popup-toggle').checked = popupEnabled;
+      document.getElementById('pet-size').value = petSize;
+
+      // Load current sprite from main window
+      window.electronAPI.onSetCurrentGif((event, currentGif) => {
+        if (currentGif) {
+          document.getElementById('gif-url').value = currentGif;
+          document.getElementById('sprite-preview-img').src = currentGif;
+        }
+      });
+    }
+
+    // Save WebSocket config
+    document.getElementById('connect-btn').addEventListener('click', () => {
+      const host = document.getElementById('ws-host').value.trim() || '127.0.0.1';
+      const port = document.getElementById('ws-port').value.trim() || '8765';
+
+      localStorage.setItem('namiWebSocketHost', host);
+      localStorage.setItem('namiWebSocketPort', port);
+
+      // Notify main process to reconnect
+      window.electronAPI.updateWebSocketConfig(host, port);
+      showToast('WebSocket config saved! Reconnecting...');
+      updateConnectionStatus('connecting');
+
+      // Simulate connection attempt (actual connection handled by nami-client.js)
+      setTimeout(() => {
+        // This would be updated by actual WebSocket events
+        showToast('WebSocket config updated');
+      }, 1000);
+    });
+
+    // Update connection status UI
+    function updateConnectionStatus(status) {
+      const dot = document.getElementById('status-dot');
+      const text = document.getElementById('status-text');
+
+      dot.className = 'status-dot ' + status;
+      text.className = 'status-text ' + status;
+
+      const statusTexts = {
+        connected: 'Connected',
+        disconnected: 'Disconnected',
+        connecting: 'Connecting...'
+      };
+      text.textContent = statusTexts[status] || status;
+    }
+
+    // Preset sprites
+    document.querySelectorAll('.preset-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const sprite = btn.dataset.sprite;
+        const url = `https://play.pokemonshowdown.com/sprites/ani-shiny/${sprite}.gif`;
+        document.getElementById('gif-url').value = url;
+        document.getElementById('sprite-preview-img').src = url;
+      });
+    });
+
+    // Reset sprite
+    document.getElementById('reset-sprite-btn').addEventListener('click', () => {
+      const defaultUrl = 'https://play.pokemonshowdown.com/sprites/ani-shiny/victini.gif';
+      document.getElementById('gif-url').value = defaultUrl;
+      document.getElementById('sprite-preview-img').src = defaultUrl;
+    });
+
+    // Save sprite
+    document.getElementById('save-sprite-btn').addEventListener('click', () => {
+      const gifUrl = document.getElementById('gif-url').value.trim();
+
+      if (!gifUrl) {
+        showToast('Please enter a URL', true);
+        return;
+      }
+
+      if (!isValidUrl(gifUrl)) {
+        showToast('Please enter a valid URL', true);
+        return;
+      }
+
+      if (!isImageUrl(gifUrl)) {
+        showToast('Please enter an image URL (.gif, .jpg, .png, .webp)', true);
+        return;
+      }
+
+      window.electronAPI.updateGif(gifUrl);
+      showToast('Sprite saved!');
+    });
+
+    // Save behavior settings
+    document.getElementById('save-behavior-btn').addEventListener('click', () => {
+      const gravityEnabled = document.getElementById('gravity-toggle').checked;
+      const soundEnabled = document.getElementById('sound-toggle').checked;
+      const popupEnabled = document.getElementById('popup-toggle').checked;
+      const petSize = document.getElementById('pet-size').value;
+
+      localStorage.setItem('gravityEnabled', gravityEnabled);
+      localStorage.setItem('soundEnabled', soundEnabled);
+      localStorage.setItem('popupEnabled', popupEnabled);
+      localStorage.setItem('petSize', petSize);
+
+      // Notify main process
+      window.electronAPI.updateBehavior({
+        gravity: gravityEnabled,
+        sound: soundEnabled,
+        popup: popupEnabled,
+        size: petSize
+      });
+
+      showToast('Settings saved!');
+    });
+
+    // Check for updates
+    document.getElementById('check-updates').addEventListener('click', (e) => {
+      e.preventDefault();
+      showToast('No updates available');
+    });
+
+    // Initialize
+    loadSettings();
+
+    // Listen for connection status updates
+    window.electronAPI.onConnectionStatus((event, status) => {
+      updateConnectionStatus(status);
+    });
+
+    // Clean up on close
+    window.addEventListener('beforeunload', () => {
+      window.electronAPI.removeAllListeners('set-current-gif');
+      window.electronAPI.removeAllListeners('connection-status');
+    });
+  </script>
+</body>
+</html>

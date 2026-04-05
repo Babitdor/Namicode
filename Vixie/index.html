@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vixie - Desktop Pet</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background: transparent;
+      overflow: hidden;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    #pet-container {
+      position: relative;
+      width: 100%;
+      height: 100%;
+    }
+
+    #pet {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      image-rendering: pixelated;
+      cursor: grab;
+      transition: transform 0.1s ease;
+    }
+
+    #pet:hover {
+      transform: scale(1.05);
+    }
+
+    #pet.dragging {
+      cursor: grabbing;
+      transform: scale(0.95);
+    }
+
+    #pet.flipped {
+      transform: scaleX(-1);
+    }
+
+    #pet.flipped:hover {
+      transform: scaleX(-1) scale(1.05);
+    }
+
+    #pet.flipped:active {
+      transform: scaleX(-1) scale(0.95);
+    }
+
+    /* Popup message */
+    #popup {
+      position: absolute;
+      top: -40px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 6px 12px;
+      border-radius: 8px;
+      font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+      font-size: 12px;
+      font-weight: 500;
+      color: white;
+      white-space: nowrap;
+      opacity: 0;
+      transition: opacity 0.3s ease;
+      pointer-events: none;
+      z-index: 100;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    }
+
+    #popup.show {
+      opacity: 1;
+    }
+
+    #popup.thinking {
+      background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+    }
+
+    #popup.working {
+      background: linear-gradient(135deg, #f59e0b, #d97706);
+    }
+
+    #popup.success {
+      background: linear-gradient(135deg, #22c55e, #16a34a);
+    }
+
+    #popup.error {
+      background: linear-gradient(135deg, #ef4444, #dc2626);
+    }
+
+    #popup.idle {
+      background: linear-gradient(135deg, #6b7280, #4b5563);
+    }
+
+    #popup.user_input {
+      background: linear-gradient(135deg, #a855f7, #7c3aed);
+    }
+
+    #popup.planning {
+      background: linear-gradient(135deg, #ec4899, #db2777);
+    }
+
+    /* Connection status indicator */
+    #connection-status {
+      position: absolute;
+      bottom: 4px;
+      right: 4px;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #ef4444;
+      border: 2px solid rgba(0, 0, 0, 0.4);
+      transition: background 0.3s ease;
+      pointer-events: none;
+    }
+
+    #connection-status.connected {
+      background: #22c55e;
+    }
+
+    #connection-status.connecting {
+      background: #f59e0b;
+      animation: pulse 1s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    /* Click effect */
+    @keyframes bounce {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.1); }
+    }
+
+    .bounce {
+      animation: bounce 0.3s ease;
+    }
+  </style>
+</head>
+<body>
+  <div id="pet-container">
+    <img id="pet" src="https://play.pokemonshowdown.com/sprites/ani-shiny/victini.gif" alt="Vixie Pet" draggable="false">
+    <div id="popup"></div>
+    <div id="connection-status"></div>
+  </div>
+
+  <script>
+    // Popup system
+    const popup = document.getElementById('popup');
+    let popupTimeout = null;
+
+    function showPopup(message, state = 'idle') {
+      // Clear any existing timeout
+      if (popupTimeout) {
+        clearTimeout(popupTimeout);
+      }
+
+      // Set message and state class
+      popup.textContent = message;
+      popup.className = state;
+
+      // Show popup
+      requestAnimationFrame(() => {
+        popup.classList.add('show');
+      });
+
+      // Hide after 3 seconds
+      popupTimeout = setTimeout(() => {
+        popup.classList.remove('show');
+      }, 3000);
+    }
+
+    // Connection status indicator
+    const statusIndicator = document.getElementById('connection-status');
+
+    function updateConnectionStatus(status) {
+      statusIndicator.className = '';
+      if (status === 'connected') {
+        statusIndicator.classList.add('connected');
+      } else if (status === 'connecting') {
+        statusIndicator.classList.add('connecting');
+      }
+      // 'disconnected' = default red, no class needed
+    }
+
+    // Pet drag + click detection via mousedown/mouseup
+    const pet = document.getElementById('pet');
+    let mouseDownTime = 0;
+    let clickCount = 0;
+    let clickTimeout = null;
+
+    pet.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      mouseDownTime = Date.now();
+      pet.classList.add('dragging');
+      if (window.electronAPI) {
+        window.electronAPI.startDrag(e.screenX, e.screenY);
+      }
+    });
+
+    document.addEventListener('mouseup', (e) => {
+      if (e.button !== 0 || mouseDownTime === 0) return;
+      const elapsed = Date.now() - mouseDownTime;
+      mouseDownTime = 0;
+      pet.classList.remove('dragging');
+
+      if (window.electronAPI) {
+        window.electronAPI.stopDrag();
+      }
+
+      // Treat short press (< 250ms) as a click
+      if (elapsed < 250) {
+        clickCount++;
+        pet.classList.add('bounce');
+        setTimeout(() => pet.classList.remove('bounce'), 300);
+
+        if (clickTimeout) clearTimeout(clickTimeout);
+
+        if (clickCount === 1) {
+          clickTimeout = setTimeout(() => {
+            const messages = ['Hello!', '✨', 'Hi there!', '💜', '*happy noises*'];
+            showPopup(messages[Math.floor(Math.random() * messages.length)], 'idle');
+            clickCount = 0;
+          }, 300);
+        } else if (clickCount === 2) {
+          clearTimeout(clickTimeout);
+          const excitedMessages = ['Yay!', '🎉', 'Wheee!', '💖', '*excited*'];
+          showPopup(excitedMessages[Math.floor(Math.random() * excitedMessages.length)], 'success');
+          clickCount = 0;
+        }
+      }
+    });
+
+    // Flip functionality
+    let isFlipped = false;
+
+    function flipPet() {
+      isFlipped = !isFlipped;
+      if (isFlipped) {
+        pet.classList.add('flipped');
+      } else {
+        pet.classList.remove('flipped');
+      }
+    }
+
+    // IPC event listeners
+    if (window.electronAPI) {
+      // Update GIF
+      window.electronAPI.onUpdateGif((event, gifUrl) => {
+        pet.src = gifUrl;
+      });
+
+      // Flip pet
+      window.electronAPI.onFlipPet((event) => {
+        flipPet();
+      });
+
+      // Set current GIF (from settings)
+      window.electronAPI.onSetCurrentGif((event, gifUrl) => {
+        pet.src = gifUrl;
+      });
+    }
+
+    // Make showPopup globally available for nami-client.js
+    window.showPopup = showPopup;
+    window.updateConnectionStatus = updateConnectionStatus;
+  </script>
+  <script src="nami-client.js"></script>
+</body>
+</html>
