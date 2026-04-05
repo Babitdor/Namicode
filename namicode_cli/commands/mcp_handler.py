@@ -207,12 +207,37 @@ async def handle_mcp_command() -> bool:
 
         console.print()
         if servers:
+            # Get active servers from MCP middleware
+            active_servers = set()
+            try:
+                from namicode_cli.mcp import get_shared_mcp_middleware
+                
+                # Get the middleware to check which servers are connected
+                middleware = get_shared_mcp_middleware()
+                
+                # Extract server names from tools cache
+                for tool_meta in middleware._tools_cache:
+                    server_name = tool_meta.get("server")
+                    if server_name:
+                        active_servers.add(server_name)
+            except Exception:
+                # If middleware isn't initialized yet, just show all as inactive
+                pass
+
             console.print(
                 "[bold]Configured MCP Servers:[/bold]", style=COLORS["primary"]
             )
             console.print()
             for name, config in servers.items():
-                console.print(f"  • [bold]{name}[/bold]", style=COLORS["primary"])
+                # Show active indicator
+                is_active = name in active_servers
+                status_indicator = "[green]✓[/green]" if is_active else "[red]✗[/red]"
+                status_text = "[green]active[/green]" if is_active else "[red]inactive[/red]"
+                
+                console.print(
+                    f"  {status_indicator} [bold]{name}[/bold] ({status_text})",
+                    style=COLORS["primary"],
+                )
                 console.print(f"    Transport: {config.transport}", style=COLORS["dim"])
                 if config.transport == "http":
                     console.print(f"    URL: {config.url}", style=COLORS["dim"])
@@ -224,6 +249,12 @@ async def handle_mcp_command() -> bool:
                         )
                 if config.description:
                     console.print(f"    {config.description}", style=COLORS["dim"])
+                
+                # Show tool count for active servers
+                if is_active:
+                    tool_count = sum(1 for t in middleware._tools_cache if t.get("server") == name)
+                    console.print(f"    Tools: {tool_count}", style=COLORS["dim"])
+                
                 console.print()
         else:
             console.print("[yellow]No MCP servers configured[/yellow]")

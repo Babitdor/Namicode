@@ -18,6 +18,22 @@ from langchain_core.tools import StructuredTool
 from langgraph.types import Command
 from nami_deepagents.prompts import render_template
 
+# Context tracking for middleware optimization
+try:
+    from namicode_cli.utils.context_tracking import track_context, track_context_async
+    CONTEXT_TRACKING_AVAILABLE = True
+except ImportError:
+    CONTEXT_TRACKING_AVAILABLE = False
+    # Fallback: create no-op decorators
+    def track_context(name):
+        def decorator(func):
+            return func
+        return decorator
+    def track_context_async(name):
+        def decorator(func):
+            return func
+        return decorator
+
 
 class SubAgent(TypedDict):
     """Specification for an agent.
@@ -634,6 +650,7 @@ class SubAgentMiddleware(AgentMiddleware):
         )
         self.tools = [task_tool]
 
+    @track_context("SubAgentMiddleware")
     def wrap_model_call(
         self,
         request: ModelRequest,
@@ -649,6 +666,7 @@ class SubAgentMiddleware(AgentMiddleware):
             return handler(request.override(system_prompt=system_prompt))
         return handler(request)
 
+    @track_context_async("SubAgentMiddleware")
     async def awrap_model_call(
         self,
         request: ModelRequest,

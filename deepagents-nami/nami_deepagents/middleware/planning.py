@@ -48,6 +48,22 @@ from nami_deepagents.middleware.ask_question import (
     QuestionResponse,
 )
 
+# Context tracking for middleware optimization
+try:
+    from namicode_cli.utils.context_tracking import track_context, track_context_async
+    CONTEXT_TRACKING_AVAILABLE = True
+except ImportError:
+    CONTEXT_TRACKING_AVAILABLE = False
+    # Fallback: create no-op decorators
+    def track_context(name):
+        def decorator(func):
+            return func
+        return decorator
+    def track_context_async(name):
+        def decorator(func):
+            return func
+        return decorator
+
 logger = logging.getLogger(__name__)
 
 
@@ -312,6 +328,7 @@ class PlanModeMiddleware(AgentMiddleware):
 
         return request.override(system_prompt=system_prompt)
 
+    @track_context("PlanModeMiddleware")
     def wrap_model_call(
         self,
         request: ModelRequest,
@@ -321,6 +338,7 @@ class PlanModeMiddleware(AgentMiddleware):
         modified_request = self.modify_request(request)
         return handler(modified_request)
 
+    @track_context_async("PlanModeMiddleware")
     async def awrap_model_call(
         self,
         request: ModelRequest,

@@ -2,18 +2,24 @@
 
 This module provides utilities for tracking and analyzing context window usage,
 including model-specific context window sizes and detailed token breakdowns.
+Uses dynamic context detection from Ollama when available, with fallback to
+hardcoded configurations.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+import logging
 
 if TYPE_CHECKING:
     from langchain_core.messages import BaseMessage
 
+logger = logging.getLogger(__name__)
+
 # Model context window sizes (input tokens)
 # These are approximate and may vary by version
+# Updated with actual values from Ollama (2026-04-05)
 MODEL_CONTEXT_WINDOWS: dict[str, int] = {
     # OpenAI models
     "gpt-4": 128_000,
@@ -33,44 +39,56 @@ MODEL_CONTEXT_WINDOWS: dict[str, int] = {
     "claude-3-sonnet-20240229": 200_000,
     "claude-3-haiku-20240307": 200_000,
     # Google Gemini models
-    "gemini-3-pro-preview": 1_000_000,
+    "gemini-3-pro-preview": 1_048_576,  # 1M context
+    "gemini-3-flash-preview": 1_048_576,  # 1M context
     "gemini-2.0-flash-exp": 1_000_000,
     "gemini-1.5-pro": 2_000_000,
     "gemini-1.5-flash": 1_000_000,
     "gemini-1.0-pro": 32_000,
-    # Ollama models (cloud and local variants)
-    "qwen3-coder": 200_000,
-    "qwen3-coder:480b-cloud": 200_000,
-    "qwen3-next:80b-cloud": 200_000,
-    "qwen3-vl:235b-instruct-cloud": 200_000,
-    "qwen3-vl:235b-cloud": 200_000,
-    "llama3": 128_000,
+    # Ollama cloud models (actual values from Ollama)
+    "glm-5": 202_752,  # Actual: 202,752 tokens
+    "glm-4.7": 202_752,  # Actual: 202,752 tokens
+    "glm-4.6": 202_752,  # Actual: 202,752 tokens
+    "qwen3.5": 262_144,  # Actual: 262,144 tokens (256K)
+    "qwen3-coder": 262_144,  # Actual: 262,144 tokens
+    "qwen3-coder:480b-cloud": 262_144,
+    "qwen3-next:80b-cloud": 262_144,
+    "qwen3-vl:235b-instruct-cloud": 262_144,
+    "qwen3-vl:235b-cloud": 262_144,
+    "gemma4": 262_144,  # Actual: 262,144 tokens
+    "minimax-m2.7": 204_800,  # Actual: 204,800 tokens
+    "minimax-m2.5": 204_800,
+    "minimax-m2.1": 204_800,
+    "minimax-m2": 204_800,
+    "cogito-2.1:671b-cloud": 163_840,  # Actual: 163,840 tokens
+    "deepseek-v3.1:671b-cloud": 163_840,  # Actual: 163,840 tokens
+    "devstral-2:123b-cloud": 262_144,
+    "mistral-large-3:675b-cloud": 262_144,
+    "ministral-3:14b-cloud": 262_144,
+    "kimi-k2.5": 262_144,
+    "kimi-k2-thinking": 262_144,
+    "kimi-k2:1t-cloud": 262_144,
+    "nemotron-3-nano:30b-cloud": 1_048_576,  # 1M context
+    # Ollama local models (actual values from Ollama)
+    "llama3.1": 131_072,  # Actual: 131,072 tokens (128K)
+    "llama3.2": 131_072,  # Actual: 131,072 tokens (128K)
+    "llama3": 131_072,
+    "mistral": 32_768,  # Actual: 32,768 tokens (32K)
+    "mixtral": 32_768,
     "codellama": 16_000,
-    "mistral": 32_000,
-    "mistral-large-3:675b-cloud": 128_000,
-    "mixtral": 32_000,
-    # DeepSeek models
-    "deepseek-v3.1:671b-cloud": 128_000,
-    # Devstral models
-    "devstral-2:123b-cloud": 128_000,
-    # Cogito models
-    "cogito-2.1:671b-cloud": 128_000,
-    # Kimi models
-    "kimi-k2-thinking:cloud": 128_000,
-    "kimi-k2:1t-cloud": 128_000,
-    # GLM models
-    "glm-4.7:cloud": 128_000,
-    "glm-4.6:cloud": 128_000,
-    # MiniMax models
-    "minimax-m2.1:cloud": 128_000,
-    "minimax-m2:cloud": 128_000,
-    # Nemotron models
-    "nemotron-3-nano:30b-cloud": 128_000,
-    # RNJ models
-    "rnj-1:8b-cloud": 128_000,
+    "glm-ocr": 131_072,  # Actual: 131,072 tokens
+    "qwen3": 40_960,  # Actual: 40,960 tokens
+    "qwen3:8b": 40_960,
+    "qwen3:1.7b": 40_960,
+    # SysML models
+    "SysML-V2-llama3.1": 131_072,
+    "SysML-V2-llama3.2": 131_072,
+    "Qwen3-4B-SysMLv2": 40_960,
+    "Qwen3-8B-SysMLv2": 40_960,
+    "Qwen3-SysMLv2": 40_960,
     # GPT-OSS models
-    "gpt-oss:20b-cloud": 128_000,
-    "gpt-oss:120b-cloud": 128_000,
+    "gpt-oss:20b-cloud": 131_072,
+    "gpt-oss:120b-cloud": 131_072,
     # Default fallback
     "default": 128_000,
 }
@@ -188,17 +206,34 @@ class CompactionResult:
     error: str | None = None
 
 
-def get_context_window_size(model_name: str) -> int:
+def get_context_window_size(model_name: str, use_dynamic: bool = True) -> int:
     """Get the context window size for a given model.
 
+    Uses dynamic detection from Ollama when available, with fallback to
+    hardcoded configurations.
+
     Args:
-        model_name: The name of the model (e.g., "gpt-4", "claude-3-opus")
+        model_name: The name of the model (e.g., "gpt-4", "claude-3-opus", "glm-5:cloud")
+        use_dynamic: Whether to use dynamic detection from Ollama (default: True)
 
     Returns:
         The context window size in tokens. Falls back to default (128K)
         if the model is not recognized.
     """
-    # Direct match
+    # Try dynamic detection first (if enabled)
+    if use_dynamic:
+        try:
+            from namicode_cli.utils.dynamic_context import get_ollama_context_length
+            
+            # Try to get context from Ollama
+            context_length = get_ollama_context_length(model_name)
+            if context_length:
+                logger.debug(f"Dynamic context for {model_name}: {context_length:,} tokens")
+                return context_length
+        except Exception as e:
+            logger.debug(f"Dynamic detection failed for {model_name}: {e}, falling back to hardcoded")
+    
+    # Direct match in hardcoded configs
     if model_name in MODEL_CONTEXT_WINDOWS:
         return MODEL_CONTEXT_WINDOWS[model_name]
 
@@ -267,6 +302,7 @@ def _message_text(msg: BaseMessage) -> str:
 def build_context_breakdown(
     messages: list[BaseMessage],
     model_name: str,
+    use_dynamic: bool = True,
 ) -> ContextBreakdown:
     """Build a ContextBreakdown from the current conversation state.
 
@@ -276,13 +312,14 @@ def build_context_breakdown(
     Args:
         messages: Current conversation messages from agent state.
         model_name: Model name for looking up context window size.
+        use_dynamic: Whether to use dynamic detection from Ollama (default: True)
 
     Returns:
         Populated ContextBreakdown with usage stats.
     """
     from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
-    context_window = get_context_window_size(model_name)
+    context_window = get_context_window_size(model_name, use_dynamic=use_dynamic)
 
     system_tokens = 0
     user_tokens = 0
@@ -352,6 +389,7 @@ def get_compaction_recommendation(
     messages: list[BaseMessage],
     model_name: str,
     baseline_tokens: int = 0,
+    use_dynamic: bool = True,
 ) -> CompactionRecommendation:
     """Analyze conversation and recommend whether compaction should be performed.
 
@@ -365,11 +403,12 @@ def get_compaction_recommendation(
         messages: Current conversation messages from agent state
         model_name: Model name for context window lookup
         baseline_tokens: Baseline tokens (system prompt, tools, memory) already used
+        use_dynamic: Whether to use dynamic detection from Ollama (default: True)
 
     Returns:
         CompactionRecommendation with analysis and recommendation
     """
-    breakdown = build_context_breakdown(messages, model_name)
+    breakdown = build_context_breakdown(messages, model_name, use_dynamic=use_dynamic)
 
     # Calculate effective usage including baseline
     total_with_baseline = breakdown.total_tokens + baseline_tokens
@@ -441,3 +480,94 @@ def get_compaction_recommendation(
         messages_count=total_messages,
         estimated_tokens_saved=estimated_tokens_saved,
     )
+
+
+def get_model_config_for_context(model_name: str, use_dynamic: bool = True):
+    """Get model configuration for context management.
+
+    This is a convenience function that integrates with the model_config module.
+
+    Args:
+        model_name: Model name (e.g., "glm-5:cloud", "gpt-4")
+        use_dynamic: Whether to use dynamic detection from Ollama (default: True)
+
+    Returns:
+        ModelConfig with context window settings
+
+    Example:
+        >>> config = get_model_config_for_context("glm-5:cloud")
+        >>> print(config.context_window)
+        202752
+    """
+    try:
+        from namicode_cli.utils.model_config import get_model_config
+        
+        return get_model_config(model_name, use_dynamic=use_dynamic)
+    except ImportError:
+        logger.warning("model_config module not available, using fallback")
+        # Return a basic config with context window from hardcoded values
+        context_window = get_context_window_size(model_name, use_dynamic=False)
+        
+        from dataclasses import dataclass
+        @dataclass
+        class BasicConfig:
+            name: str
+            context_window: int
+            safe_budget: int
+            growth_threshold: float
+            eviction_threshold: float
+            token_ratio: float
+            
+            def __init__(self, name, context_window):
+                self.name = name
+                self.context_window = context_window
+                self.safe_budget = int(context_window * 0.8)
+                self.growth_threshold = 1000.0 if context_window >= 100000 else 500.0
+                self.eviction_threshold = 0.75
+                self.token_ratio = 4.0
+        
+        return BasicConfig(model_name, context_window)
+
+
+def get_dynamic_context_info(model_name: str) -> dict:
+    """Get comprehensive context information for a model.
+
+    This combines information from both the context_manager and model_config modules.
+
+    Args:
+        model_name: Model name (e.g., "glm-5:cloud")
+
+    Returns:
+        Dictionary with context information
+
+    Example:
+        >>> info = get_dynamic_context_info("glm-5:cloud")
+        >>> print(info)
+        {
+            "model_name": "glm-5",
+            "context_window": 202752,
+            "safe_budget": 162201,
+            "usage_percentage": 5.3,
+            "source": "dynamic",
+        }
+    """
+    try:
+        from namicode_cli.utils.dynamic_context import get_model_info
+        
+        return get_model_info(model_name)
+    except ImportError:
+        logger.warning("dynamic_context module not available, using fallback")
+        
+        # Fallback to basic info
+        context_window = get_context_window_size(model_name, use_dynamic=True)
+        
+        return {
+            "name": model_name,
+            "context_window": context_window,
+            "safe_budget": int(context_window * 0.8),
+            "max_tokens": int(context_window * 0.2),
+            "growth_threshold": 1000.0 if context_window >= 100000 else 500.0,
+            "eviction_threshold": 0.75,
+            "token_ratio": 4.0,
+            "source": "fallback",
+        }

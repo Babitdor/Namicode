@@ -13,6 +13,22 @@ from langchain.agents.middleware.types import (
     ModelRequest,
     ModelResponse,
 )
+
+# Context tracking for middleware optimization
+try:
+    from namicode_cli.utils.context_tracking import track_context, track_context_async
+    CONTEXT_TRACKING_AVAILABLE = True
+except ImportError:
+    CONTEXT_TRACKING_AVAILABLE = False
+    # Fallback: create no-op decorators
+    def track_context(name):
+        def decorator(func):
+            return func
+        return decorator
+    def track_context_async(name):
+        def decorator(func):
+            return func
+        return decorator
 from langchain.tools import ToolRuntime
 from langchain.tools.tool_node import ToolCallRequest
 from langchain_core.messages import SystemMessage, ToolMessage
@@ -1033,6 +1049,7 @@ class FilesystemMiddleware(AgentMiddleware):
             return self.backend(runtime)
         return self.backend
 
+    @track_context("FilesystemMiddleware")
     def wrap_model_call(
         self,
         request: ModelRequest,
@@ -1094,6 +1111,7 @@ class FilesystemMiddleware(AgentMiddleware):
 
         return handler(request)
 
+    @track_context_async("FilesystemMiddleware")
     async def awrap_model_call(
         self,
         request: ModelRequest,

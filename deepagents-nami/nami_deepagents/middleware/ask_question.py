@@ -27,6 +27,22 @@ from langgraph.types import interrupt
 
 from nami_deepagents.prompts import render_template
 
+# Context tracking for middleware optimization
+try:
+    from namicode_cli.utils.context_tracking import track_context, track_context_async
+    CONTEXT_TRACKING_AVAILABLE = True
+except ImportError:
+    CONTEXT_TRACKING_AVAILABLE = False
+    # Fallback: create no-op decorators
+    def track_context(name):
+        def decorator(func):
+            return func
+        return decorator
+    def track_context_async(name):
+        def decorator(func):
+            return func
+        return decorator
+
 # ---------------------------------------------------------------------------
 # Types (also imported by planning.py so they stay in one canonical place)
 # ---------------------------------------------------------------------------
@@ -207,9 +223,11 @@ class AskQuestionMiddleware(AgentMiddleware[AgentState, Any]):
         )
         return request.override(system_prompt=system_prompt)  # type: ignore
 
+    @track_context("AskQuestionMiddleware")
     def wrap_model_call(self, request: ModelRequest, handler) -> ModelResponse:
         return handler(self.modify_request(request))
 
+    @track_context_async("AskQuestionMiddleware")
     async def awrap_model_call(self, request: ModelRequest, handler) -> ModelResponse:
         return await handler(self.modify_request(request))
 

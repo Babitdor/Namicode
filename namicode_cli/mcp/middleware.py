@@ -9,6 +9,7 @@ persistent connections for stateful MCP servers.
 
 import asyncio
 import contextlib
+import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict
@@ -27,6 +28,8 @@ from namicode_cli.config.config import console
 from namicode_cli.mcp.client import MultiServerMCPClient
 from namicode_cli.mcp.config import MCPConfig
 from namicode_cli.prompts import render_template
+
+logger = logging.getLogger(__name__)
 
 
 class MCPState(AgentState):
@@ -111,8 +114,10 @@ class MCPMiddleware(AgentMiddleware):
     async def _discover_tools_async(self) -> None:
         """Async implementation of tool discovery using MultiServerMCPClient.
 
-        Creates a single combined client and discovers tools from all servers.
-        Tools loaded this way will create sessions on-demand for each invocation.
+        Uses the recommended stateless pattern from langchain-mcp-adapters:
+        - Creates fresh sessions for each tool invocation
+        - Uses load_mcp_tools with server_name for proper attribution
+        - Handles errors gracefully with proper logging
         """
         from langchain_mcp_adapters.tools import load_mcp_tools
 
@@ -135,21 +140,13 @@ class MCPMiddleware(AgentMiddleware):
         all_tools: list[BaseTool] = []
 
         # Load tools from each server with proper attribution
-        # Prioritize Docker-based servers first (they have issues with Windows async)
-        server_names = list(servers.keys())
-        docker_servers = [name for name in server_names if servers[name].command == "docker"]
-        other_servers = [name for name in server_names if name not in docker_servers]
-        ordered_servers = docker_servers + other_servers
-
-        for server_name in ordered_servers:
+        # Use load_mcp_tools with server_name parameter for proper tool attribution
+        for server_name, connection in config_dict.items():
             try:
-                connection = config_dict.get(server_name)
-                if not connection:
-                    continue
-
-                # Load tools with server name prefix for proper attribution
+                # Load tools with server name for proper attribution
+                # This follows the langchain-mcp-adapters best practices
                 server_tools = await load_mcp_tools(
-                    session=None,
+                    session=None,  # Stateless - creates fresh session per invocation
                     connection=connection,
                     server_name=server_name,
                 )
@@ -177,15 +174,14 @@ class MCPMiddleware(AgentMiddleware):
                             }
                         )
 
-                    # console.print(
-                    #     f"[dim]MCP: Connected to '{server_name}' "
-                    #     f"({len(server_tools)} tools)[/dim]"
-                    # )
-
             except Exception as e:
+                # Log the error but continue with other servers
+                error_msg = str(e)
+                if "TaskGroup" in error_msg or "unhandled errors" in error_msg:
+                    error_msg = "Connection timeout or initialization error"
                 console.print(
                     f"[yellow]Warning: Failed to connect to "
-                    f"MCP server '{server_name}': {e}[/yellow]"
+                    f"MCP server '{server_name}': {error_msg}[/yellow]"
                 )
 
         # Store all tools for the agent
@@ -292,6 +288,19 @@ class MCPMiddleware(AgentMiddleware):
             # Format the MCP section using Jinja template
             servers_list = self._format_servers_list(servers, mcp_tools)
             mcp_section = render_template("mcp.jinja", servers_list=servers_list)
+
+            # Track context usage
+            try:
+                from namicode_cli.utils.context_budget import get_context_budget
+                budget = get_context_budget()
+                tokens_added = budget.track_middleware("MCPMiddleware", mcp_section)
+                logger.debug(
+                    f"MCPMiddleware added {tokens_added} tokens to context "
+                    f"(total: {budget.total_tokens}/{budget.max_tokens})"
+                )
+            except ImportError:
+                # Context budget tracking not available
+                pass
 
             # Inject into system prompt
             if updated_request.system_prompt:

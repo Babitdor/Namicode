@@ -98,7 +98,7 @@ def _remove(name: str) -> None:
 
 
 def _list() -> None:
-    """List all configured MCP servers."""
+    """List all configured MCP servers with connection status."""
     mcp_config = MCPConfig()
     servers = mcp_config.list_servers()
 
@@ -118,10 +118,36 @@ def _list() -> None:
         )
         return
 
+    # Get active servers from MCP middleware
+    active_servers = set()
+    try:
+        from namicode_cli.mcp import get_shared_mcp_middleware
+        
+        # Get the middleware to check which servers are connected
+        middleware = get_shared_mcp_middleware()
+        
+        # Extract server names from tools cache
+        for tool_meta in middleware._tools_cache:
+            server_name = tool_meta.get("server")
+            if server_name:
+                active_servers.add(server_name)
+    except Exception:
+        # If middleware isn't initialized yet, just show all as inactive
+        pass
+
     console.print("\n[bold]Configured MCP Servers:[/bold]\n", style=COLORS["primary"])
 
     for name, config in servers.items():
-        console.print(f"  • [bold]{name}[/bold]", style=COLORS["primary"])
+        # Show active indicator
+        is_active = name in active_servers
+        status_indicator = "[green]✓[/green]" if is_active else "[red]✗[/red]"
+        status_text = "[green]active[/green]" if is_active else "[red]inactive[/red]"
+        
+        console.print(
+            f"  {status_indicator} [bold]{name}[/bold] ({status_text})",
+            style=COLORS["primary"],
+        )
+        
         if config.description:
             console.print(f"    {config.description}", style=COLORS["dim"])
 
@@ -138,9 +164,20 @@ def _list() -> None:
                 )
 
         if config.env:
+            # Hide sensitive values (API keys, secrets, etc.)
             console.print("    Environment:", style=COLORS["dim"])
             for key, value in config.env.items():
-                console.print(f"      {key}={value}", style=COLORS["dim"])
+                # Mask sensitive values
+                if any(sensitive in key.upper() for sensitive in ["KEY", "SECRET", "TOKEN", "PASSWORD"]):
+                    masked_value = value[:8] + "..." if len(value) > 8 else "***"
+                    console.print(f"      {key}={masked_value}", style=COLORS["dim"])
+                else:
+                    console.print(f"      {key}={value}", style=COLORS["dim"])
+
+        # Show tool count for active servers
+        if is_active:
+            tool_count = sum(1 for t in middleware._tools_cache if t.get("server") == name)
+            console.print(f"    Tools: {tool_count}", style=COLORS["dim"])
 
         console.print()
 

@@ -38,6 +38,22 @@ from langgraph.runtime import Runtime
 from namicode_cli.prompts import render_template
 from namicode_cli.skills.load import SkillMetadata, list_skills
 
+# Context tracking for middleware optimization
+try:
+    from namicode_cli.utils.context_tracking import track_context, track_context_async
+    CONTEXT_TRACKING_AVAILABLE = True
+except ImportError:
+    CONTEXT_TRACKING_AVAILABLE = False
+    # Fallback: create no-op decorators
+    def track_context(name):
+        def decorator(func):
+            return func
+        return decorator
+    def track_context_async(name):
+        def decorator(func):
+            return func
+        return decorator
+
 
 class SkillsState(AgentState):
     """State for the skills middleware."""
@@ -205,6 +221,7 @@ class SkillsMiddleware(AgentMiddleware):
             )
         return SkillsStateUpdate(skills_metadata=skills)
 
+    @track_context("SkillsMiddleware")
     def wrap_model_call(
         self,
         request: ModelRequest,
@@ -242,6 +259,7 @@ class SkillsMiddleware(AgentMiddleware):
 
         return handler(request.override(system_prompt=system_prompt))  # type: ignore
 
+    @track_context_async("SkillsMiddleware")
     async def awrap_model_call(
         self,
         request: ModelRequest,
