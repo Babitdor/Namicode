@@ -7,8 +7,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from namicode_cli.process_manager import ProcessManager, ProcessStatus
-from namicode_cli.server_runner.dev_server import (
+from novacode_cli.process_manager import ProcessManager, ProcessStatus
+from novacode_cli.server_runner.dev_server import (
     ServerInfo,
     extract_port_from_command,
     find_available_port,
@@ -285,7 +285,7 @@ class TestServerLifecycle:
         """Test stopping server by PID."""
         import sys
 
-        from namicode_cli.server_runner.dev_server import stop_server
+        from novacode_cli.server_runner.dev_server import stop_server
 
         manager = ProcessManager.get_instance()
 
@@ -310,7 +310,7 @@ class TestServerLifecycle:
         """Test stopping server by name."""
         import sys
 
-        from namicode_cli.server_runner.dev_server import stop_server
+        from novacode_cli.server_runner.dev_server import stop_server
 
         manager = ProcessManager.get_instance()
 
@@ -333,7 +333,7 @@ class TestServerLifecycle:
     @pytest.mark.asyncio
     async def test_stop_server_not_found(self) -> None:
         """Test stopping a nonexistent server."""
-        from namicode_cli.server_runner.dev_server import stop_server
+        from novacode_cli.server_runner.dev_server import stop_server
 
         result = await stop_server(pid=99999)
         assert result is False
@@ -344,7 +344,7 @@ class TestServerLifecycle:
     @pytest.mark.asyncio
     async def test_stop_server_no_args(self) -> None:
         """Test stop_server with no arguments returns False."""
-        from namicode_cli.server_runner.dev_server import stop_server
+        from novacode_cli.server_runner.dev_server import stop_server
 
         result = await stop_server()
         assert result is False
@@ -363,7 +363,7 @@ class TestListServersTool:
 
     def test_list_servers_tool_empty(self) -> None:
         """Test list_servers_tool with no servers."""
-        from namicode_cli.server_runner.dev_server import list_servers_tool
+        from novacode_cli.server_runner.dev_server import list_servers_tool
 
         result = list_servers_tool()
 
@@ -376,7 +376,7 @@ class TestListServersTool:
         """Test list_servers_tool with running servers."""
         import sys
 
-        from namicode_cli.server_runner.dev_server import list_servers_tool
+        from novacode_cli.server_runner.dev_server import list_servers_tool
 
         manager = ProcessManager.get_instance()
 
@@ -409,7 +409,7 @@ class TestScanExternalServers:
 
     def test_scan_external_servers_no_servers(self) -> None:
         """Test scanning when no external servers are running."""
-        from namicode_cli.server_runner.dev_server import scan_external_servers
+        from novacode_cli.server_runner.dev_server import scan_external_servers
 
         # Scan ports that are unlikely to be in use
         servers = scan_external_servers(ports=[59990, 59991, 59992])
@@ -419,7 +419,7 @@ class TestScanExternalServers:
         """Test scanning detects a port in use."""
         import socket
 
-        from namicode_cli.server_runner.dev_server import scan_external_servers
+        from novacode_cli.server_runner.dev_server import scan_external_servers
 
         # Start a simple server on a test port
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -437,7 +437,7 @@ class TestScanExternalServers:
 
     def test_scan_external_servers_timeout(self) -> None:
         """Test that timeout parameter works."""
-        from namicode_cli.server_runner.dev_server import scan_external_servers
+        from novacode_cli.server_runner.dev_server import scan_external_servers
 
         # Should complete quickly with short timeout
         servers = scan_external_servers(ports=[59994], timeout=0.01)

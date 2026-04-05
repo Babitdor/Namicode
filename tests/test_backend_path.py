@@ -2,14 +2,14 @@ import logging
 import os
 import sys
 
-from nami_deepagents.backends.filesystem import FilesystemBackend
+from nova_deepagents.backends.filesystem import FilesystemBackend
 
 # Set up DEBUG logging
 logging.basicConfig(
     level=logging.DEBUG, format="%(levelname)s:%(name)s:%(message)s", stream=sys.stderr
 )
 
-backend = FilesystemBackend(root_dir="C:/Users/Babit-PC/.nami/skills")
+backend = FilesystemBackend(root_dir="C:/Users/Babit-PC/.Nova/skills")
 items = backend.ls_info(".")
 skill_dirs = [item["path"] for item in items if item.get("is_dir")]
 

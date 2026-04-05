@@ -56,7 +56,7 @@ coverage.xml
 # Environments
 .env
 .venv/
-.nami-venv/
+.nova-venv/
 env/
 venv/
 ENV/
@@ -108,8 +108,8 @@ langsmith.json
 # Evaluation job outputs
 evaluation/jobs/
 
-# .nami/.claude
-.nami/
+# .nova/.claude
+.nova/
 .claude/
 .serena/
 

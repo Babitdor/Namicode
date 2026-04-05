@@ -8,7 +8,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from namicode_cli.process_manager import (
+from novacode_cli.process_manager import (
     ProcessInfo,
     ProcessManager,
     ProcessStatus,

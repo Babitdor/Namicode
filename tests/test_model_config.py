@@ -11,15 +11,15 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from namicode_cli.utils.model_config import (
+from novacode_cli.utils.model_config import (
     get_model_config,
     get_model_config_auto,
     list_available_models,
     get_model_comparison,
     print_model_comparison,
 )
-from namicode_cli.utils.context_budget import get_context_budget, reset_context_budget
-from namicode_cli.utils.context_growth_tracker import get_growth_tracker, reset_growth_tracker
+from novacode_cli.utils.context_budget import get_context_budget, reset_context_budget
+from novacode_cli.utils.context_growth_tracker import get_growth_tracker, reset_growth_tracker
 
 
 def test_model_configs():

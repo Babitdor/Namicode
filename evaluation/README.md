@@ -1,6 +1,6 @@
-# Nami Code Evaluation with Harbor & Terminal-Bench 2.0
+# Nova Code Evaluation with Harbor & Terminal-Bench 2.0
 
-Runs the Nami Code CLI agent on [Terminal-Bench 2.0](https://github.com/laude-institute/terminal-bench-2) using [Harbor](https://github.com/laude-institute/harbor) as the evaluation harness, with optional [LangSmith](https://smith.langchain.com) tracing.
+Runs the Nova Code CLI agent on [Terminal-Bench 2.0](https://github.com/laude-institute/terminal-bench-2) using [Harbor](https://github.com/laude-institute/harbor) as the evaluation harness, with optional [LangSmith](https://smith.langchain.com) tracing.
 
 ---
 
@@ -38,26 +38,26 @@ LANGSMITH_TRACING_V2=true
 
 ## Running the Evaluation
 
-### Nami Code agent (recommended)
+### Nova Code agent (recommended)
 
 ```bash
 # 1 task — Docker, local testing
-make run-namicode-docker
+make run-Novacode-docker
 
 # 10 tasks — Daytona cloud
-make run-namicode-daytona
+make run-Novacode-daytona
 
 # 4 tasks — Modal cloud
-make run-namicode-modal
+make run-Novacode-modal
 
 # Specific task by name
-make run-namicode-task TASK=fix-git
+make run-Novacode-task TASK=fix-git
 
-# Compare Nami Code vs DeepAgents on the same task
+# Compare Nova Code vs DeepAgents on the same task
 make run-compare
 ```
 
-All jobs are written to `jobs/namicode/<timestamp>/`.
+All jobs are written to `jobs/Novacode/<timestamp>/`.
 
 ### Select a model
 
@@ -66,23 +66,23 @@ Use the `--model` flag when calling Harbor directly:
 ```bash
 # Anthropic Claude
 uv run harbor run \
-  --agent-import-path deepagents_harbor:NamiCodeWrapper \
+  --agent-import-path deepagents_harbor:NovaCodeWrapper \
   --dataset terminal-bench@2.0 -n 1 \
-  --jobs-dir jobs/namicode --env docker \
+  --jobs-dir jobs/Novacode --env docker \
   --model claude-sonnet-4-6
 
 # OpenAI GPT-4o
 uv run harbor run \
-  --agent-import-path deepagents_harbor:NamiCodeWrapper \
+  --agent-import-path deepagents_harbor:NovaCodeWrapper \
   --dataset terminal-bench@2.0 -n 1 \
-  --jobs-dir jobs/namicode --env docker \
+  --jobs-dir jobs/Novacode --env docker \
   --model gpt-4o
 
 # Local Ollama (GLM / any local model)
 uv run harbor run \
-  --agent-import-path deepagents_harbor:NamiCodeWrapper \
+  --agent-import-path deepagents_harbor:NovaCodeWrapper \
   --dataset terminal-bench@2.0 -n 1 \
-  --jobs-dir jobs/namicode --env docker \
+  --jobs-dir jobs/Novacode --env docker \
   --model ollama:glm4
 ```
 
@@ -92,14 +92,14 @@ uv run harbor run \
 
 ```bash
 # Via Makefile variable
-make run-namicode-task TASK=chess-best-move
+make run-Novacode-task TASK=chess-best-move
 
 # Directly (any task name from terminal-bench-2/)
 uv run harbor run \
-  --agent-import-path deepagents_harbor:NamiCodeWrapper \
+  --agent-import-path deepagents_harbor:NovaCodeWrapper \
   --dataset terminal-bench@2.0 \
   --task-name chess-best-move -n 1 \
-  --jobs-dir jobs/namicode-chess --env docker
+  --jobs-dir jobs/Novacode-chess --env docker
 ```
 
 ### DeepAgents baseline agent
@@ -116,10 +116,10 @@ make run-terminal-bench-modal      # 4 tasks, Modal
 
 ```bash
 # Summarize a completed job run
-uv run python scripts/analyze.py jobs/namicode/<timestamp>
+uv run python scripts/analyze.py jobs/Novacode/<timestamp>
 
 # Example
-uv run python scripts/analyze.py jobs/namicode/2026-03-28__23-52-59
+uv run python scripts/analyze.py jobs/Novacode/2026-03-28__23-52-59
 ```
 
 Output includes: trial status, reward scores, step counts, tool usage, and exception details.
@@ -144,7 +144,7 @@ uv run python scripts/harbor_langsmith.py create-dataset terminal-bench --versio
 
 ```bash
 uv run python scripts/harbor_langsmith.py create-experiment terminal-bench \
-  --name namicode-baseline-v1
+  --name Novacode-baseline-v1
 ```
 
 This prints a session ID and a direct link to the LangSmith comparison view.
@@ -153,9 +153,9 @@ This prints a session ID and a direct link to the LangSmith comparison view.
 
 ```bash
 # Set the experiment name so traces are grouped
-export LANGSMITH_EXPERIMENT="namicode-baseline-v1"
+export LANGSMITH_EXPERIMENT="Novacode-baseline-v1"
 
-make run-namicode-daytona
+make run-Novacode-daytona
 # or run harbor directly with --model etc.
 ```
 
@@ -165,13 +165,13 @@ After the run completes, attach Harbor's `harbor_reward` scores (0.0–1.0) to e
 
 ```bash
 uv run python scripts/harbor_langsmith.py add-feedback \
-  jobs/namicode/2026-03-28__23-52-59 \
-  --project-name namicode-baseline-v1
+  jobs/Novacode/2026-03-28__23-52-59 \
+  --project-name Novacode-baseline-v1
 
 # Dry-run first to preview what would be updated
 uv run python scripts/harbor_langsmith.py add-feedback \
-  jobs/namicode/2026-03-28__23-52-59 \
-  --project-name namicode-baseline-v1 \
+  jobs/Novacode/2026-03-28__23-52-59 \
+  --project-name Novacode-baseline-v1 \
   --dry-run
 ```
 
@@ -184,7 +184,7 @@ evaluation/
 ├── deepagents_harbor/
 │   ├── backend.py             # HarborSandbox — wraps Docker/Daytona/Modal APIs
 │   ├── deepagents_wrapper.py  # DeepAgents baseline wrapper
-│   ├── namicode_wrapper.py    # Nami Code CLI wrapper (primary)
+│   ├── Novacode_wrapper.py    # Nova Code CLI wrapper (primary)
 │   └── tracing.py             # LangSmith helpers
 ├── scripts/
 │   ├── analyze.py             # Summarize job results locally
@@ -225,11 +225,11 @@ evaluation/
 ## All Makefile Targets
 
 ```
-make run-namicode-docker          Run 1 task with Nami Code (Docker)
-make run-namicode-daytona         Run 10 tasks with Nami Code (Daytona)
-make run-namicode-modal           Run 4 tasks with Nami Code (Modal)
-make run-namicode-task TASK=name  Run a specific task with Nami Code
-make run-compare                  Run Nami Code vs DeepAgents on same task
+make run-Novacode-docker          Run 1 task with Nova Code (Docker)
+make run-Novacode-daytona         Run 10 tasks with Nova Code (Daytona)
+make run-Novacode-modal           Run 4 tasks with Nova Code (Modal)
+make run-Novacode-task TASK=name  Run a specific task with Nova Code
+make run-compare                  Run Nova Code vs DeepAgents on same task
 
 make run-terminal-bench-docker    Run 1 task with DeepAgents (Docker)
 make run-terminal-bench-daytona   Run 40 tasks with DeepAgents (Daytona)

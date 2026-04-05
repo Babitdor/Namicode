@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
-from namicode_cli.tools import http_request
+from novacode_cli.tools import http_request
 
 
 class TestHttpRequestBasic:
@@ -19,7 +19,7 @@ class TestHttpRequestBasic:
         mock_response.json.return_value = {"data": "value"}
         mock_response.url = "https://api.example.com/data"
 
-        with patch("namicode_cli.tools._get_http_session") as mock_session:
+        with patch("NovaCode_cli.tools._get_http_session") as mock_session:
             mock_sess = MagicMock()
             mock_sess.request.return_value = mock_response
             mock_session.return_value = mock_sess
@@ -38,7 +38,7 @@ class TestHttpRequestBasic:
         mock_response.json.return_value = {"id": 123, "created": True}
         mock_response.url = "https://api.example.com/create"
 
-        with patch("namicode_cli.tools._get_http_session") as mock_session:
+        with patch("NovaCode_cli.tools._get_http_session") as mock_session:
             mock_sess = MagicMock()
             mock_sess.request.return_value = mock_response
             mock_session.return_value = mock_sess
@@ -60,7 +60,7 @@ class TestHttpRequestBasic:
         mock_response.json.return_value = {"received": True}
         mock_response.url = "https://api.example.com/raw"
 
-        with patch("namicode_cli.tools._get_http_session") as mock_session:
+        with patch("NovaCode_cli.tools._get_http_session") as mock_session:
             mock_sess = MagicMock()
             mock_sess.request.return_value = mock_response
             mock_session.return_value = mock_sess
@@ -80,7 +80,7 @@ class TestHttpRequestBasic:
         mock_response.json.return_value = {}
         mock_response.url = "https://api.example.com"
 
-        with patch("namicode_cli.tools._get_http_session") as mock_session:
+        with patch("NovaCode_cli.tools._get_http_session") as mock_session:
             mock_sess = MagicMock()
             mock_sess.request.return_value = mock_response
             mock_session.return_value = mock_sess
@@ -102,7 +102,7 @@ class TestHttpRequestBasic:
         mock_response.json.return_value = {}
         mock_response.url = "https://api.example.com?q=test"
 
-        with patch("namicode_cli.tools._get_http_session") as mock_session:
+        with patch("NovaCode_cli.tools._get_http_session") as mock_session:
             mock_sess = MagicMock()
             mock_sess.request.return_value = mock_response
             mock_session.return_value = mock_sess
@@ -129,7 +129,7 @@ class TestHttpRequestResponseHandling:
         # Mock iter_content for streaming
         mock_response.iter_content.return_value = [b"<html>Hello World</html>"]
 
-        with patch("namicode_cli.tools._get_http_session") as mock_session:
+        with patch("NovaCode_cli.tools._get_http_session") as mock_session:
             mock_sess = MagicMock()
             mock_sess.request.return_value = mock_response
             mock_session.return_value = mock_sess
@@ -148,7 +148,7 @@ class TestHttpRequestResponseHandling:
         mock_response.reason = "Not Found"
         mock_response.url = "https://api.example.com/missing"
 
-        with patch("namicode_cli.tools._get_http_session") as mock_session:
+        with patch("NovaCode_cli.tools._get_http_session") as mock_session:
             mock_sess = MagicMock()
             mock_sess.request.return_value = mock_response
             mock_session.return_value = mock_sess
@@ -167,7 +167,7 @@ class TestHttpRequestResponseHandling:
         mock_response.reason = "Internal Server Error"
         mock_response.url = "https://api.example.com/broken"
 
-        with patch("namicode_cli.tools._get_http_session") as mock_session:
+        with patch("NovaCode_cli.tools._get_http_session") as mock_session:
             mock_sess = MagicMock()
             mock_sess.request.return_value = mock_response
             mock_session.return_value = mock_sess
@@ -182,7 +182,7 @@ class TestHttpRequestErrorHandling:
 
     def test_timeout_error(self):
         """Test handling of request timeout."""
-        with patch("namicode_cli.tools._get_http_session") as mock_session:
+        with patch("NovaCode_cli.tools._get_http_session") as mock_session:
             mock_sess = MagicMock()
             mock_sess.request.side_effect = requests.exceptions.Timeout("Connection timed out")
             mock_session.return_value = mock_sess
@@ -194,7 +194,7 @@ class TestHttpRequestErrorHandling:
 
     def test_connection_error(self):
         """Test handling of connection error."""
-        with patch("namicode_cli.tools._get_http_session") as mock_session:
+        with patch("NovaCode_cli.tools._get_http_session") as mock_session:
             mock_sess = MagicMock()
             mock_sess.request.side_effect = requests.exceptions.ConnectionError("Connection refused")
             mock_session.return_value = mock_sess
@@ -206,7 +206,7 @@ class TestHttpRequestErrorHandling:
 
     def test_generic_request_exception(self):
         """Test handling of generic request exception."""
-        with patch("namicode_cli.tools._get_http_session") as mock_session:
+        with patch("NovaCode_cli.tools._get_http_session") as mock_session:
             mock_sess = MagicMock()
             mock_sess.request.side_effect = requests.exceptions.RequestException("Unknown error")
             mock_session.return_value = mock_sess
@@ -217,7 +217,7 @@ class TestHttpRequestErrorHandling:
 
     def test_unexpected_exception(self):
         """Test handling of unexpected exception."""
-        with patch("namicode_cli.tools._get_http_session") as mock_session:
+        with patch("NovaCode_cli.tools._get_http_session") as mock_session:
             mock_sess = MagicMock()
             mock_sess.request.side_effect = RuntimeError("Something unexpected")
             mock_session.return_value = mock_sess
@@ -239,7 +239,7 @@ class TestHttpRequestMethods:
         mock_response.json.return_value = {}
         mock_response.url = "https://api.example.com"
 
-        with patch("namicode_cli.tools._get_http_session") as mock_session:
+        with patch("NovaCode_cli.tools._get_http_session") as mock_session:
             mock_sess = MagicMock()
             mock_sess.request.return_value = mock_response
             mock_session.return_value = mock_sess
@@ -256,7 +256,7 @@ class TestHttpRequestMethods:
         mock_response.json.return_value = {}
         mock_response.url = "https://api.example.com"
 
-        with patch("namicode_cli.tools._get_http_session") as mock_session:
+        with patch("NovaCode_cli.tools._get_http_session") as mock_session:
             mock_sess = MagicMock()
             mock_sess.request.return_value = mock_response
             mock_session.return_value = mock_sess
@@ -277,7 +277,7 @@ class TestHttpRequestTimeout:
         mock_response.json.return_value = {}
         mock_response.url = "https://api.example.com"
 
-        with patch("namicode_cli.tools._get_http_session") as mock_session:
+        with patch("NovaCode_cli.tools._get_http_session") as mock_session:
             mock_sess = MagicMock()
             mock_sess.request.return_value = mock_response
             mock_session.return_value = mock_sess
@@ -295,7 +295,7 @@ class TestHttpRequestTimeout:
         mock_response.json.return_value = {}
         mock_response.url = "https://api.example.com"
 
-        with patch("namicode_cli.tools._get_http_session") as mock_session:
+        with patch("NovaCode_cli.tools._get_http_session") as mock_session:
             mock_sess = MagicMock()
             mock_sess.request.return_value = mock_response
             mock_session.return_value = mock_sess

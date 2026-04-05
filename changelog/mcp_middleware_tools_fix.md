@@ -13,12 +13,12 @@ Fixed MCPMiddleware not registering discovered tools with the agent. The middlew
 The `wrap_model_call` and `awrap_model_call` methods in MCPMiddleware only modified the system prompt to document available MCP tools, but never injected the actual tools into the ModelRequest's tools list. This meant the agent knew about the tools from the documentation but couldn't actually call them.
 
 ## Changes
-### namicode_cli/mcp/middleware.py
+### Novacode_cli/mcp/middleware.py
 - Modified `wrap_model_call()` to merge `self.tools` with `request.tools` using `request.override(tools=updated_tools)`
 - Modified `awrap_model_call()` with the same fix for async paths
 - Now properly adds MCP tools to the agent's tool list while also documenting them in the system prompt
 
-### deepagents-nami/nami_deepagents/middleware/mcp.py
+### deepagents-Nova/Nova_deepagents/middleware/mcp.py
 - Applied identical fixes to keep both copies in sync
 
 ## Impact
@@ -28,7 +28,7 @@ The `wrap_model_call` and `awrap_model_call` methods in MCPMiddleware only modif
 
 ## Testing
 To verify the fix works:
-1. Configure an MCP server in `~/.nami/mcp.json`
-2. Start the agent: `uv run nami`
+1. Configure an MCP server in `~/.Nova/mcp.json`
+2. Start the agent: `uv run Nova`
 3. Ask the agent to use an MCP tool (e.g., "Use filesystem__read_file to list files")
 4. The agent should be able to successfully call the MCP tool

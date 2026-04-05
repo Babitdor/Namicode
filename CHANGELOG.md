@@ -1,9 +1,71 @@
+## v0.0.16 - 2026-04-05
+
+### Major Rebranding: Nami → NOVA
+
+#### Complete Brand Transformation
+- **Package renamed**: `namicode-cli` → `novacode-cli`
+- **Module renamed**: `namicode_cli` → `novacode_cli`
+- **Framework renamed**: `nami-deepagents` → `nova-deepagents`
+- **Command renamed**: `nami` → `nova`
+- **Configuration directory**: `~/.nami/` → `~/.nova/`
+- **Memory files**: `NAMI.md` → `NOVA.md`
+- **Default agent**: `nami-agent` → `nova-agent`
+
+#### ASCII Art & UI Updates
+- New NOVA ASCII art banner with elegant design
+- Enhanced tool call panels with double borders and decorative elements
+- Improved tool result panels with color-coded status
+- Updated agent question panels with better spacing
+- Enhanced todo list panels with visual hierarchy
+- Updated tool icons for better visual distinction
+
+#### Documentation Updates
+- All references to "Nami" and "NamiCode" replaced with "NOVA" and "NovaCode"
+- Updated README.md with new branding and repository links
+- Updated all command examples from `nami` to `nova`
+- Updated configuration directory references throughout
+- Updated all documentation to reflect new branding
+
+#### Codebase Refactoring
+- Renamed all Python modules from `namicode_cli` to `novacode_cli`
+- Renamed all imports throughout the codebase
+- Updated all configuration paths from `.nami` to `.nova`
+- Updated all memory file references from `NAMI.md` to `NOVA.md`
+- Renamed evaluation wrapper from `namicode_wrapper.py` to `novacode_wrapper.py`
+- Updated all template files (`.jinja`) with new branding
+
+#### Package Configuration
+- Updated `pyproject.toml` with new package name and entry points
+- Updated dependency names from `nami-deepagents` to `nova-deepagents`
+- Updated all package metadata and repository URLs
+- Updated version to `0.0.16` to reflect major rebranding
+
+#### Installation & Setup
+- Global installation now available via `uv tool install .`
+- Command `nova` available system-wide after installation
+- Updated all setup instructions and documentation
+- Verified all imports and references work correctly
+
+### Files Changed Summary
+
+| Component | Changes |
+|-----------|---------|
+| Package | `namicode-cli` → `novacode-cli` |
+| Module | `namicode_cli/` → `novacode_cli/` |
+| Framework | `nami-deepagents` → `nova-deepagents` |
+| Command | `nami` → `nova` |
+| Config Dir | `~/.nami/` → `~/.nova/` |
+| Memory File | `NAMI.md` → `NOVA.md` |
+| Default Agent | `nami-agent` → `nova-agent` |
+
+---
+
 ## v0.0.15 - 2026-03-28
 
 ### Features
 
 #### File Recovery System (da82f04, 03435ce)
-- New `namicode_cli/recovery.py` — `FileRecoveryManager` snapshots files to `~/.nami/trash/<session_id>/` before any destructive operation
+- New `Novacode_cli/recovery.py` — `FileRecoveryManager` snapshots files to `~/.Nova/trash/<session_id>/` before any destructive operation
 - Automatic snapshotting before `rm` shell commands (parses targets, glob-expands, copies to trash)
 - Automatic snapshotting before `write_file` and `edit_file` overwrites (persists `before_content` to disk)
 - `/restore` slash command — interactive numbered list of recent snapshots across sessions; supports `/restore <index>` and `/restore <path>` shortcuts
@@ -48,20 +110,20 @@
 
 #### Onboarding System (e19f4b6)
 - New interactive onboarding wizard for first-time setup
-- `namicode_cli/onboarding.py` (456 lines) - Complete onboarding workflow
-- `namicode_cli/doctor.py` (178 lines) - System health checks and diagnostics
+- `Novacode_cli/onboarding.py` (456 lines) - Complete onboarding workflow
+- `Novacode_cli/doctor.py` (178 lines) - System health checks and diagnostics
 - New `SecretManager` class for secure API key storage via keyring
 - Interactive model selection with provider detection
 - ModelManager integration for intelligent provider selection
 
 #### E2B Sandbox Integration (3a5d2aa)
-- New `namicode_cli/integrations/e2b_executor.py` (241 lines)
+- New `Novacode_cli/integrations/e2b_executor.py` (241 lines)
 - E2B cloud sandbox for secure code execution
 - `test_e2b.py` (186 lines) - Comprehensive test suite
 - Added `e2b_api_key` to supported API providers
 
 #### Default Subagent System (3a5d2aa)
-- New `namicode_cli/default_subagents/` module
+- New `Novacode_cli/default_subagents/` module
 - `subagents.py` (36 lines) - Subagent factory functions
 - `prompt.py` (138 lines) - Pre-configured system prompts for:
   - `code-explorer-agent` - Deep code research and exploration
@@ -69,7 +131,7 @@
   - `code-simplifier-agent` - Code simplification and refactoring
 
 #### Enhanced Agent Tools (3a5d2aa)
-- `namicode_cli/tools.py` (138 lines) - Extended tool implementations
+- `Novacode_cli/tools.py` (138 lines) - Extended tool implementations
 - New `get_default_subagents()` tool for retrieving pre-configured subagents
 - Improved tool registration and discovery
 
@@ -159,7 +221,7 @@
 - Enhanced `create_agent_with_config()` with shared InMemoryStore integration
 
 #### Agent and Subagent System Prompt Improvements (028396a)
-- Comprehensive `.nami/NAMI.md` file (592 lines) for AI assistant guidance
+- Comprehensive `.Nova/Nova.md` file (592 lines) for AI assistant guidance
 - Removed redundant documentation files (`AGENT_PROMPT_ENHANCEMENT.md`, `IMPLEMENTATION_SUMMARY.md`, `SUBAGENT_OBSERVABILITY.md`, `Task.md`, `UNICODE_FIX.md`)
 - Updated `default_agent_prompt.md` with improved delegation instructions
 - Added subagent task tool documentation with example usage patterns
@@ -188,7 +250,7 @@
 ### Documentation
 
 #### Comprehensive Documentation Update (028396a)
-- Added `.nami/NAMI.md` (592 lines) - comprehensive AI assistant guidance
+- Added `.Nova/Nova.md` (592 lines) - comprehensive AI assistant guidance
 - Added `CLAUDE.md` (281 lines) - Claude Code specific guidance
 - Removed fragmented documentation files
 - Consolidated project memory into single authoritative source
@@ -202,7 +264,7 @@
 
 | Commit | Files Changed | Description |
 |--------|---------------|-------------|
-| 028396a | 8 files | +673/-904 | NAMI.md creation, documentation consolidation, prompt enhancement |
+| 028396a | 8 files | +673/-904 | Nova.md creation, documentation consolidation, prompt enhancement |
 | 0f64635 | 13 files | +1480/-18 | Subagent delegation fixes, memory system, observability |
 | 07d8d5f | 1 file | +2/-2 | README update |
 | f44bf0f | 1 file | +1/-1 | README update |
@@ -217,18 +279,18 @@
 
 #### Harbor Evaluation Wrapper Improvements (4a10323)
 - Added Windows asyncio ProactorEventLoop policy to fix subprocess issues
-- Updated NamiCodeWrapper to use ModelManager for provider detection
+- Updated NovaCodeWrapper to use ModelManager for provider detection
 - Added "harbor" sandbox type for Terminal-Bench evaluations
 - Fixed create_agent_with_config call to match current API
 
 #### Memory System Enhancement - .gitignore Rule (28f8928)
-- Added critical `.gitignore` rule to project memory (NAMI.md)
+- Added critical `.gitignore` rule to project memory (Nova.md)
 - Added universal `.gitignore` rule to user agent memory for all projects
 - Files in `.gitignore` are now never accessed for security/privacy
 - Enforced across all AI assistants working with the codebase
 
 #### Image Loading Support (2d1a8cd)
-- New `namicode_cli/image_utils.py` module (209 lines)
+- New `Novacode_cli/image_utils.py` module (209 lines)
 - Supports loading and displaying images in terminal
 - Added dependencies for image processing
 - Used for banner display and visual enhancements
@@ -244,7 +306,7 @@
 - **Hard read-before-edit enforcement**: Rejects edit operations on files that haven't been read in the current session
 - **File content caching**: Stores file hashes and content for edit verification
 - **Security enhancement**: Prevents accidental edits to files outside project scope
-- Added `namicode_cli/file_tracker.py` with 572 lines of middleware implementation
+- Added `Novacode_cli/file_tracker.py` with 572 lines of middleware implementation
 
 #### Lower Context Summarization Thresholds (037644f)
 - Triggers context summarization at 70% instead of previous threshold
@@ -264,7 +326,7 @@
 
 #### Shared Memory System (477f392)
 - Cross-agent memory sharing with attribution tracking
-- New `namicode_cli/shared_memory.py` module (405 lines)
+- New `Novacode_cli/shared_memory.py` module (405 lines)
 - Supports `write_memory`, `read_memory`, `list_memories`, `delete_memory` tools
 - Memory entries include author attribution (`main-agent` or `subagent:<name>`)
 - Timestamps and optional tags for each memory
@@ -272,14 +334,14 @@
 
 #### Agent Memory Middleware (fdcd958, 477f392)
 - Loads agent.md memory files at session start
-- Supports both global (`~/.nami/agents/<name>/agent.md`) and project-level memory
+- Supports both global (`~/.Nova/agents/<name>/agent.md`) and project-level memory
 - Automatic memory updates based on user feedback
 - YAML frontmatter parsing for configuration
 
 ### UI/UX Improvements
 
 #### Branded ASCII Art Update (2d1a8cd)
-- Renamed `DEEP_AGENTS_ASCII` → `NAMI_CODE_ASCII` for proper branding
+- Renamed `DEEP_AGENTS_ASCII` → `Nova_CODE_ASCII` for proper branding
 - Updated all references in `commands.py`, `ui.py`, `input.py`
 - Consistent branding across the CLI
 
@@ -308,7 +370,7 @@
 - Pyproject configuration for AI protocols
 
 #### New Module: Image Utilities (2d1a8cd)
-- New `namicode_cli/image_utils.py` for image loading/display
+- New `Novacode_cli/image_utils.py` for image loading/display
 - Terminal-compatible image rendering support
 
 #### New Module: Evaluation Framework (fdcd958)
@@ -327,7 +389,7 @@
 
 #### Evaluation Framework Improvements (47e2801)
 - Major refactor of `deepagents_wrapper.py` for better evaluation handling
-- Added comprehensive `namicode_wrapper.py` with terminal-bench integration
+- Added comprehensive `Novacode_wrapper.py` with terminal-bench integration
 - Added Terminal-Bench dataset test results (60+ evaluation tasks)
 - Added test result artifacts for benchmark validation
 - Added `evaluation/deepagents_harbor/config.json` for Harbor configuration
@@ -344,9 +406,9 @@
 
 ### Documentation
 
-#### NAMI.md Files (037644f)
-- Added comprehensive `.nami/NAMI.md` file (574 lines)
-- Added root-level `NAMI.md` file (536 lines)
+#### Nova.md Files (037644f)
+- Added comprehensive `.Nova/Nova.md` file (574 lines)
+- Added root-level `Nova.md` file (536 lines)
 - Covers project overview, architecture, workflows, best practices
 - AI assistant guidance for working with the codebase
 
@@ -367,7 +429,7 @@
 | 4a10323 | 3 files | +21/-78 | Harbor evaluation wrapper, Windows asyncio fix |
 | 47e2801 | 200+ files | +11,500/-0 | Evaluation framework, Terminal-Bench results |
 | 28f8928 | 5 files | +143/-22 | .gitignore rule, user preferences |
-| 2d1a8cd | 9 files | +413/-34 | UI changes, NAMI branding, image utilities |
+| 2d1a8cd | 9 files | +413/-34 | UI changes, Nova branding, image utilities |
 | 73c52f6 | 1 file | +4/-1 | .gitignore updates |
 | 176420e | 3 files | +3/-1 | README changes |
 | 037644f | 8 files | +1952/-35 | FileTrackerMiddleware, /files command, context thresholds |

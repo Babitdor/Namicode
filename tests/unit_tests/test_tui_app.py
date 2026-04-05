@@ -1,25 +1,25 @@
 """Unit tests for TUI application components.
 
 Tests for the Textual-based TUI including:
-- NamiCodeApp initialization and command handling
+- NovaCodeApp initialization and command handling
 - StatusBar widget plan mode indicator
 - Session management integration
 - Subagent invocation routing
 """
 
-# The Textual TUI (NamiCodeApp, StatusBar, ChatInput, etc.) was removed.
+# The Textual TUI (NovaCodeApp, StatusBar, ChatInput, etc.) was removed.
 # These tests need rewriting for the current CLI-based UI.
 import pytest
 
 pytest.skip(
-    "Textual TUI (namicode_cli.widgets, namicode_cli.app) was removed — tests need rewriting",
+    "Textual TUI (NovaCode_cli.widgets, NovaCode_cli.app) was removed — tests need rewriting",
     allow_module_level=True,
 )
 
 
 import pytest
 
-from namicode_cli.states.Session import SessionState
+from novacode_cli.states.Session import SessionState
 
 
 class TestStatusBarPlanMode:
@@ -27,14 +27,14 @@ class TestStatusBarPlanMode:
 
     def test_status_bar_initialization(self):
         """Test StatusBar initializes with plan_mode=False."""
-        from namicode_cli.widgets.status import StatusBar
+        from novacode_cli.widgets.status import StatusBar
 
         status_bar = StatusBar()
         assert status_bar.plan_mode is False
 
     def test_set_plan_mode_enabled(self):
         """Test setting plan mode to enabled."""
-        from namicode_cli.widgets.status import StatusBar
+        from novacode_cli.widgets.status import StatusBar
 
         status_bar = StatusBar()
         status_bar.set_plan_mode(enabled=True)
@@ -42,7 +42,7 @@ class TestStatusBarPlanMode:
 
     def test_set_plan_mode_disabled(self):
         """Test setting plan mode to disabled."""
-        from namicode_cli.widgets.status import StatusBar
+        from novacode_cli.widgets.status import StatusBar
 
         status_bar = StatusBar()
         status_bar.set_plan_mode(enabled=True)
@@ -51,7 +51,7 @@ class TestStatusBarPlanMode:
 
     def test_status_bar_auto_approve_toggle(self):
         """Test auto-approve toggle in status bar."""
-        from namicode_cli.widgets.status import StatusBar
+        from novacode_cli.widgets.status import StatusBar
 
         status_bar = StatusBar()
         assert status_bar.auto_approve is False
@@ -64,7 +64,7 @@ class TestStatusBarPlanMode:
 
     def test_status_bar_mode_setting(self):
         """Test mode setting in status bar."""
-        from namicode_cli.widgets.status import StatusBar
+        from novacode_cli.widgets.status import StatusBar
 
         status_bar = StatusBar()
         assert status_bar.mode == "normal"
@@ -77,7 +77,7 @@ class TestStatusBarPlanMode:
 
     def test_status_bar_token_setting(self):
         """Test token count setting in status bar."""
-        from namicode_cli.widgets.status import StatusBar
+        from novacode_cli.widgets.status import StatusBar
 
         status_bar = StatusBar()
         assert status_bar.tokens == 0
@@ -136,7 +136,7 @@ class TestTUICommandParsing:
 
     def test_parse_agent_mention(self):
         """Test parsing @agent mentions."""
-        from namicode_cli.input import parse_agent_mentions
+        from novacode_cli.input import parse_agent_mentions
 
         result = parse_agent_mentions("@code-reviewer review this code")
         assert result is not None
@@ -146,7 +146,7 @@ class TestTUICommandParsing:
 
     def test_parse_agent_mention_no_match(self):
         """Test that non-mentions return tuple with None agent."""
-        from namicode_cli.input import parse_agent_mentions
+        from novacode_cli.input import parse_agent_mentions
 
         result = parse_agent_mentions("hello world")
         # When no @agent mention, returns (None, original_input)
@@ -165,7 +165,7 @@ class TestTokenTracker:
 
     def test_token_tracker_initialization(self):
         """Test TokenTracker initializes correctly."""
-        from namicode_cli.ui.ui_elements import TokenTracker
+        from novacode_cli.ui.ui_elements import TokenTracker
 
         tracker = TokenTracker()
         # Check that baseline_context is initialized
@@ -175,7 +175,7 @@ class TestTokenTracker:
 
     def test_token_tracker_set_baseline(self):
         """Test setting baseline tokens."""
-        from namicode_cli.ui.ui_elements import TokenTracker
+        from novacode_cli.ui.ui_elements import TokenTracker
 
         tracker = TokenTracker()
         tracker.set_baseline(1000)
@@ -184,7 +184,7 @@ class TestTokenTracker:
 
     def test_token_tracker_set_model(self):
         """Test setting model name."""
-        from namicode_cli.ui.ui_elements import TokenTracker
+        from novacode_cli.ui.ui_elements import TokenTracker
 
         tracker = TokenTracker()
         tracker.set_model("gpt-4")
@@ -192,7 +192,7 @@ class TestTokenTracker:
 
     def test_token_tracker_add_tokens(self):
         """Test adding tokens updates current context."""
-        from namicode_cli.ui.ui_elements import TokenTracker
+        from novacode_cli.ui.ui_elements import TokenTracker
 
         tracker = TokenTracker()
         tracker.set_baseline(1000)
@@ -205,33 +205,33 @@ class TestTokenTracker:
 class TestAppImports:
     """Tests for TUI app imports and dependencies."""
 
-    def test_namicode_app_import(self):
-        """Test that NamiCodeApp can be imported."""
-        from namicode_cli.app import NamiCodeApp
+    def test_NovaCode_app_import(self):
+        """Test that NovaCodeApp can be imported."""
+        from novacode_cli.app import NovaCodeApp
 
-        assert NamiCodeApp is not None
+        assert NovaCodeApp is not None
 
     def test_run_textual_app_import(self):
         """Test that run_textual_app can be imported."""
-        from namicode_cli.app import run_textual_app
+        from novacode_cli.app import run_textual_app
 
         assert run_textual_app is not None
 
     def test_status_bar_import(self):
         """Test that StatusBar can be imported."""
-        from namicode_cli.widgets.status import StatusBar
+        from novacode_cli.widgets.status import StatusBar
 
         assert StatusBar is not None
 
     def test_chat_input_import(self):
         """Test that ChatInput can be imported."""
-        from namicode_cli.widgets.chat_input import ChatInput
+        from novacode_cli.widgets.chat_input import ChatInput
 
         assert ChatInput is not None
 
     def test_message_widgets_import(self):
         """Test that message widgets can be imported."""
-        from namicode_cli.widgets.messages import (
+        from novacode_cli.widgets.messages import (
             AssistantMessage,
             SystemMessage,
             ToolCallMessage,
@@ -249,7 +249,7 @@ class TestMainTUIFunction:
 
     def test_main_tui_import(self):
         """Test that main_tui can be imported."""
-        from namicode_cli.main import main_tui
+        from novacode_cli.main import main_tui
 
         assert main_tui is not None
         # Verify it's an async function
@@ -261,7 +261,7 @@ class TestMainTUIFunction:
         """Test main_tui has correct parameters."""
         import inspect
 
-        from namicode_cli.main import main_tui
+        from novacode_cli.main import main_tui
 
         sig = inspect.signature(main_tui)
         params = list(sig.parameters.keys())
@@ -278,14 +278,14 @@ class TestMainTUIFunction:
 
 
 class TestCommandHandlerStubs:
-    """Tests for TUI command handler stubs (verify they exist in NamiCodeApp)."""
+    """Tests for TUI command handler stubs (verify they exist in NovaCodeApp)."""
 
-    def test_namicode_app_has_command_handlers(self):
-        """Test NamiCodeApp has required command handler methods."""
-        from namicode_cli.app import NamiCodeApp
+    def test_NovaCode_app_has_command_handlers(self):
+        """Test NovaCodeApp has required command handler methods."""
+        from novacode_cli.app import NovaCodeApp
 
         # Get the class methods
-        methods = dir(NamiCodeApp)
+        methods = dir(NovaCodeApp)
 
         expected_handlers = [
             "_show_help",
@@ -306,18 +306,18 @@ class TestCommandHandlerStubs:
         for handler in expected_handlers:
             assert handler in methods, f"Missing handler: {handler}"
 
-    def test_namicode_app_has_subagent_support(self):
-        """Test NamiCodeApp has subagent invocation method."""
-        from namicode_cli.app import NamiCodeApp
+    def test_NovaCode_app_has_subagent_support(self):
+        """Test NovaCodeApp has subagent invocation method."""
+        from novacode_cli.app import NovaCodeApp
 
-        methods = dir(NamiCodeApp)
+        methods = dir(NovaCodeApp)
         assert "_invoke_subagent" in methods
 
-    def test_namicode_app_has_session_management(self):
-        """Test NamiCodeApp has session management methods."""
-        from namicode_cli.app import NamiCodeApp
+    def test_NovaCode_app_has_session_management(self):
+        """Test NovaCodeApp has session management methods."""
+        from novacode_cli.app import NovaCodeApp
 
-        methods = dir(NamiCodeApp)
+        methods = dir(NovaCodeApp)
         assert "_save_session" in methods
         assert "_maybe_auto_save" in methods
         assert "_save_session_on_exit" in methods
@@ -328,7 +328,7 @@ class TestWidgetComponents:
 
     def test_chat_input_class_exists(self):
         """Test ChatInput class exists and has expected structure."""
-        from namicode_cli.widgets.chat_input import ChatInput
+        from novacode_cli.widgets.chat_input import ChatInput
 
         # Verify ChatInput is a valid class
         assert ChatInput is not None
@@ -337,13 +337,13 @@ class TestWidgetComponents:
 
     def test_approval_menu_import(self):
         """Test ApprovalMenu can be imported."""
-        from namicode_cli.widgets.approval import ApprovalMenu
+        from novacode_cli.widgets.approval import ApprovalMenu
 
         assert ApprovalMenu is not None
 
     def test_confirmation_modal_import(self):
         """Test ConfirmationModal can be imported."""
-        from namicode_cli.widgets.confirmation import ConfirmationModal
+        from novacode_cli.widgets.confirmation import ConfirmationModal
 
         assert ConfirmationModal is not None
 
@@ -353,7 +353,7 @@ class TestAutoSaveConfiguration:
 
     def test_auto_save_constants_in_app(self):
         """Test auto-save constants are defined in app module."""
-        from namicode_cli.app import (
+        from novacode_cli.app import (
             AUTO_SAVE_INTERVAL_SECONDS,
             AUTO_SAVE_MESSAGE_THRESHOLD,
         )
@@ -363,7 +363,7 @@ class TestAutoSaveConfiguration:
 
     def test_auto_save_constants_in_main(self):
         """Test auto-save constants are defined in main module."""
-        from namicode_cli.main import (
+        from novacode_cli.main import (
             AUTO_SAVE_INTERVAL_SECONDS,
             AUTO_SAVE_MESSAGE_THRESHOLD,
         )

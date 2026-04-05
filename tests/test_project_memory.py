@@ -6,9 +6,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from namicode_cli.config import Settings
-from namicode_cli.memory.agent_memory import AgentMemoryMiddleware
-from namicode_cli.skills import SkillsMiddleware
+from novacode_cli.config import Settings
+from novacode_cli.memory.agent_memory import AgentMemoryMiddleware
+from novacode_cli.skills import SkillsMiddleware
 
 
 class TestAgentMemoryMiddleware:
@@ -19,8 +19,8 @@ class TestAgentMemoryMiddleware:
         # Mock Path.home() to return tmp_path
         monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
 
-        # Create user agent directory at ~/.nami/agents/{agent_name}/
-        agent_dir = tmp_path / ".nami" / "agents" / "test_agent"
+        # Create user agent directory at ~/.nova/agents/{agent_name}/
+        agent_dir = tmp_path / ".nova" / "agents" / "test_agent"
         agent_dir.mkdir(parents=True)
         user_md = agent_dir / "agent.md"
         user_md.write_text("User instructions")
@@ -54,18 +54,18 @@ class TestAgentMemoryMiddleware:
         # Mock Path.home() to return tmp_path
         monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
 
-        # Create user agent directory at ~/.nami/agents/{agent_name}/
-        agent_dir = tmp_path / ".nami" / "agents" / "test_agent"
+        # Create user agent directory at ~/.nova/agents/{agent_name}/
+        agent_dir = tmp_path / ".nova" / "agents" / "test_agent"
         agent_dir.mkdir(parents=True)
         user_md = agent_dir / "agent.md"
         user_md.write_text("User instructions")
 
-        # Create project with .git and agent.md in .nami/
+        # Create project with .git and agent.md in .nova/
         project_root = tmp_path / "project"
         project_root.mkdir()
         (project_root / ".git").mkdir()
-        (project_root / ".nami").mkdir()
-        project_md = project_root / ".nami" / "agent.md"
+        (project_root / ".nova").mkdir()
+        project_md = project_root / ".nova" / "agent.md"
         project_md.write_text("Project instructions")
 
         original_cwd = Path.cwd()
@@ -123,7 +123,7 @@ class TestSkillsPathResolution:
 
     def test_skills_dir_per_agent(self, tmp_path: Path) -> None:
         """Test that different agents have separate skills directories."""
-        from namicode_cli.skills import SkillsMiddleware
+        from novacode_cli.skills import SkillsMiddleware
 
         # Agent 1
         agent1_skills = tmp_path / ".deepagents" / "agent1" / "skills"
@@ -305,8 +305,8 @@ class TestAgentMemoryEdgeCases:
         """Test handling of empty agent.md files."""
         monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
 
-        # Create empty agent.md at ~/.nami/agents/{agent_name}/
-        agent_dir = tmp_path / ".nami" / "agents" / "test_agent"
+        # Create empty agent.md at ~/.nova/agents/{agent_name}/
+        agent_dir = tmp_path / ".nova" / "agents" / "test_agent"
         agent_dir.mkdir(parents=True)
         (agent_dir / "agent.md").write_text("")
 
@@ -333,8 +333,8 @@ class TestAgentMemoryEdgeCases:
         """
         monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
 
-        # Create agent.md at ~/.nami/agents/{agent_name}/
-        agent_dir = tmp_path / ".nami" / "agents" / "test_agent"
+        # Create agent.md at ~/.nova/agents/{agent_name}/
+        agent_dir = tmp_path / ".nova" / "agents" / "test_agent"
         agent_dir.mkdir(parents=True)
 
         # Write binary data with invalid UTF-8 sequences

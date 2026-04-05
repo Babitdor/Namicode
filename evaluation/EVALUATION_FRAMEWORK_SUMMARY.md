@@ -2,7 +2,7 @@
 
 ## Overview
 
-The evaluation framework provides a comprehensive system for testing and benchmarking AI agents on complex terminal-based tasks. It integrates **Harbor** (evaluation orchestration), **Terminal-Bench 2.0** (benchmark tasks), **LangSmith** (tracing/observability), and custom agent wrappers for the Nami Code CLI.
+The evaluation framework provides a comprehensive system for testing and benchmarking AI agents on complex terminal-based tasks. It integrates **Harbor** (evaluation orchestration), **Terminal-Bench 2.0** (benchmark tasks), **LangSmith** (tracing/observability), and custom agent wrappers for the Nova Code CLI.
 
 ---
 
@@ -15,7 +15,7 @@ The evaluation framework provides a comprehensive system for testing and benchma
 | **Harbor** | Evaluation orchestration framework | Python package (`harbor>=0.1.12`) |
 | **Terminal-Bench 2.0** | Benchmark task dataset | 90+ diverse tasks |
 | **LangSmith** | Tracing and observability | LangChain ecosystem |
-| **Agent Wrappers** | Bridge agents to Harbor | `DeepAgentsWrapper`, `NamiCodeWrapper` |
+| **Agent Wrappers** | Bridge agents to Harbor | `DeepAgentsWrapper`, `NovaCodeWrapper` |
 
 ### Evaluation Flow
 
@@ -137,7 +137,7 @@ deepagents_harbor/
 ├── __init__.py              # Package exports
 ├── backend.py               # HarborSandbox - sandbox operations
 ├── deepagents_wrapper.py    # DeepAgents agent wrapper
-├── namicode_wrapper.py      # Nami Code CLI agent wrapper
+├── Novacode_wrapper.py      # Nova Code CLI agent wrapper
 └── tracing.py               # LangSmith integration utilities
 ```
 
@@ -191,11 +191,11 @@ class DeepAgentsWrapper(BaseAgent):
         # 5. Save trajectory in ATIF format
 ```
 
-#### NamiCodeWrapper
+#### NovaCodeWrapper
 
 ```python
-class NamiCodeWrapper(BaseAgent):
-    """Harbor agent using full Nami Code CLI with middleware."""
+class NovaCodeWrapper(BaseAgent):
+    """Harbor agent using full Nova Code CLI with middleware."""
     
     # Includes all middleware:
     # - FileTrackerMiddleware
@@ -219,7 +219,7 @@ make run-terminal-bench-docker
 make run-terminal-bench-daytona
 
 # Run specific task
-make run-namicode-task TASK=chess-best-move
+make run-Novacode-task TASK=chess-best-move
 
 # Compare agents
 make run-compare
@@ -264,11 +264,11 @@ python scripts/harbor_langsmith.py add-feedback jobs/terminal-bench/2025-12-02__
   "schema_version": "ATIF-v1.2",
   "session_id": "unique-session-id",
   "agent": {
-    "name": "namicode-harbor",
+    "name": "Novacode-harbor",
     "version": "0.1.0",
     "model_name": "claude-3-5-sonnet",
     "extra": {
-      "framework": "namicode-cli",
+      "framework": "Novacode-cli",
       "middleware": ["FileTrackerMiddleware", "AgentMemoryMiddleware"]
     }
   },
@@ -370,8 +370,8 @@ make run-terminal-bench-docker
 # Run scaled evaluation (Daytona cloud)
 make run-terminal-bench-daytona
 
-# Run with Nami Code agent
-make run-namicode-docker
+# Run with Nova Code agent
+make run-Novacode-docker
 
 # Create LangSmith dataset
 python scripts/harbor_langsmith.py create-dataset terminal-bench
@@ -404,7 +404,7 @@ evaluation/
 ├── deepagents_harbor/           # Agent wrappers
 │   ├── backend.py               # HarborSandbox implementation
 │   ├── deepagents_wrapper.py    # DeepAgents wrapper
-│   ├── namicode_wrapper.py      # Nami Code wrapper
+│   ├── Novacode_wrapper.py      # Nova Code wrapper
 │   └── tracing.py               # LangSmith utilities
 ├── scripts/
 │   ├── analyze.py               # Job result analysis

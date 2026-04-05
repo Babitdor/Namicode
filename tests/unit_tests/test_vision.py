@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from namicode_cli.image_utils import (
+from novacode_cli.image_utils import (
     SUPPORTED_FORMATS,
     ImageData,
     ImageProcessor,
@@ -12,8 +12,8 @@ from namicode_cli.image_utils import (
     is_image_file,
     load_image_from_path,
 )
-from namicode_cli.input import ImageTracker
-from namicode_cli.vision import (
+from novacode_cli.input import ImageTracker
+from novacode_cli.vision import (
     VISION_CAPABLE_MODELS,
     get_vision_models,
     model_supports_vision,

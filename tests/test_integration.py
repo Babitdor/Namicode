@@ -1,4 +1,4 @@
-"""Integration test for dynamic context detection with model config."""
+"""Integration test for dyNovac context detection with model config."""
 
 import sys
 from pathlib import Path
@@ -6,8 +6,8 @@ from pathlib import Path
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from namicode_cli.utils.model_config import get_model_config, get_model_config_auto
-from namicode_cli.utils.dynamic_context import (
+from novacode_cli.utils.model_config import get_model_config, get_model_config_auto
+from novacode_cli.utils.dyNovac_context import (
     get_ollama_context_length,
     is_ollama_available,
     clear_context_cache,
@@ -15,36 +15,36 @@ from namicode_cli.utils.dynamic_context import (
 )
 
 
-def test_dynamic_detection():
-    """Test dynamic detection from Ollama."""
+def test_dyNovac_detection():
+    """Test dyNovac detection from Ollama."""
     print("\n" + "=" * 80)
-    print("Testing Dynamic Detection Integration")
+    print("Testing DyNovac Detection Integration")
     print("=" * 80)
     
-    # Test with dynamic detection enabled (default)
-    print("\n1. Testing with dynamic detection enabled:")
-    config = get_model_config("glm-5:cloud", use_dynamic=True)
+    # Test with dyNovac detection enabled (default)
+    print("\n1. Testing with dyNovac detection enabled:")
+    config = get_model_config("glm-5:cloud", use_dyNovac=True)
     print(f"   Model: {config.name}")
     print(f"   Context Window: {config.context_window:,} tokens")
     print(f"   Safe Budget: {config.safe_budget:,} tokens")
     print(f"   Growth Threshold: {config.growth_threshold:,.0f} tokens/turn")
-    print(f"   ✓ Dynamic detection works")
+    print(f"   ✓ DyNovac detection works")
     
-    # Test with dynamic detection disabled
-    print("\n2. Testing with dynamic detection disabled:")
-    config_hardcoded = get_model_config("glm-5", use_dynamic=False)
+    # Test with dyNovac detection disabled
+    print("\n2. Testing with dyNovac detection disabled:")
+    config_hardcoded = get_model_config("glm-5", use_dyNovac=False)
     print(f"   Model: {config_hardcoded.name}")
     print(f"   Context Window: {config_hardcoded.context_window:,} tokens")
     print(f"   ✓ Hardcoded config works")
     
     # Compare
-    print("\n3. Comparing dynamic vs hardcoded:")
-    print(f"   Dynamic: {config.context_window:,} tokens")
+    print("\n3. Comparing dyNovac vs hardcoded:")
+    print(f"   DyNovac: {config.context_window:,} tokens")
     print(f"   Hardcoded: {config_hardcoded.context_window:,} tokens")
     if config.context_window == config_hardcoded.context_window:
         print(f"   ✓ Values match (both use actual context from Ollama)")
     else:
-        print(f"   ⚠ Values differ (dynamic detected different value)")
+        print(f"   ⚠ Values differ (dyNovac detected different value)")
 
 
 def test_caching():
@@ -92,7 +92,7 @@ def test_fallback():
     
     # Test with unknown model
     print("\n1. Testing with unknown model:")
-    config = get_model_config("unknown-model-xyz", use_dynamic=True)
+    config = get_model_config("unknown-model-xyz", use_dyNovac=True)
     print(f"   Model: {config.name}")
     print(f"   Context Window: {config.context_window:,} tokens")
     print(f"   Safe Budget: {config.safe_budget:,} tokens")
@@ -102,12 +102,12 @@ def test_fallback():
     print("\n2. Testing fallback when Ollama unavailable:")
     if not is_ollama_available():
         print("   ⚠ Ollama not available, testing fallback")
-        config = get_model_config("glm-5", use_dynamic=True)
+        config = get_model_config("glm-5", use_dyNovac=True)
         print(f"   Model: {config.name}")
         print(f"   Context Window: {config.context_window:,} tokens")
         print(f"   ✓ Fallback to hardcoded config works")
     else:
-        print("   ✓ Ollama available, dynamic detection active")
+        print("   ✓ Ollama available, dyNovac detection active")
 
 
 def test_auto_detection():
@@ -118,14 +118,14 @@ def test_auto_detection():
     
     # Test with explicit model name
     print("\n1. Testing with explicit model name:")
-    config = get_model_config_auto("glm-5:cloud", use_dynamic=True)
+    config = get_model_config_auto("glm-5:cloud", use_dyNovac=True)
     print(f"   Model: {config.name}")
     print(f"   Context Window: {config.context_window:,} tokens")
     print(f"   ✓ Auto detection with explicit name works")
     
     # Test without model name (should use default)
     print("\n2. Testing without model name:")
-    config = get_model_config_auto(use_dynamic=True)
+    config = get_model_config_auto(use_dyNovac=True)
     print(f"   Model: {config.name}")
     print(f"   Context Window: {config.context_window:,} tokens")
     print(f"   ✓ Auto detection with default works")
@@ -145,9 +145,9 @@ def test_multiple_models():
         "mistral:latest",
     ]
     
-    print("\nTesting dynamic detection for multiple models:")
+    print("\nTesting dyNovac detection for multiple models:")
     for model in models:
-        config = get_model_config(model, use_dynamic=True)
+        config = get_model_config(model, use_dyNovac=True)
         print(f"\n   {model}:")
         print(f"     Context: {config.context_window:,} tokens")
         print(f"     Safe Budget: {config.safe_budget:,} tokens")
@@ -194,11 +194,11 @@ def test_performance():
 def main():
     """Run all integration tests."""
     print("\n" + "=" * 80)
-    print("          Dynamic Context Integration Test Suite")
+    print("          DyNovac Context Integration Test Suite")
     print("=" * 80)
     
     try:
-        test_dynamic_detection()
+        test_dyNovac_detection()
         test_caching()
         test_fallback()
         test_auto_detection()
@@ -208,7 +208,7 @@ def main():
         print("\n" + "=" * 80)
         print("                    All Integration Tests Passed! ✓")
         print("=" * 80)
-        print("\n✓ Dynamic detection integrated successfully")
+        print("\n✓ DyNovac detection integrated successfully")
         print("✓ Caching working correctly")
         print("✓ Fallback to hardcoded configs working")
         print("✓ Auto detection working")

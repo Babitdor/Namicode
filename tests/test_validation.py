@@ -6,7 +6,7 @@ logging.basicConfig(
     level=logging.DEBUG, format="%(levelname)s:%(name)s:%(message)s", stream=sys.stderr
 )
 
-from nami_deepagents.middleware.skills import _validate_skill_name
+from nova_deepagents.middleware.skills import _validate_skill_name
 
 # Test with a simple example
 name = "algorithmic-art"

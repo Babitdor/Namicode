@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from namicode_cli.skills.middleware import SkillsMiddleware
+from novacode_cli.skills.middleware import SkillsMiddleware
 
 
 class TestSkillsMiddlewareInit:
@@ -44,7 +44,7 @@ class TestSkillsMiddlewareInit:
     def test_init_with_multiple_project_dirs(self, tmp_path: Path) -> None:
         """Test initialization with multiple project skills directories."""
         skills_dir = tmp_path / "user_skills"
-        project1 = tmp_path / ".nami" / "skills"
+        project1 = tmp_path / ".Nova" / "skills"
         project2 = tmp_path / ".claude" / "skills"
         skills_dir.mkdir()
         project1.mkdir(parents=True)
@@ -79,7 +79,7 @@ class TestSkillsMiddlewareProperties:
         )
 
         display = middleware.skills_dir_display
-        assert display == "~/.nami/my-agent/skills"
+        assert display == "~/.Nova/my-agent/skills"
 
     def test_skills_dir_absolute(self, tmp_path: Path) -> None:
         """Test skills_dir_absolute returns absolute path string."""
@@ -103,12 +103,12 @@ class TestSkillsMiddlewareFormatLocations:
         )
 
         result = middleware._format_skills_locations()
-        assert "~/.nami/agent/skills" in result
+        assert "~/.Nova/agent/skills" in result
         assert "User Skills" in result
 
     def test_format_with_single_project_dir(self, tmp_path: Path) -> None:
         """Test formatting with single project directory."""
-        project_dir = tmp_path / "project" / ".nami" / "skills"
+        project_dir = tmp_path / "project" / ".Nova" / "skills"
         middleware = SkillsMiddleware(
             skills_dir=tmp_path / "user",
             assistant_id="agent",
@@ -121,7 +121,7 @@ class TestSkillsMiddlewareFormatLocations:
 
     def test_format_with_multiple_project_dirs(self, tmp_path: Path) -> None:
         """Test formatting with multiple project directories."""
-        project1 = tmp_path / ".nami" / "skills"
+        project1 = tmp_path / ".Nova" / "skills"
         project2 = tmp_path / ".claude" / "skills"
         middleware = SkillsMiddleware(
             skills_dir=tmp_path / "user",
@@ -147,7 +147,7 @@ class TestSkillsMiddlewareFormatSkillsList:
 
         result = middleware._format_skills_list([])
         assert "No skills available" in result
-        assert "~/.nami/agent/skills" in result
+        assert "~/.Nova/agent/skills" in result
 
     def test_format_user_skills(self, tmp_path: Path) -> None:
         """Test formatting user skills."""
@@ -189,7 +189,7 @@ class TestSkillsMiddlewareFormatSkillsList:
             {
                 "name": "deploy",
                 "description": "Deploy the application",
-                "path": "/project/.nami/skills/deploy/SKILL.md",
+                "path": "/project/.Nova/skills/deploy/SKILL.md",
                 "source": "project",
             },
         ]
@@ -433,7 +433,7 @@ Test instructions.
     def test_project_skills_override_user_skills(self, tmp_path: Path) -> None:
         """Test that project skills override user skills with same name."""
         user_skills = tmp_path / "user" / "skills"
-        project_skills = tmp_path / "project" / ".nami" / "skills"
+        project_skills = tmp_path / "project" / ".Nova" / "skills"
         user_skills.mkdir(parents=True)
         project_skills.mkdir(parents=True)
 

@@ -17,10 +17,10 @@ async def verify_screens():
     try:
         # Import App
 
-        console.print("[green]✓ Imported NamiCodeApp[/green]")
+        console.print("[green]✓ Imported NovaCodeApp[/green]")
 
         # Import Screens
-        from namicode_cli.widgets.screens import (
+        from novacode_cli.widgets.screens import (
             AgentCreateModal,
             AgentsScreen,
             MCPScreen,
@@ -49,7 +49,7 @@ async def verify_screens():
         console.print(f"[green]✓ Instantiated AgentsScreen: {agents_screen}[/green]")
 
         # SessionsScreen
-        from namicode_cli.app import TextualSessionState
+        from novacode_cli.app import TextualSessionState
 
         dummy_state = TextualSessionState()
         sessions_screen = SessionsScreen(session_state=dummy_state)

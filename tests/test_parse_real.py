@@ -2,7 +2,7 @@ import logging
 import os
 import sys
 
-from nami_deepagents.middleware.skills import _parse_skill_metadata
+from nova_deepagents.middleware.skills import _parse_skill_metadata
 
 # Set up DEBUG logging
 logging.basicConfig(
@@ -10,12 +10,12 @@ logging.basicConfig(
 )
 
 # Read the actual SKILL.md content
-skill_md_path = "C:/Users/Babit-PC/.nami/skills/algorithmic-art/SKILL.md"
+skill_md_path = "C:/Users/Babit-PC/.Nova/skills/algorithmic-art/SKILL.md"
 with open(skill_md_path, encoding="utf-8") as f:
     content = f.read()
 
 # Extract directory name from path
-skill_dir_path = "C:/Users/Babit-PC/.nami/skills/algorithmic-art/"
+skill_dir_path = "C:/Users/Babit-PC/.Nova/skills/algorithmic-art/"
 directory_name = os.path.basename(skill_dir_path.rstrip("/\\"))
 print(f"Extracted directory_name: {directory_name!r}")
 print("Calling _parse_skill_metadata with:")

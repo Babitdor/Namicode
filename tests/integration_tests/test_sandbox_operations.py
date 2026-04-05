@@ -17,7 +17,7 @@ from collections.abc import Iterator
 import pytest
 from deepagents.backends.protocol import SandboxBackendProtocol
 
-from namicode_cli.integrations.sandbox_factory import create_sandbox
+from novacode_cli.integrations.sandbox_factory import create_sandbox
 
 
 class TestSandboxOperations:

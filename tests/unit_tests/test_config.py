@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from namicode_cli.config.config import _find_project_agent_md, _find_project_root
+from novacode_cli.config.config import _find_project_agent_md, _find_project_root
 
 
 class TestProjectRootDetection:
@@ -54,8 +54,8 @@ class TestProjectAgentMdFinding:
 
     _find_project_agent_md returns list[Path] — ALL files that exist, in
     general-to-specific order so that more-specific files override earlier ones:
-      1. NAMI.md (root)
-      2. .nami/NAMI.md
+      1. Nova.md (root)
+      2. .Nova/Nova.md
       3. CLAUDE.md (root)
       4. .claude/CLAUDE.md
     """
@@ -84,29 +84,29 @@ class TestProjectAgentMdFinding:
         result = _find_project_agent_md(project_root)
         assert result == [root_claude_md]
 
-    def test_find_nami_md_in_nami_dir(self, tmp_path: Path) -> None:
-        """Test finding NAMI.md in .nami/ directory."""
+    def test_find_Nova_md_in_Nova_dir(self, tmp_path: Path) -> None:
+        """Test finding Nova.md in .Nova/ directory."""
         project_root = tmp_path / "project"
         project_root.mkdir()
 
-        nami_dir = project_root / ".nami"
-        nami_dir.mkdir()
-        nami_md = nami_dir / "NAMI.md"
-        nami_md.write_text("Nami instructions")
+        Nova_dir = project_root / ".Nova"
+        Nova_dir.mkdir()
+        Nova_md = Nova_dir / "Nova.md"
+        Nova_md.write_text("Nova instructions")
 
         result = _find_project_agent_md(project_root)
-        assert result == [nami_md]
+        assert result == [Nova_md]
 
-    def test_find_nami_md_in_root(self, tmp_path: Path) -> None:
-        """Test finding NAMI.md in project root (created by /init)."""
+    def test_find_Nova_md_in_root(self, tmp_path: Path) -> None:
+        """Test finding Nova.md in project root (created by /init)."""
         project_root = tmp_path / "project"
         project_root.mkdir()
 
-        root_nami_md = project_root / "NAMI.md"
-        root_nami_md.write_text("# Project Documentation")
+        root_Nova_md = project_root / "Nova.md"
+        root_Nova_md.write_text("# Project Documentation")
 
         result = _find_project_agent_md(project_root)
-        assert result == [root_nami_md]
+        assert result == [root_Nova_md]
 
     def test_find_agent_md_not_found(self, tmp_path: Path) -> None:
         """Test that empty list is returned when no config file exists."""
@@ -121,13 +121,13 @@ class TestProjectAgentMdFinding:
         project_root = tmp_path / "project"
         project_root.mkdir()
 
-        root_nami_md = project_root / "NAMI.md"
-        root_nami_md.write_text("Root NAMI.md")
+        root_Nova_md = project_root / "Nova.md"
+        root_Nova_md.write_text("Root Nova.md")
 
-        nami_dir = project_root / ".nami"
-        nami_dir.mkdir()
-        nami_dir_md = nami_dir / "NAMI.md"
-        nami_dir_md.write_text("In .nami/")
+        Nova_dir = project_root / ".Nova"
+        Nova_dir.mkdir()
+        Nova_dir_md = Nova_dir / "Nova.md"
+        Nova_dir_md.write_text("In .Nova/")
 
         claude_dir = project_root / ".claude"
         claude_dir.mkdir()
@@ -135,10 +135,10 @@ class TestProjectAgentMdFinding:
         claude_dir_md.write_text("In .claude/")
 
         result = _find_project_agent_md(project_root)
-        assert result == [root_nami_md, nami_dir_md, claude_dir_md]
+        assert result == [root_Nova_md, Nova_dir_md, claude_dir_md]
 
     def test_priority_claude_dir_over_root(self, tmp_path: Path) -> None:
-        """Test that both .claude/CLAUDE.md and root NAMI.md are returned."""
+        """Test that both .claude/CLAUDE.md and root Nova.md are returned."""
         project_root = tmp_path / "project"
         project_root.mkdir()
 
@@ -147,8 +147,8 @@ class TestProjectAgentMdFinding:
         claude_dir_md = claude_dir / "CLAUDE.md"
         claude_dir_md.write_text("In .claude/")
 
-        root_nami_md = project_root / "NAMI.md"
-        root_nami_md.write_text("Root NAMI.md")
+        root_Nova_md = project_root / "Nova.md"
+        root_Nova_md.write_text("Root Nova.md")
 
         result = _find_project_agent_md(project_root)
-        assert result == [root_nami_md, claude_dir_md]
+        assert result == [root_Nova_md, claude_dir_md]

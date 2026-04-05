@@ -12,7 +12,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 
-from nami_deepagents import create_deep_agent
+from nova_deepagents import create_deep_agent
 
 
 def scan_dataset_for_solutions(dataset_path: Path) -> dict[str, Path]:

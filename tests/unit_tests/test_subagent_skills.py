@@ -7,7 +7,7 @@ via the SkillsMiddleware integration in invoke_subagent.
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from namicode_cli.skills.middleware import SkillsMiddleware
+from novacode_cli.skills.middleware import SkillsMiddleware
 
 
 class TestSubagentSkillsMiddlewareSetup:
@@ -18,7 +18,7 @@ class TestSubagentSkillsMiddlewareSetup:
         # Create mock skills directories
         skills_dir = tmp_path / "skills"
         skills_dir.mkdir()
-        project_skills = tmp_path / "project" / ".nami" / "skills"
+        project_skills = tmp_path / "project" / ".nova" / "skills"
         project_skills.mkdir(parents=True)
 
         # Create SkillsMiddleware like invoke_subagent does
@@ -34,7 +34,7 @@ class TestSubagentSkillsMiddlewareSetup:
 
     def test_subagent_skills_directory_path(self, tmp_path: Path) -> None:
         """Test that subagent uses correct skills directory paths."""
-        skills_dir = tmp_path / ".nami" / "skills"
+        skills_dir = tmp_path / ".nova" / "skills"
         skills_dir.mkdir(parents=True)
 
         middleware = SkillsMiddleware(
@@ -89,7 +89,7 @@ Follow this workflow for web research tasks.
     def test_subagent_discovers_project_skills(self, tmp_path: Path) -> None:
         """Test that subagent discovers project-level skills."""
         user_skills = tmp_path / "user_skills"
-        project_skills = tmp_path / "project" / ".nami" / "skills"
+        project_skills = tmp_path / "project" / ".nova" / "skills"
         user_skills.mkdir()
         project_skills.mkdir(parents=True)
 
@@ -366,11 +366,11 @@ class TestSubagentSkillsWithMultipleProjectDirs:
     def test_multiple_project_skills_dirs(self, tmp_path: Path) -> None:
         """Test that subagent can load from multiple project skill directories."""
         user_skills = tmp_path / "user"
-        nami_skills = tmp_path / ".nami" / "skills"
+        Nova_skills = tmp_path / ".nova" / "skills"
         claude_skills = tmp_path / ".claude" / "skills"
 
         user_skills.mkdir()
-        nami_skills.mkdir(parents=True)
+        Nova_skills.mkdir(parents=True)
         claude_skills.mkdir(parents=True)
 
         # Create skills in each location
@@ -381,10 +381,10 @@ description: From user directory
 ---
 """)
 
-        (nami_skills / "nami-skill").mkdir()
-        (nami_skills / "nami-skill" / "SKILL.md").write_text("""---
-name: nami-skill
-description: From .nami directory
+        (Nova_skills / "Nova-skill").mkdir()
+        (Nova_skills / "Nova-skill" / "SKILL.md").write_text("""---
+name: Nova-skill
+description: From .nova directory
 ---
 """)
 
@@ -398,7 +398,7 @@ description: From .claude directory
         middleware = SkillsMiddleware(
             skills_dir=user_skills,
             assistant_id="multi-dir-agent",
-            project_skills_dirs=[nami_skills, claude_skills],
+            project_skills_dirs=[Nova_skills, claude_skills],
         )
 
         mock_runtime = MagicMock()
@@ -408,4 +408,4 @@ description: From .claude directory
         assert len(result["skills_metadata"]) == 3
 
         skill_names = {s["name"] for s in result["skills_metadata"]}
-        assert skill_names == {"user-skill", "nami-skill", "claude-skill"}
+        assert skill_names == {"user-skill", "Nova-skill", "claude-skill"}

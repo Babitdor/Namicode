@@ -5,13 +5,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from namicode_cli.compaction import (
+from novacode_cli.compaction import (
     SUMMARIZATION_PROMPT,
     _format_message_content,
     compact_conversation,
     summarize_conversation,
 )
-from namicode_cli.context.context_manager import CompactionResult
+from novacode_cli.context.context_manager import CompactionResult
 
 
 class TestSummarizationPrompt:
