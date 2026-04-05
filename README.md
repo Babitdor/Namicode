@@ -1,5 +1,5 @@
 
-![Nova CLI Banner](assets/NOVA.svg)
+![Nova CLI Banner](assets/NOVA.png)
 
 # NOVA : Agentic Coding Tool
 
