@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from namicode_cli.mcp.config import MCPConfig, MCPServerConfig
-from namicode_cli.mcp.middleware import MCPMiddleware
+from novacode_cli.mcp.config import MCPConfig, MCPServerConfig
+from novacode_cli.mcp.middleware import MCPMiddleware
 
 
 class TestMCPMiddlewareInit:

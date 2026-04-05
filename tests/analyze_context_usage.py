@@ -7,7 +7,7 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from namicode_cli.utils.context_budget import get_context_budget, reset_context_budget
+from novacode_cli.utils.context_budget import get_context_budget, reset_context_budget
 
 
 def analyze_real_prompts():
@@ -23,7 +23,7 @@ def analyze_real_prompts():
     budget = get_context_budget(max_tokens=50000)
     
     # Find actual prompt templates
-    prompts_dir = Path("namicode_cli/prompts")
+    prompts_dir = Path("NovaCode_cli/prompts")
     
     if not prompts_dir.exists():
         print("⚠ Prompts directory not found, using estimates")
@@ -59,7 +59,7 @@ def analyze_real_prompts():
     print("Analyzing middleware implementation sizes...")
     print()
     
-    middleware_dir = Path("deepagents-nami/nami_deepagents/middleware")
+    middleware_dir = Path("deepagents-Nova/Nova_deepagents/middleware")
     
     if middleware_dir.exists():
         middleware_files = {
@@ -149,8 +149,8 @@ Best practices:
 You have access to specialized skills that can be invoked on-demand.
 
 Skills are loaded from:
-- ~/.nami/skills/ (user-level skills)
-- ./.nami/skills/ (project-level skills)
+- ~/.Nova/skills/ (user-level skills)
+- ./.Nova/skills/ (project-level skills)
 
 Each skill is a directory containing:
 - SKILL.md: Skill definition with YAML frontmatter
@@ -225,8 +225,8 @@ Architecture:
 - Middleware-based architecture
 
 Key directories:
-- namicode_cli/: Main CLI application
-- deepagents-nami/: DeepAgents integration
+- NovaCode_cli/: Main CLI application
+- deepagents-Nova/: DeepAgents integration
 - tests/: Test suite
 - docs/: Documentation
 
@@ -428,7 +428,7 @@ Guidelines:
 
 Best practices:
 - Write before read to ensure availability
-- Use consistent naming conventions
+- Use consistent Novang conventions
 - Include timestamps for temporal data
 - Document memory structure
 - Handle missing keys gracefully

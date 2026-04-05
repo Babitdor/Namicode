@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from nami_deepagents import create_deep_agent
+from nova_deepagents import create_deep_agent
 from dotenv import load_dotenv
 from harbor.agents.base import BaseAgent
 from harbor.environments.base import BaseEnvironment
@@ -14,9 +14,9 @@ from harbor.models.agent.context import AgentContext
 
 # Load .env file if present
 load_dotenv()
-from namicode_cli.agents.core_agent import create_agent_with_config
-from namicode_cli.config.config import Settings
-from namicode_cli.config.model_manager import ModelManager, MODEL_PRESETS, ProviderType
+from novacode_cli.agents.core_agent import create_agent_with_config
+from novacode_cli.config.config import Settings
+from novacode_cli.config.model_manager import ModelManager, MODEL_PRESETS, ProviderType
 from harbor.models.trajectories import (
     Agent,
     FinalMetrics,
@@ -81,7 +81,7 @@ class DeepAgentsWrapper(BaseAgent):
             use_cli_agent: If True, use create_cli_agent from deepagents-cli (default).
                           If False, use create_deep_agent from SDK.
             provider: Model provider (openai, anthropic, ollama, google).
-                      If None, uses the configured provider from nami.config.json or env.
+                      If None, uses the configured provider from Nova.config.json or env.
         """
         super().__init__(logs_dir, model_name, *args, **kwargs)
 
@@ -90,7 +90,7 @@ class DeepAgentsWrapper(BaseAgent):
 
         # Determine provider and model
         if provider is None and model_name is None:
-            # Use configured provider/model from nami.config.json or env
+            # Use configured provider/model from Nova.config.json or env
             current = model_manager.get_current_provider()
             if current:
                 provider_name, configured_model = current
@@ -231,7 +231,7 @@ class DeepAgentsWrapper(BaseAgent):
             # Get Harbor's system prompt with directory context
             harbor_system_prompt = await self._get_formatted_system_prompt(backend)
 
-            # Use Nami Code CLI agent
+            # Use Nova Code CLI agent
             settings = Settings.from_environment()
             deep_agent, _ = create_agent_with_config(
                 model=self._model,

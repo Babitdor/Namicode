@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from namicode_cli.mcp.config import MCPConfig, MCPServerConfig
+from novacode_cli.mcp.config import MCPConfig, MCPServerConfig
 
 
 class TestMCPServerConfig:

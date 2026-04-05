@@ -1,4 +1,4 @@
-"""Test dynamic context detection integration with context_manager."""
+"""Test dyNovac context detection integration with context_manager."""
 
 import sys
 from pathlib import Path
@@ -6,38 +6,38 @@ from pathlib import Path
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from namicode_cli.context.context_manager import (
+from novacode_cli.context.context_manager import (
     get_context_window_size,
     get_model_config_for_context,
-    get_dynamic_context_info,
+    get_dyNovac_context_info,
     build_context_breakdown,
     get_compaction_recommendation,
 )
 
 
 def test_get_context_window_size():
-    """Test get_context_window_size with dynamic detection."""
+    """Test get_context_window_size with dyNovac detection."""
     print("\n" + "=" * 80)
     print("Testing get_context_window_size")
     print("=" * 80)
     
-    # Test with dynamic detection enabled (default)
-    print("\n1. Testing with dynamic detection enabled:")
-    context = get_context_window_size("glm-5:cloud", use_dynamic=True)
+    # Test with dyNovac detection enabled (default)
+    print("\n1. Testing with dyNovac detection enabled:")
+    context = get_context_window_size("glm-5:cloud", use_dyNovac=True)
     print(f"   GLM-5 Cloud: {context:,} tokens")
     assert context == 202752, f"Expected 202752, got {context}"
-    print("   ✓ Dynamic detection works")
+    print("   ✓ DyNovac detection works")
     
-    # Test with dynamic detection disabled
-    print("\n2. Testing with dynamic detection disabled:")
-    context = get_context_window_size("glm-5", use_dynamic=False)
+    # Test with dyNovac detection disabled
+    print("\n2. Testing with dyNovac detection disabled:")
+    context = get_context_window_size("glm-5", use_dyNovac=False)
     print(f"   GLM-5: {context:,} tokens")
     assert context == 202752, f"Expected 202752, got {context}"
     print("   ✓ Hardcoded config works")
     
     # Test with unknown model
     print("\n3. Testing with unknown model:")
-    context = get_context_window_size("unknown-model", use_dynamic=True)
+    context = get_context_window_size("unknown-model", use_dyNovac=True)
     print(f"   Unknown model: {context:,} tokens")
     assert context == 128000, f"Expected 128000 (default), got {context}"
     print("   ✓ Fallback to default works")
@@ -52,7 +52,7 @@ def test_get_context_window_size():
     ]
     
     for model, expected in models:
-        context = get_context_window_size(model, use_dynamic=True)
+        context = get_context_window_size(model, use_dyNovac=True)
         print(f"   {model}: {context:,} tokens")
         assert context == expected, f"Expected {expected}, got {context}"
     
@@ -65,35 +65,35 @@ def test_get_model_config_for_context():
     print("Testing get_model_config_for_context")
     print("=" * 80)
     
-    # Test with dynamic detection
-    print("\n1. Testing with dynamic detection:")
-    config = get_model_config_for_context("glm-5:cloud", use_dynamic=True)
+    # Test with dyNovac detection
+    print("\n1. Testing with dyNovac detection:")
+    config = get_model_config_for_context("glm-5:cloud", use_dyNovac=True)
     print(f"   Model: {config.name}")
     print(f"   Context Window: {config.context_window:,} tokens")
     print(f"   Safe Budget: {config.safe_budget:,} tokens")
     print(f"   Growth Threshold: {config.growth_threshold:,.0f} tokens/turn")
     print(f"   Eviction Threshold: {config.eviction_threshold:.0%}")
     assert config.context_window == 202752
-    print("   ✓ Dynamic config works")
+    print("   ✓ DyNovac config works")
     
     # Test with hardcoded config
     print("\n2. Testing with hardcoded config:")
-    config = get_model_config_for_context("glm-5", use_dynamic=False)
+    config = get_model_config_for_context("glm-5", use_dyNovac=False)
     print(f"   Model: {config.name}")
     print(f"   Context Window: {config.context_window:,} tokens")
     assert config.context_window == 202752
     print("   ✓ Hardcoded config works")
 
 
-def test_get_dynamic_context_info():
-    """Test get_dynamic_context_info."""
+def test_get_dyNovac_context_info():
+    """Test get_dyNovac_context_info."""
     print("\n" + "=" * 80)
-    print("Testing get_dynamic_context_info")
+    print("Testing get_dyNovac_context_info")
     print("=" * 80)
     
-    # Test with dynamic detection
-    print("\n1. Testing with dynamic detection:")
-    info = get_dynamic_context_info("glm-5:cloud")
+    # Test with dyNovac detection
+    print("\n1. Testing with dyNovac detection:")
+    info = get_dyNovac_context_info("glm-5:cloud")
     print(f"   Model: {info['name']}")
     print(f"   Context Window: {info['context_window']:,} tokens")
     print(f"   Safe Budget: {info['safe_budget']:,} tokens")
@@ -102,19 +102,19 @@ def test_get_dynamic_context_info():
     print(f"   Eviction Threshold: {info['eviction_threshold']:.0%}")
     print(f"   Source: {info['source']}")
     assert info['context_window'] == 202752
-    print("   ✓ Dynamic info works")
+    print("   ✓ DyNovac info works")
     
     # Test with various models
     print("\n2. Testing with various models:")
     models = ["qwen3.5:cloud", "gemini-3-flash-preview:cloud", "llama3.1:latest"]
     
     for model in models:
-        info = get_dynamic_context_info(model)
+        info = get_dyNovac_context_info(model)
         print(f"   {model}: {info['context_window']:,} tokens (source: {info['source']})")
 
 
 def test_build_context_breakdown():
-    """Test build_context_breakdown with dynamic detection."""
+    """Test build_context_breakdown with dyNovac detection."""
     print("\n" + "=" * 80)
     print("Testing build_context_breakdown")
     print("=" * 80)
@@ -130,27 +130,27 @@ def test_build_context_breakdown():
         AIMessage(content="I don't have access to real-time weather data."),
     ]
     
-    # Test with dynamic detection
-    print("\n1. Testing with dynamic detection:")
-    breakdown = build_context_breakdown(messages, "glm-5:cloud", use_dynamic=True)
+    # Test with dyNovac detection
+    print("\n1. Testing with dyNovac detection:")
+    breakdown = build_context_breakdown(messages, "glm-5:cloud", use_dyNovac=True)
     print(f"   Context Window: {breakdown.context_window_size:,} tokens")
     print(f"   Total Tokens: {breakdown.total_tokens:,}")
     print(f"   System Tokens: {breakdown.system_prompt_tokens:,}")
     print(f"   User Tokens: {breakdown.user_message_tokens:,}")
     print(f"   Assistant Tokens: {breakdown.assistant_message_tokens:,}")
     assert breakdown.context_window_size == 202752
-    print("   ✓ Dynamic breakdown works")
+    print("   ✓ DyNovac breakdown works")
     
     # Test with hardcoded config
     print("\n2. Testing with hardcoded config:")
-    breakdown = build_context_breakdown(messages, "glm-5", use_dynamic=False)
+    breakdown = build_context_breakdown(messages, "glm-5", use_dyNovac=False)
     print(f"   Context Window: {breakdown.context_window_size:,} tokens")
     assert breakdown.context_window_size == 202752
     print("   ✓ Hardcoded breakdown works")
 
 
 def test_get_compaction_recommendation():
-    """Test get_compaction_recommendation with dynamic detection."""
+    """Test get_compaction_recommendation with dyNovac detection."""
     print("\n" + "=" * 80)
     print("Testing get_compaction_recommendation")
     print("=" * 80)
@@ -163,20 +163,20 @@ def test_get_compaction_recommendation():
         messages.append(HumanMessage(content=f"Question {i}: " + "x" * 100))
         messages.append(AIMessage(content=f"Answer {i}: " + "y" * 100))
     
-    # Test with dynamic detection
-    print("\n1. Testing with dynamic detection:")
-    recommendation = get_compaction_recommendation(messages, "glm-5:cloud", use_dynamic=True)
+    # Test with dyNovac detection
+    print("\n1. Testing with dyNovac detection:")
+    recommendation = get_compaction_recommendation(messages, "glm-5:cloud", use_dyNovac=True)
     print(f"   Should Compact: {recommendation.should_compact}")
     print(f"   Reason: {recommendation.reason}")
     print(f"   Usage: {recommendation.usage_percentage:.1f}%")
     print(f"   Tokens Used: {recommendation.tokens_used:,}")
     print(f"   Tokens Available: {recommendation.tokens_available:,}")
     print(f"   Messages: {recommendation.messages_count}")
-    print("   ✓ Dynamic recommendation works")
+    print("   ✓ DyNovac recommendation works")
     
     # Test with hardcoded config
     print("\n2. Testing with hardcoded config:")
-    recommendation = get_compaction_recommendation(messages, "glm-5", use_dynamic=False)
+    recommendation = get_compaction_recommendation(messages, "glm-5", use_dyNovac=False)
     print(f"   Should Compact: {recommendation.should_compact}")
     print(f"   Usage: {recommendation.usage_percentage:.1f}%")
     print("   ✓ Hardcoded recommendation works")
@@ -199,9 +199,9 @@ def test_integration():
     config = get_model_config_for_context("glm-5:cloud")
     print(f"   ✓ get_model_config_for_context: {config.context_window:,} tokens")
     
-    # Get dynamic info
-    info = get_dynamic_context_info("glm-5:cloud")
-    print(f"   ✓ get_dynamic_context_info: {info['context_window']:,} tokens")
+    # Get dyNovac info
+    info = get_dyNovac_context_info("glm-5:cloud")
+    print(f"   ✓ get_dyNovac_context_info: {info['context_window']:,} tokens")
     
     # Build context breakdown
     from langchain_core.messages import HumanMessage, AIMessage
@@ -219,13 +219,13 @@ def test_integration():
 def main():
     """Run all tests."""
     print("\n" + "=" * 80)
-    print("     Context Manager Dynamic Integration Test Suite")
+    print("     Context Manager DyNovac Integration Test Suite")
     print("=" * 80)
     
     try:
         test_get_context_window_size()
         test_get_model_config_for_context()
-        test_get_dynamic_context_info()
+        test_get_dyNovac_context_info()
         test_build_context_breakdown()
         test_get_compaction_recommendation()
         test_integration()
@@ -233,8 +233,8 @@ def main():
         print("\n" + "=" * 80)
         print("              All Context Manager Tests Passed! ✓")
         print("=" * 80)
-        print("\n✓ Dynamic detection integrated with context_manager")
-        print("✓ All functions support use_dynamic parameter")
+        print("\n✓ DyNovac detection integrated with context_manager")
+        print("✓ All functions support use_dyNovac parameter")
         print("✓ Fallback to hardcoded configs working")
         print("✓ Integration with model_config working")
         print("\n")

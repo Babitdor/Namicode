@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from namicode_cli.skills.load import list_skills
+from novacode_cli.skills.load import list_skills
 
 
 class TestListSkillsSingleDirectory:

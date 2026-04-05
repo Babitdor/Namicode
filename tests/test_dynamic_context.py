@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Test script for dynamic context detection.
+"""Test script for dyNovac context detection.
 
-This script demonstrates how to dynamically detect context lengths
+This script demonstrates how to dyNovacally detect context lengths
 from Ollama models instead of hardcoding them.
 """
 
@@ -11,19 +11,19 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from namicode_cli.utils.dynamic_context import (
+from novacode_cli.utils.dyNovac_context import (
     get_ollama_context_length,
-    get_model_config_dynamic,
+    get_model_config_dyNovac,
     detect_all_models_context,
     get_model_info,
     print_model_info,
 )
 
 
-def test_dynamic_detection():
-    """Test dynamic context detection for installed models."""
+def test_dyNovac_detection():
+    """Test dyNovac context detection for installed models."""
     print("=" * 80)
-    print("Dynamic Context Detection Test")
+    print("DyNovac Context Detection Test")
     print("=" * 80)
     print()
     
@@ -47,7 +47,7 @@ def test_dynamic_detection():
             print(f"  ✓ Context Length: {context_length:,} tokens")
             
             # Get full config
-            config = get_model_config_dynamic(model_name)
+            config = get_model_config_dyNovac(model_name)
             print(f"  ✓ Safe Budget: {config['safe_budget']:,} tokens")
             print(f"  ✓ Max Tokens: {config['context_window'] - config['safe_budget']:,} tokens")
             print(f"  ✓ Growth Threshold: {config['growth_threshold']:,.0f} tokens/turn")
@@ -73,7 +73,7 @@ def test_dynamic_detection():
         sorted_models = sorted(contexts.items(), key=lambda x: x[1], reverse=True)
         
         for model_name, context_length in sorted_models:
-            config = get_model_config_dynamic(model_name)
+            config = get_model_config_dyNovac(model_name)
             print(f"{model_name:<40s} {context_length:>10,d} tokens  "
                   f"(safe: {config['safe_budget']:>8,d}, max: {config['context_window'] - config['safe_budget']:>8,d})")
     else:
@@ -95,9 +95,9 @@ def test_dynamic_detection():
 
 
 def test_comparison():
-    """Compare hardcoded vs dynamic configurations."""
+    """Compare hardcoded vs dyNovac configurations."""
     print("=" * 80)
-    print("Hardcoded vs Dynamic Configuration Comparison")
+    print("Hardcoded vs DyNovac Configuration Comparison")
     print("=" * 80)
     print()
     
@@ -108,33 +108,33 @@ def test_comparison():
         ("gemini-3-flash-preview:cloud", "gemini-3-flash"),
     ]
     
-    print(f"{'Model':<30s} {'Hardcoded':<15s} {'Dynamic':<15s} {'Difference':<15s}")
+    print(f"{'Model':<30s} {'Hardcoded':<15s} {'DyNovac':<15s} {'Difference':<15s}")
     print("-" * 80)
     
     for cloud_name, base_name in test_models:
-        # Get dynamic context
-        dynamic_context = get_ollama_context_length(cloud_name)
+        # Get dyNovac context
+        dyNovac_context = get_ollama_context_length(cloud_name)
         
         # Get hardcoded context
         try:
-            from namicode_cli.utils.model_config import MODEL_CONFIGS
+            from novacode_cli.utils.model_config import MODEL_CONFIGS
             hardcoded_context = MODEL_CONFIGS.get(base_name, {}).context_window
         except:
             hardcoded_context = None
         
-        if dynamic_context and hardcoded_context:
-            diff = dynamic_context - hardcoded_context
+        if dyNovac_context and hardcoded_context:
+            diff = dyNovac_context - hardcoded_context
             diff_pct = (diff / hardcoded_context) * 100
             
-            print(f"{base_name:<30s} {hardcoded_context:>10,d}   {dynamic_context:>10,d}   "
+            print(f"{base_name:<30s} {hardcoded_context:>10,d}   {dyNovac_context:>10,d}   "
                   f"{diff:>+6,d} ({diff_pct:>+.1f}%)")
-        elif dynamic_context:
-            print(f"{base_name:<30s} {'N/A':>10s}   {dynamic_context:>10,d}   {'Dynamic only':>15s}")
+        elif dyNovac_context:
+            print(f"{base_name:<30s} {'N/A':>10s}   {dyNovac_context:>10,d}   {'DyNovac only':>15s}")
         else:
             print(f"{base_name:<30s} {'N/A':>10s}   {'N/A':>10s}   {'Not found':>15s}")
     
     print()
-    print("Note: Positive difference means dynamic detected larger context than hardcoded")
+    print("Note: Positive difference means dyNovac detected larger context than hardcoded")
     print()
 
 
@@ -149,7 +149,7 @@ def test_fallback():
     unknown_model = "unknown-model-xyz"
     print(f"Testing unknown model: {unknown_model}")
     
-    config = get_model_config_dynamic(unknown_model)
+    config = get_model_config_dyNovac(unknown_model)
     
     print(f"  Name: {config['name']}")
     print(f"  Context Window: {config['context_window']:,} tokens")
@@ -165,12 +165,12 @@ def main():
     """Run all tests."""
     print()
     print("╔" + "=" * 78 + "╗")
-    print("║" + " " * 20 + "Dynamic Context Detection Test Suite" + " " * 23 + "║")
+    print("║" + " " * 20 + "DyNovac Context Detection Test Suite" + " " * 23 + "║")
     print("╚" + "=" * 78 + "╝")
     print()
     
     try:
-        test_dynamic_detection()
+        test_dyNovac_detection()
         test_comparison()
         test_fallback()
         
@@ -179,12 +179,12 @@ def main():
         print("=" * 80)
         print()
         print("Summary:")
-        print("  ✅ Dynamic context detection works")
+        print("  ✅ DyNovac context detection works")
         print("  ✅ All installed models detected")
         print("  ✅ Comparison with hardcoded values works")
         print("  ✅ Fallback to default works")
         print()
-        print("Dynamic context detection is ready for production!")
+        print("DyNovac context detection is ready for production!")
         print()
         
     except Exception as e:

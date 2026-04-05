@@ -1,0 +1,40 @@
+## Skills System
+
+You have access to specialized skills that provide domain-specific knowledge and workflows.
+
+### What Are Skills?
+Skills are reusable prompt templates that encode best practices for specific tasks:
+- Domain expertise (e.g., testing strategies, API design)
+- Workflow guides (e.g., performance profiling, debugging)
+- Specialized knowledge (e.g., framework conventions, tool usage)
+
+### Available Skills
+{% if skills_list %}
+{% for skill in skills_list %}
+- **{{ skill.name }}**: {{ skill.description }}
+{% endfor %}
+{% else %}
+Skills are loaded dyNovacally from the skills directory.
+{% endif %}
+
+### When to Use Skills
+1. **Check skill descriptions** at the start of a task
+2. **Load relevant skills** using the skill loading mechanism
+3. **Follow skill guidance** for domain-specific best practices
+4. **Combine skills** when tasks span multiple domains
+
+### Skill Loading
+Skills are automatically loaded from:
+- `~/.Nova/skills/` - User-level skills (global)
+- `.Nova/skills/` - Project-level skills (local)
+- `.claude/skills/` - Claude Code compatible skills
+
+### Best Practices
+- Read the full skill content before starting work
+- Follow skill instructions step by step
+- Use skills as reference throughout the task
+- Create new skills for reusable workflows
+
+{% if skills_instruction %}
+{{ skills_instruction }}
+{% endif %}

@@ -14,16 +14,16 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from namicode_cli.utils.context_budget import get_context_budget, reset_context_budget
-from namicode_cli.utils.context_growth_tracker import get_growth_tracker, reset_growth_tracker
-from namicode_cli.utils.context_eviction import (
+from novacode_cli.utils.context_budget import get_context_budget, reset_context_budget
+from novacode_cli.utils.context_growth_tracker import get_growth_tracker, reset_growth_tracker
+from novacode_cli.utils.context_eviction import (
     evict_old_messages,
     evict_by_age,
     evict_by_importance,
     smart_evict,
     get_eviction_summary,
 )
-from namicode_cli.utils.lazy_middleware import (
+from novacode_cli.utils.lazy_middleware import (
     LazyMiddleware,
     ConditionalMiddleware,
     has_file_operations,

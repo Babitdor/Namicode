@@ -10,12 +10,12 @@ Tests that subagents have enhanced UI features like:
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from namicode_cli.file_ops import (
+from novacode_cli.file_ops import (
     FileOperationRecord,
     FileOpTracker,
     compute_unified_diff,
 )
-from namicode_cli.ui.ui_elements import render_file_operation, render_todo_list
+from novacode_cli.ui.ui_elements import render_file_operation, render_todo_list
 
 
 class TestSubagentFileOpTracker:
@@ -23,8 +23,8 @@ class TestSubagentFileOpTracker:
 
     def test_file_op_tracker_initialization(self, tmp_path: Path) -> None:
         """Test that FileOpTracker initializes correctly for subagent."""
-        from nami_deepagents.backends import CompositeBackend
-        from nami_deepagents.backends.filesystem import FilesystemBackend
+        from nova_deepagents.backends import CompositeBackend
+        from nova_deepagents.backends.filesystem import FilesystemBackend
 
         backend = CompositeBackend(
             default=FilesystemBackend(),
@@ -184,7 +184,7 @@ class TestRenderFileOperation:
         record.metrics.lines_added = 10
         record.metrics.lines_removed = 0
 
-        with patch("namicode_cli.ui.ui_elements.console") as mock_console:
+        with patch("NovaCode_cli.ui.ui_elements.console") as mock_console:
             render_file_operation(record)
             # Verify console.print was called
             assert mock_console.print.called
@@ -203,7 +203,7 @@ class TestRenderFileOperation:
         record.metrics.lines_removed = 3
         record.diff = "--- app.py (before)\n+++ app.py (after)\n@@ -1,3 +1,5 @@\n-old\n+new"
 
-        with patch("namicode_cli.ui.ui_elements.console") as mock_console:
+        with patch("NovaCode_cli.ui.ui_elements.console") as mock_console:
             render_file_operation(record)
             assert mock_console.print.called
 
@@ -218,7 +218,7 @@ class TestRenderFileOperation:
             error="Permission denied",
         )
 
-        with patch("namicode_cli.ui.ui_elements.console") as mock_console:
+        with patch("NovaCode_cli.ui.ui_elements.console") as mock_console:
             render_file_operation(record)
             assert mock_console.print.called
 
@@ -228,7 +228,7 @@ class TestRenderTodoList:
 
     def test_render_empty_todo_list(self) -> None:
         """Test rendering an empty todo list does nothing."""
-        with patch("namicode_cli.ui.ui_elements.console") as mock_console:
+        with patch("NovaCode_cli.ui.ui_elements.console") as mock_console:
             render_todo_list([])
             # Should not print anything for empty list
             mock_console.print.assert_not_called()
@@ -241,7 +241,7 @@ class TestRenderTodoList:
             {"content": "Pending task", "status": "pending"},
         ]
 
-        with patch("namicode_cli.ui.ui_elements.console") as mock_console:
+        with patch("NovaCode_cli.ui.ui_elements.console") as mock_console:
             render_todo_list(todos)
             assert mock_console.print.called
 
@@ -253,7 +253,7 @@ class TestRenderTodoList:
             {"content": "Third", "status": "completed"},
         ]
 
-        with patch("namicode_cli.ui.ui_elements.console") as mock_console:
+        with patch("NovaCode_cli.ui.ui_elements.console") as mock_console:
             render_todo_list(todos)
             # Verify Panel was created and printed
             assert mock_console.print.called
@@ -332,8 +332,8 @@ class TestSubagentUIWithBackend:
 
     def test_tracker_with_composite_backend(self, tmp_path: Path) -> None:
         """Test FileOpTracker works with CompositeBackend."""
-        from nami_deepagents.backends import CompositeBackend
-        from nami_deepagents.backends.filesystem import FilesystemBackend
+        from nova_deepagents.backends import CompositeBackend
+        from nova_deepagents.backends.filesystem import FilesystemBackend
 
         backend = CompositeBackend(
             default=FilesystemBackend(),

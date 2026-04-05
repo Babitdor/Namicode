@@ -27,11 +27,11 @@ import pytest
 from langgraph.checkpoint.memory import MemorySaver
 from rich.console import Console
 
-from namicode_cli import config as config_module
-from namicode_cli import main as main_module
-from namicode_cli.agents.core_agent import create_agent_with_config
-from namicode_cli.config.config import SessionState, create_model
-from namicode_cli.main import simple_cli
+from novacode_cli import config as config_module
+from novacode_cli import main as main_module
+from novacode_cli.agents.core_agent import create_agent_with_config
+from novacode_cli.config.config import SessionState, create_model
+from novacode_cli.main import simple_cli
 
 
 @asynccontextmanager
@@ -77,8 +77,8 @@ async def run_cli_task(task: str, tmp_path: Path) -> AsyncIterator[tuple[Path, s
                 patch.object(config_module, "console", captured_console),
             ):
                 # Import after patching
-                from namicode_cli.agents.core_agent import create_agent_with_config
-                from namicode_cli.config import create_model
+                from novacode_cli.agents.core_agent import create_agent_with_config
+                from novacode_cli.config import create_model
 
                 # Create real agent with real model (will use env var or fail gracefully)
                 model = create_model()
@@ -220,17 +220,17 @@ class TestAgentBehavior:
         tool is actually executed, to verify the correct command is being passed.
         """
         # Mock the settings to use a fresh filesystem in tmp_path
-        from namicode_cli.config import Settings
+        from novacode_cli.config import Settings
 
         mock_settings = Settings.from_environment(start_path=tmp_path)
 
         # Patch settings in all modules that import it
         patches = [
-            patch("namicode_cli.config.settings", mock_settings),
-            patch("namicode_cli.agent.settings", mock_settings),
-            patch("namicode_cli.file_ops.settings", mock_settings),
-            patch("namicode_cli.tools.settings", mock_settings),
-            patch("namicode_cli.token_utils.settings", mock_settings),
+            patch("NovaCode_cli.config.settings", mock_settings),
+            patch("NovaCode_cli.agent.settings", mock_settings),
+            patch("NovaCode_cli.file_ops.settings", mock_settings),
+            patch("NovaCode_cli.tools.settings", mock_settings),
+            patch("NovaCode_cli.token_utils.settings", mock_settings),
         ]
 
         # Apply all patches using ExitStack for cleaner nesting

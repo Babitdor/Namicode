@@ -6,11 +6,11 @@ from pathlib import Path
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from namicode_cli.session.session_persistence import (
+from novacode_cli.session.session_persistence import (
     SessionManager,
     SessionMeta,
 )
-from namicode_cli.session.session_restore import (
+from novacode_cli.session.session_restore import (
     build_session_summary_message,
     format_session_age,
     format_session_summary,
@@ -31,7 +31,7 @@ class TestSessionMeta:
             last_active="2025-01-01T01:00:00+00:00",
             project_root="/path/to/project",
             repo_hash="abc123",
-            nami_md_checksum="def456",
+            Nova_md_checksum="def456",
             model_name="gpt-4",
             assistant_id="test-agent",
             message_count=10,
@@ -48,7 +48,7 @@ class TestSessionMeta:
             last_active="2025-01-01T01:00:00+00:00",
             project_root=None,
             repo_hash=None,
-            nami_md_checksum=None,
+            Nova_md_checksum=None,
             model_name=None,
             assistant_id="agent",
         )
@@ -66,7 +66,7 @@ class TestSessionMeta:
             "last_active": "2025-01-01T01:00:00+00:00",
             "project_root": "/path",
             "repo_hash": "abc",
-            "nami_md_checksum": "def",
+            "Nova_md_checksum": "def",
             "model_name": "claude-3",
             "assistant_id": "agent",
             "message_count": 5,
@@ -324,7 +324,7 @@ class TestSessionRestore:
             last_active="2025-01-01T00:00:00+00:00",
             project_root="/path/to/project",
             repo_hash=None,
-            nami_md_checksum=None,
+            Nova_md_checksum=None,
             model_name="gpt-4",
             assistant_id="agent",
             message_count=5,
@@ -364,7 +364,7 @@ class TestValidateSessionCompatibility:
             last_active="2025-01-01T00:00:00+00:00",
             project_root=None,
             repo_hash=None,
-            nami_md_checksum=None,
+            Nova_md_checksum=None,
             model_name="gpt-4",
             assistant_id="agent",
         )
@@ -383,7 +383,7 @@ class TestValidateSessionCompatibility:
                 last_active="2025-01-01T00:00:00+00:00",
                 project_root="/different/path",
                 repo_hash=None,
-                nami_md_checksum=None,
+                Nova_md_checksum=None,
                 model_name="gpt-4",
                 assistant_id="agent",
             )

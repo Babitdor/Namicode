@@ -1,0 +1,279 @@
+"""Handlers for session-related commands: /sessions, /save, /compact."""
+
+import uuid
+from pathlib import Path
+from prompt_toolkit import PromptSession
+from rich.console import Console
+from rich.text import Text
+
+from novacode_cli.config.config import COLORS, console
+from novacode_cli.ui.ui_elements import TokenTracker
+
+
+async def handle_sessions_command(session_state) -> bool:
+    """Handle the /sessions command - list, select, delete sessions.
+
+    Args:
+        session_state: Current session state
+
+    Returns:
+        True (command always handled)
+    """
+    from novacode_cli.session.session_persistence import SessionManager
+    from novacode_cli.session.session_restore import format_session_age
+
+    ps = PromptSession()
+    session_manager = SessionManager()
+
+    console.print()
+    console.print("[bold]Session Management[/bold]", style=COLORS["primary"])
+    console.print()
+
+    # Show current session if any
+    if session_state.session_id:
+        console.print(
+            f"[bold]Current session:[/bold] {session_state.session_id[:8]}...",
+            style=COLORS["primary"],
+        )
+        console.print()
+
+    # Show menu
+    console.print("What would you like to do?", style=COLORS["primary"])
+    console.print("  1. List saved sessions")
+    console.print("  2. Delete a session")
+    console.print("  3. Cancel")
+    console.print()
+
+    choice = (await ps.prompt_async("Choose (1-3): ")).strip()
+
+    if choice == "1":
+        # List sessions
+        sessions = session_manager.list_sessions(limit=20)
+
+        console.print()
+        if sessions:
+            console.print("[bold]Saved Sessions:[/bold]", style=COLORS["primary"])
+            console.print()
+            for meta in sessions:
+                age = format_session_age(meta.last_active)
+                project = (
+                    Path(meta.project_root).name if meta.project_root else "no project"
+                )
+                model = meta.model_name or "unknown model"
+
+                # Mark current session
+                is_current = session_state.session_id == meta.session_id
+                marker = " ← current" if is_current else ""
+
+                console.print(
+                    f"  • [bold]{meta.session_id[:8]}[/bold]{marker}",
+                    style=COLORS["primary"],
+                )
+                console.print(
+                    f"    {project} ({model}), {meta.message_count} messages",
+                    style=COLORS["dim"],
+                )
+                console.print(f"    {age}", style=COLORS["dim"])
+                console.print()
+        else:
+            console.print("[yellow]No saved sessions found[/yellow]")
+            console.print("[dim]Sessions are saved automatically on exit[/dim]")
+
+    elif choice == "2":
+        # Delete session
+        sessions = session_manager.list_sessions(limit=20)
+
+        if not sessions:
+            console.print()
+            console.print("[yellow]No sessions to delete[/yellow]")
+            return True
+
+        console.print()
+        console.print("[bold]Select session to delete:[/bold]", style=COLORS["primary"])
+        for i, meta in enumerate(sessions, 1):
+            age = format_session_age(meta.last_active)
+            project = (
+                Path(meta.project_root).name if meta.project_root else "no project"
+            )
+            console.print(f"  {i}. {meta.session_id[:8]} - {project} ({age})")
+
+        console.print()
+        delete_choice = (
+            await ps.prompt_async("Choose session number (or 'cancel'): ")
+        ).strip()
+
+        if delete_choice.lower() != "cancel":
+            try:
+                delete_idx = int(delete_choice) - 1
+                if 0 <= delete_idx < len(sessions):
+                    meta = sessions[delete_idx]
+
+                    # Confirm deletion
+                    confirm = (
+                        (
+                            await ps.prompt_async(
+                                f"Delete session {meta.session_id[:8]}? (y/N): ",
+                                default="n",
+                            )
+                        )
+                        .strip()
+                        .lower()
+                    )
+
+                    if confirm == "y":
+                        if session_manager.delete_session(meta.session_id):
+                            console.print()
+                            console.print(
+                                f"✓ Session {meta.session_id[:8]} deleted",
+                                style=COLORS["primary"],
+                            )
+                        else:
+                            console.print()
+                            console.print("[red]Failed to delete session[/red]")
+                    else:
+                        console.print()
+                        console.print("[yellow]Cancelled[/yellow]")
+                else:
+                    console.print()
+                    console.print("[yellow]Invalid choice[/yellow]")
+            except (ValueError, IndexError):
+                console.print()
+                console.print("[yellow]Invalid choice[/yellow]")
+
+    console.print()
+    return True
+
+
+async def handle_save_command(
+    agent,
+    session_state,
+    assistant_id: str,
+    session_manager=None,
+    model_name: str | None = None,
+) -> bool:
+    """Handle the /save command - manually save current session.
+
+    Args:
+        agent: The LangGraph agent
+        session_state: Current session state
+        assistant_id: Agent identifier
+        session_manager: Session manager instance
+        model_name: Name of the model being used
+
+    Returns:
+        True (command always handled)
+    """
+    if session_manager is None:
+        from novacode_cli.session.session_persistence import SessionManager
+
+        session_manager = SessionManager()
+
+    console.print()
+
+    try:
+        # Get current messages from agent state
+        config = {"configurable": {"thread_id": session_state.thread_id}}
+        state = await agent.aget_state(config)
+        messages = state.values.get("messages", [])
+
+        if not messages:
+            console.print("[yellow]No conversation to save yet[/yellow]")
+            console.print()
+            return True
+
+        # Generate session_id if not set
+        if not session_state.session_id:
+            session_state.session_id = str(uuid.uuid4())
+
+        # Get project root
+        project_root = Path.cwd()
+
+        # Save the session
+        session_manager.save_session(
+            session_id=session_state.session_id,
+            thread_id=session_state.thread_id,
+            messages=messages,
+            assistant_id=assistant_id,
+            todos=session_state.todos,
+            model_name=model_name,
+            project_root=project_root,
+        )
+
+        console.print(
+            f"✓ Session saved: {session_state.session_id[:8]}...",
+            style=COLORS["primary"],
+        )
+        console.print(f"  [dim]{len(messages)} messages saved[/dim]")
+        console.print("  [dim]Use 'Nova --continue' to resume this session[/dim]")
+
+    except Exception as e:
+        console.print(f"[red]Failed to save session: {e}[/red]")
+
+    console.print()
+    return True
+
+
+async def handle_compact_command(
+    agent,
+    session_state,
+    token_tracker: TokenTracker,
+    focus_instructions: str | None = None,
+) -> bool:
+    """Handle the /compact command to summarize conversation history.
+
+    Args:
+        agent: The LangGraph agent
+        session_state: Current session state
+        token_tracker: Token tracker instance
+        focus_instructions: Optional user instructions (e.g., "Focus on X and Y")
+
+    Returns:
+        True (command always handled)
+    """
+    from novacode_cli.compaction import compact_conversation
+    from novacode_cli.config.model_create import create_model
+
+    console.print()
+    console.print("[bold]Compacting Conversation[/bold]", style=COLORS["primary"])
+    console.print()
+
+    # Get the model for summarization
+    model = create_model()
+
+    with console.status("[bold]Summarizing conversation...[/bold]", spinner="dots"):
+        result = await compact_conversation(
+            agent=agent,
+            model=model,
+            thread_id=session_state.thread_id,
+            focus_instructions=focus_instructions,
+        )
+
+    if result.success:
+        console.print("[green]✓[/green] ", end="")
+        console.print("[green]Conversation compacted successfully![/green]")
+        console.print()
+
+        # Show statistics
+        console.print(
+            f"  [dim]Messages: {result.messages_before} → {result.messages_after}[/dim]"
+        )
+        console.print(f"  [dim]Tokens saved: ~{result.tokens_saved:,}[/dim]")
+        console.print()
+
+        # Show summary preview (first 500 chars)
+        console.print("[bold]Summary Preview:[/bold]", style=COLORS["primary"])
+        preview = result.summary[:500]
+        if len(result.summary) > 500:
+            preview += "..."
+        console.print(f"[dim]{preview}[/dim]")
+        console.print()
+
+        # Reset token tracker counters
+        token_tracker.reset()
+
+    else:
+        console.print("[red]✗[/red] ", end="")
+        console.print(f"[red]Compaction failed: {result.error}[/red]")
+        console.print()
+
+    return True

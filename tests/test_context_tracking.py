@@ -7,7 +7,7 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from namicode_cli.utils.context_budget import get_context_budget, reset_context_budget
+from novacode_cli.utils.context_budget import get_context_budget, reset_context_budget
 
 
 def test_middleware_context_usage():
@@ -67,8 +67,8 @@ To use a skill:
 4. Apply the skill's guidelines
 
 Skills are loaded from:
-- ~/.nami/skills/ (user-level)
-- ./.nami/skills/ (project-level)
+- ~/.Nova/skills/ (user-level)
+- ./.Nova/skills/ (project-level)
 """
     
     # MemoryMiddleware - Project context and instructions

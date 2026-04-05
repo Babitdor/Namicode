@@ -1,0 +1,15 @@
+{
+  "hooks": [
+    {
+      "command": ["bash", "~/.nova/hooks/session-logger.sh"],
+      "events": ["session.start", "session.end"]
+    },
+    {
+      "command": ["python", "~/.nova/hooks/tool-monitor.py"],
+      "events": ["tool.call", "tool.result"]
+    },
+    {
+      "command": ["node", "~/.nova/hooks/webhook-forwarder.js"]
+    }
+  ]
+}

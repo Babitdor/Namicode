@@ -1,5 +1,5 @@
 
-from namicode_cli.widgets.screens import SkillsScreen
+from novacode_cli.widgets.screens import SkillsScreen
 from textual.app import App
 
 

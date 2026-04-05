@@ -1,7 +1,7 @@
 """Tests for context_manager module."""
 
 
-from namicode_cli.context.context_manager import (
+from novacode_cli.context.context_manager import (
     CONTEXT_CRITICAL_THRESHOLD,
     CONTEXT_WARNING_THRESHOLD,
     MODEL_CONTEXT_WINDOWS,

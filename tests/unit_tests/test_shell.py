@@ -8,7 +8,7 @@ import tempfile
 import pytest
 from langchain_core.tools.base import ToolException
 
-from namicode_cli.shell import (
+from novacode_cli.shell import (
     PROMPT_PATTERNS,
     SERVER_READY_PATTERNS,
     ShellMiddleware,

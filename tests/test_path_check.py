@@ -1,7 +1,7 @@
 import os
 
 # Simulate the full path being passed
-directory_name = "C:\\Users\\Babit-PC\\.nami\\skills\\algorithmic-art"
+directory_name = "C:\\Users\\Babit-PC\\.Nova\\skills\\algorithmic-art"
 normalized_dir_name = directory_name.rstrip("/\\")
 print(f"directory_name: {directory_name!r}")
 print(f"normalized_dir_name: {normalized_dir_name!r}")

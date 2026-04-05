@@ -7,7 +7,7 @@ logging.basicConfig(
     level=logging.DEBUG, format="%(levelname)s:%(name)s:%(message)s", stream=sys.stderr
 )
 
-from nami_deepagents.middleware.skills import _validate_skill_name
+from nova_deepagents.middleware.skills import _validate_skill_name
 
 # Test 1: Simple case
 print("Test 1: Simple case")
@@ -21,7 +21,7 @@ print()
 
 # Test 2: Path with trailing slash
 print("Test 2: Path with trailing slash")
-skill_dir_path = "C:\\Users\\Babit-PC\\.nami\\skills\\algorithmic-art/"
+skill_dir_path = "C:\\Users\\Babit-PC\\.Nova\\skills\\algorithmic-art/"
 directory_name_extracted = os.path.basename(skill_dir_path.rstrip("/\\"))
 print(f"  skill_dir_path: {skill_dir_path!r}")
 print(f"  directory_name extracted: {directory_name_extracted!r}")
@@ -32,7 +32,7 @@ print()
 
 # Test 3: Path without trailing slash
 print("Test 3: Path without trailing slash")
-skill_dir_path = "C:\\Users\\Babit-PC\\.nami\\skills\\algorithmic-art"
+skill_dir_path = "C:\\Users\\Babit-PC\\.Nova\\skills\\algorithmic-art"
 directory_name_extracted = os.path.basename(skill_dir_path.rstrip("/\\"))
 print(f"  skill_dir_path: {skill_dir_path!r}")
 print(f"  directory_name extracted: {directory_name_extracted!r}")

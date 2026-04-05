@@ -8,8 +8,8 @@ pytest.skip("MCPClient class was removed — tests need rewriting", allow_module
 
 from unittest.mock import AsyncMock, MagicMock, patch  # noqa: E402
 
-from namicode_cli.mcp.client import MCPClient, check_server_connection  # noqa: E402
-from namicode_cli.mcp.config import MCPServerConfig
+from novacode_cli.mcp.client import MCPClient, check_server_connection  # noqa: E402
+from novacode_cli.mcp.config import MCPServerConfig
 
 
 class TestMCPClientInit:
@@ -94,8 +94,8 @@ class TestMCPClientConnect:
         mock_session = AsyncMock()
         mock_session.initialize = AsyncMock()
 
-        with patch("namicode_cli.mcp.client.stdio_client") as mock_stdio:
-            with patch("namicode_cli.mcp.client.ClientSession") as mock_session_class:
+        with patch("NovaCode_cli.mcp.client.stdio_client") as mock_stdio:
+            with patch("NovaCode_cli.mcp.client.ClientSession") as mock_session_class:
                 # Setup mock context managers
                 mock_read = MagicMock()
                 mock_write = MagicMock()
@@ -123,8 +123,8 @@ class TestMCPClientConnect:
         mock_session = AsyncMock()
         mock_session.initialize = AsyncMock()
 
-        with patch("namicode_cli.mcp.client.sse_client") as mock_sse:
-            with patch("namicode_cli.mcp.client.ClientSession") as mock_session_class:
+        with patch("NovaCode_cli.mcp.client.sse_client") as mock_sse:
+            with patch("NovaCode_cli.mcp.client.ClientSession") as mock_session_class:
                 # Setup mock context managers
                 mock_read = MagicMock()
                 mock_write = MagicMock()
@@ -161,8 +161,8 @@ class TestMCPClientConnect:
         mock_session = AsyncMock()
         mock_session.initialize = AsyncMock()
 
-        with patch("namicode_cli.mcp.client.sse_client") as mock_sse:
-            with patch("namicode_cli.mcp.client.ClientSession") as mock_session_class:
+        with patch("NovaCode_cli.mcp.client.sse_client") as mock_sse:
+            with patch("NovaCode_cli.mcp.client.ClientSession") as mock_session_class:
                 mock_read = MagicMock()
                 mock_write = MagicMock()
 
@@ -314,7 +314,7 @@ class TestCheckServerConnection:
         """Test successful connection check."""
         config = MCPServerConfig(transport="http", url="https://example.com/mcp")
 
-        with patch("namicode_cli.mcp.client.MCPClient") as mock_client_class:
+        with patch("NovaCode_cli.mcp.client.MCPClient") as mock_client_class:
             mock_client = AsyncMock()
             mock_client.list_tools = AsyncMock(
                 return_value=[
@@ -335,7 +335,7 @@ class TestCheckServerConnection:
         """Test failed connection check."""
         config = MCPServerConfig(transport="http", url="https://example.com/mcp")
 
-        with patch("namicode_cli.mcp.client.MCPClient") as mock_client_class:
+        with patch("NovaCode_cli.mcp.client.MCPClient") as mock_client_class:
             mock_client = AsyncMock()
             mock_client.list_tools = AsyncMock(side_effect=RuntimeError("Connection refused"))
             mock_client_class.return_value = mock_client

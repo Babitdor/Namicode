@@ -3,13 +3,13 @@ requires = ["setuptools >= 77.0.3"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "namicode-cli"
+name = "novacode-cli"
 version = "0.0.14"
 description = "Agentic Coding Tool that runs in your terminal"
 authors = [{ name = "Babitdor", email = "babitdorbryan14@gmail.com" }]
 readme = {file = "README.md", content-type = "text/markdown"}
 license = "MIT"
-keywords = ["nami", "code-cli", "nami-code", "agentic-code-cli"]
+keywords = ["nova", "code-cli", "nova-code", "agentic-code-cli"]
 
 requires-python = ">=3.11,<4.0"
 classifiers = [
@@ -62,17 +62,19 @@ dependencies = [
     "ruff>=0.8.0",
     "mypy>=1.13.0",
     # Local deep-agent framework (path source defined in [tool.uv.sources])
-    "nami-deepagents",
+    "nova-deepagents",
+    # Browser automation
+    "browser-use>=0.1.0",
 ]
 
 [project.urls]
-    Homepage = "https://github.com/Babitdor/namicode"
-    Repository = "https://github.com/Babitdor/namicode"
-    Issues = "https://github.com/Babitdor/namicode/issues"
-    Changelog = "https://github.com/Babitdor/Namicode/blob/main/CHANGELOG.md"
+    Homepage = "https://github.com/Babitdor/NovaCode"
+    Repository = "https://github.com/Babitdor/NovaCode"
+    Issues = "https://github.com/Babitdor/NovaCode/issues"
+    Changelog = "https://github.com/Babitdor/NovaCode/blob/main/CHANGELOG.md"
 
 [project.scripts]
-nami = "namicode_cli.main:cli_main"
+nova = "novacode_cli.main:cli_main"
 
 [tool.setuptools.package-data]
 "*" = ["*.jinja"]
@@ -111,7 +113,7 @@ convention = "google"  # Google-style docstrings
 ignore-var-parameters = true
 
 [tool.ruff.lint.per-file-ignores]
-"namicode_cli/cli.py" = [
+"novacode_cli/cli.py" = [
     "T201",    # Allow print statements in CLI
 ]
 "tests/*" = [
@@ -144,7 +146,7 @@ disallow_any_generics = false
 warn_return_any = false
 
 [tool.uv.sources]
-nami-deepagents = { path = "./deepagents-nami" }
+nova-deepagents = { path = "./deepagents-nova" }
 
 [tool.setuptools.packages.find]
-include = ["namicode_cli*"]
+include = ["novacode_cli*"]

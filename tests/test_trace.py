@@ -8,10 +8,10 @@ logging.basicConfig(
 )
 
 # Manually add a handler to see the DEBUG messages
-from nami_deepagents.backends.filesystem import FilesystemBackend
-from nami_deepagents.middleware import skills
+from nova_deepagents.backends.filesystem import FilesystemBackend
+from nova_deepagents.middleware import skills
 
-backend = FilesystemBackend(root_dir="C:/Users/Babit-PC/.nami/skills")
+backend = FilesystemBackend(root_dir="C:/Users/Babit-PC/.Nova/skills")
 
 # Manually trace through the code
 items = backend.ls_info(".")

@@ -15,13 +15,13 @@ NotImplementedError: Non-relative patterns are unsupported
 The `glob_info()` method in `FilesystemBackend` was using Python's `pathlib.Path.rglob()` method, which only accepts simple relative patterns without path separators. When patterns like `**/*.py` or `dir1/**/*.md` were passed, the method raised a `NotImplementedError`.
 
 ### Location
-- **File**: `deepagents-nami/nami_deepagents/backends/filesystem.py`
+- **File**: `deepagents-Nova/Nova_deepagents/backends/filesystem.py`
 - **Method**: `FilesystemBackend.glob_info()`
 - **Line**: 432 (before fix)
 
 ## Changes Applied
 
-### File: `deepagents-nami/nami_deepagents/backends/filesystem.py`
+### File: `deepagents-Nova/Nova_deepagents/backends/filesystem.py`
 
 #### Before
 ```python
@@ -174,12 +174,12 @@ Test 5: **/*.{py,md}
 ## Related Files
 
 ### Modified
-- `deepagents-nami/nami_deepagents/backends/filesystem.py` - Fixed glob_info() method
+- `deepagents-Nova/Nova_deepagents/backends/filesystem.py` - Fixed glob_info() method
 
 ### Uses the fix
-- `deepagents-nami/nami_deepagents/backends/composite.py` - Calls glob_info on backends
-- `deepagents-nami/nami_deepagents/middleware/filesystem.py` - Glob tool implementation
-- Test files in `deepagents-nami/tests/unit_tests/backends/`
+- `deepagents-Nova/Nova_deepagents/backends/composite.py` - Calls glob_info on backends
+- `deepagents-Nova/Nova_deepagents/middleware/filesystem.py` - Glob tool implementation
+- Test files in `deepagents-Nova/tests/unit_tests/backends/`
 
 ## Notes
 

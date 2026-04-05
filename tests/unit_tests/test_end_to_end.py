@@ -12,10 +12,10 @@ from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import Runnable
 from langchain_core.tools import BaseTool, tool
-from nami_deepagents.backends import CompositeBackend
-from nami_deepagents.backends.filesystem import FilesystemBackend
+from nova_deepagents.backends import CompositeBackend
+from nova_deepagents.backends.filesystem import FilesystemBackend
 
-from namicode_cli.agents.core_agent import create_agent_with_config
+from novacode_cli.agents.core_agent import create_agent_with_config
 
 
 @tool(description="Sample tool")
@@ -59,7 +59,7 @@ def mock_settings(tmp_path: Path, assistant_id: str = "test-agent") -> Generator
     skills_dir.mkdir(parents=True)
 
     # Patch settings
-    with patch("namicode_cli.agent.settings") as mock_settings_obj:
+    with patch("NovaCode_cli.agent.settings") as mock_settings_obj:
         mock_settings_obj.user_deepagents_dir = tmp_path / "agents"
         mock_settings_obj.ensure_agent_dir.return_value = agent_dir
         mock_settings_obj.ensure_user_skills_dir.return_value = skills_dir

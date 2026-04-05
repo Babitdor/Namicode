@@ -6,15 +6,15 @@ import sys
 
 logging.basicConfig(level=logging.WARNING)
 
-sys.path.insert(0, "deepagents-nami")
+sys.path.insert(0, "deepagents-Nova")
 sys.path.insert(0, ".")
 
-from nami_deepagents.backends.filesystem import FilesystemBackend
-from nami_deepagents.middleware.skills import _list_skills
+from nova_deepagents.backends.filesystem import FilesystemBackend
+from nova_deepagents.middleware.skills import _list_skills
 
 
 def main():
-    backend = FilesystemBackend("C:\\Users\\Babit-PC\\.nami\\skills")
+    backend = FilesystemBackend("C:\\Users\\Babit-PC\\.Nova\\skills")
     skills = _list_skills(backend, ".")
 
     print(f"Loaded {len(skills)} skills successfully:\n")

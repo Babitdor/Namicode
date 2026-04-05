@@ -3,17 +3,17 @@
 from unittest.mock import Mock, patch
 
 import pytest
-from nami_deepagents.middleware.planning import (
+from nova_deepagents.middleware.planning import (
     ASK_QUESTION_SYSTEM_PROMPT,
     PLAN_MODE_SYSTEM_PROMPT,
     PlanModeMiddleware,
     PlanModeState,
     QuestionRequest,
 )
-from nami_deepagents.middleware.ask_question import _create_ask_question_tool
+from nova_deepagents.middleware.ask_question import _create_ask_question_tool
 
-from namicode_cli.states.Session import SessionState
-from namicode_cli.ui.question_prompt import (
+from novacode_cli.states.Session import SessionState
+from novacode_cli.ui.question_prompt import (
     QuestionResponse,
     handle_agent_question,
 )
@@ -149,7 +149,7 @@ class TestQuestionPromptUI:
     @pytest.mark.asyncio
     async def test_handle_agent_question_routes_structured(self):
         """Test routing to structured question handler."""
-        with patch("namicode_cli.ui.question_prompt.prompt_for_structured_question") as mock:
+        with patch("NovaCode_cli.ui.question_prompt.prompt_for_structured_question") as mock:
             mock.return_value = QuestionResponse(answer="Option A", selected_index=0)
 
             result = await handle_agent_question(
@@ -167,7 +167,7 @@ class TestQuestionPromptUI:
     @pytest.mark.asyncio
     async def test_handle_agent_question_routes_open_ended(self):
         """Test routing to open-ended question handler."""
-        with patch("namicode_cli.ui.question_prompt.prompt_for_open_question") as mock:
+        with patch("NovaCode_cli.ui.question_prompt.prompt_for_open_question") as mock:
             mock.return_value = QuestionResponse(answer="My answer", selected_index=None)
 
             result = await handle_agent_question(
@@ -184,7 +184,7 @@ class TestQuestionPromptUI:
     @pytest.mark.asyncio
     async def test_handle_agent_question_defaults_to_open_ended(self):
         """Test defaults to open-ended when no type specified."""
-        with patch("namicode_cli.ui.question_prompt.prompt_for_open_question") as mock:
+        with patch("NovaCode_cli.ui.question_prompt.prompt_for_open_question") as mock:
             mock.return_value = QuestionResponse(answer="Answer", selected_index=None)
 
             result = await handle_agent_question(
@@ -198,7 +198,7 @@ class TestQuestionPromptUI:
     @pytest.mark.asyncio
     async def test_handle_agent_question_structured_without_options(self):
         """Test structured question without options falls back to open-ended."""
-        with patch("namicode_cli.ui.question_prompt.prompt_for_open_question") as mock:
+        with patch("NovaCode_cli.ui.question_prompt.prompt_for_open_question") as mock:
             mock.return_value = QuestionResponse(answer="Answer", selected_index=None)
 
             result = await handle_agent_question(
@@ -287,7 +287,7 @@ class TestComplexityAnalysis:
 
     def test_decide_complexity_tool_exists(self):
         """Agent should have decide_complexity tool."""
-        from nami_deepagents.middleware.planning import PlanModeMiddleware
+        from nova_deepagents.middleware.planning import PlanModeMiddleware
 
         middleware = PlanModeMiddleware()
         tool_names = [tool.name for tool in middleware.tools]
@@ -295,7 +295,7 @@ class TestComplexityAnalysis:
 
     def test_exit_plan_mode_tool_exists(self):
         """Agent should have exit_plan_mode tool."""
-        from nami_deepagents.middleware.planning import PlanModeMiddleware
+        from nova_deepagents.middleware.planning import PlanModeMiddleware
 
         middleware = PlanModeMiddleware()
         tool_names = [tool.name for tool in middleware.tools]
@@ -303,7 +303,7 @@ class TestComplexityAnalysis:
 
     def test_agent_decides_complexity_no_rules(self):
         """Agent uses own judgment to decide complexity, not predefined keywords."""
-        from nami_deepagents.middleware.planning import _submit_complexity_decision
+        from nova_deepagents.middleware.planning import _submit_complexity_decision
 
         # Agent decides task needs planning
         result_plan = _submit_complexity_decision(
@@ -323,7 +323,7 @@ class TestComplexityAnalysis:
 
     def test_agent_uses_custom_reasoning(self):
         """Agent can use any reasoning it sees fit."""
-        from nami_deepagents.middleware.planning import _submit_complexity_decision
+        from nova_deepagents.middleware.planning import _submit_complexity_decision
 
         result = _submit_complexity_decision(
             task="Implement user authentication",
@@ -339,7 +339,7 @@ class TestToolBlocking:
 
     def test_blocked_tools_const(self):
         """Test blocked tools constant is defined."""
-        from nami_deepagents.middleware.planning import BLOCKED_TOOLS_IN_PLAN_MODE
+        from nova_deepagents.middleware.planning import BLOCKED_TOOLS_IN_PLAN_MODE
 
         assert "write_file" in BLOCKED_TOOLS_IN_PLAN_MODE
         assert "edit_file" in BLOCKED_TOOLS_IN_PLAN_MODE
@@ -348,7 +348,7 @@ class TestToolBlocking:
 
     def test_allowed_tools_const(self):
         """Test allowed tools constant is defined."""
-        from nami_deepagents.middleware.planning import ALLOWED_TOOLS_IN_PLAN_MODE
+        from nova_deepagents.middleware.planning import ALLOWED_TOOLS_IN_PLAN_MODE
 
         assert "read_file" in ALLOWED_TOOLS_IN_PLAN_MODE
         assert "ls" in ALLOWED_TOOLS_IN_PLAN_MODE
@@ -358,7 +358,7 @@ class TestToolBlocking:
 
     def test_no_overlap_blocked_allowed(self):
         """Test no overlap between blocked and allowed tools."""
-        from nami_deepagents.middleware.planning import (
+        from nova_deepagents.middleware.planning import (
             ALLOWED_TOOLS_IN_PLAN_MODE,
             BLOCKED_TOOLS_IN_PLAN_MODE,
         )

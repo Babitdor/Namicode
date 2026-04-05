@@ -1,7 +1,7 @@
 
-![Nami CLI Banner](assets/NAMI.svg)
+![Nova CLI Banner](assets/NOVA.svg)
 
-# Nami-Code : Agentic Coding Tool
+# NOVA : Agentic Coding Tool
 
 An open-source terminal-based AI coding assistant that runs in your terminal, similar to Claude Code. Built on top of the `deepagents` library which provides the core agent architecture.
 
@@ -31,8 +31,8 @@ An open-source terminal-based AI coding assistant that runs in your terminal, si
 
 ```bash
 # Clone the repository
-git clone https://github.com/Babitdor/namicode-cli.git
-cd namicode-cli
+git clone https://github.com/Babitdor/NovaCode.git
+cd NovaCode
 
 # Create virtual environment and install
 uv venv
@@ -60,22 +60,22 @@ You can also create a `.env` file in your project root or home directory.
 
 ```bash
 # Start the CLI
-nami
+nova
 
 # Use a specific agent configuration
-nami --agent mybot
+nova --agent mybot
 
 # Auto-approve tool usage (skip approval prompts)
-nami --auto-approve
+nova --auto-approve
 
 # Execute in a remote sandbox
-nami --sandbox modal
+nova --sandbox modal
 
 # Execute code in E2B cloud sandbox
-nami --sandbox e2b
+nova --sandbox e2b
 
 # Run system diagnostics
-nami doctor
+nova doctor
 ```
 
 ## Built-in Tools
@@ -103,9 +103,9 @@ nami doctor
 
 ### Directory Structure
 
-**Global Configuration** (`~/.nami/`):
+**Global Configuration** (`~/.nova/`):
 ```
-~/.nami/
+~/.nova/
 ├── agents/           # Agent configurations
 │   └── default/
 │       └── agent.md
@@ -121,7 +121,7 @@ nami doctor
 **Project Configuration** (in your project root):
 ```
 my-project/
-├── .nami/
+├── .nova/
 │   ├── agent.md     # Project-specific instructions
 │   └── skills/      # Project-specific skills
 └── .claude/         # Also supported (Claude Code compatible)
@@ -131,8 +131,8 @@ my-project/
 
 The `agent.md` file provides persistent memory loaded at every session start:
 
-- **Global** (`~/.nami/agents/default/agent.md`): Your personality, style, and universal preferences
-- **Project** (`.nami/NAMI.md`): Project-specific context, conventions, and architecture
+- **Global** (`~/.nova/agents/default/agent.md`): Your personality, style, and universal preferences
+- **Project** (`.nova/NOVA.md`): Project-specific context, conventions, and architecture
 
 The agent automatically updates these files when you describe preferences or give feedback.
 
@@ -142,23 +142,23 @@ Skills provide specialized workflows and domain knowledge. Manage skills with:
 
 ```bash
 # List all skills
-nami skills list
+nova skills list
 
 # Create a new skill
-nami skills create my-skill
+nova skills create my-skill
 
 # Create a project-specific skill
-nami skills create my-skill --project
+nova skills create my-skill --project
 
 # View skill details
-nami skills info web-research
+nova skills info web-research
 ```
 
 Skills follow [Anthropic's progressive disclosure pattern](https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills) - the agent knows skills exist but only loads full instructions when needed.
 
 ### Default Subagents
 
-Nami-Code includes built-in specialized subagents for common tasks:
+NOVA includes built-in specialized subagents for common tasks:
 
 | Subagent | Description |
 |----------|-------------|
@@ -176,42 +176,42 @@ Extend the agent with Model Context Protocol servers for specialized capabilitie
 
 ```bash
 # Add filesystem MCP server (preset)
-nami mcp add filesystem --preset filesystem
+nova mcp add filesystem --preset filesystem
 
 # Add GitHub MCP server (preset)
-nami mcp add github --preset github
+nova mcp add github --preset github
 
 # Add PostgreSQL MCP server (preset)
-nami mcp add postgres --preset postgres
+nova mcp add postgres --preset postgres
 
 # Add Puppeteer MCP server (preset)
-nami mcp add puppeteer --preset puppeteer
+nova mcp add puppeteer --preset puppeteer
 ```
 
 **Custom MCP Servers:**
 
 ```bash
 # HTTP transport
-nami mcp add custom-server --transport http --url https://example.com/mcp
+nova mcp add custom-server --transport http --url https://example.com/mcp
 
 # Stdio transport (local process)
-nami mcp add my-server --transport stdio --command "python -m my_mcp_server"
+nova mcp add my-server --transport stdio --command "python -m my_mcp_server"
 
 # Stdio with arguments
-nami mcp add fetch-server --transport stdio --command "npx" --args "-y", "@modelcontextprotocol/server-fetch"
+nova mcp add fetch-server --transport stdio --command "npx" --args "-y", "@modelcontextprotocol/server-fetch"
 ```
 
 **MCP Management:**
 
 ```bash
 # List all configured MCP servers
-nami mcp list
+nova mcp list
 
 # Remove an MCP server
-nami mcp remove my-server
+nova mcp remove my-server
 
 # View MCP server details
-nami mcp info my-server
+nova mcp info my-server
 ```
 
 **Environment Variables for MCP:**
@@ -228,10 +228,10 @@ E2B provides secure cloud sandbox execution for running code with full isolation
 
 ```bash
 # Execute in E2B cloud sandbox
-nami --sandbox e2b
+nova --sandbox e2b
 
 # Run Python scripts securely
-nami --sandbox e2b <<< "print('Hello from E2B!')"
+nova --sandbox e2b <<< "print('Hello from E2B!')"
 ```
 
 **Setup:**
@@ -247,7 +247,7 @@ E2B sandboxes are ideal for:
 
 ### File Recovery
 
-Nami-Code automatically snapshots files before any destructive operation, so you can always recover from mistakes.
+NOVA automatically snapshots files before any destructive operation, so you can always recover from mistakes.
 
 **What gets snapshotted:**
 - Files targeted by `rm` shell commands — captured before deletion
@@ -272,14 +272,14 @@ The agent can also self-recover autonomously using its built-in tools:
 - `list_trash()` — see what snapshots are available
 - `restore_file("src/utils.py")` — restore the most recent snapshot for that path
 
-Snapshots are stored in `~/.nami/trash/<session-id>/` and are available across session restarts. Files larger than 10 MB are skipped.
+Snapshots are stored in `~/.Nova/trash/<session-id>/` and are available across session restarts. Files larger than 10 MB are skipped.
 
 ### Doctor Command
 
 Run system diagnostics to verify your environment:
 
 ```bash
-nami doctor
+Nova doctor
 ```
 
 The `doctor` command checks:
@@ -291,11 +291,11 @@ The `doctor` command checks:
 
 ### Onboarding System
 
-On first run, Nami-Code guides you through an interactive setup:
+On first run, NOVA guides you through an interactive setup:
 
 ```bash
 # First run - launches onboarding wizard
-nami
+nova
 ```
 
 The onboarding process includes:
@@ -389,14 +389,14 @@ Results are stored in `evaluation/results/` with:
 
 ```bash
 # Clone the repository
-git clone https://github.com/Babitdor/namicode-cli.git
-cd namicode-cli
+git clone https://github.com/Babitdor/NovaCode.git
+cd NovaCode
 
 # Install dependencies
 uv sync --all-groups
 
 # Run during development
-uv run nami
+uv run nova
 ```
 
 ### Running Tests
@@ -451,7 +451,7 @@ The CLI implements a "Deep Agent" architecture with four key components:
 
 ## Dependencies
 
-This package depends on the custom `deepagents` for windows library for core agent functionality. The `deepagents-nami` library is automatically installed as a dependency.
+This package depends on the custom `deepagents` for windows library for core agent functionality. The `deepagents-Nova` library is automatically installed as a dependency.
 
 ## License
 

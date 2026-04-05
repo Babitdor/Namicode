@@ -9,8 +9,8 @@ class TestWebSearchNoApiKey:
     def test_no_api_key_returns_error(self):
         """Test that web_search returns error when API key is not set."""
         # We need to patch the module-level tavily_client
-        with patch("namicode_cli.tools.tavily_client", None):
-            from namicode_cli.tools import web_search
+        with patch("NovaCode_cli.tools.tavily_client", None):
+            from novacode_cli.tools import web_search
 
             result = web_search("test query")
 
@@ -43,8 +43,8 @@ class TestWebSearchWithApiKey:
             "query": "test query",
         }
 
-        with patch("namicode_cli.tools.tavily_client", mock_tavily):
-            from namicode_cli.tools import web_search
+        with patch("NovaCode_cli.tools.tavily_client", mock_tavily):
+            from novacode_cli.tools import web_search
 
             result = web_search("test query")
 
@@ -63,8 +63,8 @@ class TestWebSearchWithApiKey:
         mock_tavily = MagicMock()
         mock_tavily.search.return_value = {"results": [], "query": "test"}
 
-        with patch("namicode_cli.tools.tavily_client", mock_tavily):
-            from namicode_cli.tools import web_search
+        with patch("NovaCode_cli.tools.tavily_client", mock_tavily):
+            from novacode_cli.tools import web_search
 
             web_search("test query", max_results=10)
 
@@ -80,8 +80,8 @@ class TestWebSearchWithApiKey:
         mock_tavily = MagicMock()
         mock_tavily.search.return_value = {"results": [], "query": "test"}
 
-        with patch("namicode_cli.tools.tavily_client", mock_tavily):
-            from namicode_cli.tools import web_search
+        with patch("NovaCode_cli.tools.tavily_client", mock_tavily):
+            from novacode_cli.tools import web_search
 
             web_search("latest news", topic="news")
 
@@ -97,8 +97,8 @@ class TestWebSearchWithApiKey:
         mock_tavily = MagicMock()
         mock_tavily.search.return_value = {"results": [], "query": "test"}
 
-        with patch("namicode_cli.tools.tavily_client", mock_tavily):
-            from namicode_cli.tools import web_search
+        with patch("NovaCode_cli.tools.tavily_client", mock_tavily):
+            from novacode_cli.tools import web_search
 
             web_search("stock prices", topic="finance")
 
@@ -114,8 +114,8 @@ class TestWebSearchWithApiKey:
         mock_tavily = MagicMock()
         mock_tavily.search.return_value = {"results": [], "query": "test"}
 
-        with patch("namicode_cli.tools.tavily_client", mock_tavily):
-            from namicode_cli.tools import web_search
+        with patch("NovaCode_cli.tools.tavily_client", mock_tavily):
+            from novacode_cli.tools import web_search
 
             web_search("test query", include_raw_content=True)
 
@@ -135,8 +135,8 @@ class TestWebSearchErrorHandling:
         mock_tavily = MagicMock()
         mock_tavily.search.side_effect = Exception("API rate limit exceeded")
 
-        with patch("namicode_cli.tools.tavily_client", mock_tavily):
-            from namicode_cli.tools import web_search
+        with patch("NovaCode_cli.tools.tavily_client", mock_tavily):
+            from novacode_cli.tools import web_search
 
             result = web_search("test query")
 
@@ -150,8 +150,8 @@ class TestWebSearchErrorHandling:
         mock_tavily = MagicMock()
         mock_tavily.search.side_effect = ConnectionError("Network unreachable")
 
-        with patch("namicode_cli.tools.tavily_client", mock_tavily):
-            from namicode_cli.tools import web_search
+        with patch("NovaCode_cli.tools.tavily_client", mock_tavily):
+            from novacode_cli.tools import web_search
 
             result = web_search("test query")
 
@@ -168,8 +168,8 @@ class TestWebSearchParameters:
         mock_tavily = MagicMock()
         mock_tavily.search.return_value = {"results": [], "query": "test"}
 
-        with patch("namicode_cli.tools.tavily_client", mock_tavily):
-            from namicode_cli.tools import web_search
+        with patch("NovaCode_cli.tools.tavily_client", mock_tavily):
+            from novacode_cli.tools import web_search
 
             web_search(
                 "financial news today",
@@ -190,8 +190,8 @@ class TestWebSearchParameters:
         mock_tavily = MagicMock()
         mock_tavily.search.return_value = {"results": [], "query": "test"}
 
-        with patch("namicode_cli.tools.tavily_client", mock_tavily):
-            from namicode_cli.tools import web_search
+        with patch("NovaCode_cli.tools.tavily_client", mock_tavily):
+            from novacode_cli.tools import web_search
 
             web_search("simple query")
 

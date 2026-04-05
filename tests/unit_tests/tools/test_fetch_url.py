@@ -5,7 +5,7 @@ import pytest
 requests = pytest.importorskip("requests")
 responses = pytest.importorskip("responses")
 
-from namicode_cli.tools import fetch_url
+from novacode_cli.tools import fetch_url
 
 
 @responses.activate
