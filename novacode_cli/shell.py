@@ -910,6 +910,32 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
                 await process.wait()
             except OSError:
                 pass  # Process may already be terminated
+        except KeyboardInterrupt:
+            # User interrupted - terminate the process immediately
+            output_lines.append("\n[yellow]Interrupted by user[/yellow]")
+            status = "error"
+            try:
+                # Try graceful termination first
+                process.terminate()
+                # Wait briefly for graceful shutdown
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=2.0)
+                except asyncio.TimeoutError:
+                    # Force kill if process doesn't terminate
+                    try:
+                        process.kill()
+                        await process.wait()
+                    except OSError:
+                        pass  # Process already terminated
+            except OSError:
+                pass  # Process already terminated
+            finally:
+                # Ensure stdin is closed
+                try:
+                    if process.stdin:
+                        process.stdin.close()
+                except Exception:
+                    pass
         finally:
             # Close stdin (StreamWriter) to prevent ResourceWarning on Windows
             # Note: stdout/stderr are StreamReader and don't need explicit closing
@@ -958,9 +984,12 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         try:
             return input("> ")
         except EOFError:
+            # User pressed Ctrl+D - treat as empty input
             return ""
         except KeyboardInterrupt:
-            return ""
+            # User pressed Ctrl+C - return empty and let caller handle it
+            # Re-raise to ensure proper cleanup in the calling context
+            raise
 
     def _run_background_shell_command(
         self,
