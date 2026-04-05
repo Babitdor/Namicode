@@ -92,12 +92,71 @@ nova doctor
 | `execute` | Execute commands in remote sandbox (sandbox mode) |
 | `web_search` | Search the web using Tavily API |
 | `fetch_url` | Fetch and convert web pages to markdown |
+| `browser_automate` | AI-powered browser automation for web tasks |
 | `task` | Delegate work to subagents for parallel execution |
 | `write_todos` | Create and manage task lists for complex work |
 | `list_trash` | List file snapshots available for recovery |
 | `restore_file` | Restore a deleted or overwritten file from snapshots |
 
 > **Note**: Potentially destructive operations require user approval. Use `--auto-approve` to skip prompts.
+
+## Browser Automation
+
+NOVA includes AI-powered browser automation capabilities for web-based tasks:
+
+### Direct Command
+
+```bash
+# Run browser automation task
+/browser-use <task> [--model M] [--no-vision]
+
+# Examples:
+/browser-use Go to github.com and find trending Python repos
+/browser-use Fill out the contact form on example.com --model llama3.2
+/browser-use Search for Python tutorials --no-vision
+```
+
+### Agent Tool
+
+The agent can also use browser automation directly:
+
+```python
+# Browser automation tool
+browser_automate(
+    task="Go to news.ycombinator.com and get the top 5 stories",
+    model="llama3.1:8b",
+    use_vision=True
+)
+```
+
+### Specialized Subagent
+
+NOVA includes a specialized browser-automation-agent for complex web tasks:
+
+- **Web Scraping**: Extract data from websites
+- **Form Filling**: Automate form submissions
+- **Data Collection**: Gather information from multiple pages
+- **Multi-step Interactions**: Perform complex web workflows
+
+### Browser-Use Features
+
+- **Vision Support**: Optional vision capabilities for visual understanding
+- **Model Selection**: Choose different Ollama models (default: llama3.1:8b)
+- **Result Integration**: Results automatically sent to Nova for analysis
+- **Conversation History**: Browser results become part of the conversation context
+
+### Requirements
+
+```bash
+# Install browser-use
+pip install browser-use
+
+# Or with uv
+uv pip install browser-use
+
+# Ensure Ollama is running with the model installed
+ollama pull llama3.1:8b
+```
 
 ## Configuration
 
@@ -167,6 +226,90 @@ NOVA includes built-in specialized subagents for common tasks:
 | `code-simplifier-agent` | Code simplification and refactoring |
 
 These subagents are automatically available and can be invoked via the `task` tool for parallel, focused work on specific aspects of your codebase.
+
+### Hooks System
+
+NOVA provides a powerful hooks system for customizing agent behavior at key lifecycle points:
+
+**Hook Types:**
+
+| Hook | When It Fires | Use Case |
+|------|---------------|----------|
+| `pre_tool_call` | Before a tool is executed | Validate inputs, log actions, modify parameters |
+| `post_tool_call` | After a tool completes | Process results, log outcomes, trigger notifications |
+| `on_message` | When a message is received | Filter content, add context, track conversations |
+| `on_error` | When an error occurs | Custom error handling, logging, recovery actions |
+
+**Managing Hooks:**
+
+```bash
+# List all hooks
+/hooks list
+
+# Add a hook
+/hooks add pre_tool_call my_hook --command "echo 'Tool called'"
+
+# Add a hook from a file
+/hooks add post_tool_call logger --file hooks/logger.py
+
+# Enable/disable hooks
+/hooks enable my_hook
+/hooks disable my_hook
+
+# View hook details
+/hooks info my_hook
+
+# Remove a hook
+/hooks remove my_hook
+```
+
+**Hook Configuration:**
+
+Hooks are stored in `~/.nova/hooks/` and can be:
+- **Python scripts**: Full access to NOVA's internals
+- **Shell commands**: Quick one-liners for simple tasks
+- **Executable files**: Any executable for custom logic
+
+**Example Hook (Python):**
+
+```python
+# ~/.nova/hooks/pre_tool_call.py
+def hook(tool_name: str, args: dict) -> dict:
+    """Log tool calls before execution."""
+    print(f"[HOOK] Tool called: {tool_name}")
+    print(f"[HOOK] Arguments: {args}")
+    
+    # Modify arguments if needed
+    if tool_name == "write_file":
+        args["content"] = args["content"].rstrip() + "\n"
+    
+    return args
+```
+
+**Example Hook (Shell):**
+
+```bash
+# ~/.nova/hooks/post_tool_call.sh
+#!/bin/bash
+echo "Tool completed: $TOOL_NAME"
+echo "Result: $RESULT"
+```
+
+**Hook Use Cases:**
+
+- **Logging**: Track all tool calls for debugging
+- **Validation**: Ensure file paths are within project boundaries
+- **Notifications**: Send alerts when tasks complete
+- **Custom Behavior**: Add project-specific logic
+- **Security**: Prevent certain operations
+- **Integration**: Connect to external services
+
+**Hook Priority:**
+
+Hooks execute in priority order (lower number = higher priority):
+1. System hooks (priority 0-99)
+2. User hooks (priority 100-199)
+3. Project hooks (priority 200-299)
 
 ### MCP Integration
 
@@ -439,6 +582,62 @@ The CLI implements a "Deep Agent" architecture with four key components:
 - `config.py` - Settings and environment configuration
 - `tools.py` - Custom tool implementations
 - `ui.py` - Rich-based UI rendering
+
+## Vixie Integration
+
+NOVA includes **Vixie**, an Electron-based desktop application for Nami integration:
+
+### Features
+
+- **Desktop UI**: Native desktop application for Nami interactions
+- **Nami Client**: Built-in client for Nami blockchain integration
+- **Gravity Simulation**: Interactive gravity simulation demo
+- **Settings Management**: Configurable settings for customization
+
+### Vixie Components
+
+| File | Description |
+|------|-------------|
+| `main.js` | Electron main process |
+| `preload.js` | IPC bridge between main and renderer |
+| `index.html` | Main application window |
+| `settings.html` | Settings configuration page |
+| `nami-client.js` | Nami blockchain client integration |
+| `gravity.js` | Gravity simulation module |
+
+### Running Vixie
+
+```bash
+# Navigate to Vixie directory
+cd Vixie
+
+# Install dependencies
+npm install
+
+# Run in development mode
+npm start
+
+# Build for production
+npm run make
+```
+
+### Vixie Architecture
+
+Vixie uses Electron Forge for cross-platform desktop deployment:
+
+- **Main Process**: Handles app lifecycle and native APIs
+- **Renderer Process**: UI rendering and user interactions
+- **Preload Script**: Secure bridge for IPC communication
+- **Nami Client**: Integration with Nami blockchain wallet
+
+### Integration with NOVA
+
+Vixie provides a graphical interface for NOVA's capabilities:
+
+- Visual browser automation controls
+- Real-time task progress monitoring
+- Interactive settings configuration
+- Desktop notifications for task completion
 - `recovery.py` - File recovery system (snapshots + restore)
 - `skills/` - Skills system implementation
 - `mcp/` - Model Context Protocol integration
