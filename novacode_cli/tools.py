@@ -11,12 +11,26 @@ Key Tools:
 - docs_search(): Search official documentation sites only
 - execute_in_e2b(): Execute code in isolated E2B cloud sandboxes
 
+LSP Tools (Code Intelligence):
+- lsp_goto_definition(): Navigate to symbol definitions
+- lsp_find_references(): Find all references to a symbol
+- lsp_hover(): Get documentation and type info for symbols
+- lsp_completions(): Get auto-complete suggestions
+- lsp_document_symbols(): List all symbols in a file
+- lsp_workspace_symbols(): Search symbols across workspace
+- lsp_diagnostics(): Get syntax errors and linting issues
+- lsp_rename(): Rename a symbol across files
+- lsp_signature_help(): Get function/method signatures
+- lsp_type_definition(): Navigate to type definitions
+- lsp_implementation(): Find implementations of interfaces
+
 These tools are registered with the agent and allow it to:
 - Fetch data from REST APIs
 - Scrape web content and convert to readable markdown
 - Search for current information online
 - Handle various HTTP methods (GET, POST, PUT, DELETE, etc.)
 - Run Python, Node.js, and Bash code securely in isolated environments
+- Navigate and understand codebases with LSP-like features
 
 Dependencies:
 - requests: HTTP client library
@@ -24,6 +38,7 @@ Dependencies:
 - tavily: Tavily search client (optional)
 - ddgs: DuckDuckGo search client (no API key needed)
 - e2b-code-interpreter: E2B sandbox execution
+- jedi: Python static analysis for LSP tools
 
 The Tavily client is initialized if TAVILY_API_KEY is available in settings.
 """
@@ -962,6 +977,59 @@ def summarize_web_content(
     }
 
 
+def _convert_github_to_raw_url(url: str) -> tuple[str, bool]:
+    """Convert GitHub page URLs to raw content URLs for better fetching.
+
+    Handles:
+    - Blob URLs: https://github.com/owner/repo/blob/branch/path -> raw.githubusercontent.com
+    - Tree URLs: https://github.com/owner/repo/tree/branch/path -> raw.githubusercontent.com
+    - Raw URLs: Already raw, return as-is
+
+    Args:
+        url: The GitHub URL to convert
+
+    Returns:
+        Tuple of (converted_url, was_converted)
+    """
+    import re
+
+    # Pattern: https://github.com/owner/repo/blob/branch/path
+    blob_match = re.match(
+        r"https://github\.com/([^/]+)/([^/]+)/blob/([^/]+)/(.+)",
+        url
+    )
+    if blob_match:
+        owner, repo, branch, path = blob_match.groups()
+        raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}"
+        return raw_url, True
+
+    # Pattern: https://github.com/owner/repo/tree/branch/path (for directory listings)
+    tree_match = re.match(
+        r"https://github\.com/([^/]+)/([^/]+)/tree/([^/]+)/(.+)",
+        url
+    )
+    if tree_match:
+        owner, repo, branch, path = tree_match.groups()
+        # For tree URLs, we can't get raw content, but we can try the API
+        # Return the API URL for directory contents
+        api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}?ref={branch}"
+        return api_url, True
+
+    # Pattern: https://github.com/owner/repo (repo root)
+    repo_match = re.match(
+        r"https://github\.com/([^/]+)/([^/]+)/?$",
+        url
+    )
+    if repo_match:
+        owner, repo = repo_match.groups()
+        # Return API URL for repo info
+        api_url = f"https://api.github.com/repos/{owner}/{repo}"
+        return api_url, True
+
+    # Already a raw URL or not a GitHub URL
+    return url, False
+
+
 def fetch_url(
     url: str,
     timeout: int = 30,
@@ -983,8 +1051,17 @@ def fetch_url(
     making it easy to read and process HTML content. After receiving the markdown,
     you MUST synthesize the information into a natural, helpful response for the user.
 
+    GitHub URL Support:
+    - Automatically converts GitHub blob URLs to raw content URLs
+    - Example: https://github.com/owner/repo/blob/main/file.py
+      -> https://raw.githubusercontent.com/owner/repo/main/file.py
+    - Handles tree URLs via GitHub API for directory listings
+    - Handles repo root URLs via GitHub API for repository info
+
     Args:
         url: The URL to fetch (must be a valid HTTP/HTTPS URL)
+            - Supports GitHub URLs (blob, tree, repo root)
+            - Supports raw.githubusercontent.com URLs directly
         timeout: Request timeout in seconds (default: 30)
         max_retries: Maximum number of retry attempts (default: 3)
         headers: Additional HTTP headers to include
@@ -1001,6 +1078,8 @@ def fetch_url(
         Dictionary containing:
         - success: Whether the request succeeded
         - url: The final URL after redirects
+        - original_url: The original URL (before GitHub conversion)
+        - github_url_converted: Whether the URL was converted from GitHub format
         - markdown_content: The page content converted to markdown
         - status_code: HTTP status code
         - content_length: Length of the markdown content in characters
@@ -1017,6 +1096,11 @@ def fetch_url(
     import random
     import time
 
+    # Convert GitHub URLs to raw content URLs for better fetching
+    original_url = url
+    url, was_github_url = _convert_github_to_raw_url(url)
+    is_github_api_url = url.startswith("https://api.github.com")
+
     # Build headers
     request_headers = {
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
@@ -1025,6 +1109,10 @@ def fetch_url(
         "Connection": "keep-alive",
         "Upgrade-Insecure-Requests": "1",
     }
+
+    # For GitHub API URLs, use JSON Accept header
+    if is_github_api_url:
+        request_headers["Accept"] = "application/vnd.github.v3+json"
 
     # Set User-Agent
     if user_agent == "browser":
@@ -1142,6 +1230,15 @@ def fetch_url(
             # Convert HTML content to markdown
             markdown_content = markdownify(content)
 
+            # For GitHub API responses, format as JSON code block
+            if is_github_api_url:
+                try:
+                    import json
+                    parsed = json.loads(content)
+                    markdown_content = f"```json\n{json.dumps(parsed, indent=2)}\n```"
+                except (json.JSONDecodeError, ImportError):
+                    pass  # Keep original content
+
             # Apply summarization if requested and content is large
             if summarize and len(markdown_content) > summarize_max_length:
                 summary_result = summarize_web_content(
@@ -1154,6 +1251,8 @@ def fetch_url(
                         "success": True,
                         "url": str(response.url),
                         "final_url": str(response.url),
+                        "original_url": original_url,
+                        "github_url_converted": was_github_url,
                         "markdown_content": summary_result["summarized_content"],
                         "status_code": response.status_code,
                         "content_length": summary_result["summarized_length"],
@@ -1170,6 +1269,8 @@ def fetch_url(
                 "success": True,
                 "url": str(response.url),
                 "final_url": str(response.url),
+                "original_url": original_url,
+                "github_url_converted": was_github_url,
                 "markdown_content": markdown_content,
                 "status_code": response.status_code,
                 "content_length": len(markdown_content),
@@ -3286,3 +3387,31 @@ This file contains memories related to {topic}.
             "message": f"Advanced memory structure created at {memories_dir} with {len(created_files)} files",
             "index_file": str(index_path),
         }
+
+
+# =============================================================================
+# LSP Tools (Language Server Protocol - Code Intelligence)
+# =============================================================================
+
+# Import LSP tools from the dedicated module
+# These tools provide code intelligence features similar to IDE LSP functionality
+from novacode_cli.lsp_tools import (  # noqa: F401
+    lsp_completions,
+    lsp_diagnostics,
+    lsp_document_symbols,
+    lsp_find_references,
+    lsp_goto_definition,
+    lsp_hover,
+    lsp_implementation,
+    lsp_rename,
+    lsp_signature_help,
+    lsp_type_definition,
+    lsp_workspace_symbols,
+)
+
+# Import command tool for CLI slash commands
+# This allows the agent to invoke CLI commands programmatically
+from novacode_cli.command_tool import (  # noqa: F401
+    list_commands,
+    run_command,
+)

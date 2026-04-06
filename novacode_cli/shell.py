@@ -374,6 +374,9 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
 
     This shell will execute on the local machine and has NO safeguards except
     for the human in the loop safeguard provided by the CLI itself.
+    
+    When a sandbox backend is provided, commands will be executed in the sandbox
+    instead of locally, enabling remote execution in isolated environments.
     """
 
     def __init__(
@@ -383,6 +386,7 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         timeout: float = 120.0,
         max_output_bytes: int = 100_000,
         env: dict[str, str] | None = None,
+        backend: Any = None,
     ) -> None:
         """Initialize an instance of `ShellMiddleware`.
 
@@ -394,6 +398,9 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
                 Defaults to 100,000 bytes.
             env: Environment variables to pass to the subprocess. If None,
                 uses the current process's environment. Defaults to None.
+            backend: Optional sandbox backend for remote execution. When provided,
+                commands will be executed in the sandbox instead of locally.
+                Must implement SandboxBackendProtocol with an execute() method.
         """
         super().__init__()
         self._timeout = timeout
@@ -401,6 +408,7 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         self._tool_name = "shell"
         self._env = ShellMiddleware._sanitize_env(env if env is not None else os.environ.copy())
         self._workspace_root = workspace_root
+        self._backend = backend
         
         # Track background processes for cleanup
         self._background_processes: list[asyncio.subprocess.Process] = []
@@ -409,11 +417,21 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         import atexit
         atexit.register(self._cleanup_background_processes)
 
+        # Determine execution context for description
+        if backend is not None:
+            execution_context = (
+                f"You are operating in a **remote sandbox environment** at {self._workspace_root}. "
+                f"All commands execute remotely in the sandbox, not on the local machine. "
+            )
+        else:
+            execution_context = (
+                f"Commands will run in the working directory: {self._workspace_root}. "
+            )
+
         # Build description with working directory information
         description = (
-            f"Execute a shell command directly on the host. Commands will run in "
-            f"the working directory: {self._workspace_root}. Each command runs in a fresh shell "
-            f"environment with the current process's environment variables. Commands may "
+            f"Execute a shell command. {execution_context}"
+            f"Each command runs in a fresh shell environment. Commands may "
             f"be truncated if they exceed the configured timeout or output limits. "
             f"Use interactive=True for commands that may prompt for user input "
             f"(e.g., npx create-next-app, npm init, git rebase -i). "
@@ -502,6 +520,18 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         """
         return {k: v for k, v in env.items() if k not in _DANGEROUS_ENV_VARS}
 
+    def _supports_sandbox_execution(self) -> bool:
+        """Check if the backend supports sandbox execution.
+        
+        Returns:
+            True if backend implements SandboxBackendProtocol with execute method.
+        """
+        if self._backend is None:
+            return False
+        
+        # Check if backend has execute method (SandboxBackendProtocol)
+        return hasattr(self._backend, 'execute') and callable(getattr(self._backend, 'execute', None))
+
     def _run_shell_command(
         self,
         command: str,
@@ -510,10 +540,13 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
     ) -> ToolMessage | str:
         """Execute a shell command and return the result.
 
-        This method uses dyNovac prompt detection:
+        This method uses dynamic prompt detection:
         1. Run the command with a short initial timeout
         2. If output contains a prompt pattern, automatically switch to interactive mode
         3. Otherwise, continue with normal execution
+        
+        When a sandbox backend is configured, commands are executed in the sandbox
+        instead of locally.
 
         Args:
             command: The shell command to execute.
@@ -526,7 +559,7 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
             msg = "Shell tool expects a non-empty command string."
             raise ToolException(msg)
 
-        # Convert Unix commands to Windows-compatible commands
+        # Convert Unix commands to Windows-compatible commands (for local execution)
         command = _convert_unix_command_to_windows(command)
 
         dangerous, reason = is_dangerous_command(command)
@@ -542,8 +575,8 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
                 status="error",
             )
 
-        # Snapshot files targeted by rm before they are deleted
-        if re.search(r"\brm\b", command):
+        # Snapshot files targeted by rm before they are deleted (local only)
+        if self._backend is None and re.search(r"\brm\b", command):
             try:
                 from novacode_cli.recovery import extract_rm_targets, get_recovery_manager
 
@@ -554,6 +587,89 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
             except Exception:
                 pass  # never block execution due to snapshot failure
 
+        # If sandbox backend is available, execute in sandbox
+        if self._supports_sandbox_execution():
+            return self._run_sandbox_command(command, tool_call_id=tool_call_id)
+
+        # Local execution (original behavior)
+        return self._run_local_command(command, tool_call_id=tool_call_id)
+
+    def _run_sandbox_command(
+        self,
+        command: str,
+        *,
+        tool_call_id: str | None,
+    ) -> ToolMessage:
+        """Execute a shell command in the sandbox backend.
+        
+        Args:
+            command: The shell command to execute.
+            tool_call_id: The tool call ID for creating a ToolMessage.
+            
+        Returns:
+            A ToolMessage with the command output or an error message.
+        """
+        try:
+            # Call the sandbox backend's execute method
+            result = self._backend.execute(command)
+            
+            # Format output for LLM consumption
+            output = result.output if result.output else "<no output>"
+            
+            if len(output) > self._max_output_bytes:
+                output = output[: self._max_output_bytes]
+                output += f"\n\n... Output truncated at {self._max_output_bytes} bytes."
+            
+            if result.exit_code is not None and result.exit_code != 0:
+                output = f"{output.rstrip()}\n\nExit code: {result.exit_code}"
+                status = "error"
+            else:
+                status = "success"
+            
+            if result.truncated:
+                output += "\n[Output was truncated due to size limits]"
+            
+            return ToolMessage(
+                content=output,
+                tool_call_id=tool_call_id,
+                name=self._tool_name,
+                status=status,
+            )
+        except NotImplementedError as e:
+            return ToolMessage(
+                content=f"Error: Sandbox execution not available. {e}",
+                tool_call_id=tool_call_id,
+                name=self._tool_name,
+                status="error",
+            )
+        except Exception as e:
+            return ToolMessage(
+                content=f"Error executing command in sandbox: {e}",
+                tool_call_id=tool_call_id,
+                name=self._tool_name,
+                status="error",
+            )
+
+    def _run_local_command(
+        self,
+        command: str,
+        *,
+        tool_call_id: str | None,
+    ) -> ToolMessage:
+        """Execute a shell command locally (original behavior).
+        
+        This method uses dynamic prompt detection:
+        1. Run the command with a short initial timeout
+        2. If output contains a prompt pattern, automatically switch to interactive mode
+        3. Otherwise, continue with normal execution
+
+        Args:
+            command: The shell command to execute.
+            tool_call_id: The tool call ID for creating a ToolMessage.
+
+        Returns:
+            A ToolMessage with the command output or an error message.
+        """
         # Phase 1: Try running with a short timeout to detect prompts
         prompt_detection_timeout = 5.0  # Short timeout to detect prompts
         try:
@@ -1004,6 +1120,9 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         and returns success once the server is up. The process continues running
         in the background.
 
+        Note: In sandbox mode, background commands are executed synchronously
+        since the sandbox doesn't support persistent background processes.
+
         Args:
             command: The shell command to execute.
             tool_call_id: The tool call ID for creating a ToolMessage.
@@ -1032,7 +1151,12 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
                 status="error",
             )
 
-        # Run the async implementation in an event loop
+        # If sandbox backend is available, execute synchronously
+        # (sandbox doesn't support persistent background processes)
+        if self._supports_sandbox_execution():
+            return self._run_sandbox_command(command, tool_call_id=tool_call_id)
+
+        # Run the async implementation in an event loop (local execution)
         try:
             try:
                 asyncio.get_running_loop()

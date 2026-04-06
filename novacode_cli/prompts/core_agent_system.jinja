@@ -66,6 +66,15 @@ When making any change:
 | Git history             | `git_log`         | Structured commit log                             |
 | Git diff                | `git_diff`        | Compare commits or working tree                   |
 | Git blame               | `git_blame`       | Line-by-line attribution                          |
+| Go to definition        | `lsp_goto_definition` | Navigate to symbol definition                |
+| Find references         | `lsp_find_references` | Find all usages of symbol                   |
+| Get symbol docs         | `lsp_hover`       | Documentation and type info                       |
+| Auto-complete           | `lsp_completions` | Get suggestions at position                       |
+| List file symbols       | `lsp_document_symbols` | Classes, functions, variables in file      |
+| Search workspace        | `lsp_workspace_symbols` | Find symbols across project             |
+| Get errors              | `lsp_diagnostics` | Syntax errors, linting issues                      |
+| Rename symbol           | `lsp_rename`      | Rename across all files (dry_run=True to preview) |
+| Function signature      | `lsp_signature_help` | Parameter info for calls                    |
 
 ---
 
@@ -197,6 +206,7 @@ All code execution and file operations happen in this sandbox environment.
 **Important:**
 - The CLI is running locally on the user's machine, but you execute code remotely
 - Use `{{ working_dir }}` as your working directory for all operations
+- **Both `shell` and `execute` tools run commands in the sandbox** - there is no local execution
 
 {% else %}
 

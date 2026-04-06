@@ -197,7 +197,7 @@ def create_deep_agent(
     # Use the provided name for the agent's todo list, or default to "Deep Agent"
     agent_display_name = name if name else "Deep Agent"
     deepagent_middleware: list[AgentMiddleware] = [
-        TodoListMiddleware(agent_name=agent_display_name),
+        TodoListMiddleware(agent_name=agent_display_name), # type: ignore
     ]
     if memory is not None:
         deepagent_middleware.append(MemoryMiddleware(backend=backend, sources=memory))

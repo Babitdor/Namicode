@@ -652,6 +652,7 @@ def create_agent_with_config(
         ShellMiddleware(
             workspace_root=str(workspace_root),
             env=dict(os.environ),
+            backend=backend,  # Pass sandbox backend for remote execution
         ),
         AgentMemoryMiddleware(
             settings=settings,

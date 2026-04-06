@@ -261,6 +261,19 @@ MCP_PRESETS: dict[str, dict[str, Any]] = {
             "env": {},
         },
     },
+    "context7": {
+        "name": "Context7 MCP",
+        "description": "Upstash Context7 MCP server for context management",
+        "package": "@upstash/context7-mcp",
+        "config": {
+            "transport": "stdio",
+            "command": "npx",
+            "args": ["-y", "@upstash/context7-mcp", "--api-key", "{context7_api_key}"],
+            "env": {},
+        },
+        "setup_prompt": "Enter your Upstash Context7 API key:",
+        "setup_key": "context7_api_key",
+    },
 }
 
 

@@ -148,8 +148,10 @@ from novacode_cli.tools import (
     http_request,
     image_search,
     lint_code,
+    list_commands,
     package_info,
     read_memory,
+    run_command,
     think,
     web_search,
     write_memory,
@@ -966,6 +968,9 @@ async def _run_agent_session(
         write_memory,
         read_memory,
         create_memory_structure,
+        # Command tools (CLI slash commands)
+        run_command,
+        list_commands,
     ]
     if settings.has_tavily:
         tools.append(web_search)
