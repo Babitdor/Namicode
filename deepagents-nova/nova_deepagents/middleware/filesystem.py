@@ -230,164 +230,24 @@ class FilesystemState(AgentState):
     """Files in the filesystem."""
 
 
-LIST_FILES_TOOL_DESCRIPTION = """Lists all files in the filesystem, filtering by directory.
-
-Usage:
-- The path parameter must be an absolute path, not a relative path
-- The list_files tool will return a list of all files in the specified directory.
-- This is very useful for exploring the file system and finding the right file to read or edit.
-- You should almost ALWAYS use this tool before using the Read or Edit tools."""
-
-READ_FILE_TOOL_DESCRIPTION = """Reads a file from the filesystem. You can access any file directly by using this tool.
-Assume this tool is able to read all files on the machine. If the User provides a path to a file assume that path is valid. It is okay to read a file that does not exist; an error will be returned.
-
-Usage:
-- The file_path parameter must be an absolute path, not a relative path
-- By default, it reads up to 500 lines starting from the beginning of the file
-- **IMPORTANT for large files and codebase exploration**: Use pagination with offset and limit parameters to avoid context overflow
-  - First scan: read_file(path, limit=100) to see file structure
-  - Read more sections: read_file(path, offset=100, limit=200) for next 200 lines
-  - Only omit limit (read full file) when necessary for editing
-- Specify offset and limit: read_file(path, offset=0, limit=100) reads first 100 lines
-- Any lines longer than 2000 characters will be truncated
-- Results are returned using cat -n format, with line numbers starting at 1
-- You have the capability to call multiple tools in a single response. It is always better to speculatively read multiple files as a batch that are potentially useful.
-- If you read a file that exists but has empty contents you will receive a system reminder warning in place of file contents.
-- You should ALWAYS make sure a file has been read before editing it.
-
-Args:
-    file_path: Absolute path to the file to read (e.g., /home/user/project/main.py).
-    offset: Line number to start reading from (0-indexed). Default: 0. Use for pagination.
-    limit: Maximum number of lines to read. Default: 500. Use a smaller value (e.g., 100)
-        for initial exploration of large files to avoid context overflow."""
-
-EDIT_FILE_TOOL_DESCRIPTION = """Performs exact string replacements in files.
-
-Usage:
-- You must use your `Read` tool at least once in the conversation before editing. This tool will error if you attempt an edit without reading the file.
-- When editing text from Read tool output, ensure you preserve the exact indentation (tabs/spaces) as it appears AFTER the line number prefix. The line number prefix format is: spaces + line number + tab. Everything after that tab is the actual file content to match. Never include any part of the line number prefix in the old_string or new_string.
-- ALWAYS prefer editing existing files. NEVER write new files unless explicitly required.
-- Only use emojis if the user explicitly requests it. Avoid adding emojis to files unless asked.
-- The edit will FAIL if `old_string` is not unique in the file. Either provide a larger string with more surrounding context to make it unique or use `replace_all` to change every instance of `old_string`.
-- Use `replace_all` for replacing and reNovang strings across the file. This parameter is useful if you want to rename a variable for instance.
-
-Args:
-    file_path: Absolute path to the file to edit.
-    old_string: The exact string to find and replace. Must be unique within the file,
-        or use replace_all=True. Include surrounding context lines if needed for uniqueness.
-    new_string: The replacement string. Use an empty string to delete old_string.
-    replace_all: If True, replace every occurrence of old_string in the file. Default: False."""
-
-
-WRITE_FILE_TOOL_DESCRIPTION = """Writes to a new file in the filesystem.
-
-Usage:
-- The file_path parameter must be an absolute path, not a relative path
-- The content parameter must be a string
-- The write_file tool will create the a new file.
-- Prefer to edit existing files over creating new ones when possible.
-
-Args:
-    file_path: Absolute path for the new file (e.g., /project/src/new_module.py).
-    content: Full text content to write to the file."""
-
-
-GLOB_TOOL_DESCRIPTION = """Find files matching a glob pattern.
-
-Usage:
-- The glob tool finds files by matching patterns with wildcards
-- Supports standard glob patterns: `*` (any characters), `**` (any directories), `?` (single character)
-- Patterns can be absolute (starting with `/`) or relative
-- Returns a list of absolute file paths that match the pattern
-
-Examples:
-- `**/*.py` - Find all Python files
-- `*.txt` - Find all text files in root
-- `/subdir/**/*.md` - Find all markdown files under /subdir
-- The path parameter optionally restricts the search to a specific directory
-
-Args:
-    pattern: Glob pattern to match against file paths (e.g., "**/*.py", "src/**/*.ts").
-    path: Optional directory to restrict the search to. Defaults to the filesystem root.
-        Use to narrow results when you know the relevant subdirectory (e.g., "/src")."""
-
-GREP_TOOL_DESCRIPTION = """Search for a regex pattern in files.
-
-Usage:
-- The grep tool searches for text patterns across files using regular expressions
-- The pattern parameter is a regex (e.g., "TODO", "def \\w+", "error|warning", "^import")
-- For literal strings with special chars, escape them (e.g., "re\\.compile" to find "re.compile")
-- The path parameter filters which directory to search in (default is the current working directory)
-- The glob parameter accepts a glob pattern to filter which files to search (e.g., `*.py`)
-- The output_mode parameter controls the output format:
-  - `files_with_matches`: List only file paths containing matches (default)
-  - `content`: Show matching lines with file path and line numbers
-  - `count`: Show count of matches per file
-
-Examples:
-- Search all files: `grep(pattern="TODO")`
-- Search Python files only: `grep(pattern="import", glob="*.py")`
-- Show matching lines: `grep(pattern="error", output_mode="content")`
-- Regex search: `grep(pattern="def \\w+_handler", glob="*.py", output_mode="content")`
-- Word boundary: `grep(pattern="\\berror\\b", output_mode="content")`
-
-Args:
-    pattern: Regular expression to search for (e.g., "def\\s+\\w+", "TODO", "import\\s+os").
-    path: Optional directory path to restrict the search scope.
-    glob: Optional glob pattern to filter which files are searched (e.g., "*.py", "**/*.ts").
-    output_mode: Controls output format. One of:
-        - "files_with_matches" (default): return only file paths
-        - "content": return matching lines with file and line number context
-        - "count": return match count per file"""
-
-EXECUTE_TOOL_DESCRIPTION = """Executes a given command in the sandbox environment with proper handling and security measures.
-
-Before executing the command, please follow these steps:
-
-1. Directory Verification:
-   - If the command will create new directories or files, first use the ls tool to verify the parent directory exists and is the correct location
-   - For example, before running "mkdir foo/bar", first use ls to check that "foo" exists and is the intended parent directory
-
-2. Command Execution:
-   - Always quote file paths that contain spaces with double quotes (e.g., cd "path with spaces/file.txt")
-   - Examples of proper quoting:
-     - cd "/Users/name/My Documents" (correct)
-     - cd /Users/name/My Documents (incorrect - will fail)
-     - python "/path/with spaces/script.py" (correct)
-     - python /path/with spaces/script.py (incorrect - will fail)
-   - After ensuring proper quoting, execute the command
-   - Capture the output of the command
-
-Usage notes:
-  - The command parameter is required
-  - Commands run in an isolated sandbox environment
-  - Returns combined stdout/stderr output with exit code
-  - If the output is very large, it may be truncated
-  - VERY IMPORTANT: You MUST avoid using search commands like find and grep. Instead use the grep, glob tools to search. You MUST avoid read tools like cat, head, tail, and use read_file to read files.
-  - When issuing multiple commands, use the ';' or '&&' operator to separate them. DO NOT use newlines (newlines are ok in quoted strings)
-    - Use '&&' when commands depend on each other (e.g., "mkdir dir && cd dir")
-    - Use ';' only when you need to run commands sequentially but don't care if earlier commands fail
-  - Try to maintain your current working directory throughout the session by using absolute paths and avoiding usage of cd
-
-Examples:
-  Good examples:
-    - execute(command="pytest /foo/bar/tests")
-    - execute(command="python /path/to/script.py")
-    - execute(command="npm install && npm test")
-
-  Bad examples (avoid these):
-    - execute(command="cd /foo/bar && pytest tests")  # Use absolute path instead
-    - execute(command="cat file.txt")  # Use read_file tool instead
-    - execute(command="find . -name '*.py'")  # Use glob tool instead
-    - execute(command="grep -r 'pattern' .")  # Use grep tool instead
-
-Note: This tool is only available if the backend supports execution (SandboxBackendProtocol).
-If execution is not supported, the tool will return an error message."""
-
 from nova_deepagents.prompts import render_template
 
 FILESYSTEM_SYSTEM_PROMPT = render_template("filesystem.jinja")
 EXECUTION_SYSTEM_PROMPT = render_template("execution.jinja")
+
+# Tool descriptions loaded from Jinja2 templates
+def _load_tool_description(template_name: str) -> str:
+    """Load a tool description from a Jinja2 template."""
+    return render_template(f"tools/{template_name}")
+
+
+LIST_FILES_TOOL_DESCRIPTION = _load_tool_description("ls_description.jinja")
+READ_FILE_TOOL_DESCRIPTION = _load_tool_description("read_file_description.jinja")
+EDIT_FILE_TOOL_DESCRIPTION = _load_tool_description("edit_file_description.jinja")
+WRITE_FILE_TOOL_DESCRIPTION = _load_tool_description("write_file_description.jinja")
+GLOB_TOOL_DESCRIPTION = _load_tool_description("glob_description.jinja")
+GREP_TOOL_DESCRIPTION = _load_tool_description("grep_description.jinja")
+EXECUTE_TOOL_DESCRIPTION = _load_tool_description("execute_description.jinja")
 
 
 def _get_backend(
@@ -957,14 +817,17 @@ def _get_filesystem_tools(
     return tools
 
 
-TOO_LARGE_TOOL_MSG = """Tool result too large, the result of this tool call {tool_call_id} was saved in the filesystem at this path: {file_path}
-You can read the result from the filesystem by using the read_file tool, but make sure to only read part of the result at a time.
-You can do this by specifying an offset and limit in the read_file tool call.
-For example, to read the first 100 lines, you can use the read_file tool with offset=0 and limit=100.
+# TOO_LARGE_TOOL_MSG loaded from template - use _format_too_large_msg() for formatting
 
-Here are the first 10 lines of the result:
-{content_sample}
-"""
+
+def _format_too_large_msg(tool_call_id: str, file_path: str, content_sample: str) -> str:
+    """Format the too large tool message using Jinja2 template."""
+    return render_template(
+        "tools/too_large_tool_msg.jinja",
+        tool_call_id=tool_call_id,
+        file_path=file_path,
+        content_sample=content_sample,
+    )
 
 
 class FilesystemMiddleware(AgentMiddleware):
@@ -1199,7 +1062,7 @@ class FilesystemMiddleware(AgentMiddleware):
             [line[:1000] for line in content.splitlines()[:10]], start_line=1
         )
         processed_message = ToolMessage(
-            TOO_LARGE_TOOL_MSG.format(
+            _format_too_large_msg(
                 tool_call_id=message.tool_call_id,
                 file_path=file_path,
                 content_sample=content_sample,

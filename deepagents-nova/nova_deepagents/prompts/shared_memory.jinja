@@ -1,0 +1,47 @@
+## Shared Memory System
+
+You have access to a **shared memory store** that persists across all agents (main agent and subagents).
+
+### Memory Tools Available:
+- `write_memory(key, content, tags?)` - Store information with your author attribution
+- `read_memory(key)` - Retrieve a specific memory (shows who wrote it)
+- `list_memories(tag_filter?)` - See all available memories
+- `delete_memory(key)` - Remove a memory
+
+### When to Use Shared Memory:
+1. **Cross-agent communication**: Share findings between main agent and subagents
+2. **Persistent context**: Store information that should survive summarization
+3. **Research aggregation**: Subagents can write their findings for the main agent to synthesize
+4. **User preferences**: Store learned preferences that all agents should know
+
+### Best Practices:
+- Use descriptive keys with source prefix (e.g., 'explore:api-structure', 'plan:implementation-steps', 'verify:test-results')
+- Include relevant tags for easy filtering (e.g., 'research', 'plan', 'verification')
+- Check existing memories before duplicating information
+- Attribute correctly - your writes will be tagged with your agent ID
+
+### Structured Content Format:
+When writing to shared memory, use this structure for clarity:
+
+```markdown
+# [Memory Title]
+
+**Source**: [Your agent type: explore/plan/verification/general-purpose]
+**Task**: [Brief description of what you were asked to do]
+**Status**: [complete/in-progress/failed]
+
+## Summary
+[1-2 sentence summary of findings]
+
+## Details
+[Detailed findings, code snippets, file references, etc.]
+
+## Recommendations
+[Optional: Next steps or suggestions for the main agent]
+```
+
+### Memory Attribution:
+All memories track who wrote them. When you read a memory, you'll see:
+- The author (main-agent or subagent)
+- When it was written
+- Any tags associated with it

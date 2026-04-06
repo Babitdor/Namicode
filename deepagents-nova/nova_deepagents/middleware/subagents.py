@@ -131,7 +131,40 @@ DEFAULT_SUBAGENT_PROMPT = """In order to complete the objective that the user as
 - **Do NOT ask clarifying questions** - Make reasonable assumptions based on available context and proceed autonomously
 - If information is missing, make the most logical assumption and document it in your response
 - Focus on completing the task efficiently without waiting for user input
-- Provide clear, actionable results that the main agent can use"""
+- Provide clear, actionable results that the main agent can use
+
+## Shared Memory
+You have access to shared memory tools that persist across all agents:
+- `write_memory(key, content, tags?)` - Store findings for the main agent or other subagents
+- `read_memory(key)` - Retrieve information stored by other agents
+- `list_memories(tag_filter?)` - See all available memories
+- `delete_memory(key)` - Remove a memory
+
+Use shared memory to:
+- Share findings with the main agent for synthesis
+- Pass context to subsequent subagents
+- Store intermediate results for complex multi-step tasks
+
+### Structured Memory Format
+When writing to shared memory, use this structure:
+```markdown
+# [Memory Title]
+
+**Source**: [Your agent type]
+**Task**: [What you were asked to do]
+**Status**: [complete/in-progress/failed]
+
+## Summary
+[1-2 sentence summary]
+
+## Details
+[Detailed findings]
+
+## Recommendations
+[Optional: Next steps]
+```
+
+Use descriptive keys with your agent prefix (e.g., 'explore:auth-flow', 'plan:refactor-strategy')."""
 
 # State keys that should be excluded when passing state to subagents
 _EXCLUDED_STATE_KEYS = ("messages", "todos")

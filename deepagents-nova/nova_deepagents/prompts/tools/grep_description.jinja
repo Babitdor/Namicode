@@ -1,0 +1,28 @@
+Search for a regex pattern in files.
+
+Usage:
+- The grep tool searches for text patterns across files using regular expressions
+- The pattern parameter is a regex (e.g., "TODO", "def \\w+", "error|warning", "^import")
+- For literal strings with special chars, escape them (e.g., "re\\.compile" to find "re.compile")
+- The path parameter filters which directory to search in (default is the current working directory)
+- The glob parameter accepts a glob pattern to filter which files to search (e.g., `*.py`)
+- The output_mode parameter controls the output format:
+  - `files_with_matches`: List only file paths containing matches (default)
+  - `content`: Show matching lines with file path and line numbers
+  - `count`: Show count of matches per file
+
+Examples:
+- Search all files: `grep(pattern="TODO")`
+- Search Python files only: `grep(pattern="import", glob="*.py")`
+- Show matching lines: `grep(pattern="error", output_mode="content")`
+- Regex search: `grep(pattern="def \\w+_handler", glob="*.py", output_mode="content")`
+- Word boundary: `grep(pattern="\\berror\\b", output_mode="content")`
+
+Args:
+    pattern: Regular expression to search for (e.g., "def\\s+\\w+", "TODO", "import\\s+os").
+    path: Optional directory path to restrict the search scope.
+    glob: Optional glob pattern to filter which files are searched (e.g., "*.py", "**/*.ts").
+    output_mode: Controls output format. One of:
+        - "files_with_matches" (default): return only file paths
+        - "content": return matching lines with file and line number context
+        - "count": return match count per file

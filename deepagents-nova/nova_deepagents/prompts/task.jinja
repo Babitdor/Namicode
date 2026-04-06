@@ -32,3 +32,31 @@ Subagents are highly capable and will produce thorough, well-structured results.
 
 ## Subagent behavior note
 Subagents operate autonomously and do NOT have access to the `ask_question` tool. They will make reasonable assumptions based on the context you provide. When spawning a subagent, include all necessary context and clear instructions in the task description.
+
+## Shared Memory for Coordination
+Both you and your subagents have access to shared memory tools:
+- `write_memory(key, content, tags?)` - Store information for cross-agent sharing
+- `read_memory(key)` - Retrieve information stored by other agents
+- `list_memories(tag_filter?)` - See all available memories
+
+Use shared memory to:
+- **Pre-populate context**: Before spawning a subagent, write relevant context to memory
+- **Receive findings**: Subagents can store detailed findings in memory for you to read
+- **Coordinate parallel work**: Multiple subagents can share intermediate results
+
+### Reading Subagent Results
+When reading memories from subagents, look for:
+- **Source**: Which agent type wrote it (explore/plan/verification/general-purpose)
+- **Task**: What they were asked to do
+- **Status**: Whether the task completed successfully
+- **Summary**: Quick overview of findings
+- **Details**: In-depth information with file references
+- **Recommendations**: Suggested next steps
+
+### Memory Key Conventions
+Subagents use prefixed keys for easy discovery:
+- `explore:*` - Exploration findings (e.g., `explore:auth-flow`)
+- `plan:*` - Implementation plans (e.g., `plan:refactor-strategy`)
+- `verify:*` - Test results (e.g., `verify:api-integration`)
+
+Use `list_memories()` to see all available memories, then `read_memory(key)` for details.

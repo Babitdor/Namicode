@@ -1,0 +1,22 @@
+Reads a file from the filesystem. You can access any file directly by using this tool.
+Assume this tool is able to read all files on the machine. If the User provides a path to a file assume that path is valid. It is okay to read a file that does not exist; an error will be returned.
+
+Usage:
+- The file_path parameter must be an absolute path, not a relative path
+- By default, it reads up to 500 lines starting from the beginning of the file
+- **IMPORTANT for large files and codebase exploration**: Use pagination with offset and limit parameters to avoid context overflow
+  - First scan: read_file(path, limit=100) to see file structure
+  - Read more sections: read_file(path, offset=100, limit=200) for next 200 lines
+  - Only omit limit (read full file) when necessary for editing
+- Specify offset and limit: read_file(path, offset=0, limit=100) reads first 100 lines
+- Any lines longer than 2000 characters will be truncated
+- Results are returned using cat -n format, with line numbers starting at 1
+- You have the capability to call multiple tools in a single response. It is always better to speculatively read multiple files as a batch that are potentially useful.
+- If you read a file that exists but has empty contents you will receive a system reminder warning in place of file contents.
+- You should ALWAYS make sure a file has been read before editing it.
+
+Args:
+    file_path: Absolute path to the file to read (e.g., /home/user/project/main.py).
+    offset: Line number to start reading from (0-indexed). Default: 0. Use for pagination.
+    limit: Maximum number of lines to read. Default: 500. Use a smaller value (e.g., 100)
+        for initial exploration of large files to avoid context overflow.

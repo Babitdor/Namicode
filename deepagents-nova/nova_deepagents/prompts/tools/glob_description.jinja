@@ -1,0 +1,18 @@
+Find files matching a glob pattern.
+
+Usage:
+- The glob tool finds files by matching patterns with wildcards
+- Supports standard glob patterns: `*` (any characters), `**` (any directories), `?` (single character)
+- Patterns can be absolute (starting with `/`) or relative
+- Returns a list of absolute file paths that match the pattern
+
+Examples:
+- `**/*.py` - Find all Python files
+- `*.txt` - Find all text files in root
+- `/subdir/**/*.md` - Find all markdown files under /subdir
+- The path parameter optionally restricts the search to a specific directory
+
+Args:
+    pattern: Glob pattern to match against file paths (e.g., "**/*.py", "src/**/*.ts").
+    path: Optional directory to restrict the search to. Defaults to the filesystem root.
+        Use to narrow results when you know the relevant subdirectory (e.g., "/src").
