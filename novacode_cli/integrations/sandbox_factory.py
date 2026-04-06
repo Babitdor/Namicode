@@ -428,6 +428,7 @@ def create_sandbox(
     *,
     sandbox_id: str | None = None,
     setup_script_path: str | None = None,
+    ports: dict[int, int] | None = None,
 ) -> Generator[SandboxBackendProtocol, None, None]:
     """Create or connect to a sandbox of the specified provider.
 
@@ -438,6 +439,7 @@ def create_sandbox(
         provider: Sandbox provider ("modal", "runloop", "daytona", "docker")
         sandbox_id: Optional existing sandbox ID to reuse
         setup_script_path: Optional path to setup script to run after sandbox starts
+        ports: Optional port mapping for Docker sandbox {container_port: host_port}
 
     Yields:
         (SandboxBackend, sandbox_id)
@@ -451,7 +453,17 @@ def create_sandbox(
 
     sandbox_provider = _SANDBOX_PROVIDERS[provider]
 
-    with sandbox_provider(sandbox_id=sandbox_id, setup_script_path=setup_script_path) as backend:
+    # Build kwargs for sandbox provider
+    sandbox_kwargs = {
+        "sandbox_id": sandbox_id,
+        "setup_script_path": setup_script_path,
+    }
+    
+    # Only pass ports to Docker sandbox
+    if provider == "docker" and ports:
+        sandbox_kwargs["ports"] = ports
+
+    with sandbox_provider(**sandbox_kwargs) as backend:
         yield backend
 
 
