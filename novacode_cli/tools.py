@@ -2986,7 +2986,7 @@ def write_memory(
 
     Memory Locations:
         - User memory: ~/.nova/{agent-id}/agent.md
-        - Project memory: {project-root}/Nova.md
+        - Project memory: {project-root}/.nova/NOVA.md
 
     Example:
         >>> write_memory("# Preferences\\n\\n- Use concise responses", memory_type="user")
@@ -3007,14 +3007,14 @@ def write_memory(
         agent_dir = settings.get_agent_dir(MAIN_AGENT_ID)
         memory_path = agent_dir / "agent.md"
     else:
-        # Project memory: {project-root}/Nova.md
+        # Project memory: {project-root}/.nova/NOVA.md
         if not settings.project_root:
             return {
                 "success": False,
                 "error": "Not in a project directory. Use memory_type='user' for user memory.",
                 "memory_type": memory_type,
             }
-        memory_path = settings.project_root / "Nova.md"
+        memory_path = settings.project_root / ".nova" / "NOVA.md"
 
     # Create parent directory if needed
     memory_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3102,7 +3102,7 @@ def read_memory(
                 "error": "Not in a project directory. Use memory_type='user' for user memory.",
                 "memory_type": memory_type,
             }
-        memory_path = settings.project_root / "Nova.md"
+        memory_path = settings.project_root / ".nova" / "NOVA.md"
 
     # Check if memory exists
     if not memory_path.exists():
