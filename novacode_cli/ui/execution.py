@@ -236,7 +236,9 @@ async def execute_task(  # type: ignore
                                         status.stop()
                                         spinner_active = False
                                     console.print()
-                                    render_todo_list(_new_todos)
+                                    # Get agent name from state if available
+                                    _agent_name = _node_state.get("agent_name")
+                                    render_todo_list(_new_todos, agent_name=_agent_name)
                                     console.print()
                                 break
 

@@ -286,11 +286,18 @@ def _get_subagents(
     # NOTE: Subagents never have HITL middleware - they auto-approve all operations
     # The main agent handles user approvals; subagents execute autonomously
     if general_purpose_agent:
+        # Import TodoListMiddleware here to avoid circular dependency
+        from nova_deepagents.middleware.todo import TodoListMiddleware
+        
         general_purpose_subagent = create_agent(
             default_model,
+            name="general-purpose",
             system_prompt=DEFAULT_SUBAGENT_PROMPT,
             tools=list(default_tools),
-            middleware=[*default_subagent_middleware],  # No HITL for subagents
+            middleware=[
+                TodoListMiddleware(agent_name="General-Purpose Agent"),
+                *default_subagent_middleware,
+            ],  # No HITL for subagents
         )
         agents["general-purpose"] = general_purpose_subagent
         subagent_descriptions.append(
@@ -301,12 +308,18 @@ def _get_subagents(
 
     # Create explore agent if enabled
     if explore_agent:
+        # Import TodoListMiddleware here to avoid circular dependency
+        from nova_deepagents.middleware.todo import TodoListMiddleware
+        
         explore_subagent = create_agent(
             default_model,
             name="explore",
             system_prompt=EXPLORE_AGENT_PROMPT,
             tools=_filter_tools(EXPLORE_AGENT_TOOLS),
-            middleware=[*default_subagent_middleware],
+            middleware=[
+                TodoListMiddleware(agent_name="Explore Agent"),
+                *default_subagent_middleware,
+            ],
         )
         agents["explore"] = explore_subagent
         subagent_descriptions.append(f"- explore: {EXPLORE_AGENT_DESCRIPTION}")
@@ -314,12 +327,18 @@ def _get_subagents(
 
     # Create plan agent if enabled
     if plan_agent:
+        # Import TodoListMiddleware here to avoid circular dependency
+        from nova_deepagents.middleware.todo import TodoListMiddleware
+        
         plan_subagent = create_agent(
             default_model,
             name="plan",
             system_prompt=PLAN_AGENT_PROMPT,
             tools=_filter_tools(PLAN_AGENT_TOOLS),
-            middleware=[*default_subagent_middleware],
+            middleware=[
+                TodoListMiddleware(agent_name="Plan Agent"),
+                *default_subagent_middleware,
+            ],
         )
         agents["plan"] = plan_subagent
         subagent_descriptions.append(f"- plan: {PLAN_AGENT_DESCRIPTION}")
@@ -327,12 +346,18 @@ def _get_subagents(
 
     # Create verification agent if enabled
     if verification_agent:
+        # Import TodoListMiddleware here to avoid circular dependency
+        from nova_deepagents.middleware.todo import TodoListMiddleware
+        
         verification_subagent = create_agent(
             default_model,
             name="verification",
             system_prompt=VERIFICATION_AGENT_PROMPT,
             tools=_filter_tools(VERIFICATION_AGENT_TOOLS),
-            middleware=[*default_subagent_middleware],
+            middleware=[
+                TodoListMiddleware(agent_name="Verification Agent"),
+                *default_subagent_middleware,
+            ],
         )
         agents["verification"] = verification_subagent
         subagent_descriptions.append(
@@ -362,11 +387,18 @@ def _get_subagents(
         )
         # interrupt_on config is ignored for subagents - they always auto-approve
 
+        # Import TodoListMiddleware here to avoid circular dependency
+        from nova_deepagents.middleware.todo import TodoListMiddleware
+        
+        # Create a display name for the subagent (capitalize and replace dashes with spaces)
+        display_name = agent_["name"].replace("-", " ").title()
+        
         agents[agent_["name"]] = create_agent(
             subagent_model,
+            name=agent_["name"],
             system_prompt=agent_["system_prompt"],
             tools=_tools,
-            middleware=_middleware,
+            middleware=[TodoListMiddleware(agent_name=f"{display_name} Agent"), *_middleware],
         )
     return agents, subagent_descriptions
 

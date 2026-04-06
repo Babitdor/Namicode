@@ -48,6 +48,7 @@ from novacode_cli.commands.ralph_handler import (
 )
 from novacode_cli.commands.browser_use_handler import handle_browser_use_command
 from novacode_cli.commands.dream_handler import handle_dream_command
+from novacode_cli.commands.research_handler import handle_research_command
 
 
 @contextmanager
@@ -358,9 +359,38 @@ async def handle_command(
 
     if cmd == "dream":
         try:
-            return await handle_dream_command(session_state)
+            result = await handle_dream_command(session_state)
+            # If result is a string (prompt), return it for agent processing
+            # If result is True, command was handled
+            return result
         except Exception as e:
             console.print(f"[red]Error running /dream command: {e}[/red]")
+        return True
+
+    if cmd == "research":
+        try:
+            # Parse mode and query from args
+            # Format: /research [mode] <query>
+            # Modes: academic, market, stocks, technical, general
+            mode = "general"
+            query = cmd_args
+            
+            if cmd_args:
+                parts = cmd_args.split(maxsplit=1)
+                if parts[0].lower() in ["academic", "market", "stocks", "technical", "general"]:
+                    mode = parts[0].lower()
+                    query = parts[1] if len(parts) > 1 else None
+            
+            result = await handle_research_command(
+                session_state,
+                research_query=query,
+                mode=mode,
+            )
+            # If result is a string (prompt), return it for agent processing
+            # If result is True, command was handled
+            return result
+        except Exception as e:
+            console.print(f"[red]Error running /research command: {e}[/red]")
         return True
 
     console.print()

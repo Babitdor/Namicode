@@ -1,0 +1,281 @@
+{#
+  Purpose: Multi-agent research swarm orchestration
+  Use when: conducting comprehensive research on papers, markets, stocks, or technical topics
+  
+  Mode: {{ mode }} - {{ mode_description }}
+  Agents: {{ agent_count }} specialized agents
+  Focus: {{ focus }}
+  Output: {{ output_format }}
+#}
+# Research Swarm: {{ mode_description }}
+
+You are orchestrating a research swarm to investigate: **{{ research_query }}**
+
+Research mode: `{{ mode }}`
+Output directory: `{{ output_dir }}`
+
+---
+
+## Swarm Architecture
+
+You have {{ agent_count }} specialized agents at your disposal:
+
+{% for agent in agents %}
+{{ loop.index }}. **{{ agent.replace('_', ' ').title() }}** - Specialized in {{ focus.split(', ')[loop.index0 % focus.split(', ')|length] }}
+{% endfor %}
+
+## Research Protocol
+
+### Phase 1: Question Decomposition
+
+Break down the research query into {{ agent_count }} distinct sub-questions or aspects:
+
+```
+For each agent, define:
+- Specific research question to answer
+- Key sources to investigate
+- Expected deliverables
+- Success criteria
+```
+
+**Output**: Create `.nova/research/decomposition.md` with:
+- Original research question
+- {{ agent_count }} sub-questions
+- Agent assignments
+- Investigation strategy
+
+### Phase 2: Parallel Investigation
+
+Each agent investigates their assigned aspect **independently**:
+
+{% for agent in agents %}
+**{{ agent.replace('_', ' ').title() }}**:
+- Focus: [assigned sub-question]
+- Sources: [relevant sources for this aspect]
+- Tools: Use appropriate research tools (web search, document analysis, etc.)
+- Output: `.nova/research/{{ agent }}_findings.md`
+{% endfor %}
+
+**Important**: Agents should NOT duplicate work. Each focuses on their assigned aspect.
+
+### Phase 3: Cross-Pollination
+
+After initial findings, agents share insights:
+
+1. Each agent posts a summary to `.nova/research/shared/insights.md`
+2. Other agents review and incorporate relevant findings
+3. Adjust investigation focus based on shared insights
+4. Identify gaps and overlaps
+
+**Output**: Update individual findings files with cross-references
+
+### Phase 4: Synthesis
+
+Combine all agent findings into a comprehensive report:
+
+1. **Executive Summary** (2-3 paragraphs)
+   - Main findings
+   - Key insights
+   - Recommendations
+
+2. **Detailed Analysis**
+   {% for agent in agents %}
+   - **{{ agent.replace('_', ' ').title() }} Findings**: [summary of findings]
+   {% endfor %}
+
+3. **Integrated Insights**
+   - Connections between findings
+   - Contradictions or tensions
+   - Synthesis of multiple perspectives
+
+4. **Conclusions & Recommendations**
+   - Evidence-based conclusions
+   - Actionable recommendations
+   - Limitations and caveats
+
+5. **Sources & Methodology**
+   - All sources used
+   - Methodology notes
+   - Confidence levels
+
+**Output**: `.nova/research/final_report.md`
+
+### Phase 5: Quality Assurance
+
+Fact-check and validate the research:
+
+1. **Source Verification**
+   - Verify all claims have sources
+   - Check source credibility
+   - Flag uncertain claims
+
+2. **Consistency Check**
+   - Ensure no contradictions
+   - Verify numbers and dates
+   - Cross-reference claims
+
+3. **Completeness Check**
+   - All sub-questions answered?
+   - All aspects covered?
+   - Gaps identified?
+
+**Output**: `.nova/research/qa_report.md`
+
+---
+
+## Mode-Specific Guidelines
+
+{% if mode == "academic" %}
+### Academic Research Standards
+
+- **Sources**: Prioritize peer-reviewed journals, conference papers, arXiv
+- **Citations**: Use proper academic citation format (APA, MLA, or field-specific)
+- **Methodology**: Evaluate research methodology quality
+- **Citation Networks**: Track citation chains and influential papers
+- **Bias**: Consider funding sources, conflicts of interest
+- **Reproducibility**: Note methodology details for replication
+
+**Quality Criteria**:
+- Impact factor of journals
+- Number of citations
+- Recency of publications
+- Methodology rigor
+- Sample size and statistical significance
+{% elif mode == "market" %}
+### Market Research Standards
+
+- **Sources**: Industry reports, market data, competitor websites, news
+- **Data**: Prefer quantitative data from reputable sources
+- **Trends**: Identify growth trends, market size, CAGR
+- **Competition**: Map competitive landscape, market share
+- **Validation**: Cross-reference data from multiple sources
+
+**Quality Criteria**:
+- Data recency (prefer last 12 months)
+- Source credibility (established research firms)
+- Methodology transparency
+- Sample size and representativeness
+- Geographic coverage
+{% elif mode == "stocks" %}
+### Stock Research Standards
+
+- **Sources**: SEC filings, earnings calls, financial news, analyst reports
+- **Financials**: Analyze balance sheet, income statement, cash flow
+- **News**: Track recent news, announcements, sentiment
+- **Technical**: Consider technical indicators if relevant
+- **Risks**: Identify key risk factors
+
+**Quality Criteria**:
+- Financial statement accuracy
+- Management guidance consistency
+- Analyst consensus
+- Industry trends
+- Competitive positioning
+{% elif mode == "technical" %}
+### Technical Research Standards
+
+- **Sources**: Official documentation, API references, GitHub repos
+- **Code Examples**: Include working code examples
+- **Versions**: Note version compatibility
+- **Best Practices**: Highlight recommended approaches
+- **Limitations**: Document known issues or limitations
+
+**Quality Criteria**:
+- Documentation completeness
+- Code example functionality
+- Version specificity
+- Platform compatibility
+- Community support
+{% else %}
+### General Research Standards
+
+- **Sources**: Diverse sources (news, academic, industry, primary)
+- **Balance**: Multiple perspectives on controversial topics
+- **Recency**: Prefer recent sources, note publication dates
+- **Credibility**: Evaluate source credibility
+- **Transparency**: Note methodology and limitations
+
+**Quality Criteria**:
+- Source diversity
+- Perspective balance
+- Fact verification
+- Logical consistency
+- Clear methodology
+{% endif %}
+
+---
+
+## Execution Strategy
+
+1. **Start with Decomposition**
+   - Create `.nova/research/` directory
+   - Write `decomposition.md` with sub-questions
+   - Assign each agent their focus area
+
+2. **Spawn Agents Sequentially**
+   - For each agent:
+     - Load their specific research question
+     - Execute investigation using appropriate tools
+     - Save findings to their designated file
+     - Post summary to shared insights
+
+3. **Monitor Progress**
+   - Check each agent's output file
+   - Ensure all sub-questions are being addressed
+   - Identify any blockers or gaps
+
+4. **Facilitate Cross-Pollination**
+   - After all agents complete initial investigation
+   - Share insights between agents
+   - Update findings based on shared information
+
+5. **Synthesize Final Report**
+   - Combine all agent findings
+   - Create comprehensive report
+   - Ensure coherent narrative
+
+6. **Run Quality Assurance**
+   - Fact-check all claims
+   - Verify sources
+   - Check for consistency
+
+---
+
+## Output Files
+
+Create these files in `.nova/research/`:
+
+1. `decomposition.md` - Research question breakdown
+{% for agent in agents %}
+2. `{{ agent }}_findings.md` - {{ agent.replace('_', ' ').title() }}'s investigation
+{% endfor %}
+3. `shared/insights.md` - Cross-pollination insights
+4. `final_report.md` - Comprehensive synthesis
+5. `qa_report.md` - Quality assurance checklist
+
+---
+
+## Success Criteria
+
+Research is complete when:
+
+- [ ] All sub-questions have been investigated
+- [ ] Each agent has produced their findings file
+- [ ] Insights have been shared between agents
+- [ ] Final report synthesizes all findings
+- [ ] Quality assurance checklist is complete
+- [ ] All claims have sources
+- [ ] No contradictions remain unresolved
+
+---
+
+## Important Notes
+
+- **Avoid Duplication**: Each agent focuses on their assigned aspect
+- **Stay Focused**: Don't let agents wander into other agents' territory
+- **Document Everything**: Save all findings to designated files
+- **Cross-Reference**: Link related findings between agents
+- **Be Critical**: Evaluate source quality and credibility
+- **Note Limitations**: Acknowledge what you couldn't find or verify
+
+Begin by creating the decomposition file and assigning agents their research questions.

@@ -645,7 +645,7 @@ async def simple_cli(
             # Get compaction recommendation
             recommendation = get_compaction_recommendation(
                 messages=messages,
-                model_name=model_name,
+                model_name=model_name, # type: ignore
                 baseline_tokens=baseline_tokens,
             )
 
@@ -802,6 +802,28 @@ async def simple_cli(
                 console.print("\nGoodbye!", style=COLORS["primary"])
                 break
             if result:
+                # If result is a string, it's a prompt for the agent to process
+                if isinstance(result, str):
+                    # Process the prompt through the agent
+                    _exec_task = asyncio.ensure_future(
+                        execute_task(
+                            result,
+                            agent,
+                            assistant_id,
+                            session_state,
+                            token_tracker,
+                            backend=backend,
+                            is_subagent=False,
+                            image_tracker=image_tracker,
+                            seen_message_ids=_seen_message_ids,
+                        )
+                    )
+                    try:
+                        await _exec_task
+                    except asyncio.CancelledError:
+                        pass
+                    finally:
+                        _exec_task = None
                 # Command was handled, continue to next input
                 continue
 

@@ -909,10 +909,14 @@ def _todo_line(todo: dict, indent: str = "") -> str:
     return f"{indent}[{style}]{icon} {id_label}{content}{dep_label}[/{style}]"
 
 
-def render_todo_list(todos: list[dict]) -> None:
+def render_todo_list(todos: list[dict], agent_name: str | None = None) -> None:
     """Render todo list as a beautiful rich Panel with checkboxes, supporting subtasks.
     
     Responsive to terminal width with beautiful styling and visual hierarchy.
+    
+    Args:
+        todos: List of todo items with content and status
+        agent_name: Optional name of the agent for display in the header
     """
     if not todos:
         return
@@ -928,8 +932,11 @@ def render_todo_list(todos: list[dict]) -> None:
     # Use 80% of terminal width, minimum 50, maximum 140
     panel_width = max(50, min(140, int(terminal_width * 0.8)))
 
-    # Create beautiful title with decorative elements
-    title_text = f"[bold {COLORS['primary']}]◆[/bold {COLORS['primary']}] [bold]📋 Task List[/bold] [bold {COLORS['primary']}]◆[/bold {COLORS['primary']}]"
+    # Create beautiful title with decorative elements and agent name
+    if agent_name:
+        title_text = f"[bold {COLORS['primary']}]◆[/bold {COLORS['primary']}] [bold]📋 {agent_name}'s Task List[/bold] [bold {COLORS['primary']}]◆[/bold {COLORS['primary']}]"
+    else:
+        title_text = f"[bold {COLORS['primary']}]◆[/bold {COLORS['primary']}] [bold]📋 Task List[/bold] [bold {COLORS['primary']}]◆[/bold {COLORS['primary']}]"
 
     panel = Panel(
         "\n".join(lines),

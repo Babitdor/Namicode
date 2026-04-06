@@ -266,6 +266,7 @@ COMMANDS = {
     "ralph": "Run autonomous looping mode (e.g., /ralph <task>, /ralph <task> --iterations 5)",
     "browser-use": "Run browser automation with AI (e.g., /browser-use <task>, /browser-use <task> --model llama3.2)",
     "dream": "Run memory consolidation to organize and clean up memory files",
+    "research": "Run agent swarm research (e.g., /research <query>, /research academic <query>, /research market <query>)",
     "exit": "Exit the CLI",
 }
 

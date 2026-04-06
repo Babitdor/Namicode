@@ -8,7 +8,6 @@ from langchain.agents.middleware import (
     HumanInTheLoopMiddleware,
     InterruptOnConfig,
 )
-from langchain.agents.middleware.todo import TodoListMiddleware
 from langchain.agents.middleware import ContextEditingMiddleware, ClearToolUsesEdit
 from langchain.agents.middleware import ModelRetryMiddleware, ToolRetryMiddleware
 from langgraph.errors import GraphInterrupt
@@ -40,6 +39,7 @@ from nova_deepagents.middleware.subagents import (
     SubAgentMiddleware,
 )
 from nova_deepagents.middleware.shared_memory import SharedMemoryMiddleware
+from nova_deepagents.middleware.todo import TodoListMiddleware
 
 BASE_AGENT_PROMPT = "In order to complete the objective that the user asks of you, you have access to a number of standard tools."
 
@@ -158,8 +158,9 @@ def create_deep_agent(
     # Note: SharedMemoryMiddleware is added to enable cross-agent memory sharing
     # between main agent and subagents. All subagents use author_id="subagent"
     # for attribution (main agent uses "main-agent").
+    # Note: TodoListMiddleware is added individually for each subagent with their specific name
+    # in SubAgentMiddleware._get_subagents() to show unique agent names in todo lists.
     subagent_middleware: list[AgentMiddleware] = [
-        TodoListMiddleware(), # type: ignore
         SharedMemoryMiddleware(author_id="subagent"),
     ]
 
@@ -193,8 +194,10 @@ def create_deep_agent(
     )
 
     # Build main agent middleware stack
+    # Use the provided name for the agent's todo list, or default to "Deep Agent"
+    agent_display_name = name if name else "Deep Agent"
     deepagent_middleware: list[AgentMiddleware] = [
-        TodoListMiddleware(),  # type: ignore
+        TodoListMiddleware(agent_name=agent_display_name),
     ]
     if memory is not None:
         deepagent_middleware.append(MemoryMiddleware(backend=backend, sources=memory))
