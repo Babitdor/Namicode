@@ -24,24 +24,102 @@ An open-source terminal-based AI coding assistant that runs in your terminal, si
 
 ### Prerequisites
 
-- Python 3.11 or higher
-- [uv](https://docs.astral.sh/uv/) (recommended) or pip
+- **Python 3.11 or higher** (Python 3.12 recommended)
+- **Git** for cloning the repository
+- **[uv](https://docs.astral.sh/uv/)** (recommended) or pip for package management
 
-### Install from Source
+### Step-by-Step Installation
+
+#### Option 1: Install with uv (Recommended)
 
 ```bash
-# Clone the repository
+# 1. Clone the repository
 git clone https://github.com/Babitdor/NovaCode.git
 cd NovaCode
 
-# Create virtual environment and install
-uv venv
+# 2. Create a virtual environment with Python 3.11+
+uv venv --python 3.11
+
+# 3. Activate the virtual environment
+# On Windows (PowerShell):
+.venv\Scripts\Activate.ps1
+# On Windows (Command Prompt):
+.venv\Scripts\activate.bat
+# On macOS/Linux:
+source .venv/bin/activate
+
+# 4. Install dependencies
 uv sync
+
+# 5. Install the package in editable mode
+uv pip install -e .
+```
+
+#### Option 2: Install with pip
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/Babitdor/NovaCode.git
+cd NovaCode
+
+# 2. Create a virtual environment
+python -m venv .venv
+
+# 3. Activate the virtual environment
+# On Windows (PowerShell):
+.venv\Scripts\Activate.ps1
+# On Windows (Command Prompt):
+.venv\Scripts\activate.bat
+# On macOS/Linux:
+source .venv/bin/activate
+
+# 4. Upgrade pip
+pip install --upgrade pip
+
+# 5. Install dependencies
+pip install -e .
+```
+
+#### Option 3: Install deepagents-nova separately (for development)
+
+If you want to work on the deepagents-nova package separately:
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/Babitdor/NovaCode.git
+cd NovaCode
+
+# 2. Create and activate virtual environment
+uv venv --python 3.11
+source .venv/bin/activate  # or .venv\Scripts\Activate.ps1 on Windows
+
+# 3. Install the main package
+uv pip install -e .
+
+# 4. Install deepagents-nova in editable mode
+cd deepagents-nova
+uv pip install -e .
+cd ..
+```
+
+### Verify Installation
+
+```bash
+# Check if nova is installed
+nova --version
+
+# Run system diagnostics
+nova doctor
+
+# Start the CLI
+nova
 ```
 
 ### API Keys Setup
 
 Configure your preferred LLM provider by setting environment variables:
+
+#### Option 1: Environment Variables (Recommended)
 
 ```bash
 # OpenAI (default)
@@ -54,7 +132,100 @@ export ANTHROPIC_API_KEY="your-anthropic-api-key"
 export TAVILY_API_KEY="your-tavily-api-key"
 ```
 
-You can also create a `.env` file in your project root or home directory.
+#### Option 2: .env File
+
+Create a `.env` file in your project root or home directory:
+
+```bash
+# .env file
+OPENAI_API_KEY=your-openai-api-key
+ANTHROPIC_API_KEY=your-anthropic-api-key
+TAVILY_API_KEY=your-tavily-api-key
+```
+
+#### Option 3: Configuration File
+
+Create `~/.Nova/config.json`:
+
+```json
+{
+  "api_keys": {
+    "openai": "your-openai-api-key",
+    "anthropic": "your-anthropic-api-key",
+    "tavily": "your-tavily-api-key"
+  }
+}
+```
+
+### Troubleshooting
+
+#### Common Issues
+
+**1. Python version mismatch**
+```bash
+# Check Python version
+python --version
+
+# If you have multiple Python versions, specify the version
+uv venv --python 3.11
+```
+
+**2. Virtual environment not activating**
+```bash
+# On Windows, you may need to enable script execution
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+
+# Then activate
+.venv\Scripts\Activate.ps1
+```
+
+**3. Package installation fails**
+```bash
+# Clear uv cache and reinstall
+uv cache clean
+uv sync --reinstall
+```
+
+**4. Missing dependencies**
+```bash
+# Install all dependencies including dev dependencies
+uv sync --all-extras
+```
+
+**5. Import errors**
+```bash
+# Reinstall in editable mode
+uv pip install -e . --force-reinstall
+```
+
+### Development Setup
+
+For development work:
+
+```bash
+# Install development dependencies
+uv sync --all-extras
+
+# Run tests
+pytest tests/
+
+# Format code
+black .
+isort .
+
+# Type checking
+mypy novacode_cli/
+```
+
+### Docker Installation (Alternative)
+
+```bash
+# Build the Docker image
+docker build -t nova-cli .
+
+# Run in container
+docker run -it -v $(pwd):/workspace nova-cli
+```
 
 ## Quick Start
 
