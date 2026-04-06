@@ -658,6 +658,7 @@ def create_agent_with_config(
             settings=settings,
             assistant_id=assistant_id,
             skip_project_memory=is_continuation,
+            backend=backend,  # Pass sandbox backend for reading memory files
         ),
     ]
     # Load pre-defined default and user defined subagents

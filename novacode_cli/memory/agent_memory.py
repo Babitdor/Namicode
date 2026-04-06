@@ -4,7 +4,7 @@ import contextlib
 import os
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import TypedDict, cast
+from typing import Any, TypedDict, cast
 
 try:
     from typing import NotRequired
@@ -75,6 +75,9 @@ class AgentMemoryMiddleware(AgentMiddleware):
     at the start of the conversation and stored in state.
 
     Supports loading from multiple project memory files and combining them.
+    
+    When a sandbox backend is provided, memory files are read from the sandbox
+    instead of the local filesystem.
     """
 
     state_schema = AgentMemoryState
@@ -86,6 +89,7 @@ class AgentMemoryMiddleware(AgentMiddleware):
         assistant_id: str,
         system_prompt_template: str | None = None,
         skip_project_memory: bool = False,
+        backend: Any = None,
     ) -> None:
         """Initialize the agent memory middleware.
 
@@ -97,10 +101,14 @@ class AgentMemoryMiddleware(AgentMiddleware):
             skip_project_memory: If True, skip loading project memory files
                 (Nova.md/CLAUDE.md). Use on session continuation to avoid
                 duplicate context.
+            backend: Optional sandbox backend for reading files from sandbox.
+                When provided, memory files are read from the sandbox instead
+                of the local filesystem.
         """
         self.settings = settings
         self.assistant_id = assistant_id
         self.skip_project_memory = skip_project_memory
+        self._backend = backend
 
         # User paths
         self.agent_dir = settings.get_agent_dir(assistant_id)
@@ -147,6 +155,133 @@ class AgentMemoryMiddleware(AgentMiddleware):
             if mtime is not None:
                 self._last_mtimes[str(path)] = mtime
 
+    def _supports_sandbox_file_ops(self) -> bool:
+        """Check if the backend supports file operations.
+        
+        Returns:
+            True if backend implements file read operations.
+        """
+        if self._backend is None:
+            return False
+        
+        # Check if backend has read method (BackendProtocol provides this)
+        return hasattr(self._backend, 'read') and callable(getattr(self._backend, 'read', None))
+
+    def _read_file(self, path: Path) -> str | None:
+        """Read file content from local filesystem or sandbox.
+        
+        When a sandbox backend is provided and supports file operations,
+        reads from the sandbox. Otherwise reads from local filesystem.
+        
+        Args:
+            path: Path to the file to read.
+            
+        Returns:
+            File content as string, or None if file doesn't exist or can't be read.
+        """
+        # Try sandbox first if available
+        if self._supports_sandbox_file_ops():
+            try:
+                # Use sandbox backend's read method
+                # The read method returns content with line numbers (cat -n format)
+                result = self._backend.read(str(path))
+                if result and isinstance(result, str):
+                    # Check for error responses
+                    if result.startswith("Error:") or result.startswith("error:"):
+                        # File doesn't exist in sandbox, fall back to local
+                        pass
+                    else:
+                        return result
+            except Exception:
+                # Fall back to local filesystem
+                pass
+        
+        # Local filesystem read
+        try:
+            if path.exists():
+                return path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            pass
+        
+        return None
+
+    def _read_file_local(self, path: Path) -> str | None:
+        """Read file content from local filesystem only.
+        
+        Used for user memory files that are stored locally and not synced to sandbox.
+        
+        Args:
+            path: Path to the file to read.
+            
+        Returns:
+            File content as string, or None if file doesn't exist or can't be read.
+        """
+        try:
+            if path.exists():
+                return path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            pass
+        
+        return None
+
+    def _read_file_sandbox(self, path: Path) -> str | None:
+        """Read file content from sandbox only.
+        
+        Used for project memory files that should be read from sandbox when available.
+        
+        Args:
+            path: Path to the file to read.
+            
+        Returns:
+            File content as string, or None if file doesn't exist or can't be read.
+        """
+        if not self._supports_sandbox_file_ops():
+            # No sandbox available, fall back to local
+            return self._read_file_local(path)
+        
+        try:
+            # Use sandbox backend's read method
+            result = self._backend.read(str(path))
+            if result and isinstance(result, str):
+                # Check for error responses
+                if result.startswith("Error:") or result.startswith("error:"):
+                    return None
+                return result
+        except Exception:
+            pass
+        
+        return None
+
+    def _file_exists(self, path: Path) -> bool:
+        """Check if file exists in local filesystem or sandbox.
+        
+        Args:
+            path: Path to check.
+            
+        Returns:
+            True if file exists, False otherwise.
+        """
+        # Try sandbox first if available
+        if self._supports_sandbox_file_ops():
+            try:
+                # Use sandbox backend's ls_info method to check existence
+                if hasattr(self._backend, 'ls_info'):
+                    parent_dir = str(path.parent)
+                    result = self._backend.ls_info(parent_dir)
+                    if result and isinstance(result, list):
+                        # Check if our file is in the listing
+                        for item in result:
+                            if isinstance(item, dict) and item.get('path') == str(path):
+                                return True
+                # Try to read the file - if it succeeds, it exists
+                content = self._read_file(path)
+                return content is not None
+            except Exception:
+                pass
+        
+        # Local filesystem check
+        return path.exists()
+
     def before_agent(  # type: ignore
         self,
         state: AgentMemoryState,
@@ -159,6 +294,12 @@ class AgentMemoryMiddleware(AgentMiddleware):
 
         Hot-reload: Automatically reloads memory files when they change on disk.
         Tracks modification times and reloads when files are updated.
+        
+        When a sandbox backend is provided:
+        - User memory files (~/.Nova/{agent}/agent.md) are ALWAYS read from local
+          filesystem since they're not synced to the sandbox
+        - Project memory files ({project_root}/.nova/NOVA.md) are read from the
+          sandbox when available
 
         Args:
             state: Current agent state.
@@ -174,26 +315,29 @@ class AgentMemoryMiddleware(AgentMiddleware):
         project_paths = self.settings.get_project_agent_md_paths() if not self.skip_project_memory else []
         all_paths = [user_path] + list(project_paths)
 
-        # Check if any files have changed (hot-reload)
-        needs_reload = self._files_changed(all_paths)
+        # Check if any files have changed (hot-reload) - only for local filesystem
+        # In sandbox mode, we always reload since we can't track mtimes
+        needs_reload = self._files_changed(all_paths) if self._backend is None else True
 
         # Load user memory if not in state or if file changed
+        # User memory is ALWAYS read from local filesystem (not synced to sandbox)
         if needs_reload or "user_memory" not in state:
-            if user_path.exists():
-                with contextlib.suppress(OSError, UnicodeDecodeError):
-                    content = user_path.read_text(encoding="utf-8")
-                    if len(content) > MAX_MEMORY_CHARS:
-                        content = content[:MAX_MEMORY_CHARS] + _MEMORY_TRUNCATION_NOTICE
-                    result["user_memory"] = content
+            content = self._read_file_local(user_path)
+            if content is not None:
+                if len(content) > MAX_MEMORY_CHARS:
+                    content = content[:MAX_MEMORY_CHARS] + _MEMORY_TRUNCATION_NOTICE
+                result["user_memory"] = content
 
         # Load project memory from ALL available sources if not in state or if files changed
+        # Project memory is read from sandbox when available, local otherwise
         if not self.skip_project_memory and (needs_reload or "project_memory" not in state):
             combined_memories: list[str] = []
             self.loaded_project_memory_sources = []
 
             for path in project_paths:
-                with contextlib.suppress(OSError, UnicodeDecodeError):
-                    content = path.read_text(encoding="utf-8")
+                # Read project memory from sandbox if available, local otherwise
+                content = self._read_file_sandbox(path)
+                if content is not None:
                     if len(content) > MAX_MEMORY_CHARS:
                         content = content[:MAX_MEMORY_CHARS] + _MEMORY_TRUNCATION_NOTICE
                     if content.strip():
@@ -207,8 +351,9 @@ class AgentMemoryMiddleware(AgentMiddleware):
             if combined_memories:
                 result["project_memory"] = "\n\n---\n\n".join(combined_memories)
 
-        # Record modification times after successful load
-        self._record_mtimes(all_paths)
+        # Record modification times after successful load (local only)
+        if self._backend is None:
+            self._record_mtimes(all_paths)
 
         return result
 
