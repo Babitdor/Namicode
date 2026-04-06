@@ -120,6 +120,7 @@ from novacode_cli.path_approval import PathApprovalManager, check_path_approval
 from novacode_cli.skills.skill_creation import setup_skills_parser
 from novacode_cli.states.Session import SessionState
 from novacode_cli.tools import (
+    browser_automate,
     check_types,
     convert_format,
     docs_search,
@@ -1041,6 +1042,8 @@ async def _run_agent_session(
         git_log,
         git_diff,
         git_blame,
+        # Browser automation (AI-powered web browsing)
+        browser_automate,
     ]
     if settings.has_tavily:
         tools.append(web_search)
