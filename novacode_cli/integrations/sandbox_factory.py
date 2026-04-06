@@ -281,13 +281,19 @@ def create_daytona_sandbox(
 
 @contextmanager
 def create_docker_sandbox(
-    *, sandbox_id: str | None = None, setup_script_path: str | None = None
+    *, 
+    sandbox_id: str | None = None, 
+    setup_script_path: str | None = None,
+    ports: dict[int, int] | None = None,
 ) -> Generator[SandboxBackendProtocol, None, None]:
     """Create or connect to Docker container sandbox.
 
     Args:
         sandbox_id: Optional existing container ID to reuse
         setup_script_path: Optional path to setup script to run after container starts
+        ports: Optional port mapping as {container_port: host_port}.
+               Example: {8080: 8080, 3000: 3000} maps container ports to same host ports.
+               If None, no ports are exposed.
 
     Yields:
         DockerBackend instance
@@ -340,6 +346,14 @@ def create_docker_sandbox(
                 console.print(f"[dim]Pulling image {image}...[/dim]")
                 client.images.pull(image)
 
+            # Convert port mapping to Docker format
+            # {8080: 8080} -> {'8080/tcp': 8080}
+            port_bindings = None
+            if ports:
+                port_bindings = {f"{container_port}/tcp": host_port 
+                                 for container_port, host_port in ports.items()}
+                console.print(f"[dim]Exposing ports: {ports}[/dim]")
+
             # Create and start container
             container = client.containers.run(
                 image=image,
@@ -350,6 +364,7 @@ def create_docker_sandbox(
                 environment={},
                 stdin_open=True,
                 tty=True,
+                ports=port_bindings,  # Port forwarding
             )
 
             # Wait for container to be ready
@@ -366,6 +381,11 @@ def create_docker_sandbox(
 
         backend = DockerBackend(container)
         console.print(f"[green]✓ Docker container ready: {backend.id}[/green]")
+        
+        # Show exposed ports if any
+        if ports:
+            for container_port, host_port in ports.items():
+                console.print(f"[dim]Port forwarding: localhost:{host_port} -> container:{container_port}[/dim]")
 
         # Run setup script if provided
         if setup_script_path:

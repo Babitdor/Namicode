@@ -371,6 +371,12 @@ def parse_args():
         help="Path to setup script to run in sandbox after creation",
     )
     parser.add_argument(
+        "--ports",
+        type=str,
+        help="Port forwarding for Docker sandbox (format: 'PORT' or 'HOST_PORT:CONTAINER_PORT'). "
+             "Multiple ports separated by comma. Example: '8080,3000:3000,5432:5432'",
+    )
+    parser.add_argument(
         "--no-splash",
         action="store_true",
         help="Disable the startup splash screen",
@@ -395,6 +401,39 @@ def parse_args():
     )
 
     return parser.parse_args()
+
+
+def parse_ports(ports_str: str | None) -> dict[int, int] | None:
+    """Parse port forwarding argument.
+
+    Args:
+        ports_str: Port string in format 'PORT' or 'HOST_PORT:CONTAINER_PORT'.
+                   Multiple ports separated by comma.
+                   Example: '8080,3000:3000,5432:5432'
+
+    Returns:
+        Dictionary mapping container ports to host ports, or None if no ports.
+        Example: {8080: 8080, 3000: 3000, 5432: 5432}
+    """
+    if not ports_str:
+        return None
+
+    ports = {}
+    for port_spec in ports_str.split(","):
+        port_spec = port_spec.strip()
+        if ":" in port_spec:
+            # Format: HOST_PORT:CONTAINER_PORT
+            host_port_str, container_port_str = port_spec.split(":", 1)
+            host_port = int(host_port_str)
+            container_port = int(container_port_str)
+        else:
+            # Format: PORT (same for both host and container)
+            port = int(port_spec)
+            host_port = port
+            container_port = port
+        ports[container_port] = host_port
+
+    return ports if ports else None
 
 
 async def simple_cli(
@@ -1109,16 +1148,18 @@ async def main(
     sandbox_id: str | None = None,
     setup_script_path: str | None = None,
     continue_session: bool | str = False,
+    ports: dict[int, int] | None = None,
 ) -> None:
     """Main entry point with conditional sandbox support.
 
     Args:
         assistant_id: Agent identifier for memory storage
         session_state: Session state with auto-approve settings
-        sandbox_type: Type of sandbox ("none", "modal", "runloop", "daytona")
+        sandbox_type: Type of sandbox ("none", "modal", "runloop", "daytona", "docker")
         sandbox_id: Optional existing sandbox ID to reuse
         setup_script_path: Optional path to setup script to run in sandbox
         continue_session: If True, continue last session. If string, use as session ID.
+        ports: Optional port mapping for Docker sandbox {container_port: host_port}
     """
     # Initialize Vixie WebSocket server for desktop pet integration (non-blocking)
     # Server runs in background; if port is in use, it gracefully skips
@@ -1249,9 +1290,15 @@ async def main(
         # Try to create sandbox
         try:
             console.print()
-            with create_sandbox(
-                sandbox_type, sandbox_id=sandbox_id, setup_script_path=setup_script_path
-            ) as sandbox_backend:
+            # Pass ports only for Docker sandbox
+            sandbox_kwargs = {
+                "sandbox_id": sandbox_id,
+                "setup_script_path": setup_script_path,
+            }
+            if sandbox_type == "docker" and ports:
+                sandbox_kwargs["ports"] = ports
+            
+            with create_sandbox(sandbox_type, **sandbox_kwargs) as sandbox_backend:
                 console.print(
                     f"[yellow]⚡ Remote execution enabled ({sandbox_type})[/yellow]"
                 )
@@ -1644,6 +1691,9 @@ def cli_main() -> None:
                 auto_approve=args.auto_approve, no_splash=args.no_splash
             )
 
+            # Parse port forwarding argument
+            ports = parse_ports(args.ports)
+
             # API key validation happens in create_model()
             asyncio.run(
                 main(
@@ -1653,6 +1703,7 @@ def cli_main() -> None:
                     args.sandbox_id,
                     args.sandbox_setup,
                     args.continue_session,
+                    ports=ports,
                 )
             )
     except KeyboardInterrupt:
