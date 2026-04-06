@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 # Constants
 ERROR_PREVIEW_LENGTH = 100
-DEFAULT_MODEL = "llama3.1:8b"
+DEFAULT_MODEL = "qwen3.5:cloud"
 
 
 class BrowserUseTask:
@@ -56,7 +56,7 @@ def _print_usage_help() -> None:
     console.print("[dim]        /browser-use Fill out the contact form --no-vision[/dim]")
     console.print()
     console.print("[bold]Options:[/bold]")
-    console.print("  --model M, -m M       Ollama model to use (default: llama3.1:8b)")
+    console.print("  --model M, -m M       Ollama model to use (default: qwen3.5:cloud)")
     console.print("  --no-vision           Disable vision capability")
     console.print("  --status              Show status of running browser tasks")
     console.print()
@@ -186,7 +186,7 @@ async def handle_browser_use_command(
 
     Usage:
         /browser-use <task>              - Run browser automation task
-        /browser-use <task> --model M    - Use specific Ollama model (default: llama3.1:8b)
+        /browser-use <task> --model M    - Use specific Ollama model (default: qwen3.5:cloud)
         /browser-use <task> --no-vision  - Disable vision capability
         /browser-use --status            - Show status of running browser tasks
 
