@@ -91,6 +91,21 @@ from novacode_cli.agents.core_agent import (
     list_agents,
     reset_agent,
 )
+from novacode_cli.cli_session import (
+    AUTO_SAVE_INTERVAL_SECONDS,
+    AUTO_SAVE_MESSAGE_THRESHOLD,
+    AutoSaveManager,
+    GracefulShutdown,
+    SeenMessageIds,
+    display_auto_approve_status,
+    display_memory_status,
+    display_model_info,
+    display_sandbox_info,
+    display_splash_screen,
+    display_tavily_warning,
+    display_tips,
+    display_working_directory,
+)
 from novacode_cli.commands.commands import (
     execute_bash_command,
     execute_skills_command,
@@ -123,6 +138,7 @@ from novacode_cli.tools import (
     browser_automate,
     check_types,
     convert_format,
+    create_memory_structure,
     docs_search,
     duckduckgo_search,
     execute_in_e2b,
@@ -133,8 +149,10 @@ from novacode_cli.tools import (
     image_search,
     lint_code,
     package_info,
+    read_memory,
     think,
     web_search,
+    write_memory,
 )
 from novacode_cli.git_tools import (
     git_status,
@@ -155,10 +173,6 @@ from novacode_cli.server_runner.dev_server import (
 )
 from novacode_cli.server_runner.test_runner import run_tests_tool
 from novacode_cli.ui.ui_elements import TokenTracker, show_help
-
-# Auto-save configuration
-AUTO_SAVE_INTERVAL_SECONDS = 300  # Save session every 5 minutes
-AUTO_SAVE_MESSAGE_THRESHOLD = 5  # Also save after every N new messages
 
 
 def check_cli_dependencies() -> None:
@@ -426,42 +440,10 @@ async def simple_cli(
         console.print()
         sys.exit(1)
 
+    # Display splash screen and model info
+    display_splash_screen(console, no_splash)
     if not no_splash:
-        # Use responsive ASCII art that adapts to terminal width
-        ascii_art = get_responsive_ascii(console)
-        console.print(ascii_art, style=f"bold {COLORS['primary']}")
-        console.print()
-        
-        # Display model information
-        from novacode_cli.utils.model_info import get_model_info, get_provider_icon, get_provider_color
-        from rich.panel import Panel
-        from rich.text import Text
-        from rich import box
-        
-        try:
-            provider, model_name, display_name = get_model_info()
-            provider_icon = get_provider_icon(provider)
-            provider_color = get_provider_color(provider)
-            
-            # Create a bordered panel for model info
-            model_text = Text()
-            model_text.append(f"{provider_icon} ", style="bold")
-            model_text.append(f"{provider.capitalize()}", style=f"bold {provider_color}")
-            model_text.append(" • ", style="dim")
-            model_text.append(f"{display_name}", style="bold white")
-            
-            panel = Panel(
-                model_text,
-                border_style=provider_color,
-                box=box.DOUBLE,
-                padding=(0, 1),
-                expand=False,
-            )
-            console.print(panel)
-            console.print()
-        except Exception as e:
-            # If there's any error getting model info, just skip it
-            pass
+        display_model_info(console)
 
     # Extract sandbox ID from backend if using sandbox mode
     sandbox_id: str | None = None
@@ -476,61 +458,18 @@ async def simple_cli(
             sandbox_id = backend.id
 
     # Display sandbox info persistently (survives console.clear())
-    if sandbox_type and sandbox_id:
-        console.print(
-            f"[yellow]⚡ {sandbox_type.capitalize()} sandbox: {sandbox_id}[/yellow]"
-        )
-        if setup_script_path:
-            console.print(
-                f"[green]✓ Setup script ({setup_script_path}) completed successfully[/green]"
-            )
-        console.print()
+    display_sandbox_info(console, sandbox_type, sandbox_id, setup_script_path)
 
-    if not settings.has_tavily:
-        console.print(
-            "[yellow]⚠ Web search disabled:[/yellow] TAVILY_API_KEY not found.",
-            style=COLORS["dim"],
-        )
-        console.print(
-            "  To enable web search, set your Tavily API key:", style=COLORS["dim"]
-        )
-        console.print(
-            "    export TAVILY_API_KEY=your_api_key_here", style=COLORS["dim"]
-        )
-        console.print(
-            "  Or add it to your .env file. Get your key at: https://tavily.com",
-            style=COLORS["dim"],
-        )
-        console.print()
+    # Display Tavily warning if API key not configured
+    display_tavily_warning(console)
 
     console.print()
 
-    if sandbox_type:
-        working_dir = get_default_working_dir(sandbox_type)
-        console.print(f"  [dim]Local CLI directory: {Path.cwd()}[/dim]")
-        console.print(f"  [dim]Code execution: Remote sandbox ({working_dir})[/dim]")
-    else:
-        console.print(f"  [dim]{Path.cwd()}[/dim]")
+    # Display working directory
+    display_working_directory(console, sandbox_type)
 
     # Show memory status (agent.md / NOVA.md loaded)
-    if assistant_id:
-        user_agent_md = settings.get_user_agent_md_path(assistant_id)
-        has_user_memory = user_agent_md.exists()
-    else:
-        has_user_memory = False
-    project_agent_mds = settings.get_project_agent_md_paths()
-    has_project_memory = bool(project_agent_mds)
-
-    if has_user_memory or has_project_memory:
-        memory_parts = []
-        if has_user_memory:
-            memory_parts.append(f"(~/.nova/agents/{assistant_id}/agent.md)")
-        if has_project_memory:
-            names = ", ".join(p.name for p in project_agent_mds)
-            memory_parts.append(f"Project: ({names})")
-        console.print(f"  [dim]Memory: {', '.join(memory_parts)}[/dim]")
-    else:
-        console.print("  [dim]Memory: none (use /init to create project memory)[/dim]")
+    display_memory_status(console, assistant_id)
 
     console.print()
 
@@ -545,24 +484,11 @@ async def simple_cli(
             Nova_md_loaded=Nova_md_loaded,
         )
 
-    if session_state.auto_approve:
-        console.print(
-            "  [yellow]⚡ Auto-approve: ON[/yellow] [dim](tools run without confirmation)[/dim]"
-        )
-        console.print()
+    # Display auto-approve status if enabled
+    display_auto_approve_status(console, session_state.auto_approve)
 
-    # Localize modifier names and show key symbols (macOS vs others)
-    if sys.platform == "darwin":
-        tips = (
-            "Tips: ⏎ Enter to submit, ⌥ Option + ⏎ Enter for newline (or Esc+Enter), "
-            "⌃E to open editor, ⌃T to toggle auto-approve, ⌃C to interrupt"
-        )
-    else:
-        tips = (
-            "Tips: Enter to submit, Alt+Enter (or Esc+Enter) for newline, "
-            "Ctrl+E to open editor, Ctrl+T to toggle auto-approve, Ctrl+C to interrupt"
-        )
-    console.print(tips, style=f"dim {COLORS['dim']}")
+    # Display keyboard shortcuts and tips
+    display_tips(console)
 
     console.print()
 
@@ -573,10 +499,6 @@ async def simple_cli(
     token_tracker.set_baseline(baseline_tokens)
     if model_name:
         token_tracker.set_model(model_name)
-
-    # Auto-save state tracking
-    last_save_time = time.time()
-    messages_since_save = 0
 
     # Helper to save session (used by both cleanup and auto-save)
     async def _save_session(*, silent: bool = False) -> bool:
@@ -774,48 +696,22 @@ async def simple_cli(
             # Don't fail exit if compaction fails - just log and continue
             console.print(f"[dim]Could not check context: {e}[/dim]")
 
-    # Helper for auto-save check
+    # Helper for auto-save check using AutoSaveManager
+    auto_save_manager = AutoSaveManager()
+
     async def _maybe_auto_save() -> None:
         """Check if auto-save should run and save if needed."""
-        nonlocal last_save_time, messages_since_save
-
-        current_time = time.time()
-        time_since_save = current_time - last_save_time
-
-        # Auto-save if enough time has passed or enough messages accumulated
-        should_save = (
-            time_since_save >= AUTO_SAVE_INTERVAL_SECONDS
-            or messages_since_save >= AUTO_SAVE_MESSAGE_THRESHOLD
-        )
-
-        if should_save and messages_since_save > 0:
+        if auto_save_manager.should_save():
             if await _save_session(silent=True):
-                last_save_time = current_time
-                messages_since_save = 0
+                auto_save_manager.reset_messages()
 
-    # Signal handler for graceful termination (SIGTERM, SIGHUP)
+    # Signal handler for graceful termination using flag-based approach
     # This allows session saving when the terminal is closed or process is terminated
-    shutdown_requested = False
+    graceful_shutdown = GracefulShutdown()
+    graceful_shutdown.install_handlers()
 
-    def _signal_handler(signum, frame):
-        """Handle termination signals by requesting graceful shutdown."""
-        nonlocal shutdown_requested
-        shutdown_requested = True
-        # Re-raise as KeyboardInterrupt to trigger normal cleanup path
-        raise KeyboardInterrupt
-
-    # Register signal handlers (Unix-only, Windows doesn't support all signals)
-    if sys.platform != "win32":
-        try:
-            signal.signal(signal.SIGTERM, _signal_handler)
-            signal.signal(signal.SIGHUP, _signal_handler)
-        except (ValueError, OSError):
-            # Signal handling may fail in some contexts (e.g., threads)
-            pass
-
-    # Persistent set of message IDs already displayed — prevents re-display
-    # of compaction summaries and old AI responses across turns.
-    _seen_message_ids: set[str] = set()
+    # Bounded collection for message IDs — prevents unbounded memory growth
+    _seen_message_ids = SeenMessageIds()
 
     # Cancellable task tracking: lets Ctrl+C cancel a running execute_task
     # by injecting CancelledError rather than relying on KeyboardInterrupt
@@ -981,7 +877,7 @@ async def simple_cli(
             )
 
         # Track message for auto-save and check if we should save
-        messages_since_save += 1
+        auto_save_manager.increment_messages()
         await _maybe_auto_save()
 
 
@@ -1044,6 +940,10 @@ async def _run_agent_session(
         git_blame,
         # Browser automation (AI-powered web browsing)
         browser_automate,
+        # Memory management (persist across sessions)
+        write_memory,
+        read_memory,
+        create_memory_structure,
     ]
     if settings.has_tavily:
         tools.append(web_search)

@@ -1,0 +1,74 @@
+{#
+  Adapted from: claude-code-system-prompts/agent-prompt-quick-git-commit.md
+  Purpose: Git safety protocols and streamlined commit workflow
+  
+  Use this when: creating commits, working with git operations, ensuring safe git practices
+#}
+## Git Safety Protocol
+
+### NEVER Do These (Unless Explicitly Requested)
+- NEVER update the git config
+- NEVER skip hooks (--no-verify, --no-gpg-sign, etc) unless the user explicitly requests it
+- NEVER use git commit --amend unless the user explicitly requests it
+- NEVER run destructive/irreversible git commands (push --force, hard reset, etc) unless explicitly requested
+- NEVER force push to main/master branches
+- Never use git commands with the -i flag (like git rebase -i or git add -i) since they require interactive input
+
+### Always Do These
+- ALWAYS create NEW commits (never amend by default)
+- Check for files that likely contain secrets (.env, credentials.json, etc) before committing
+- If there are no changes to commit, do not create an empty commit
+- Follow the repository's commit message style by looking at recent commits
+
+## Commit Workflow
+
+### Step 1: Gather Context
+```bash
+git status              # Current state
+git diff HEAD           # All changes
+git branch --show-current  # Current branch
+git log --oneline -10   # Recent commits for style
+```
+
+### Step 2: Analyze Changes
+- Look at the recent commits to follow this repository's commit message style
+- Summarize the nature of the changes (new feature, enhancement, bug fix, refactoring, test, docs, etc.)
+- Ensure the message accurately reflects the changes and their purpose
+  - "add" means a wholly new feature
+  - "update" means an enhancement to an existing feature
+  - "fix" means a bug fix
+
+### Step 3: Create Commit
+Draft a concise (1-2 sentences) commit message that focuses on the "why" rather than the "what".
+
+Use HEREDOC syntax for multi-line commits:
+```bash
+git commit -m "$(cat <<'EOF'
+Commit message here.
+
+[Optional body with more details]
+EOF
+)"
+```
+
+## Commit Message Guidelines
+
+### Good Commit Messages
+- `fix: resolve login button not responding on mobile`
+- `feat: add user profile settings page`
+- `refactor: extract authentication logic into separate module`
+- `docs: update API documentation with new endpoints`
+- `test: add integration tests for payment flow`
+
+### Bad Commit Messages
+- `fix bug` (too vague)
+- `updates` (doesn't say what or why)
+- `WIP` (should not be committed)
+- `fixed the thing` (doesn't explain what or why)
+
+## Pre-Commit Checklist
+- [ ] No secrets or credentials in files being committed
+- [ ] Commit message follows repository style
+- [ ] Changes are logically grouped (don't mix unrelated changes)
+- [ ] Commit message explains WHY, not just WHAT
+- [ ] No large binary files that should be in .gitignore

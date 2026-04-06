@@ -806,6 +806,162 @@ _BROWSER_USER_AGENTS = [
 ]
 
 
+def summarize_web_content(
+    content: str,
+    max_length: int = 8000,
+    focus_query: str | None = None,
+) -> dict[str, Any]:
+    """Summarize large web content for efficient token usage.
+
+    When fetched content exceeds token limits, use this tool to extract
+    the most relevant information while preserving key details.
+
+    Args:
+        content: The markdown content to summarize
+        max_length: Maximum length of summarized content (default: 8000 chars)
+        focus_query: Optional query to focus summarization on relevant sections
+
+    Returns:
+        Dictionary containing:
+        - success: Whether summarization succeeded
+        - summarized_content: The summarized content
+        - original_length: Length of original content
+        - summarized_length: Length of summarized content
+        - compression_ratio: How much the content was compressed
+
+    Example:
+        result = fetch_url("https://example.com/long-article")
+        if result["success"] and len(result["markdown_content"]) > 10000:
+            summary = summarize_web_content(
+                result["markdown_content"],
+                focus_query="API authentication"
+            )
+    """
+    if not content:
+        return {
+            "success": False,
+            "error": "No content to summarize",
+            "original_length": 0,
+            "summarized_length": 0,
+        }
+
+    original_length = len(content)
+
+    # If content is already small enough, return as-is
+    if original_length <= max_length:
+        return {
+            "success": True,
+            "summarized_content": content,
+            "original_length": original_length,
+            "summarized_length": original_length,
+            "compression_ratio": 1.0,
+        }
+
+    # Extract key sections
+    lines = content.split("\n")
+    sections: list[dict[str, str]] = []
+    current_section: dict[str, str] = {"title": "Intro", "content": ""}
+    code_blocks: list[str] = []
+
+    for line in lines:
+        # Track code blocks separately
+        if line.strip().startswith("```"):
+            if current_section["content"].strip():
+                sections.append(current_section.copy())
+                current_section = {"title": "", "content": ""}
+            # Extract code block
+            code_content = []
+            continue
+
+        # Track headers as section boundaries
+        if line.startswith("#"):
+            if current_section["content"].strip():
+                sections.append(current_section.copy())
+            current_section = {"title": line.strip("# ").strip(), "content": ""}
+            continue
+
+        current_section["content"] += line + "\n"
+
+    # Add final section
+    if current_section["content"].strip():
+        sections.append(current_section)
+
+    # Score sections by relevance
+    def score_section(section: dict[str, str]) -> float:
+        score = 0.0
+        text = section["title"] + " " + section["content"]
+
+        # Boost for headers/keywords
+        if section["title"]:
+            score += 10.0
+
+        # Boost for focus query matches
+        if focus_query:
+            query_terms = focus_query.lower().split()
+            for term in query_terms:
+                score += text.lower().count(term) * 2.0
+
+        # Boost for important patterns
+        important_patterns = [
+            "api",
+            "example",
+            "usage",
+            "install",
+            "config",
+            "important",
+            "note",
+            "warning",
+            "parameter",
+            "return",
+            "argument",
+        ]
+        for pattern in important_patterns:
+            score += text.lower().count(pattern) * 0.5
+
+        return score
+
+    # Sort sections by score
+    scored_sections = [(score_section(s), s) for s in sections]
+    scored_sections.sort(key=lambda x: x[0], reverse=True)
+
+    # Build summarized content
+    summarized_parts: list[str] = []
+    current_length = 0
+
+    # Always include first section (intro)
+    if sections:
+        intro = sections[0]
+        summarized_parts.append(f"## {intro['title']}\n{intro['content']}")
+        current_length += len(intro["content"])
+
+    # Add highest-scored sections until we hit max_length
+    for score, section in scored_sections[1:]:
+        section_text = f"## {section['title']}\n{section['content']}"
+        if current_length + len(section_text) < max_length:
+            summarized_parts.append(section_text)
+            current_length += len(section_text)
+        else:
+            # Truncate section if needed
+            remaining = max_length - current_length - 100
+            if remaining > 200:
+                truncated = section["content"][:remaining] + "\n...[truncated]"
+                summarized_parts.append(f"## {section['title']}\n{truncated}")
+            break
+
+    summarized_content = "\n\n".join(summarized_parts)
+    summarized_length = len(summarized_content)
+
+    return {
+        "success": True,
+        "summarized_content": summarized_content,
+        "original_length": original_length,
+        "summarized_length": summarized_length,
+        "compression_ratio": round(summarized_length / original_length, 2),
+        "sections_analyzed": len(sections),
+        "sections_included": len(summarized_parts),
+    }
+
+
 def fetch_url(
     url: str,
     timeout: int = 30,
@@ -815,6 +971,9 @@ def fetch_url(
     max_content_size: int = 10 * 1024 * 1024,  # 10MB default
     verify_ssl: bool = True,
     user_agent: str = "browser",
+    summarize: bool = False,
+    summarize_max_length: int = 8000,
+    focus_query: str | None = None,
 ) -> dict[str, Any]:
     """Fetch content from a URL and convert HTML to markdown format.
 
@@ -834,6 +993,9 @@ def fetch_url(
         verify_ssl: Whether to verify SSL certificates (default: True)
         user_agent: User agent type - "browser" for real browser UA, "bot" for bot UA,
                    or provide custom string (default: "browser")
+        summarize: Whether to summarize large content (default: False)
+        summarize_max_length: Max length for summarized content (default: 8000 chars)
+        focus_query: Optional query to focus summarization on relevant sections
 
     Returns:
         Dictionary containing:
@@ -844,6 +1006,7 @@ def fetch_url(
         - content_length: Length of the markdown content in characters
         - attempts: Number of attempts made (useful for debugging retries)
         - final_url: The final URL after any redirects
+        - summarized: Whether content was summarized (if summarize=True)
 
     IMPORTANT: After using this tool:
     1. Read through the markdown content
@@ -979,6 +1142,30 @@ def fetch_url(
             # Convert HTML content to markdown
             markdown_content = markdownify(content)
 
+            # Apply summarization if requested and content is large
+            if summarize and len(markdown_content) > summarize_max_length:
+                summary_result = summarize_web_content(
+                    markdown_content,
+                    max_length=summarize_max_length,
+                    focus_query=focus_query,
+                )
+                if summary_result["success"]:
+                    return {
+                        "success": True,
+                        "url": str(response.url),
+                        "final_url": str(response.url),
+                        "markdown_content": summary_result["summarized_content"],
+                        "status_code": response.status_code,
+                        "content_length": summary_result["summarized_length"],
+                        "original_content_length": summary_result["original_length"],
+                        "compression_ratio": summary_result["compression_ratio"],
+                        "content_type": response.headers.get("Content-Type", ""),
+                        "attempts": attempts,
+                        "summarized": True,
+                        "sections_analyzed": summary_result["sections_analyzed"],
+                        "sections_included": summary_result["sections_included"],
+                    }
+
             return {
                 "success": True,
                 "url": str(response.url),
@@ -988,6 +1175,7 @@ def fetch_url(
                 "content_length": len(markdown_content),
                 "content_type": response.headers.get("Content-Type", ""),
                 "attempts": attempts,
+                "summarized": False,
             }
 
         except requests.exceptions.Timeout as e:
@@ -2762,4 +2950,339 @@ def browser_automate(
             "task": task,
             "model": model,
             "vision_enabled": use_vision,
+        }
+
+
+# =============================================================================
+# Memory Management Tools
+# =============================================================================
+
+
+def write_memory(
+    content: str,
+    memory_type: Literal["user", "project"] = "user",
+    path: str | None = None,
+    append: bool = False,
+) -> dict[str, Any]:
+    """Write content to agent memory file for persistence across sessions.
+
+    Memory allows the agent to remember information across conversations.
+    Use this tool when the user explicitly asks to remember something or when
+    you identify information that should be persisted for future sessions.
+
+    Args:
+        content: Memory content to write (Markdown format recommended)
+        memory_type: "user" for user preferences (applies to all projects),
+                    "project" for project-specific context
+        path: Optional custom path (defaults to standard locations)
+        append: If True, append to existing memory; if False, replace (default: False)
+
+    Returns:
+        Dictionary with:
+        - success: bool - Whether write succeeded
+        - path: str - Path to memory file
+        - message: str - Success/error message
+        - memory_type: str - Type of memory written
+
+    Memory Locations:
+        - User memory: ~/.nova/{agent-id}/agent.md
+        - Project memory: {project-root}/Nova.md
+
+    Example:
+        >>> write_memory("# Preferences\\n\\n- Use concise responses", memory_type="user")
+        {'success': True, 'path': '/home/user/.nova/nova-agent/agent.md', 'message': '...'}
+
+        >>> write_memory("# Project Notes\\n\\n- Use Python 3.11+", memory_type="project")
+        {'success': True, 'path': '/project/Nova.md', 'message': '...'}
+    """
+    from pathlib import Path
+
+    from novacode_cli.config.config import MAIN_AGENT_ID, settings
+
+    # Determine memory path
+    if path:
+        memory_path = Path(path)
+    elif memory_type == "user":
+        # User memory: ~/.nova/{agent-id}/agent.md
+        agent_dir = settings.get_agent_dir(MAIN_AGENT_ID)
+        memory_path = agent_dir / "agent.md"
+    else:
+        # Project memory: {project-root}/Nova.md
+        if not settings.project_root:
+            return {
+                "success": False,
+                "error": "Not in a project directory. Use memory_type='user' for user memory.",
+                "memory_type": memory_type,
+            }
+        memory_path = settings.project_root / "Nova.md"
+
+    # Create parent directory if needed
+    memory_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Read existing content if appending
+    existing_content = ""
+    if append and memory_path.exists():
+        try:
+            existing_content = memory_path.read_text(encoding="utf-8")
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Failed to read existing memory: {e!s}",
+                "path": str(memory_path),
+                "memory_type": memory_type,
+            }
+
+    # Write or append content
+    try:
+        if append and existing_content:
+            # Append with separator
+            full_content = f"{existing_content}\n\n---\n\n{content}"
+        else:
+            full_content = content
+
+        memory_path.write_text(full_content, encoding="utf-8")
+
+        return {
+            "success": True,
+            "path": str(memory_path),
+            "message": f"Memory written to {memory_path}",
+            "memory_type": memory_type,
+            "appended": append,
+            "content_length": len(full_content),
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Failed to write memory: {e!s}",
+            "path": str(memory_path),
+            "memory_type": memory_type,
+        }
+
+
+def read_memory(
+    memory_type: Literal["user", "project"] = "user",
+    path: str | None = None,
+) -> dict[str, Any]:
+    """Read agent memory file to see what the agent remembers.
+
+    Use this tool to check what information is stored in memory before
+    updating it or when the user asks "what do you remember?"
+
+    Args:
+        memory_type: "user" for user preferences, "project" for project context
+        path: Optional custom path (defaults to standard locations)
+
+    Returns:
+        Dictionary with:
+        - success: bool - Whether read succeeded
+        - content: str - Memory file content
+        - path: str - Path to memory file
+        - exists: bool - Whether memory file exists
+        - memory_type: str - Type of memory read
+
+    Example:
+        >>> read_memory(memory_type="user")
+        {'success': True, 'content': '# Preferences\\n\\n...', 'path': '...'}
+    """
+    from pathlib import Path
+
+    from novacode_cli.config.config import MAIN_AGENT_ID, settings
+
+    # Determine memory path
+    if path:
+        memory_path = Path(path)
+    elif memory_type == "user":
+        agent_dir = settings.get_agent_dir(MAIN_AGENT_ID)
+        memory_path = agent_dir / "agent.md"
+    else:
+        if not settings.project_root:
+            return {
+                "success": False,
+                "error": "Not in a project directory. Use memory_type='user' for user memory.",
+                "memory_type": memory_type,
+            }
+        memory_path = settings.project_root / "Nova.md"
+
+    # Check if memory exists
+    if not memory_path.exists():
+        return {
+            "success": True,
+            "content": "",
+            "path": str(memory_path),
+            "exists": False,
+            "message": f"No memory file found at {memory_path}",
+            "memory_type": memory_type,
+        }
+
+    # Read memory
+    try:
+        content = memory_path.read_text(encoding="utf-8")
+        return {
+            "success": True,
+            "content": content,
+            "path": str(memory_path),
+            "exists": True,
+            "content_length": len(content),
+            "memory_type": memory_type,
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Failed to read memory: {e!s}",
+            "path": str(memory_path),
+            "memory_type": memory_type,
+        }
+
+
+def create_memory_structure(
+    structure_type: Literal["simple", "advanced"] = "simple",
+    topics: list[str] | None = None,
+) -> dict[str, Any]:
+    """Create memory directory structure for organizing agent memory.
+
+    Use this tool to set up an organized memory structure. The agent can then
+    use the advanced structure to organize memories by topic.
+
+    Args:
+        structure_type: "simple" for single agent.md file (default),
+                       "advanced" for memories/ directory with topic files
+        topics: List of topic names for advanced structure (e.g., ["preferences", "coding-style", "workflows"])
+               If None, creates default topics: ["preferences", "coding-style", "project-context"]
+
+    Returns:
+        Dictionary with:
+        - success: bool - Whether creation succeeded
+        - structure_type: str - Type of structure created
+        - path: str - Path to memory directory/file
+        - topics_created: list - List of topic files created (advanced only)
+        - message: str - Success/error message
+
+    Structure Types:
+        - Simple: ~/.nova/{agent-id}/agent.md (single file)
+        - Advanced: ~/.nova/{agent-id}/memories/ (directory with topic files)
+            - INDEX.md (memory index)
+            - preferences.md
+            - coding-style.md
+            - project-context.md
+            - ... (custom topics)
+
+    Example:
+        >>> create_memory_structure("simple")
+        {'success': True, 'path': '/home/user/.nova/nova-agent/agent.md', ...}
+
+        >>> create_memory_structure("advanced", topics=["preferences", "workflows"])
+        {'success': True, 'topics_created': ['preferences.md', 'workflows.md'], ...}
+    """
+    from pathlib import Path
+
+    from novacode_cli.config.config import MAIN_AGENT_ID, settings
+
+    # Get agent directory
+    agent_dir = settings.get_agent_dir(MAIN_AGENT_ID)
+
+    if structure_type == "simple":
+        # Simple structure: single agent.md file
+        memory_path = agent_dir / "agent.md"
+
+        # Create parent directory if needed
+        memory_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Create file with template if it doesn't exist
+        if not memory_path.exists():
+            template = """# Agent Memory
+
+This file stores your preferences and context that persist across sessions.
+
+## Communication Style
+- [Your preferred communication style]
+
+## Coding Preferences
+- [Your coding preferences]
+
+## Project Context
+- [Project-specific notes]
+
+## Workflows
+- [Common workflows you use]
+"""
+            memory_path.write_text(template, encoding="utf-8")
+
+        return {
+            "success": True,
+            "structure_type": "simple",
+            "path": str(memory_path),
+            "message": f"Simple memory structure created at {memory_path}",
+            "created_files": ["agent.md"],
+        }
+
+    else:
+        # Advanced structure: memories/ directory with topic files
+        memories_dir = agent_dir / "memories"
+
+        # Create memories directory
+        memories_dir.mkdir(parents=True, exist_ok=True)
+
+        # Default topics if none provided
+        if topics is None:
+            topics = ["preferences", "coding-style", "project-context"]
+
+        # Create INDEX.md
+        index_path = memories_dir / "INDEX.md"
+        if not index_path.exists():
+            index_content = f"""# Memory Index
+
+This directory contains organized memory files by topic.
+
+## Topics
+
+"""
+            for topic in topics:
+                index_content += f"- [{topic}]({topic}.md) - [Description]\n"
+
+            index_content += """
+## Usage
+
+- Each file contains memories for a specific topic
+- Use `/dream` to consolidate and organize memories
+- Update this INDEX.md when adding new topics
+"""
+            index_path.write_text(index_content, encoding="utf-8")
+
+        # Create topic files
+        created_files = ["INDEX.md"]
+        for topic in topics:
+            # Sanitize topic name
+            safe_topic = topic.replace(" ", "-").replace("_", "-").lower()
+            topic_path = memories_dir / f"{safe_topic}.md"
+
+            if not topic_path.exists():
+                # Create topic file with template
+                topic_content = f"""# {topic.replace('-', ' ').title()}
+
+This file contains memories related to {topic}.
+
+## Notes
+
+- [Add your notes here]
+
+## Preferences
+
+- [Add your preferences here]
+
+## Examples
+
+- [Add examples here]
+"""
+                topic_path.write_text(topic_content, encoding="utf-8")
+                created_files.append(f"{safe_topic}.md")
+
+        return {
+            "success": True,
+            "structure_type": "advanced",
+            "path": str(memories_dir),
+            "topics_created": created_files,
+            "message": f"Advanced memory structure created at {memories_dir} with {len(created_files)} files",
+            "index_file": str(index_path),
         }

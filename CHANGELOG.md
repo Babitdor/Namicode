@@ -1,3 +1,95 @@
+## v0.0.17 - 2026-04-06
+
+### Code Quality Improvements
+
+#### CLI Session Refactoring (main.py → cli_session.py)
+- **New module**: `novacode_cli/cli_session.py` — extracted helper functions from `simple_cli()`
+- **`SeenMessageIds` class**: Bounded collection for tracking seen message IDs (max 10,000)
+  - Prevents unbounded memory growth from accumulating message IDs
+  - Uses `deque` with `maxlen` for automatic eviction of oldest entries
+- **`GracefulShutdown` class**: Flag-based signal handler for graceful termination
+  - Safer than raising `KeyboardInterrupt` directly in signal handlers
+  - Provides `install_handlers()` and `restore_handlers()` methods
+  - Cross-platform compatible (skips signal handling on Windows)
+- **`AutoSaveManager` class**: Encapsulates auto-save timing and thresholds
+  - Manages message counting and time-based auto-save triggers
+  - Configurable intervals and thresholds
+
+#### Display Helper Functions
+- `display_splash_screen()` — Display startup ASCII art
+- `display_model_info()` — Display model information panel
+- `display_sandbox_info()` — Display sandbox information
+- `display_tavily_warning()` — Display Tavily API key warning
+- `display_working_directory()` — Display current working directory
+- `display_memory_status()` — Display memory status (agent.md / NOVA.md)
+- `display_tips()` — Display keyboard shortcuts
+- `display_auto_approve_status()` — Display auto-approve status
+
+#### Unit Tests
+- **New test file**: `tests/unit_tests/test_cli_session.py` — 23 tests covering:
+  - `TestSeenMessageIds` (6 tests) — add, contains, duplicate, eviction, clear, size
+  - `TestGracefulShutdown` (5 tests) — initial state, request, reset, handlers
+  - `TestAutoSaveManager` (10 tests) — increment, reset, should_save, thresholds
+  - `TestConstants` (3 tests) — verify default values
+
+### Prompt Template Refactoring
+
+#### Jinja2 Template Extraction
+- Moved filesystem tool descriptions from hardcoded strings to Jinja2 templates
+- Moved shared memory prompts to Jinja2 templates
+- Created `deepagents-nova/nova_deepagents/prompts/tools/` directory with:
+  - `ls_description.jinja`
+  - `read_file_description.jinja`
+  - `edit_file_description.jinja`
+  - `write_file_description.jinja`
+  - `glob_description.jinja`
+  - `grep_description.jinja`
+  - `execute_description.jinja`
+  - `too_large_tool_msg.jinja`
+  - `write_memory_description.jinja`
+  - `read_memory_description.jinja`
+  - `list_memories_description.jinja`
+  - `delete_memory_description.jinja`
+
+### Subagent Shared Memory Enhancement
+
+#### Updated Subagent Prompts
+- Added shared memory instructions to all subagent prompts:
+  - `DEFAULT_SUBAGENT_PROMPT` — general-purpose agent
+  - `explore_agent.jinja` — read-only exploration agent
+  - `plan_agent.jinja` — read-only planning agent
+  - `verification_agent.jinja` — testing agent
+  - `task.jinja` — main agent subagent coordination
+
+#### Structured Memory Format
+- Added structured content format for shared memory:
+  - Source (agent type)
+  - Task description
+  - Status (complete/in-progress/failed)
+  - Summary + Details + Recommendations
+- Key naming conventions: `explore:*`, `plan:*`, `verify:*` prefixes
+
+### Bug Fixes
+
+- Fixed `browser_automate` tool not being added to main agent tools list
+  - Browser-automation-agent subagent now has access to the tool
+- Fixed import error: `get_responsive_ascii` imported from correct module (`config.py`)
+
+### Files Changed Summary
+
+| Component | Changes |
+|-----------|---------|
+| New File | `novacode_cli/cli_session.py` |
+| New File | `tests/unit_tests/test_cli_session.py` |
+| New Files | `deepagents-nova/nova_deepagents/prompts/tools/*.jinja` (13 files) |
+| Modified | `novacode_cli/main.py` — refactored, uses new cli_session module |
+| Modified | `deepagents-nova/nova_deepagents/middleware/filesystem.py` |
+| Modified | `deepagents-nova/nova_deepagents/middleware/shared_memory.py` |
+| Modified | `deepagents-nova/nova_deepagents/middleware/subagents.py` |
+| Modified | `deepagents-nova/nova_deepagents/prompts/*.jinja` (5 files) |
+
+---
+
 ## v0.0.16 - 2026-04-05
 
 ### Major Rebranding: Nami → NOVA

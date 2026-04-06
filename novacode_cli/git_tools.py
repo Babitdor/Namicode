@@ -11,6 +11,13 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from .git_safety import (
+    DANGEROUS_GIT_COMMANDS,
+    BLOCKED_COMMANDS,
+    detect_command_injection,
+    extract_command_prefix,
+)
+
 
 def _run_git_command(args: list[str], cwd: str | Path | None = None) -> tuple[int, str, str]:
     """Run a git command and return exit code, stdout, stderr.
@@ -39,6 +46,64 @@ def _run_git_command(args: list[str], cwd: str | Path | None = None) -> tuple[in
         return -1, "", "git command not found"
     except Exception as e:
         return -1, "", str(e)
+
+
+def validate_git_command(command: str) -> dict[str, Any]:
+    """Validate a git command for safety before execution.
+
+    Checks for:
+    - Command injection patterns
+    - Blocked commands
+    - Dangerous commands requiring approval
+
+    Args:
+        command: The git command to validate
+
+    Returns:
+        Dictionary containing:
+        - safe: bool - Whether the command is safe to execute
+        - requires_approval: bool - Whether command requires user approval
+        - reason: str - Reason if command is unsafe or requires approval
+        - command_prefix: str - The extracted command prefix
+    """
+    # Check for command injection
+    if detect_command_injection(command):
+        return {
+            "safe": False,
+            "requires_approval": False,
+            "reason": "Command injection detected - command contains suspicious patterns",
+            "command_prefix": "command_injection_detected",
+        }
+
+    # Extract command prefix
+    command_prefix = extract_command_prefix(command)
+
+    # Check for blocked commands
+    for blocked, reason in BLOCKED_COMMANDS.items():
+        if blocked in command:
+            return {
+                "safe": False,
+                "requires_approval": False,
+                "reason": f"Blocked command: {reason}",
+                "command_prefix": command_prefix,
+            }
+
+    # Check for dangerous commands
+    for dangerous, reason in DANGEROUS_GIT_COMMANDS.items():
+        if dangerous in command:
+            return {
+                "safe": True,
+                "requires_approval": True,
+                "reason": f"Dangerous operation: {reason}",
+                "command_prefix": command_prefix,
+            }
+
+    return {
+        "safe": True,
+        "requires_approval": False,
+        "reason": "",
+        "command_prefix": command_prefix,
+    }
 
 
 def git_status(

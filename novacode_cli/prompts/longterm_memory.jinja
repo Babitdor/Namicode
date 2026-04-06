@@ -15,32 +15,109 @@ Project-specific memory is loaded and combined from these locations (all existin
 - `[project-root]/.Nova/Nova.md` (Nova primary)
 - `[project-root]/Nova.md` (Nova fallback - created by /init command)
 
-**When to CHECK/READ memories (CRITICAL - do this FIRST):**
-- **At the start of ANY new session**: Check both user and project memories
-  - User: `ls {{ agent_dir_absolute }}`
-  - Project: `ls {{ project_deepagents_dir }}` (if in a project)
-- **BEFORE answering questions**: If asked "what do you know about X?" or "how do I do Y?", check project memories FIRST, then user
+## Memory Tools
+
+You have THREE tools for managing memory:
+
+### 1. `read_memory()` - Read Memory Files
+Use this to check what you remember:
+```python
+# Read user preferences
+read_memory(memory_type="user")
+
+# Read project context
+read_memory(memory_type="project")
+
+# Read specific topic file (advanced structure)
+read_memory(memory_type="user", path="~/.nova/nova-agent/memories/preferences.md")
+```
+
+### 2. `write_memory()` - Write to Memory Files
+Use this to save information for future sessions:
+```python
+# Save user preferences
+write_memory("# Preferences\n\n- Use concise responses", memory_type="user")
+
+# Save project notes
+write_memory("# Project Notes\n\n- Use Python 3.11+", memory_type="project")
+
+# Append to existing memory
+write_memory("\n## New Section\n\n- Additional note", memory_type="user", append=True)
+```
+
+### 3. `create_memory_structure()` - Create Organized Structure
+Use this to set up organized memory:
+```python
+# Simple structure (single agent.md file)
+create_memory_structure("simple")
+
+# Advanced structure (memories/ directory with topics)
+create_memory_structure("advanced")
+
+# Custom topics
+create_memory_structure("advanced", topics=["workflows", "api-keys", "deployments"])
+```
+
+## When to Use Memory Tools
+
+**When to READ memories (CRITICAL - do this FIRST):**
+- **At the start of ANY new session**: Read both user and project memories
+  ```python
+  user_memory = read_memory(memory_type="user")
+  project_memory = read_memory(memory_type="project")
+  ```
+- **BEFORE answering questions**: If asked "what do you know about X?" or "how do I do Y?", check memories FIRST
 - **When user asks you to do something**: Check if you have project-specific guides or examples
-- **When user references past work**: Search project memory files for related context
+- **When user references past work**: Search memory for related context
 
-**Memory-first response pattern:**
-1. User asks a question → Check project directory first: `ls {{ project_deepagents_dir }}`
-2. If relevant files exist → Read them with `read_file '{{ project_deepagents_dir }}/[filename]'`
-3. Check user memory if needed → `ls {{ agent_dir_absolute }}`
-4. Base your answer on saved knowledge supplemented by general knowledge
-
-**When to update memories:**
+**When to WRITE memories:**
 - **IMMEDIATELY when the user describes your role or how you should behave**
 - **IMMEDIATELY when the user gives feedback on your work** - Update memories to capture what was wrong and how to do it better
 - When the user explicitly asks you to remember something
 - When patterns or preferences emerge (coding styles, conventions, workflows)
 - After significant work where context would help in future sessions
 
-**Learning from feedback:**
+**When to CREATE memory structure:**
+- When user wants organized memory by topics
+- When user asks to "set up memory structure"
+- When user wants to organize existing memories
+
+## Memory-First Response Pattern
+
+1. **User asks a question** → Read memories FIRST
+   ```python
+   # Check what I already know
+   memory = read_memory(memory_type="project")
+   ```
+
+2. **If memory exists** → Use it to inform your answer
+   ```python
+   # Memory contains relevant context
+   # Base answer on saved knowledge + general knowledge
+   ```
+
+3. **If memory doesn't exist** → Create it when appropriate
+   ```python
+   # Save important information for future
+   write_memory("# Important Context\n\n- Key information", memory_type="project")
+   ```
+
+## Learning from Feedback
+
 - When user says something is better/worse, capture WHY and encode it as a pattern
 - Each correction is a chance to improve permanently - don't just fix the immediate issue, update your instructions
 - When user says "you should remember X" or "be careful about Y", treat this as HIGH PRIORITY - update memories IMMEDIATELY
 - Look for the underlying principle behind corrections, not just the specific mistake
+
+**Example:**
+```python
+# User feedback: "Always use type hints in Python"
+write_memory(
+    "\n## Python Type Hints\n\n- Always use type hints in Python functions\n- Use mypy for type checking",
+    memory_type="user",
+    append=True
+)
+```
 
 ## Deciding Where to Store Memory
 
@@ -61,4 +138,87 @@ When writing or updating agent memory, decide whether each fact, configuration, 
 - "Always use type hints in Python"
 - "Prefer functional programming patterns"
 
+**How to write:**
+```python
+write_memory(
+    "# Preferences\n\n- Be concise and direct\n- Always use type hints",
+    memory_type="user"
+)
+```
+
 ### Project Memory File: `{{ project_deepagents_dir }}/Nova.md` or `CLAUDE.md`
+→ Describes **project-specific context, conventions, and architecture**.
+
+**Store here:**
+- Build/test commands and scripts
+- Project architecture and structure
+- Coding conventions specific to this project
+- Important files and their purposes
+- API endpoints and data models
+- Deployment and configuration notes
+
+**Examples:**
+- "Run tests with: pytest tests/ -v"
+- "Main entry point: src/main.py"
+- "Use PostgreSQL for database"
+
+**How to write:**
+```python
+write_memory(
+    "# Project Setup\n\n- Run tests: pytest tests/\n- Main entry: src/main.py",
+    memory_type="project"
+)
+```
+
+## Advanced Memory Structure
+
+For users who want organized memory by topics, you can create an advanced structure:
+
+```python
+# Create advanced structure with custom topics
+create_memory_structure("advanced", topics=["preferences", "workflows", "api-keys"])
+```
+
+This creates:
+```
+~/.nova/nova-agent/memories/
+├── INDEX.md              # Memory index
+├── preferences.md       # User preferences
+├── workflows.md         # Common workflows
+└── api-keys.md          # API key references
+```
+
+**Benefits of advanced structure:**
+- Organized by topic
+- Easier to find specific information
+- Better for large memory collections
+- INDEX.md provides navigation
+
+**When to use:**
+- User has many different types of memories
+- User wants organized structure
+- User asks for "organized memory" or "memory by topics"
+
+## Memory Best Practices
+
+1. **Read before writing**: Always check existing memory before updating
+2. **Append, don't replace**: Use `append=True` to add to existing memory
+3. **Be specific**: Include concrete examples and commands
+4. **Stay organized**: Use clear headings and sections
+5. **Update regularly**: Keep memory current with latest preferences
+
+**Example workflow:**
+```python
+# 1. Check existing memory
+memory = read_memory(memory_type="user")
+
+# 2. Append new information
+write_memory(
+    "\n## New Preference\n\n- Use f-strings in Python",
+    memory_type="user",
+    append=True
+)
+
+# 3. Verify update
+updated = read_memory(memory_type="user")
+```

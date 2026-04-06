@@ -47,6 +47,7 @@ from novacode_cli.commands.ralph_handler import (
     _stop_and_save_all_ralph_tasks,
 )
 from novacode_cli.commands.browser_use_handler import handle_browser_use_command
+from novacode_cli.commands.dream_handler import handle_dream_command
 
 
 @contextmanager
@@ -353,6 +354,13 @@ async def handle_command(
             )
         except Exception as e:
             console.print(f"[red]Error running /browser-use command: {e}[/red]")
+        return True
+
+    if cmd == "dream":
+        try:
+            return await handle_dream_command(session_state)
+        except Exception as e:
+            console.print(f"[red]Error running /dream command: {e}[/red]")
         return True
 
     console.print()

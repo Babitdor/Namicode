@@ -265,6 +265,7 @@ COMMANDS = {
     "critique": "Run critique agent on recent changes (e.g., /critique or /critique src/)",
     "ralph": "Run autonomous looping mode (e.g., /ralph <task>, /ralph <task> --iterations 5)",
     "browser-use": "Run browser automation with AI (e.g., /browser-use <task>, /browser-use <task> --model llama3.2)",
+    "dream": "Run memory consolidation to organize and clean up memory files",
     "exit": "Exit the CLI",
 }
 
