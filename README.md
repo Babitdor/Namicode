@@ -264,6 +264,7 @@ nova doctor
 | `web_search` | Search the web using Tavily API |
 | `fetch_url` | Fetch and convert web pages to markdown |
 | `browser_automate` | AI-powered browser automation for web tasks |
+| `capture_browser_console` | Capture browser console errors and logs from web apps |
 | `task` | Delegate work to subagents for parallel execution |
 | `write_todos` | Create and manage task lists for complex work |
 | `list_trash` | List file snapshots available for recovery |
@@ -298,6 +299,51 @@ browser_automate(
     model="llama3.1:8b",
     use_vision=True
 )
+```
+
+## Browser Console Capture
+
+NOVA can capture browser console errors and logs from running web applications:
+
+### Use Cases
+
+- Debug JavaScript errors in development
+- Monitor console warnings during testing
+- Capture console output from web applications
+- Identify runtime errors in production
+
+### Agent Tool
+
+```python
+# Capture console errors from local development server
+capture_browser_console(
+    url="http://localhost:3000",
+    duration=60,
+    capture_errors=True,
+    capture_warnings=True,
+    capture_logs=False
+)
+
+# Quick error check (5 seconds)
+capture_browser_console("http://localhost:8080", duration=5)
+
+# Capture all console messages from production site
+capture_browser_console("https://example.com", duration=30)
+```
+
+### Output
+
+Returns a dictionary with:
+- `messages`: List of captured console messages with type, content, timestamp, and location
+- `summary`: Statistics including error count, warning count, and log count
+- `success`: Whether the capture succeeded
+
+### Requirements
+
+```bash
+pip install playwright
+playwright install chromium
+```
 ```
 
 ### Specialized Subagent

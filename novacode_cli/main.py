@@ -136,6 +136,7 @@ from novacode_cli.skills.skill_creation import setup_skills_parser
 from novacode_cli.states.Session import SessionState
 from novacode_cli.tools import (
     browser_automate,
+    capture_browser_console,
     check_types,
     convert_format,
     create_memory_structure,
@@ -1014,6 +1015,8 @@ async def _run_agent_session(
         git_blame,
         # Browser automation (AI-powered web browsing)
         browser_automate,
+        # Browser console capture (debug web applications)
+        capture_browser_console,
         # Memory management (persist across sessions)
         write_memory,
         read_memory,

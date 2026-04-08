@@ -54,6 +54,8 @@ BUG_FIX_AGENT = {
         "git_status",
         "git_diff",
         "git_blame",
+        # Browser debugging - capture console errors from web apps
+        "capture_browser_console",
     ],
 }
 
@@ -121,6 +123,8 @@ TESTING_AGENT = {
         # Git — see what changed to understand test context
         "git_status",
         "git_diff",
+        # Browser debugging - capture console errors from web apps
+        "capture_browser_console",
     ],
 }
 
@@ -146,7 +150,9 @@ BROWSER_AUTOMATION_AGENT = {
     "description": "Performs web-based tasks using AI-powered browser automation. Can navigate websites, interact with elements, fill forms, extract data, and perform multi-step web interactions. Use for web scraping, form filling, data extraction, and browser-based research.",
     "prompt": _load_prompt("browser_automation_agent.jinja"),
     "tools": [
-        # Browser automation tool - the only tool this agent needs
+        # Browser automation tool - the primary tool for this agent
         "browser_automate",
+        # Browser debugging - capture console errors from web apps
+        "capture_browser_console",
     ],
 }

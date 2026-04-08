@@ -10,6 +10,7 @@ Key Tools:
 - duckduckgo_search(): Search the web (no API key required)
 - docs_search(): Search official documentation sites only
 - execute_in_e2b(): Execute code in isolated E2B cloud sandboxes
+- capture_browser_console(): Capture browser console errors and logs from web apps
 
 LSP Tools (Code Intelligence):
 - lsp_goto_definition(): Navigate to symbol definitions
@@ -24,6 +25,10 @@ LSP Tools (Code Intelligence):
 - lsp_type_definition(): Navigate to type definitions
 - lsp_implementation(): Find implementations of interfaces
 
+Browser Tools:
+- browser_automate(): AI-powered browser automation for web tasks
+- capture_browser_console(): Capture console errors and logs from web applications
+
 These tools are registered with the agent and allow it to:
 - Fetch data from REST APIs
 - Scrape web content and convert to readable markdown
@@ -31,6 +36,7 @@ These tools are registered with the agent and allow it to:
 - Handle various HTTP methods (GET, POST, PUT, DELETE, etc.)
 - Run Python, Node.js, and Bash code securely in isolated environments
 - Navigate and understand codebases with LSP-like features
+- Debug web applications by capturing browser console output
 
 Dependencies:
 - requests: HTTP client library
@@ -39,6 +45,7 @@ Dependencies:
 - ddgs: DuckDuckGo search client (no API key needed)
 - e2b-code-interpreter: E2B sandbox execution
 - jedi: Python static analysis for LSP tools
+- playwright: Browser automation for console capture (optional)
 
 The Tavily client is initialized if TAVILY_API_KEY is available in settings.
 """
@@ -2937,6 +2944,193 @@ def think(reflection: str) -> str:
         Confirmation that reflection was recorded for decision-making
     """
     return f"Reflection recorded: {reflection}"
+
+
+def capture_browser_console(
+    url: str,
+    duration: int = 30,
+    capture_errors: bool = True,
+    capture_warnings: bool = True,
+    capture_logs: bool = True,
+    headless: bool = True,
+) -> dict[str, Any]:
+    """Capture browser console errors, warnings, and logs from a running web application.
+
+    This tool launches a browser, navigates to the specified URL, and captures all console
+    messages for a specified duration. Useful for debugging web applications and monitoring
+    JavaScript errors during development.
+
+    Args:
+        url: The URL to monitor (e.g., "http://localhost:3000", "https://example.com")
+        duration: Duration in seconds to capture console messages (default: 30, max: 300)
+        capture_errors: Whether to capture console.error messages (default: True)
+        capture_warnings: Whether to capture console.warn messages (default: True)
+        capture_logs: Whether to capture console.log messages (default: True)
+        headless: Whether to run browser in headless mode (default: True)
+
+    Returns:
+        Dictionary containing:
+        - success: Whether the capture succeeded
+        - url: The URL that was monitored
+        - duration: Actual capture duration in seconds
+        - messages: List of captured console messages, each with:
+            - type: "error", "warning", "log", or "info"
+            - message: The console message content
+            - timestamp: ISO format timestamp
+            - location: File location if available (file:line:column)
+        - summary: Summary statistics:
+            - total_messages: Total number of messages captured
+            - error_count: Number of error messages
+            - warning_count: Number of warning messages
+            - log_count: Number of log messages
+        - error: Error message if capture failed
+
+    Example:
+        # Capture console errors from local development server
+        capture_browser_console("http://localhost:3000", duration=60)
+
+        # Capture all console messages from production site
+        capture_browser_console("https://example.com", duration=30, capture_logs=True)
+
+        # Quick error check (5 seconds)
+        capture_browser_console("http://localhost:8080", duration=5, capture_logs=False)
+
+    Note: Requires playwright to be installed. Install with:
+          pip install playwright
+          playwright install chromium
+    """
+    import asyncio
+    import time
+    from datetime import datetime, timezone
+
+    # Limit duration to reasonable bounds
+    duration = min(max(1, duration), 300)  # Between 1 and 300 seconds
+
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError as e:
+        return {
+            "success": False,
+            "error": f"Playwright not installed: {e}\n\nInstall with: pip install playwright\nThen run: playwright install chromium",
+            "url": url,
+            "duration": duration,
+        }
+
+    async def capture_console():
+        """Async function to capture console messages."""
+        messages = []
+        start_time = time.time()
+
+        try:
+            async with async_playwright() as p:
+                # Launch browser
+                browser = await p.chromium.launch(headless=headless)
+                context = await browser.new_context()
+                page = await context.new_page()
+
+                # Console message handler
+                def handle_console(msg):
+                    msg_type = msg.type
+                    msg_text = msg.text
+                    msg_location = msg.location
+
+                    # Filter by type
+                    if msg_type == "error" and not capture_errors:
+                        return
+                    if msg_type == "warning" and not capture_warnings:
+                        return
+                    if msg_type == "log" and not capture_logs:
+                        return
+                    if msg_type == "info" and not capture_logs:
+                        return
+
+                    # Format location
+                    location_str = None
+                    if msg_location:
+                        location_str = f"{msg_location.get('file', 'unknown')}:{msg_location.get('line', 0)}:{msg_location.get('column', 0)}"
+
+                    messages.append({
+                        "type": msg_type,
+                        "message": msg_text,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "location": location_str,
+                    })
+
+                # Register console handler
+                page.on("console", handle_console)
+
+                # Navigate to URL
+                try:
+                    await page.goto(url, wait_until="networkidle", timeout=10000)
+                except Exception as nav_error:
+                    # Still capture console even if page doesn't fully load
+                    messages.append({
+                        "type": "warning",
+                        "message": f"Page navigation warning: {nav_error!s}",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "location": None,
+                    })
+
+                # Wait for specified duration, capturing console messages
+                elapsed = 0
+                while elapsed < duration:
+                    await asyncio.sleep(1)
+                    elapsed = time.time() - start_time
+
+                await browser.close()
+
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Browser capture failed: {e!s}",
+                "url": url,
+                "duration": time.time() - start_time,
+                "messages": messages,
+            }
+
+        # Calculate summary
+        error_count = sum(1 for m in messages if m["type"] == "error")
+        warning_count = sum(1 for m in messages if m["type"] == "warning")
+        log_count = sum(1 for m in messages if m["type"] in ("log", "info"))
+
+        return {
+            "success": True,
+            "url": url,
+            "duration": time.time() - start_time,
+            "messages": messages,
+            "summary": {
+                "total_messages": len(messages),
+                "error_count": error_count,
+                "warning_count": warning_count,
+                "log_count": log_count,
+            },
+        }
+
+    # Run async capture
+    try:
+        # Check if we're already in an async context
+        try:
+            loop = asyncio.get_running_loop()
+            # We're in an async context, create a task
+            import concurrent.futures
+
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(asyncio.run, capture_console())
+                result = future.result(timeout=duration + 30)  # Extra buffer
+        except RuntimeError:
+            # No running loop, we can use asyncio.run directly
+            result = asyncio.run(capture_console())
+
+        return result
+
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Failed to capture browser console: {e!s}",
+            "url": url,
+            "duration": duration,
+            "messages": [],
+        }
 
 
 def browser_automate(
