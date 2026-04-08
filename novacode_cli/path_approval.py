@@ -19,6 +19,21 @@ class PathApprovalManager:
         self.config_dir = Path.home() / ".Nova"
         self.config_file = self.config_dir / "approved_paths.json"
         self._approved_paths = self._load_approved_paths()
+        # Build prefix set for O(1) parent lookup
+        self._rebuild_prefix_index()
+
+    def _rebuild_prefix_index(self) -> None:
+        """Rebuild the prefix index for fast parent path lookups.
+        
+        This creates a set of all path prefixes that have recursive approval,
+        enabling O(1) lookup instead of O(n) iteration.
+        """
+        self._recursive_prefixes: set[str] = set()
+        for path_str, config in self._approved_paths.items():
+            if config.get("recursive", False):
+                # Store normalized path with trailing separator for prefix matching
+                normalized = str(Path(path_str).resolve())
+                self._recursive_prefixes.add(normalized)
 
     def _check_file_permissions(self) -> bool:
         """Check if config file has secure permissions.
@@ -87,6 +102,8 @@ class PathApprovalManager:
     def is_path_approved(self, path: Path) -> bool:
         """Check if a path is approved for access.
 
+        Uses optimized prefix matching for O(1) lookup instead of O(n) iteration.
+
         Args:
             path: The path to check
 
@@ -96,21 +113,18 @@ class PathApprovalManager:
         path = path.resolve()
         path_str = str(path)
 
-        # Check exact match
+        # O(1) exact match check
         if path_str in self._approved_paths:
             return True
 
-        # Check if any parent directory is approved with recursive access
-        for approved_path_str, config in self._approved_paths.items():
-            approved_path = Path(approved_path_str)
-            if config.get("recursive", False):
-                try:
-                    # Check if current path is under the approved path
-                    path.relative_to(approved_path)
-                    return True
-                except ValueError:
-                    # Not a subdirectory
-                    continue
+        # O(d) parent check where d = path depth (typically < 10)
+        # Walk up the directory tree and check each parent
+        current = path
+        while current != current.parent:  # Stop at root
+            current_str = str(current)
+            if current_str in self._recursive_prefixes:
+                return True
+            current = current.parent
 
         return False
 
@@ -129,6 +143,7 @@ class PathApprovalManager:
             "approved_at": Path.cwd().as_posix(),
         }
         self._save_approved_paths()
+        self._rebuild_prefix_index()  # Update prefix index
 
     def revoke_path(self, path: Path) -> bool:
         """Revoke approval for a path.
@@ -145,6 +160,7 @@ class PathApprovalManager:
         if path_str in self._approved_paths:
             del self._approved_paths[path_str]
             self._save_approved_paths()
+            self._rebuild_prefix_index()  # Update prefix index
             return True
         return False
 

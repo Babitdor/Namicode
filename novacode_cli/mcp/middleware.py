@@ -67,8 +67,8 @@ class MCPMiddleware(AgentMiddleware):
     def __init__(self, config_path: Path | None = None) -> None:
         """Initialize the MCP middleware.
 
-        Discovers MCP tools synchronously at init time so they can be
-        registered with the agent.
+        Uses lazy discovery - tools are discovered on first use instead of at init time.
+        This significantly speeds up agent startup by deferring MCP server connections.
 
         Args:
             config_path: Optional path to mcp.json config file.
@@ -82,14 +82,34 @@ class MCPMiddleware(AgentMiddleware):
         self._sessions: dict[str, ClientSession] = {}
         self._session_contexts: list[contextlib.AbstractAsyncContextManager[Any]] = []
 
-        # Discover tools synchronously at init time
-        self._discover_tools_sync()
+        # Lazy discovery - tools are discovered on first use
+        self._tools_discovered = False
+        self._discovery_lock = asyncio.Lock()
+        # Cache for rendered MCP section to avoid re-rendering on every request
+        self._mcp_section_cache: str | None = None
+        self._mcp_section_cache_time: float = 0
+        self._mcp_section_cache_ttl: float = 30.0  # 30 seconds TTL
+
+    async def _ensure_tools_discovered(self) -> None:
+        """Ensure tools are discovered before first use.
+
+        This lazy discovery pattern defers MCP server connections until
+        the first tool call, significantly speeding up agent startup.
+        """
+        if self._tools_discovered:
+            return
+
+        async with self._discovery_lock:
+            if self._tools_discovered:
+                return
+            await self._discover_tools_async()
+            self._tools_discovered = True
 
     def _discover_tools_sync(self) -> None:
-        """Discover tools from all configured MCP servers synchronously.
+        """Discover tools synchronously - kept for backwards compatibility.
 
-        This runs at __init__ time to ensure tools are available when
-        the middleware is registered with the agent.
+        DEPRECATED: Use _ensure_tools_discovered() instead for lazy loading.
+        This method is kept for any code that still needs synchronous discovery.
         """
         servers = self.mcp_config.list_servers()
 
@@ -110,6 +130,7 @@ class MCPMiddleware(AgentMiddleware):
             asyncio.set_event_loop(loop)
 
         loop.run_until_complete(self._discover_tools_async())
+        self._tools_discovered = True
 
     async def _discover_tools_async(self) -> None:
         """Async implementation of tool discovery using MultiServerMCPClient.
@@ -186,6 +207,9 @@ class MCPMiddleware(AgentMiddleware):
 
         # Store all tools for the agent
         self.tools = all_tools  # type: ignore
+        
+        # Mark discovery as complete to avoid re-discovering on every message
+        self._tools_discovered = True
 
     async def on_session_start(
         self,
@@ -195,8 +219,8 @@ class MCPMiddleware(AgentMiddleware):
     ) -> MCPStateUpdate | None:
         """Store MCP tools metadata in state at session start.
 
-        Tools are already discovered at __init__ time, so this just
-        stores the metadata in state for use in system prompt injection.
+        Uses lazy discovery - tools are discovered on first session start,
+        not at __init__ time, to speed up agent startup.
 
         Args:
             runtime: The LangGraph runtime instance
@@ -205,6 +229,9 @@ class MCPMiddleware(AgentMiddleware):
         Returns:
             State update with MCP tools metadata, or None if no tools
         """
+        # Lazy discovery - discover tools on first use
+        await self._ensure_tools_discovered()
+
         if not self._tools_cache:
             return None
 
@@ -217,6 +244,8 @@ class MCPMiddleware(AgentMiddleware):
     ) -> str:
         """Format MCP servers and their tools for display in system prompt.
 
+        Uses O(n) algorithm by pre-grouping tools by server name.
+
         Args:
             servers: Dictionary of server configurations
             tools_metadata: List of tool metadata
@@ -226,14 +255,22 @@ class MCPMiddleware(AgentMiddleware):
         """
         lines = []
 
+        # O(n) - Group tools by server name using dict
+        tools_by_server: dict[str, list[dict[str, Any]]] = {}
+        for tool in tools_metadata:
+            server_name = tool.get("server", "")
+            if server_name not in tools_by_server:
+                tools_by_server[server_name] = []
+            tools_by_server[server_name].append(tool)
+
         for name, config in servers.items():
             lines.append(f"\n**{name}** ({config.transport})")
 
             if config.description:
                 lines.append(f"  {config.description}")
 
-            # List tools from this server
-            server_tools = [t for t in tools_metadata if t["server"] == name]
+            # O(1) - Get tools for this server from pre-grouped dict
+            server_tools = tools_by_server.get(name, [])
 
             if server_tools:
                 lines.append(f"  Tools ({len(server_tools)}):")
@@ -282,12 +319,28 @@ class MCPMiddleware(AgentMiddleware):
 
         # Inject MCP info into system prompt if we have tools
         if mcp_tools:
-            # Get servers configuration
-            servers = self.mcp_config.list_servers()
+            import time
+            current_time = time.time()
+            
+            # Use cached MCP section if still valid (sliding window: refreshes on access)
+            if (
+                self._mcp_section_cache is not None
+                and current_time - self._mcp_section_cache_time < self._mcp_section_cache_ttl
+            ):
+                # Sliding window: reset timer on access to keep cache alive during active use
+                self._mcp_section_cache_time = current_time
+                mcp_section = self._mcp_section_cache
+            else:
+                # Get servers configuration
+                servers = self.mcp_config.list_servers()
 
-            # Format the MCP section using Jinja template
-            servers_list = self._format_servers_list(servers, mcp_tools)
-            mcp_section = render_template("mcp.jinja", servers_list=servers_list)
+                # Format the MCP section using Jinja template
+                servers_list = self._format_servers_list(servers, mcp_tools)
+                mcp_section = render_template("mcp.jinja", servers_list=servers_list)
+                
+                # Cache the rendered section
+                self._mcp_section_cache = mcp_section
+                self._mcp_section_cache_time = current_time
 
             # Track context usage
             try:

@@ -261,6 +261,7 @@ COMMANDS = {
     "images": "Manage images in conversation (list, remove <id>, clear)",
     "plan": "Toggle plan mode (e.g., /plan, /plan on, /plan off)",
     "verbose": "Toggle verbose mode - show/hide internal agent context",
+    "vision": "Analyze images with vision model (e.g., /vision @image.png, /vision @img1.png @img2.png)",
     "files": "Show file operation summary for the session",
     "critique": "Run critique agent on recent changes (e.g., /critique or /critique src/)",
     "ralph": "Run autonomous looping mode (e.g., /ralph <task>, /ralph <task> --iterations 5)",
@@ -311,10 +312,16 @@ else:
     console = Console(highlight=False)
 
 
+# Cache for project skills directories with TTL
+_project_skills_cache: dict[str, tuple[float, list[Path]]] = {}
+_PROJECT_SKILLS_CACHE_TTL = 30.0  # seconds
+
+
 def find_project_skills(project_root: Path) -> list[Path]:
     """Find project-specific skills directories.
 
     Checks for skills in both .claude/ and .nova/ directories.
+    Uses a cache with TTL to avoid repeated filesystem scans.
 
     Args:
         project_root: Path to the project root directory.
@@ -322,6 +329,16 @@ def find_project_skills(project_root: Path) -> list[Path]:
     Returns:
         List of skills directory paths that exist.
     """
+    import time
+    
+    # Check cache first
+    cache_key = str(project_root)
+    now = time.time()
+    if cache_key in _project_skills_cache:
+        cached_time, cached_value = _project_skills_cache[cache_key]
+        if now - cached_time < _PROJECT_SKILLS_CACHE_TTL:
+            return cached_value
+
     skills_dirs = []
 
     # Check .claude/skills/
@@ -333,6 +350,9 @@ def find_project_skills(project_root: Path) -> list[Path]:
     deepagents_skills = project_root / ".nova" / "skills"
     if deepagents_skills.exists() and deepagents_skills.is_dir():
         skills_dirs.append(deepagents_skills)
+
+    # Cache the result
+    _project_skills_cache[cache_key] = (now, skills_dirs)
 
     return skills_dirs
 

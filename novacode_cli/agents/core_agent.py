@@ -25,6 +25,7 @@ The agent is built using LangGraph's Pregel architecture with:
 
 import os
 import shutil
+import time
 from pathlib import Path
 
 from langchain.agents.middleware import (
@@ -46,6 +47,7 @@ from nova_deepagents.backends.sandbox import SandboxBackendProtocol
 from nova_deepagents.middleware.subagents import SubAgent
 
 from novacode_cli.agents.default_subagents.subagents import retrieve_core_subagents
+from novacode_cli.agents.default_subagents.async_subagents import retrieve_async_subagents
 from novacode_cli.config.config import (
     COLORS,
     config,
@@ -56,23 +58,15 @@ from novacode_cli.config.config import (
     settings,
 )
 from novacode_cli.integrations.sandbox_factory import get_default_working_dir
-from novacode_cli.mcp import get_shared_mcp_middleware
-from novacode_cli.memory.agent_memory import AgentMemoryMiddleware
-from nova_deepagents.middleware.shared_memory import (
-    SharedMemoryMiddleware,
-    reset_shared_memory_store,
-)
 from novacode_cli.prompts import render_template
-from novacode_cli.shell import ShellMiddleware
-from novacode_cli.tracking.file_tracker import (
-    FileTrackerMiddleware,
-    reset_session_tracker,
-)
-from novacode_cli.tracking.tool_limits_middleware import ToolLimitsMiddleware
-from novacode_cli.tracking.tracing import (
-    get_tracing_config,
-    is_tracing_enabled,
-)
+
+# Lazy imports for heavy dependencies (imported inside functions to speed up startup)
+# - novacode_cli.mcp (MCP middleware)
+# - novacode_cli.memory.agent_memory (Memory middleware)
+# - novacode_cli.shell (Shell middleware)
+# - novacode_cli.tracking.file_tracker (File tracker)
+# - novacode_cli.tracking.tool_limits_middleware (Tool limits)
+# - novacode_cli.tracking.tracing (Tracing)
 
 # Module-level shared store for agent/subagent memory sharing
 _shared_store: InMemoryStore | None = None
@@ -98,8 +92,10 @@ def reset_shared_store() -> None:
     _shared_store = None
     _store_lock_initialized = False
     # Also reset the shared memory store
+    from nova_deepagents.middleware.shared_memory import reset_shared_memory_store
     reset_shared_memory_store()
     # Also reset the file tracker for the new session
+    from novacode_cli.tracking.file_tracker import reset_session_tracker
     reset_session_tracker()
     # Also reset the tool limits circuit breaker
     from novacode_cli.tracking.tool_limits_middleware import reset_tool_limits
@@ -132,6 +128,11 @@ def _extract_agent_description(agent_md_content: str) -> str:
     return "Agent with custom system prompt and tools"
 
 
+# Cache for named subagents with TTL to avoid repeated filesystem reads
+_named_subagents_cache: dict[str, tuple[float, list[SubAgent]]] = {}
+_NAMED_SUBAGENTS_CACHE_TTL = 60.0  # seconds
+
+
 def build_named_subagents(
     assistant_id: str,
     tools: list[BaseTool],
@@ -142,6 +143,8 @@ def build_named_subagents(
     directories, excluding the current main agent, and converts them into SubAgent
     specifications that can be passed to SubAgentMiddleware.
 
+    Uses a cache with TTL to avoid repeated filesystem reads on agent restarts.
+
     Args:
         assistant_id: The name of the current main agent (to exclude from subagents)
         tools: The list of tools to provide to each subagent
@@ -150,6 +153,14 @@ def build_named_subagents(
         List of SubAgent specifications ready for SubAgentMiddleware
     """
     from novacode_cli.config.config import settings
+
+    # Check cache first
+    now = time.time()
+    cache_key = assistant_id
+    if cache_key in _named_subagents_cache:
+        cached_time, cached_value = _named_subagents_cache[cache_key]
+        if now - cached_time < _NAMED_SUBAGENTS_CACHE_TTL:
+            return cached_value
 
     subagents: list[SubAgent] = []
     all_agents = settings.get_all_agents()
@@ -198,6 +209,9 @@ def build_named_subagents(
             subagent["color"] = agent_color  # type: ignore
 
         subagents.append(subagent)
+
+    # Cache the result
+    _named_subagents_cache[cache_key] = (now, subagents)
 
     return subagents
 
@@ -555,6 +569,9 @@ def create_agent_with_config(
     Returns:
         2-tuple of (graph, backend)
     """
+    # Lazy import for tracing (speeds up startup)
+    from novacode_cli.tracking.tracing import is_tracing_enabled, get_tracing_config
+
     tracing_enabled = False
     skill_sources = []
     Nova_SubAgent: list[SubAgent] = []
@@ -600,9 +617,6 @@ def create_agent_with_config(
     # Extend with each path as a string (not str(list) which would be wrong)
     skill_sources.extend(str(p) for p in project_skills_dirs)
 
-    # Use shared MCP middleware (singleton pattern avoids reconnecting for subagents)
-    mcp_middleware = get_shared_mcp_middleware()
-
     # Determine workspace root for path containment
     workspace_root = settings.project_root or Path.cwd()
 
@@ -631,7 +645,7 @@ def create_agent_with_config(
         backend = FilesystemBackend(
             root_dir=str(workspace_root),
             virtual_mode=False,  # Use real filesystem paths
-            allowed_prefixes=allowed_prefixes,  # Allow workspace + user directories
+            allowed_prefixes=allowed_prefixes,  # Allow workspace + user directories # type: ignore
         )
 
     else:
@@ -639,6 +653,17 @@ def create_agent_with_config(
         # Backend: Remote sandbox for code (no /memories/ route needed with filesystem-based memory)
         backend = sandbox
         # FileTrackerMiddleware MUST be first to track all file operations and enforce read-before-edit
+
+    # Lazy imports for middleware (speeds up startup)
+    from novacode_cli.mcp import get_shared_mcp_middleware
+    from novacode_cli.memory.agent_memory import AgentMemoryMiddleware
+    from nova_deepagents.middleware.shared_memory import SharedMemoryMiddleware
+    from novacode_cli.shell import ShellMiddleware
+    from novacode_cli.tracking.file_tracker import FileTrackerMiddleware
+    from novacode_cli.tracking.tool_limits_middleware import ToolLimitsMiddleware
+
+    # Use shared MCP middleware (singleton pattern avoids reconnecting for subagents)
+    mcp_middleware = get_shared_mcp_middleware()
 
     agent_middleware = [
         FileTrackerMiddleware(
@@ -664,6 +689,9 @@ def create_agent_with_config(
     # Load pre-defined default and user defined subagents
     Nova_SubAgent.extend(retrieve_core_subagents(tools=tools))  # type: ignore
     Nova_SubAgent.extend(build_named_subagents(assistant_id=assistant_id, tools=tools))  # type: ignore
+    
+    # Load async subagents (run on remote LangGraph servers in background)
+    async_subagents = retrieve_async_subagents()
 
     # Get the system prompt (sandbox-aware and with skills)
     if system_prompt is None:
@@ -698,7 +726,7 @@ def create_agent_with_config(
         middleware=agent_middleware,
         store=store,
         interrupt_on=interrupt_on,  # type: ignore
-        subagents=Nova_SubAgent,  # Pass named agents as subagents # type: ignore
+        subagents=Nova_SubAgent + async_subagents,  # type: ignore
     ).with_config(
         config  # type: ignore
     )

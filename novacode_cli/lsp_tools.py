@@ -781,12 +781,25 @@ def lsp_workspace_symbols(
         # Limit files to search for performance
         max_files = 500
         if len(python_files) > max_files:
-            # Prioritize files in common source directories
-            priority_dirs = ["src", "lib", "app", "novacode_cli", "deepagents"]
+            # Prioritize files in common source directories using heuristics
+            # Common source directory patterns (language-agnostic)
+            common_source_dirs = {
+                "src", "lib", "app", "apps", "core", "backend", "frontend",
+                "api", "services", "modules", "packages", "components",
+            }
+            # Also prioritize files with matching query in the filename
             prioritized = []
-            for pd in priority_dirs:
-                prioritized.extend([f for f in python_files if pd in str(f)])
-            python_files = prioritized[:max_files] if prioritized else python_files[:max_files]
+            other_files = []
+            
+            for f in python_files:
+                path_str = str(f)
+                # Check if any common source dir is in the path
+                if any(f"/{pd}/" in path_str or f"\\{pd}\\" in path_str for pd in common_source_dirs):
+                    prioritized.append(f)
+                else:
+                    other_files.append(f)
+            
+            python_files = (prioritized + other_files)[:max_files]
 
         for py_file in python_files:
             try:

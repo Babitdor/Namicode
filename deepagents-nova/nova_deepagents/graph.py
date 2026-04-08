@@ -40,8 +40,47 @@ from nova_deepagents.middleware.subagents import (
 )
 from nova_deepagents.middleware.shared_memory import SharedMemoryMiddleware
 from nova_deepagents.middleware.todo import TodoListMiddleware
+from nova_deepagents.middleware.async_subagents import AsyncSubAgent, AsyncSubAgentMiddleware
 
-BASE_AGENT_PROMPT = "In order to complete the objective that the user asks of you, you have access to a number of standard tools."
+BASE_AGENT_PROMPT = """You are Nova, an AI assistant that helps users accomplish tasks using tools. You respond with text and tool calls. The user can see your responses and tool outputs in real time.
+
+## Core Behavior
+
+- Be concise and direct. Don't over-explain unless asked.
+- NEVER add unnecessary preamble (\"Sure!\", \"Great question!\", \"I'll now...\").
+- Don't say \"I'll now do X\" — just do it.
+- If the request is ambiguous, ask questions before acting.
+- If asked how to approach something, explain first, then act.
+
+## Professional Objectivity
+
+- Prioritize accuracy over validating the user's beliefs
+- Disagree respectfully when the user is incorrect
+- Avoid unnecessary superlatives, praise, or emotional validation
+
+## Doing Tasks
+
+When the user asks you to do something:
+
+1. **Understand first** — read relevant files, check existing patterns. Quick but thorough — gather enough evidence to start, then iterate.
+2. **Act** — implement the solution. Work quickly but accurately.
+3. **Verify** — check your work against what was asked, not against your own output. Your first attempt is rarely correct — iterate.
+
+Keep working until the task is fully complete. Don't stop partway and explain what you would do — just do it. Only yield back to the user when the task is done or you're genuinely blocked.
+
+**When things go wrong:**
+- If something fails repeatedly, stop and analyze *why* — don't keep retrying the same approach.
+- If you're blocked, tell the user what's wrong and ask for guidance.
+
+## Progress Updates
+
+For longer tasks, provide brief progress updates at reasonable intervals — a concise sentence recapping what you've done and what's next."""  # noqa: E501
+"""Default system prompt appended to every Deep Agent.
+
+When a caller passes `system_prompt` to `create_deep_agent`, the custom prompt
+is prepended and this base prompt is appended. When `system_prompt` is `None`,
+this is used as the sole system prompt.
+"""
 
 
 def _reraise_graph_interrupt(exc: Exception) -> str:
@@ -69,7 +108,7 @@ def create_deep_agent(
     *,
     system_prompt: str | None = None,
     middleware: Sequence[AgentMiddleware] = (),
-    subagents: list[SubAgent | CompiledSubAgent] | None = None,
+    subagents: list[SubAgent | CompiledSubAgent | AsyncSubAgent] | None = None,
     skills: list[str] | None = None,
     memory: list[str] | None = None,
     response_format: ResponseFormat | None = None,
@@ -193,6 +232,19 @@ def create_deep_agent(
         ]
     )
 
+    # Separate inline subagents from async subagents
+    # AsyncSubAgent entries are identified by their async-subagent fields (graph_id)
+    # and are routed into AsyncSubAgentMiddleware instead of SubAgentMiddleware
+    inline_subagents: list[SubAgent | CompiledSubAgent] = []
+    async_subagents: list[AsyncSubAgent] = []
+    for spec in subagents or []:
+        if "graph_id" in spec:
+            # Then spec is an AsyncSubAgent
+            async_subagents.append(spec)  # type: ignore[arg-type]
+        else:
+            # SubAgent or CompiledSubAgent - use as-is
+            inline_subagents.append(spec)  # type: ignore[arg-type]
+
     # Build main agent middleware stack
     # Use the provided name for the agent's todo list, or default to "Deep Agent"
     agent_display_name = name if name else "Deep Agent"
@@ -218,7 +270,7 @@ def create_deep_agent(
             SubAgentMiddleware(
                 default_model=model,
                 default_tools=tools,
-                subagents=subagents if subagents is not None else [],
+                subagents=inline_subagents,
                 default_middleware=subagent_middleware,
                 default_interrupt_on=interrupt_on,
                 general_purpose_agent=True,
@@ -235,6 +287,11 @@ def create_deep_agent(
             PatchToolCallsMiddleware(),
         ]
     )
+
+    if async_subagents:
+        # Async here means that we run these subagents in a non-blocking manner.
+        # Currently this supports agents deployed via LangSmith deployments.
+        deepagent_middleware.append(AsyncSubAgentMiddleware(async_subagents=async_subagents))
     if middleware:
         deepagent_middleware.extend(middleware)
     if interrupt_on is not None:

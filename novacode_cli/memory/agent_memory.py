@@ -130,6 +130,10 @@ class AgentMemoryMiddleware(AgentMiddleware):
         # Cache for loaded memory content
         self._cached_user_memory: str | None = None
         self._cached_project_memory: str | None = None
+        # Cache for rendered memory section to avoid re-rendering on every request
+        self._memory_section_cache: str | None = None
+        self._memory_section_cache_time: float = 0
+        self._memory_section_cache_ttl: float = 30.0  # 30 seconds TTL
 
     def _get_file_mtime(self, path: Path) -> float | None:
         """Get modification time for a file, or None if it doesn't exist."""
@@ -366,52 +370,80 @@ class AgentMemoryMiddleware(AgentMiddleware):
         Returns:
             Complete system prompt with memory sections injected.
         """
+        import time
+        
         # Extract memory from state
         state = cast("AgentMemoryState", request.state)
         user_memory = state.get("user_memory")
         project_memory = state.get("project_memory")
         base_system_prompt = request.system_prompt
-
-        # Build project memory info for documentation based on actually loaded files
-        if self.project_root and self.loaded_project_memory_sources:
-            sources_list = ", ".join(self.loaded_project_memory_sources)
-            project_memory_info = f"`{self.project_root}` (loaded: {sources_list})"
-        elif self.project_root:
-            project_memory_info = f"`{self.project_root}` (no CLAUDE.md or Nova.md found)"
-        else:
-            project_memory_info = "None (not in a git project)"
-
-        # Build project deepagents directory path (.claude or .Nova)
-        if self.project_root:
-            if (self.project_root / ".claude").exists():
-                project_deepagents_dir = str(self.project_root / ".claude")
-            elif (self.project_root / ".Nova").exists():
-                project_deepagents_dir = str(self.project_root / ".Nova")
-            else:
-                project_deepagents_dir = "[project-root]/(.claude or .Nova not found)"
-        else:
-            project_deepagents_dir = "[project-root]/(.claude or .Nova not in a project)"
-
-        # Format memory section with both memories
-        memory_section = self.system_prompt_template.format(
-            user_memory=user_memory if user_memory else "(No user agent.md)",
-            project_memory=(
-                project_memory if project_memory else "(No project CLAUDE.md or Nova.md)"
-            ),
+        
+        current_time = time.time()
+        
+        # Check if we can use cached memory section (sliding window)
+        # Cache is valid if: TTL not expired AND memory content hasn't changed
+        memory_content = (user_memory or "", project_memory or "")
+        can_use_cache = (
+            self._memory_section_cache is not None
+            and current_time - self._memory_section_cache_time < self._memory_section_cache_ttl
+            and (self._cached_user_memory or "") == memory_content[0]
+            and (self._cached_project_memory or "") == memory_content[1]
         )
+        
+        if can_use_cache:
+            # Sliding window: reset timer on access to keep cache alive during active use
+            self._memory_section_cache_time = current_time
+            memory_section = self._memory_section_cache
+        else:
+            # Build project memory info for documentation based on actually loaded files
+            if self.project_root and self.loaded_project_memory_sources:
+                sources_list = ", ".join(self.loaded_project_memory_sources)
+                project_memory_info = f"`{self.project_root}` (loaded: {sources_list})"
+            elif self.project_root:
+                project_memory_info = f"`{self.project_root}` (no CLAUDE.md or Nova.md found)"
+            else:
+                project_memory_info = "None (not in a git project)"
 
-        system_prompt = memory_section
+            # Build project deepagents directory path (.claude or .Nova)
+            if self.project_root:
+                if (self.project_root / ".claude").exists():
+                    project_deepagents_dir = str(self.project_root / ".claude")
+                elif (self.project_root / ".Nova").exists():
+                    project_deepagents_dir = str(self.project_root / ".Nova")
+                else:
+                    project_deepagents_dir = "[project-root]/(.claude or .Nova not found)"
+            else:
+                project_deepagents_dir = "[project-root]/(.claude or .Nova not in a project)"
+
+            # Format memory section with both memories
+            memory_section = self.system_prompt_template.format(
+                user_memory=user_memory if user_memory else "(No user agent.md)",
+                project_memory=(
+                    project_memory if project_memory else "(No project CLAUDE.md or Nova.md)"
+                ),
+            )
+            
+            # Add longterm memory template
+            memory_section += "\n\n" + render_template(
+                "longterm_memory.jinja",
+                agent_dir_absolute=self.agent_dir_absolute,
+                agent_dir_display=self.agent_dir_display,
+                project_memory_info=project_memory_info,
+                project_deepagents_dir=project_deepagents_dir,
+            )
+            
+            # Cache the result
+            self._memory_section_cache = memory_section
+            self._memory_section_cache_time = current_time
+            self._cached_user_memory = memory_content[0]
+            self._cached_project_memory = memory_content[1]
+
+        # memory_section is guaranteed to be set at this point
+        assert memory_section is not None
+        system_prompt: str = memory_section
 
         if base_system_prompt:
             system_prompt += "\n\n" + base_system_prompt
-
-        system_prompt += "\n\n" + render_template(
-            "longterm_memory.jinja",
-            agent_dir_absolute=self.agent_dir_absolute,
-            agent_dir_display=self.agent_dir_display,
-            project_memory_info=project_memory_info,
-            project_deepagents_dir=project_deepagents_dir,
-        )
 
         return system_prompt
 

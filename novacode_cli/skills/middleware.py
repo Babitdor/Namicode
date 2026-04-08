@@ -36,7 +36,7 @@ from langchain.agents.middleware.types import (
 from langgraph.runtime import Runtime
 
 from novacode_cli.prompts import render_template
-from novacode_cli.skills.load import SkillMetadata, list_skills
+from novacode_cli.skills.load import ExtendedSkillMetadata, SkillMetadata, list_skills
 
 # Context tracking for middleware optimization
 try:
@@ -58,15 +58,15 @@ except ImportError:
 class SkillsState(AgentState):
     """State for the skills middleware."""
 
-    skills_metadata: NotRequired[list[SkillMetadata]]
-    """List of loaded skill metadata (name, description, path)."""
+    skills_metadata: NotRequired[list[ExtendedSkillMetadata]]
+    """List of loaded skill metadata (name, description, path, source)."""
 
 
 class SkillsStateUpdate(TypedDict):
     """State update for the skills middleware."""
 
-    skills_metadata: list[SkillMetadata]
-    """List of loaded skill metadata (name, description, path)."""
+    skills_metadata: list[ExtendedSkillMetadata]
+    """List of loaded skill metadata (name, description, path, source)."""
 
 
 # Skills System Documentation - loaded from: NovaCode_cli/prompts/skills.jinja
@@ -117,6 +117,11 @@ class SkillsMiddleware(AgentMiddleware):
         self.project_skills_dirs = project_skills_dirs or []
         # Store display paths for prompts
         self.user_skills_display = f"~/.Nova/{assistant_id}/skills"
+        # Cache for rendered skills section to avoid re-rendering on every request
+        self._skills_section_cache: str | None = None
+        self._skills_section_cache_time: float = 0
+        self._skills_section_cache_ttl: float = 30.0  # 30 seconds TTL
+        self._skills_section_cache_metadata: tuple = ()  # Track what was cached
 
     @property
     def skills_dir_display(self) -> str:
@@ -153,17 +158,26 @@ class SkillsMiddleware(AgentMiddleware):
 
         return "\n".join(locations)
 
-    def _format_skills_list(self, skills: list[SkillMetadata]) -> str:
-        """Format skills metadata for display in system prompt."""
+    def _format_skills_list(self, skills: list[ExtendedSkillMetadata]) -> str:
+        """Format skills metadata for display in system prompt.
+        
+        Uses O(n) algorithm with single pass grouping.
+        """
         if not skills:
             locations = [f"{self.user_skills_display}/"]
             if self.project_skills_dir:
                 locations.append(f"{self.project_skills_dir}/")
             return f"(No skills available yet. You can create skills in {' or '.join(locations)})"
 
-        # Group skills by source
-        user_skills = [s for s in skills if s["source"] == "user"]
-        project_skills = [s for s in skills if s["source"] == "project"]
+        # O(n) - Group skills by source in single pass
+        user_skills: list[SkillMetadata] = []
+        project_skills: list[SkillMetadata] = []
+        
+        for skill in skills:
+            if skill["source"] == "user": # type: ignore
+                user_skills.append(skill)
+            else:
+                project_skills.append(skill)
 
         lines = []
 
@@ -219,7 +233,50 @@ class SkillsMiddleware(AgentMiddleware):
                 user_skills_dir=self.skills_dir,
                 project_skills_dir=self.project_skills_dir,
             )
-        return SkillsStateUpdate(skills_metadata=skills)
+        return SkillsStateUpdate(skills_metadata=skills) # type: ignore
+
+    def _get_skills_section(self, skills_metadata: list[ExtendedSkillMetadata]) -> str:
+        """Get skills section with caching.
+
+        Args:
+            skills_metadata: List of skill metadata.
+
+        Returns:
+            Rendered skills section string.
+        """
+        import time
+        current_time = time.time()
+        
+        # Create a cache key from the metadata
+        cache_key = tuple((s["name"], s["source"]) for s in skills_metadata)
+        
+        # Use cached section if still valid and metadata hasn't changed (sliding window)
+        if (
+            self._skills_section_cache is not None
+            and current_time - self._skills_section_cache_time < self._skills_section_cache_ttl
+            and self._skills_section_cache_metadata == cache_key
+        ):
+            # Sliding window: reset timer on access to keep cache alive during active use
+            self._skills_section_cache_time = current_time
+            return self._skills_section_cache
+        
+        # Format skills locations and list
+        skills_locations = self._format_skills_locations()
+        skills_list = self._format_skills_list(skills_metadata)
+
+        # Format the skills documentation using Jinja template
+        skills_section = render_template(
+            "skills.jinja",
+            skills_locations=skills_locations,
+            skills_list=skills_list,
+        )
+        
+        # Cache the result
+        self._skills_section_cache = skills_section
+        self._skills_section_cache_time = current_time
+        self._skills_section_cache_metadata = cache_key
+        
+        return skills_section
 
     @track_context("SkillsMiddleware")
     def wrap_model_call(
@@ -241,16 +298,8 @@ class SkillsMiddleware(AgentMiddleware):
         # Get skills metadata from state
         skills_metadata = request.state.get("skills_metadata", [])
 
-        # Format skills locations and list
-        skills_locations = self._format_skills_locations()
-        skills_list = self._format_skills_list(skills_metadata)
-
-        # Format the skills documentation using Jinja template
-        skills_section = render_template(
-            "skills.jinja",
-            skills_locations=skills_locations,
-            skills_list=skills_list,
-        )
+        # Get skills section with caching
+        skills_section = self._get_skills_section(skills_metadata)
 
         if request.system_prompt:
             system_prompt = request.system_prompt + "\n\n" + skills_section
@@ -278,16 +327,8 @@ class SkillsMiddleware(AgentMiddleware):
         state = cast("SkillsState", request.state)
         skills_metadata = state.get("skills_metadata", [])
 
-        # Format skills locations and list
-        skills_locations = self._format_skills_locations()
-        skills_list = self._format_skills_list(skills_metadata)
-
-        # Format the skills documentation using Jinja template
-        skills_section = render_template(
-            "skills.jinja",
-            skills_locations=skills_locations,
-            skills_list=skills_list,
-        )
+        # Get skills section with caching
+        skills_section = self._get_skills_section(skills_metadata)
 
         # Inject into system prompt
         if request.system_prompt:

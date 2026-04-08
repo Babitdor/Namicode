@@ -345,7 +345,11 @@ class FileTrackerMiddleware(AgentMiddleware):
         self.truncate_results = truncate_results
         self.include_system_prompt = include_system_prompt
         self._tracker = tracker
-        self.tools: list[BaseTool] = []  # No additional tools
+        self.tools: list[BaseTool] = []  # type: ignore # No additional tools
+        # Cache for rendered prompt to avoid re-rendering on every request
+        self._prompt_cache: str | None = None
+        self._prompt_cache_time: float = 0
+        self._prompt_cache_ttl: float = 30.0  # 30 seconds TTL
 
     @property
     def tracker(self) -> SessionFileTracker:
@@ -361,8 +365,23 @@ class FileTrackerMiddleware(AgentMiddleware):
     ) -> ModelResponse:
         """Inject file operation rules into the system prompt."""
         if self.include_system_prompt:
-            from novacode_cli.prompts import render_template
-            file_tracker_prompt = render_template("file_tracker.jinja")
+            import time
+            current_time = time.time()
+            
+            # Use cached prompt if still valid (sliding window: refreshes on access)
+            if (
+                self._prompt_cache is not None
+                and current_time - self._prompt_cache_time < self._prompt_cache_ttl
+            ):
+                # Sliding window: reset timer on access to keep cache alive during active use
+                self._prompt_cache_time = current_time
+                file_tracker_prompt = self._prompt_cache
+            else:
+                from novacode_cli.prompts import render_template
+                file_tracker_prompt = render_template("file_tracker.jinja")
+                self._prompt_cache = file_tracker_prompt
+                self._prompt_cache_time = current_time
+            
             system_prompt = (
                 request.system_prompt + "\n\n" + file_tracker_prompt
                 if request.system_prompt
@@ -378,8 +397,23 @@ class FileTrackerMiddleware(AgentMiddleware):
     ) -> ModelResponse:
         """(async) Inject file operation rules into the system prompt."""
         if self.include_system_prompt:
-            from novacode_cli.prompts import render_template
-            file_tracker_prompt = render_template("file_tracker.jinja")
+            import time
+            current_time = time.time()
+            
+            # Use cached prompt if still valid (sliding window: refreshes on access)
+            if (
+                self._prompt_cache is not None
+                and current_time - self._prompt_cache_time < self._prompt_cache_ttl
+            ):
+                # Sliding window: reset timer on access to keep cache alive during active use
+                self._prompt_cache_time = current_time
+                file_tracker_prompt = self._prompt_cache
+            else:
+                from novacode_cli.prompts import render_template
+                file_tracker_prompt = render_template("file_tracker.jinja")
+                self._prompt_cache = file_tracker_prompt
+                self._prompt_cache_time = current_time
+            
             system_prompt = (
                 request.system_prompt + "\n\n" + file_tracker_prompt
                 if request.system_prompt
