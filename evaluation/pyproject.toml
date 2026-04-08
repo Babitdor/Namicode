@@ -9,9 +9,7 @@ dependencies = [
     "harbor>=0.1.12",
     "langchain-anthropic>=1.0.0",
     "langchain-openai>=1.0.0",
-    # Local packages
-    "nami-deepagents",
-    "namicode-cli",
+
     # LangSmith for observability
     "langsmith>=0.4.0",
     "modal>=0.64.0",
@@ -42,8 +40,8 @@ override-dependencies = [
 ]
 
 [tool.uv.sources]
-nami-deepagents = { path = "../deepagents-nami" }
-namicode-cli = { path = "..", editable = true }
+nova-deepagents = { path = "../deepagents-nova" }
+novacode-cli = { path = "..", editable = true }
 
 [tool.ruff]
 line-length = 100

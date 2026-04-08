@@ -345,6 +345,10 @@ def parse_args():
         help="Check migration status without performing migration",
     )
 
+    # Voice command - interactive voice session with Nova
+    from novacode_cli.voice.voice_handler import setup_voice_parser
+    setup_voice_parser(subparsers)
+
     # Default interactive mode
     parser.add_argument(
         "--agent",
@@ -582,9 +586,16 @@ async def simple_cli(
                 # Determine task status from state
                 task_status = getattr(session_state, "task_status", "active")
 
-                # Check if we should trigger summarization
+                # Get context usage percentage for summarization threshold
+                context_breakdown = token_tracker.get_breakdown()
+                context_usage_percentage = context_breakdown.usage_percentage
+
+                # Check if we should trigger summarization (only at 80%+ context usage)
                 memory_content = None
-                if should_trigger_summarization(len(messages)):
+                if should_trigger_summarization(
+                    context_usage_percentage=context_usage_percentage,
+                    task_status=task_status,
+                ):
                     if not silent:
                         console.print("[dim]Generating session memory summary...[/dim]")
                     try:
@@ -1685,6 +1696,10 @@ def cli_main() -> None:
             from novacode_cli.doctor import run_doctor
 
             sys.exit(run_doctor())
+        elif args.command == "voice":
+            from novacode_cli.voice.voice_handler import handle_voice_command
+
+            handle_voice_command(args)
         else:
             # Create session state from args
             session_state = SessionState(

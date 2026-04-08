@@ -117,26 +117,30 @@ def _build_conversation_summary(messages: list[BaseMessage], max_length: int = 1
 
 
 def should_trigger_summarization(
-    message_count: int,
+    message_count: int = 0,
     recent_limit: int = 8,
     task_status: str | None = None,
+    context_usage_percentage: float | None = None,
+    context_threshold: float = 80.0,
 ) -> bool:
     """Determine if summarization should be triggered.
 
     Triggers when:
-    - Message count exceeds recent limit significantly
+    - Context usage percentage exceeds threshold (default 80%)
     - Task status changed to 'complete'
 
     Args:
-        message_count: Total number of messages in session
-        recent_limit: Number of recent messages to keep
+        message_count: Total number of messages in session (deprecated, kept for compatibility)
+        recent_limit: Number of recent messages to keep (deprecated, kept for compatibility)
         task_status: Current task status
+        context_usage_percentage: Current context window usage percentage (0-100)
+        context_threshold: Threshold percentage to trigger summarization (default 80%)
 
     Returns:
         True if summarization should be triggered
     """
-    # Trigger if we have way more messages than the recent limit
-    if message_count > recent_limit * 2:
+    # Trigger when context usage exceeds threshold
+    if context_usage_percentage is not None and context_usage_percentage >= context_threshold:
         return True
 
     # Trigger when task is marked complete

@@ -40,6 +40,7 @@ from novacode_cli.commands.file_commands import (
     handle_images_command,
     handle_restore_command,
 )
+from novacode_cli.commands.vision_handler import handle_vision_command
 from novacode_cli.commands.plan_handler import handle_plan_command
 from novacode_cli.commands.trace_handler import handle_trace_command
 from novacode_cli.commands.ralph_handler import (
@@ -330,6 +331,13 @@ async def handle_command(
             return await handle_images_command(cmd_args, image_tracker)
         except Exception as e:
             console.print(f"[red]Error running /images command: {e}[/red]")
+        return True
+
+    if cmd == "vision":
+        try:
+            return await handle_vision_command(cmd_args, image_tracker)
+        except Exception as e:
+            console.print(f"[red]Error running /vision command: {e}[/red]")
         return True
 
     if cmd == "restore":

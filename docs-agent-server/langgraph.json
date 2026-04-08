@@ -1,0 +1,7 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "documentation-update-agent": "./agent.py:graph"
+  },
+  "env": ".env"
+}

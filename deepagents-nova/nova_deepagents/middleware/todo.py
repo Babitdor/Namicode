@@ -19,7 +19,8 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Annotated, Any, Literal, NotRequired, TypedDict, cast
+from typing import Annotated, Any, Literal, NotRequired, cast
+from typing_extensions import TypedDict
 
 from nova_deepagents.prompts import render_template
 

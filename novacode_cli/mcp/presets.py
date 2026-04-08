@@ -10,46 +10,6 @@ from novacode_cli.mcp.config import MCPServerConfig
 
 # Pre-defined MCP server presets
 MCP_PRESETS: dict[str, dict[str, Any]] = {
-    "filesystem": {
-        "name": "Filesystem MCP",
-        "description": "Secure file operations with configurable access controls",
-        "package": "@modelcontextprotocol/server-filesystem",
-        "config": {
-            "transport": "stdio",
-            "command": "npx",
-            "args": [
-                "-y",
-                "@modelcontextprotocol/server-filesystem",
-                "{allowed_directories}",
-            ],
-            "env": {},
-        },
-        "setup_prompt": "Enter allowed directories (comma-separated, e.g., /workspace,/tmp):",
-        "setup_key": "allowed_directories",
-    },
-    "github": {
-        "name": "GitHub MCP",
-        "description": "Interact with GitHub repositories, issues, and PRs",
-        "package": "ghcr.io/github/github-mcp-server",
-        "config": {
-            "transport": "stdio",
-            "command": "docker",
-            "args": [
-                "run",
-                "-i",
-                "--rm",
-                "--init",
-                "-e",
-                "GITHUB_PERSONAL_ACCESS_TOKEN",
-                "ghcr.io/github/github-mcp-server",
-                "stdio",
-            ],
-            "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "{github_token}"},
-        },
-        "setup_prompt": "Enter your GitHub personal access token:",
-        "setup_key": "github_token",
-        "env_mapping": {"github_token": "GITHUB_PERSONAL_ACCESS_TOKEN"},
-    },
     "brave-search": {
         "name": "Brave Search MCP",
         "description": "Web search using Brave Search API",
@@ -89,28 +49,6 @@ MCP_PRESETS: dict[str, dict[str, Any]] = {
         "setup_key": "connection_string",
         "env_mapping": {"connection_string": "POSTGRES_CONNECTION_STRING"},
     },
-    "slack": {
-        "name": "Slack MCP",
-        "description": "Send messages and interact with Slack",
-        "package": "@modelcontextprotocol/server-slack",
-        "config": {
-            "transport": "stdio",
-            "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-slack"],
-            "env": {
-                "SLACK_BOT_TOKEN": "{slack_bot_token}",
-                "SLACK_TEAM_ID": "{slack_team_id}",
-            },
-        },
-        "setup_prompt": "Enter your Slack bot token:",
-        "setup_key": "slack_bot_token",
-        "setup_secondary_prompt": "Enter your Slack team ID:",
-        "setup_secondary_key": "slack_team_id",
-        "env_mapping": {
-            "slack_bot_token": "SLACK_BOT_TOKEN",
-            "slack_team_id": "SLACK_TEAM_ID",
-        },
-    },
     "google-drive": {
         "name": "Google Drive MCP",
         "description": "Access and manage Google Drive files (requires OAuth setup)",
@@ -141,17 +79,6 @@ MCP_PRESETS: dict[str, dict[str, Any]] = {
                 "--timeout-action=30000",
                 "--timeout-navigation=30000",
             ],  #  Headless by default; remove for headed
-            "env": {},
-        },
-    },
-    "git": {
-        "name": "Git MCP",
-        "description": "Tools to read, search, and manipulate Git repositories",
-        "package": "@modelcontextprotocol/server-git",
-        "config": {
-            "transport": "stdio",
-            "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-git"],
             "env": {},
         },
     },
@@ -229,34 +156,6 @@ MCP_PRESETS: dict[str, dict[str, Any]] = {
                 "--project-from-cwd",
                 "--context",
                 "agent",
-            ],
-            "env": {},
-        },
-    },
-    "n8n-mcp": {
-        "name": "n8n MCP",
-        "description": "n8n workflow automation MCP server (Docker required)",
-        "package": "ghcr.io/czlonkowski/n8n-mcp:latest",
-        "config": {
-            "transport": "stdio",
-            "command": "docker",
-            "args": [
-                "run",
-                "-i",
-                "--rm",
-                "--init",
-                "-e",
-                "-e",
-                "MCP_MODE=stdio",
-                "-e",
-                "LOG_LEVEL=error",
-                "-e",
-                "DISABLE_CONSOLE_OUTPUT=true",
-                "-e",
-                "N8N_API_URL=http://host.docker.internal:5678",
-                "-e",
-                "N8N_API_KEY=your-api-key",
-                "ghcr.io/czlonkowski/n8n-mcp:latest",
             ],
             "env": {},
         },

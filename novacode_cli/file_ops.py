@@ -87,10 +87,45 @@ def _safe_read(path: Path) -> str | None:
 
 
 def _count_lines(text: str) -> int:
-    """Count lines in text, treating empty strings as zero lines."""
+    """Count lines in text, treating empty strings as zero lines.
+    
+    For formatted read output with line numbers, this counts the actual
+    source lines (excluding continuation lines like 5.1, 5.2 for long lines).
+    """
     if not text:
         return 0
-    return len(text.splitlines())
+    
+    lines = text.splitlines()
+    if not lines:
+        return 0
+    
+    # Check if this is formatted output with line numbers (e.g., "     1\tcontent")
+    # Formatted lines have format: "{line_num:{width}d}\t{content}" or "{line_num.decimal}\t{content}"
+    first_line = lines[0] if lines else ""
+    
+    # Detect formatted output: line number followed by tab
+    import re
+    formatted_pattern = re.compile(r'^\s*\d+(\.\d+)?\t')
+    is_formatted = bool(formatted_pattern.match(first_line))
+    
+    if is_formatted:
+        # Count unique line numbers (excluding continuation markers like 5.1, 5.2)
+        unique_lines = set()
+        for line in lines:
+            match = formatted_pattern.match(line)
+            if match:
+                # Extract the base line number (before any decimal)
+                line_marker = match.group(0).strip().rstrip('\t')
+                if '.' in line_marker:
+                    # This is a continuation line (e.g., "5.1"), skip it
+                    continue
+                try:
+                    unique_lines.add(int(line_marker))
+                except ValueError:
+                    pass
+        return len(unique_lines) if unique_lines else len(lines)
+    
+    return len(lines)
 
 
 def compute_unified_diff(
