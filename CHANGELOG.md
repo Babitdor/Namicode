@@ -1,3 +1,78 @@
+## v0.0.18 - 2026-04-07
+
+### New Features
+
+#### Voice Agent Module (`novacode_cli/voice/`)
+- **New module**: Voice-based interaction with Nova coding assistant
+- **Voice providers**: Support for multiple STT/TTS providers
+  - STT: Deepgram (default), ElevenLabs
+  - TTS: ElevenLabs (default), Deepgram, Cartesia
+- **LLM models**: Gemini (default), GPT-4o
+- **Wake word detection**: "Hey Nova" activation
+- **File operation tools**: Read-only tools for codebase exploration
+  - `read_file` - Read file contents
+  - `list_directory` - List directory contents
+  - `search_code` - Search for code patterns
+- **CLI command**: `nova voice` with options:
+  - `--model` / `-m`: LLM model selection
+  - `--stt`: Speech-to-text provider
+  - `--tts`: Text-to-speech provider
+  - `--voice`: Voice name for TTS
+  - `--no-wake-word`: Disable wake word detection
+  - `--working-dir` / `-d`: Working directory
+
+#### Memory System Enhancement
+- **Complete memory system**: Tools for persistent agent memory
+  - `write_memory()` - Store information with tags
+  - `read_memory()` - Retrieve stored memories
+  - `list_memories()` - List all memories
+  - `delete_memory()` - Remove memories
+- **Agent-specific todo lists**: Each agent type has its own todo list namespace
+- **Context optimization utilities**: Reduce token usage in agent contexts
+
+#### Sandbox-Aware Middleware
+- **AgentMemoryMiddleware**: Now sandbox-aware for project memory files
+- **ShellMiddleware**: Now sandbox-aware with LSP tools integration
+- **Ports parameter**: Fixed `create_sandbox()` to accept ports configuration
+
+### Improvements
+
+#### MCP Presets Cleanup
+- Removed unused presets to reduce bundle size:
+  - `filesystem` - Removed (built-in filesystem tools preferred)
+  - `github` - Removed (requires Docker setup)
+  - `slack` - Removed (requires complex OAuth)
+  - `git` - Removed (built-in git tools preferred)
+  - `n8n-mcp` - Removed (requires Docker setup)
+- Retained commonly-used presets:
+  - `brave-search`, `memory`, `postgres`, `google-drive`
+  - `playwright`, `fetch`, `time`, `sqlite`, `stripe`
+  - `everything`, `serena`, `context7`
+
+#### Documentation
+- Improved installation documentation with clear step-by-step instructions
+- Better onboarding for new users
+
+### Bug Fixes
+
+- Fixed project memory path to use `.nova/NOVA.md` instead of incorrect path
+- Fixed `ports` parameter not being passed to `create_sandbox()` function
+- Cleaned up playwright-mcp temporary files
+
+### Files Changed Summary
+
+| Component | Changes |
+|-----------|---------|
+| New Module | `novacode_cli/voice/` (4 files) |
+| Modified | `novacode_cli/mcp/presets.py` — removed 5 presets |
+| Modified | `novacode_cli/memory/agent_memory.py` — sandbox-aware |
+| Modified | `novacode_cli/mcp/middleware.py` — sandbox-aware, LSP tools |
+| Modified | `novacode_cli/lsp_tools.py` — added to sandbox |
+| Modified | `novacode_cli/main.py` — ports parameter fix |
+| Modified | Documentation files |
+
+---
+
 ## v0.0.17 - 2026-04-06
 
 ### Code Quality Improvements
