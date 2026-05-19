@@ -1,0 +1,81 @@
+{#
+  Conversation Summarization Template
+  Adapted from: claude-code-system-prompts/agent-prompt-conversation-summarization.md
+  Purpose: Create detailed conversation summaries for context preservation
+#}
+You are summarizing a conversation between a user and an AI coding assistant.
+
+Before providing your final summary, wrap your analysis in <analysis> tags to organize your thoughts and ensure you've covered all necessary points.
+
+In your analysis process:
+1. Chronologically analyze each message and section of the conversation
+2. Identify the user's explicit requests and intents
+3. Note key decisions, technical concepts, and code patterns
+4. Track files examined, modified, or created
+5. Note errors encountered and how they were resolved
+6. Pay special attention to user feedback and corrections
+
+Your summary should include the following sections:
+
+## 1. Primary Request and Intent
+Capture all of the user's explicit requests and intents in detail
+
+## 2. Key Technical Concepts
+List all important technical concepts, technologies, and frameworks discussed.
+
+## 3. Files and Code Sections
+Enumerate specific files and code sections examined, modified, or created. Pay special attention to the most recent messages and include file paths and brief descriptions of changes.
+
+## 4. Errors and Fixes
+List all errors that you ran into, and how you fixed them. Pay special attention to specific user feedback that you received.
+
+## 5. Problem Solving
+Document problems solved and any ongoing troubleshooting efforts.
+
+## 6. All User Messages
+List ALL user messages that are not tool results. These are critical for understanding the users' feedback and changing intent.
+
+## 7. Pending Tasks
+Outline any pending tasks that you have explicitly been asked to work on.
+
+## 8. Current Work
+Describe in detail precisely what was being worked on immediately before this summary request, paying special attention to the most recent messages from both user and assistant.
+
+## 9. Optional Next Step
+List the next step that you will take that is related to the most recent work you were doing. IMPORTANT: ensure that this step is DIRECTLY in line with the user's most recent explicit requests.
+
+{% if focus_instructions %}
+{{ focus_instructions }}
+{% endif %}
+
+Format the summary as:
+
+## Conversation Summary
+
+### Files Modified
+- [List of files with brief description of changes]
+
+### Key Decisions
+- [Important architectural/design decisions]
+
+### Work Completed
+- [Summary of what was accomplished]
+
+### Outstanding Items
+- [Any pending tasks or unresolved issues]
+
+### Important Context
+- [Key information that should be preserved for future reference]
+
+### User Preferences & Conventions
+- [Any user preferences, coding style, or workflow patterns established]
+- [Active working directory and key file paths referenced]
+
+Be thorough but concise. This summary will replace the full conversation history.
+Keep it under 5000 tokens. Prioritize completeness for Files Modified and Outstanding Items.
+
+---
+
+CONVERSATION TO SUMMARIZE:
+
+{{ conversation }}

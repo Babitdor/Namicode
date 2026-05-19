@@ -1,0 +1,70 @@
+## Iteration {{ iteration_display }}
+
+### Context
+Your previous work is in the filesystem. Continue making progress toward completing the task.
+
+### Current Task
+{{ task }}
+
+### Your Objectives
+1. **Assess Progress**: Review what has been done and what remains
+2. **Make Concrete Progress**: Implement the next logical step
+3. **Validate Work**: Test, lint, or verify changes where applicable
+4. **Document Decisions**: Note any important choices or trade-offs
+
+### Action Guidelines
+- **If the task is incomplete**: Identify and execute the next critical step
+- **If the task appears complete**: 
+  - Summarize what was accomplished
+  - Explain why it's complete (criteria met)
+  - Note any remaining optional improvements
+
+### 🛠️ Skill Usage (MANDATORY)
+**ALWAYS consider and potentially invoke these skills based on the task:**
+
+| Skill | When to Use | Trigger Keywords |
+|-------|-------------|------------------|
+| **testing-skills** | Validate code functionality | test, verify, check, validate, run tests |
+| **code-review** | Review code quality and correctness | review, audit, check for bugs, security |
+| **code-documentation** | Improve or create documentation | doc, docs, README, API reference |
+| **frontend-design** | Create or improve UI components | design, UI, frontend, visual |
+| **expert-css-skills** | CSS/layout optimization | CSS, styling, responsive, layout |
+| **three-js-expert-skills** | 3D graphics work | 3D, WebGL, three.js |
+| **framer-motion-animator** | Add animations | animate, animation, motion |
+| **webapp-testing** | Test web applications | test web app, browser, e2e |
+| **web-research** | Look up information | research, find, learn about |
+| **docs_search** | Find official documentation | docs, API reference, official guide |
+| **web-artifacts-builder** | Complex HTML/React artifacts | React, Tailwind, shadcn, complex UI |
+
+**Skill Invocation Checklist (Ask yourself before each iteration):**
+- [ ] Does this task require testing? → Invoke `testing-skills`
+- [ ] Does this need code review? → Invoke `code-review`
+- [ ] Are docs needed/missing? → Invoke `code-documentation`
+- [ ] Is this a frontend task? → Consider `frontend-design` + `expert-css-skills`
+- [ ] Does this need 3D? → Invoke `three-js-expert-skills`
+- [ ] Are animations needed? → Invoke `framer-motion-animator`
+- [ ] Do I need to look something up? → Use `web-research` or `docs_search`
+- [ ] Is this a complex web app? → Consider `web-artifacts-builder`
+
+**How to Invoke Skills (CRITICAL):**
+Skills are loaded from your system prompt. To use a skill:
+1. **Find the skill path** in the "Available Skills" section of your system prompt
+2. **Read the skill file**: `read_file("<skill_path>/SKILL.md")`
+3. **Follow the instructions** in the SKILL.md file exactly
+4. **Apply the workflow** described in the skill to your current task
+
+Example: If you see `- **testing-skills**: ... -> Read 'C:/Users/.../skills/testing-skills/SKILL.md'`
+Then call: `read_file("C:/Users/.../skills/testing-skills/SKILL.md")` and follow those instructions.
+
+### Output Format
+End your response with:
+- **Progress Summary**: What you accomplished in this iteration
+- **Current Status**: Complete or Incomplete (with remaining work)
+- **Next Steps**: What should be done next (if any)
+- **Skills Used**: List any skills invoked and why
+
+### Output Format
+End your response with:
+- **Progress Summary**: What you accomplished in this iteration
+- **Current Status**: Complete or Incomplete (with remaining work)
+- **Next Steps**: What should be done next (if any)

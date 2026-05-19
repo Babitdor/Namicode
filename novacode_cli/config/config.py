@@ -1,0 +1,896 @@
+"""Configuration, constants, and model creation for the CLI.
+
+This module provides centralized configuration management for the CLI, including:
+- Color scheme and UI styling constants
+- Environment variable parsing and settings management
+- Project root detection and working directory management
+- Rich console initialization with proper encoding
+
+Key Components:
+- create_model(): Factory function for creating chat models from configuration
+- settings(): Global settings object with environment variable access
+- COLORS: Color scheme constants for UI styling
+- ASCII art banner for CLI startup
+
+Supported Model Providers:
+- OpenAI (default): Requires OPENAI_API_KEY
+- Anthropic: Requires ANTHROPIC_API_KEY
+- Ollama: Local models, requires OLLAMA_BASE_URL
+- Google: Requires GOOGLE_API_KEY
+
+Environment Configuration:
+- API keys loaded from environment variables or .env files
+- Configuration files in ~/.nova/ and .nova/
+- Project-specific settings override global settings
+"""
+
+import os
+import re
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+import dotenv
+from rich.console import Console
+
+dotenv.load_dotenv()
+
+# Home directory for NOVA configuration
+HOME_DIR = Path.home() / ".nova"
+
+# Color scheme - Red & White Theme
+COLORS = {
+    "primary": "#ef4444",  # Bright red (primary actions, headings)
+    "secondary": "#dc2626",  # Deep red (highlights, important text)
+    "accent": "#fca5a5",  # Light red (accents, borders)
+    "dim": "#9ca3af",  # Gray (secondary text)
+    "user": "#ffffff",  # White (user messages)
+    "agent": "#ef4444",  # Bright red (agent messages)
+    "thinking": "#f87171",  # Medium red (thinking/processing)
+    "tool": "#dc2626",  # Deep red (tool calls)
+    "success": "#10b981",  # Green (success states)
+    "warning": "#f59e0b",  # Orange (warnings)
+    "error": "#dc2626",  # Deep red (errors)
+    "subagent": "#30c3f0",  # Medium red (sub-agent messages)
+}
+
+# Reserved agent ID for the main agent — not a user-created named subagent.
+MAIN_AGENT_ID = "nova-agent"
+
+# Agent color registry - stores colors for custom agents
+_agent_colors: dict[str, str] = {}
+
+
+def extract_agent_description(agent_md: Path) -> str:
+    """Extract description from agent.md YAML frontmatter or first content line.
+
+    Args:
+        agent_md: Path to the agent.md file.
+
+    Returns:
+        Extracted description string.
+    """
+    try:
+        content = agent_md.read_text(encoding="utf-8")
+
+        # YAML front-matter
+        if content.startswith("---"):
+            parts = content.split("---", 2)
+            if len(parts) >= 3:
+                front_matter = parts[1]
+                for line in front_matter.splitlines():
+                    line = line.strip()
+                    if line.startswith("description:"):
+                        return line.split(":", 1)[1].strip()[:80]
+
+        # Fallback: first non-empty, non-heading line
+        for line in content.splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                return (line[:80] + "...") if len(line) > 80 else line
+
+    except Exception:
+        pass
+
+    return "[unable to read]"
+
+
+def get_agent_color(agent_name: str) -> str:
+    """Get the color for an agent by name.
+
+    Args:
+        agent_name: The name of the agent.
+
+    Returns:
+        The color string (hex or name), or default subagent color if not set.
+    """
+    return _agent_colors.get(agent_name, COLORS["subagent"])
+
+
+def set_agent_color(agent_name: str, color: str) -> None:
+    """Set the color for an agent.
+
+    Args:
+        agent_name: The name of the agent.
+        color: The color string (hex code like '#ef4444' or color name).
+    """
+    _agent_colors[agent_name] = color
+
+
+def clear_agent_colors() -> None:
+    """Clear all registered agent colors."""
+    _agent_colors.clear()
+
+
+def parse_agent_color(agent_md_path: Path) -> str | None:
+    """Parse color from agent.md YAML frontmatter.
+
+    Looks for a color field in YAML frontmatter at the start of the file:
+    ```
+    ---
+    color: #ef4444
+    ---
+    ```
+
+    Args:
+        agent_md_path: Path to the agent.md file.
+
+    Returns:
+        Color string if found, None otherwise.
+    """
+    try:
+        content = agent_md_path.read_text(encoding="utf-8")
+
+        # Match YAML frontmatter between --- delimiters
+        frontmatter_pattern = r"^---\s*\n(.*?)\n---\s*\n"
+        match = re.match(frontmatter_pattern, content, re.DOTALL)
+
+        if not match:
+            return None
+
+        frontmatter = match.group(1)
+
+        # Parse color from frontmatter
+        for line in frontmatter.split("\n"):
+            kv_match = re.match(r"^color:\s*(.+)$", line.strip())
+            if kv_match:
+                return kv_match.group(1).strip().strip('"').strip("'")
+
+        return None
+    except Exception:
+        return None
+
+
+def get_responsive_ascii(console: Console) -> str:
+    """Generate responsive ASCII art that adapts to terminal width.
+    
+    Args:
+        console: Rich console instance to get terminal width
+        
+    Returns:
+        ASCII art string sized appropriately for the terminal
+    """
+    # Get terminal width (with fallback to 80)
+    try:
+        terminal_width = console.width
+    except Exception:
+        terminal_width = 80
+    
+    # Minimum width for full ASCII art
+    min_width = 75
+    
+    # ASCII art templates for different sizes
+    if terminal_width >= min_width:
+        # Full ASCII art for wide terminals
+        ascii_art = """
+                                                                           
+   ███╗   ██╗  ██████╗  ██╗   ██╗  █████╗                                  
+   ████╗  ██║ ██╔═══██╗ ██║   ██║ ██╔══██╗                                 
+   ██╔██╗ ██║ ██║   ██║ ██║   ██║ ███████║                                 
+   ██║╚██╗██║ ██║   ██║ ╚██╗ ██╔╝ ██╔══██║                                 
+   ██║ ╚████║ ╚██████╔╝  ╚████╔╝  ██║  ██║                                 
+   ╚═╝  ╚═══╝  ╚═════╝    ╚═══╝   ╚═╝  ╚═╝                                 
+                                                                           
+              ~ Beyond code. Beyond limits. NOVA Code ~                    
+                                                                           
+"""
+    elif terminal_width >= 60:
+        # Medium ASCII art for medium terminals
+        ascii_art = """
+                                                      
+   ███╗   ██╗  ██████╗  ██╗   ██╗  █████╗            
+   ████╗  ██║ ██╔═══██╗ ██║   ██║ ██╔══██╗           
+   ██╔██╗ ██║ ██║   ██║ ██║   ██║ ███████║           
+   ██║╚██╗██║ ██║   ██║ ╚██╗ ██╔╝ ██╔══██║           
+   ██║ ╚████║ ╚██████╔╝  ╚████╔╝  ██║  ██║           
+   ╚═╝  ╚═══╝  ╚═════╝    ╚═══╝   ╚═╝  ╚═╝           
+                                                      
+        ~ Beyond code. Beyond limits. NOVA Code ~                                                          
+"""
+    else:
+        # Simple text for narrow terminals
+        ascii_art = """
+                      
+      ███╗   ██╗     
+      ████╗  ██║     
+      ██╔██╗ ██║     
+      ██║╚██╗██║     
+      ██║ ╚████║     
+      ╚═╝  ╚═══╝     
+                      
+     NOVA Code        
+                      
+"""
+    
+    return ascii_art
+
+
+# Legacy static ASCII art (kept for backward compatibility)
+NOVA_CODE_ASCII = """
+                                                                          
+   ███╗   ██╗  ██████╗  ██╗   ██╗  █████╗                                  
+   ████╗  ██║ ██╔═══██╗ ██║   ██║ ██╔══██╗                                 
+   ██╔██╗ ██║ ██║   ██║ ██║   ██║ ███████║                                 
+   ██║╚██╗██║ ██║   ██║ ╚██╗ ██╔╝ ██╔══██║                                 
+   ██║ ╚████║ ╚██████╔╝  ╚████╔╝  ██║  ██║                                 
+   ╚═╝  ╚═══╝  ╚═════╝    ╚═══╝   ╚═╝  ╚═╝                                 
+                                                                           
+             ~ Beyond code. Beyond limits. NOVA Code ~                    
+                                                                           
+"""
+
+# Interactive commands
+COMMANDS = {
+    "clear": "Clear screen and reset conversation",
+    "help": "Show help information",
+    "tokens": "Show token usage for current session",
+    "context": "Show detailed context window usage with visual breakdown",
+    "compact": "Summarize conversation to free up context (e.g., /compact Focus on X)",
+    "init": "Explore codebase and create NOVA.MD file",
+    "mcp": "Manage MCP servers (install presets, add custom, list, remove)",
+    "model": "Manage LLM providers (view, switch between OpenAI, Anthropic, Ollama, Google)",
+    "hooks": "Manage hooks - list, add, remove, test, view logs (e.g., /hooks list)",
+    "skills": "Manage skills - create or list (e.g., /skills, /skills create, /skills list)",
+    "agents": "Manage custom agents - view, create, or delete (e.g., /agents)",
+    "sessions": "List and manage saved sessions",
+    "save": "Manually save current session (auto-saved on exit)",
+    "servers": "List and manage running dev servers",
+    "tests": "Run project tests (e.g., /tests or /tests pytest -v)",
+    "trace": "Manage LangSmith tracing (status, enable, disable, projects)",
+    "kill": "Kill a running process by PID or name (e.g., /kill 1234)",
+    "images": "Manage images in conversation (list, remove <id>, clear)",
+    "plan": "Toggle plan mode (e.g., /plan, /plan on, /plan off)",
+    "verbose": "Toggle verbose mode - show/hide internal agent context",
+    "decompose": "Toggle prompt decomposition - split multi-step requests into sequential sub-prompts",
+    "steer": "Add persistent steering instructions (e.g., /steer focus on database layer)",
+    "remote": "Manage remote bridges to Discord or Telegram (start/stop/status/test)",
+    "vision": "Analyze images with vision model (e.g., /vision @image.png, /vision @img1.png @img2.png)",
+    "files": "Show file operation summary for the session",
+    "critique": "Run critique agent on recent changes (e.g., /critique or /critique src/)",
+    "ralph": "Run autonomous looping mode (e.g., /ralph <task>, /ralph <task> --iterations 5)",
+    "browser-use": "Run browser automation with AI (e.g., /browser-use <task>, /browser-use <task> --model llama3.2)",
+    "dream": "Run memory consolidation to organize and clean up memory files",
+    "research": "Run agent swarm research (e.g., /research <query>, /research academic <query>, /research market <query>)",
+    "reindex": "Rebuild the semantic code search index (after significant code changes)",
+    "exit": "Exit the CLI",
+}
+
+
+# Maximum argument length for display
+MAX_ARG_LENGTH = 150
+
+# Tool icons for display in tool calls
+TOOL_ICONS = {
+    "read_file": "📄",
+    "write_file": "✍️",
+    "edit_file": "📝",
+    "shell": "💻",
+    "ls": "📁",
+    "glob": "🔍",
+    "grep": "🔎",
+    "web_search": "🌐",
+    "http_request": "📡",
+    "fetch_url": "🌍",
+    "task": "🤖",
+    "write_todos": "📋",
+    "mcp": "🔌",
+    "run_tests": "🧪",
+    "start_dev_server": "🚀",
+    "stop_dev_server": "🛑",
+    "list_servers": "📋",
+    "code_search": "🔍",
+    "find_related_code": "🔄",
+    "default": "🔧",
+}
+
+# Agent configuration
+config = {"recursion_limit": 1000}
+
+# Rich console instance
+# Force UTF-8 encoding on Windows to support Unicode characters in ASCII art
+if sys.platform == "win32":
+    import io
+
+    console = Console(
+        highlight=False, file=io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+    )
+else:
+    console = Console(highlight=False)
+
+
+# Cache for project skills directories with TTL
+_project_skills_cache: dict[str, tuple[float, list[Path]]] = {}
+_PROJECT_SKILLS_CACHE_TTL = 30.0  # seconds
+
+
+def find_project_skills(project_root: Path) -> list[Path]:
+    """Find project-specific skills directories.
+
+    Checks for skills in both .claude/ and .nova/ directories.
+    Uses a cache with TTL to avoid repeated filesystem scans.
+
+    Args:
+        project_root: Path to the project root directory.
+
+    Returns:
+        List of skills directory paths that exist.
+    """
+    import time
+    
+    # Check cache first
+    cache_key = str(project_root)
+    now = time.time()
+    if cache_key in _project_skills_cache:
+        cached_time, cached_value = _project_skills_cache[cache_key]
+        if now - cached_time < _PROJECT_SKILLS_CACHE_TTL:
+            return cached_value
+
+    skills_dirs = []
+
+    # Check .claude/skills/
+    claude_skills = project_root / ".claude" / "skills"
+    if claude_skills.exists() and claude_skills.is_dir():
+        skills_dirs.append(claude_skills)
+
+    # Check .nova/skills/
+    deepagents_skills = project_root / ".nova" / "skills"
+    if deepagents_skills.exists() and deepagents_skills.is_dir():
+        skills_dirs.append(deepagents_skills)
+
+    # Cache the result
+    _project_skills_cache[cache_key] = (now, skills_dirs)
+
+    return skills_dirs
+
+
+def _find_project_root(start_path: Path | None = None) -> Path | None:
+    """Find the project root by looking for .git directory.
+
+    Walks up the directory tree from start_path (or cwd) looking for a .git
+    directory, which indicates the project root.
+
+    Args:
+        start_path: Directory to start searching from. Defaults to current working directory.
+
+    Returns:
+        Path to the project root if found, None otherwise.
+    """
+    current = Path(start_path or Path.cwd()).resolve()
+
+    # Walk up the directory tree
+    for parent in [current, *list(current.parents)]:
+        git_dir = parent / ".git"
+        if git_dir.exists():
+            return parent
+
+    return None
+
+
+def _find_project_agent_md(project_root: Path) -> list[Path]:
+    """Find ALL project-specific CLAUDE.md and Nova.md files.
+
+    Returns every memory file that exists, ordered from most general to most
+    specific (matching Claude Code's hierarchical loading behavior). All found
+    files are combined so later entries take higher precedence.
+
+    Load order (general → specific):
+    1. project_root/NOVA.md       (NOVA root — created by /init)
+    2. project_root/.nova/NOVA.md (NOVA directory)
+    3. project_root/CLAUDE.md     (Claude Code root)
+    4. project_root/.claude/CLAUDE.md (Claude Code directory — highest precedence)
+
+    Args:
+        project_root: Path to the project root directory.
+
+    Returns:
+        List of existing paths (may be empty if no memory files found).
+    """
+    candidates = [
+        project_root / "NOVA.md",
+        project_root / ".nova" / "NOVA.md",
+        project_root / "CLAUDE.md",
+        project_root / ".claude" / "CLAUDE.md",
+    ]
+    return [p for p in candidates if p.exists()]
+
+
+def get_default_coding_instructions() -> str:
+    """Get the default coding agent instructions.
+
+    These are the immutable base instructions that cannot be modified by the agent.
+    Long-term memory (agent.md) is handled separately by the middleware.
+    """
+    from novacode_cli.prompts import render_template
+
+    return render_template("System_Prompt_Nova.jinja")
+
+
+@dataclass
+class Settings:
+    """Global settings and environment detection for deepagents-cli.
+
+    This class is initialized once at startup and provides access to:
+    - Available models and API keys
+    - Current project information
+    - Tool availability (e.g., Tavily)
+    - File system paths
+
+    Attributes:
+        project_root: Current project root directory (if in a git project)
+
+        openai_api_key: OpenAI API key if available
+        anthropic_api_key: Anthropic API key if available
+        tavily_api_key: Tavily API key if available
+    """
+
+    # API keys
+    openai_api_key: str | None
+    anthropic_api_key: str | None
+    google_api_key: str | None
+    tavily_api_key: str | None
+    langsmith_api_key: str | None
+    replicate_api_key: str | None
+
+    # Ollama configuration
+    ollama_host: str | None
+
+    # Project information
+    project_root: Path | None
+
+    # LangSmith configuration
+    langsmith_project: str = "Nova-Code"
+    langsmith_workspace_id: str | None = None
+    langsmith_tracing_enabled: bool = False
+
+    version: str = "1.0.0"
+
+    @classmethod
+    def from_environment(cls, *, start_path: Path | None = None) -> "Settings":
+        """Create settings by detecting the current environment.
+
+        Priority order for API keys:
+        1. OS keychain (via SecretManager)
+        2. Environment variables
+        3. None (not configured)
+
+        Args:
+            start_path: Directory to start project detection from (defaults to cwd)
+
+        Returns:
+            Settings instance with detected configuration
+        """
+        # Import SecretManager here to avoid circular imports
+        # (SecretManager imports from config, config imports SecretManager)
+        try:
+            from novacode_cli.onboarding import SecretManager
+
+            secret_manager = SecretManager()
+        except ImportError:
+            # If onboarding module not available yet, skip keyring
+            secret_manager = None
+
+        # Detect API keys - check keyring first, then environment variables
+        if secret_manager:
+            openai_key = secret_manager.get_secret("openai_api_key") or os.environ.get(
+                "OPENAI_API_KEY"
+            )
+            anthropic_key = secret_manager.get_secret(
+                "anthropic_api_key"
+            ) or os.environ.get("ANTHROPIC_API_KEY")
+            google_key = secret_manager.get_secret("google_api_key") or os.environ.get(
+                "GOOGLE_API_KEY"
+            )
+            tavily_key = secret_manager.get_secret("tavily_api_key") or os.environ.get(
+                "TAVILY_API_KEY"
+            )
+            replicate_key = secret_manager.get_secret(
+                "replicate_api_key"
+            ) or os.environ.get("REPLICATE_API_TOKEN")
+        else:
+            openai_key = os.environ.get("OPENAI_API_KEY")
+            anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+            google_key = os.environ.get("GOOGLE_API_KEY")
+            tavily_key = os.environ.get("TAVILY_API_KEY")
+            replicate_key = os.environ.get("REPLICATE_API_TOKEN")
+
+        langsmith_key = os.environ.get("LANGSMITH_API_KEY")
+
+        # Detect Ollama host configuration
+        ollama_host = os.environ.get("OLLAMA_HOST")
+
+        # Detect project
+        project_root = _find_project_root(start_path)
+
+        # LangSmith configuration
+        langsmith_enabled = os.environ.get("LANGSMITH_TRACING", "").lower() == "true"
+        langsmith_project = os.environ.get("LANGSMITH_PROJECT", "Nova-Code")
+        langsmith_workspace = os.environ.get("LANGSMITH_WORKSPACE_ID")
+
+        return cls(
+            openai_api_key=openai_key,
+            anthropic_api_key=anthropic_key,
+            google_api_key=google_key,
+            tavily_api_key=tavily_key,
+            langsmith_api_key=langsmith_key,
+            replicate_api_key=replicate_key,
+            ollama_host=ollama_host,
+            project_root=project_root,
+            langsmith_project=langsmith_project,
+            langsmith_workspace_id=langsmith_workspace,
+            langsmith_tracing_enabled=langsmith_enabled,
+        )
+
+    @property
+    def has_openai(self) -> bool:
+        """Check if OpenAI API key is configured."""
+        return self.openai_api_key is not None
+
+    @property
+    def has_anthropic(self) -> bool:
+        """Check if Anthropic API key is configured."""
+        return self.anthropic_api_key is not None
+
+    @property
+    def has_google(self) -> bool:
+        """Check if Google API key is configured."""
+        return self.google_api_key is not None
+
+    @property
+    def has_tavily(self) -> bool:
+        """Check if Tavily API key is configured."""
+        return self.tavily_api_key is not None
+
+    @property
+    def has_replicate(self) -> bool:
+        """Check if Replicate API key is configured."""
+        return self.replicate_api_key is not None
+
+    @property
+    def has_langsmith(self) -> bool:
+        """Check if LangSmith is configured and enabled."""
+        return self.langsmith_api_key is not None and self.langsmith_tracing_enabled
+
+    @property
+    def has_project(self) -> bool:
+        """Check if currently in a git project."""
+        return self.project_root is not None
+
+    def get_onboarding_status(self) -> bool:
+        """Check if onboarding has been completed.
+
+        Returns:
+            True if onboarding completed, False otherwise
+        """
+        config_file = HOME_DIR / "config.json"
+        onboarded_marker = HOME_DIR / ".onboarded"
+
+        # Check if either marker exists
+        if onboarded_marker.exists():
+            return True
+
+        # Check config.json for onboarding_completed flag
+        if config_file.exists():
+            try:
+                import json
+
+                config = json.loads(config_file.read_text(encoding="utf-8"))
+                return config.get("onboarding_completed", False)
+            except Exception:  # noqa: BLE001
+                return False
+
+        return False
+
+    def mark_onboarding_complete(self) -> None:
+        """Mark onboarding as completed.
+
+        Creates completion markers in config.json and .onboarded file.
+        """
+        import json
+
+        config_file = HOME_DIR / "config.json"
+        onboarded_marker = HOME_DIR / ".onboarded"
+
+        # Update config.json
+        config = {}
+        if config_file.exists():
+            try:
+                config = json.loads(config_file.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001, S110
+                pass
+
+        config["onboarding_completed"] = True
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+        config_file.write_text(json.dumps(config, indent=2), encoding="utf-8")
+
+        # Create marker file
+        onboarded_marker.touch()
+
+    @property
+    def user_deepagents_dir(self) -> Path:
+        """Get the base user-level .nova directory.
+
+        Returns:
+            Path to ~/.nova
+        """
+        return HOME_DIR
+
+    def get_agents_root_dir(self) -> Path:
+        """Get the global agents root directory.
+
+        Returns:
+            Path to ~/.nova/agents/
+        """
+        return self.user_deepagents_dir / "agents"
+
+    def get_project_agents_dir(self) -> Path | None:
+        """Get project-level agents directory path.
+
+        Returns:
+            Path to {project_root}/.nova/agents/, or None if not in a project
+        """
+        if not self.project_root:
+            return None
+        return self.project_root / ".nova" / "agents"
+
+    def ensure_project_agents_dir(self) -> Path | None:
+        """Ensure project-level agents directory exists and return its path.
+
+        Returns:
+            Path to {project_root}/.nova/agents/, or None if not in a project
+        """
+        if not self.project_root:
+            return None
+        agents_dir = self.get_project_agents_dir()
+        if agents_dir:
+            agents_dir.mkdir(parents=True, exist_ok=True)
+        return agents_dir
+
+    def get_all_agents(self) -> list[tuple[str, Path, str]]:
+        """Get all available agents from both global and project scopes.
+
+        Returns:
+            List of (agent_name, agent_dir_path, scope) tuples.
+            scope is either "global" or "project"
+        """
+        agents: list[tuple[str, Path, str]] = []
+
+        # Global agents (~/.nova/agents/)
+        global_agents_dir = self.get_agents_root_dir()
+        if global_agents_dir.exists():
+            for agent_dir in global_agents_dir.iterdir():
+                if agent_dir.is_dir() and (agent_dir / "agent.md").exists():
+                    if agent_dir.name == MAIN_AGENT_ID:
+                        continue  # reserved — not a user-created named agent
+                    agents.append((agent_dir.name, agent_dir, "global"))
+
+        # Project agents ({project_root}/.nova/agents/)
+        project_agents_dir = self.get_project_agents_dir()
+        if project_agents_dir and project_agents_dir.exists():
+            for agent_dir in project_agents_dir.iterdir():
+                if agent_dir.is_dir() and (agent_dir / "agent.md").exists():
+                    if agent_dir.name == MAIN_AGENT_ID:
+                        continue  # reserved — not a user-created named agent
+                    agents.append((agent_dir.name, agent_dir, "project"))
+
+        return agents
+
+    def find_agent(self, agent_name: str) -> tuple[Path, str] | None:
+        """Find an agent by name, checking project scope first then global.
+
+        Project-specific agents take precedence over global agents with the same name.
+
+        Args:
+            agent_name: Name of the agent to find
+
+        Returns:
+            Tuple of (agent_dir_path, scope) if found, None otherwise
+        """
+        # Check project agents first (higher priority)
+        project_agents_dir = self.get_project_agents_dir()
+        if project_agents_dir:
+            project_agent_dir = project_agents_dir / agent_name
+            if project_agent_dir.exists() and (project_agent_dir / "agent.md").exists():
+                return (project_agent_dir, "project")
+
+        # Check global agents
+        global_agent_dir = self.get_agents_root_dir() / agent_name
+        if global_agent_dir.exists() and (global_agent_dir / "agent.md").exists():
+            return (global_agent_dir, "global")
+
+        return None
+
+    def get_global_skills_dir(self) -> Path:
+        """Get the global skills directory (shared across all agents).
+
+        Returns:
+            Path to ~/.nova/skills/
+        """
+        return self.user_deepagents_dir / "skills"
+
+    def get_user_agent_md_path(self, agent_name: str) -> Path:
+        """Get user-level agent.md path for a specific agent.
+
+        Returns path regardless of whether the file exists.
+
+        Args:
+            agent_name: Name of the agent
+
+        Returns:
+            Path to ~/.nova/agents/{agent_name}/agent.md
+        """
+        return self.get_agents_root_dir() / agent_name / "agent.md"
+
+    def get_project_agent_md_path(self) -> Path | None:
+        """Get project-level agent.md path (legacy single-file method).
+
+        DEPRECATED: Use get_project_agent_md_paths() for full multi-file support.
+
+        Returns path regardless of whether the file exists.
+
+        Returns:
+            Path to {project_root}/.nova/NOVA.md, or None if not in a project
+        """
+        if not self.project_root:
+            return None
+        return self.project_root / ".nova" / "NOVA.md"
+
+    def get_project_agent_md_paths(self) -> list[Path]:
+        """Get all project-level memory file paths (CLAUDE.md, NOVA.md).
+
+        Returns every memory file that exists at the project root, ordered from
+        most general to most specific — matching Claude Code's hierarchical
+        loading behavior where all found files are combined.
+
+        Returns:
+            List of existing paths (empty if not in a project or no files found).
+        """
+        if not self.project_root:
+            return []
+        return _find_project_agent_md(self.project_root)
+
+    @staticmethod
+    def _is_valid_agent_name(agent_name: str) -> bool:
+        """Validate prevent invalid filesystem paths and security issues."""
+        if not agent_name or not agent_name.strip():
+            return False
+        # Allow only alphanumeric, hyphens, underscores, and whitespace
+        return bool(re.match(r"^[a-zA-Z0-9_\-\s]+$", agent_name))
+
+    def get_agent_dir(self, agent_name: str) -> Path:
+        """Get the global agent directory path.
+
+        Args:
+            agent_name: Name of the agent
+
+        Returns:
+            Path to ~/.nova/agents/{agent_name}
+        """
+        if not self._is_valid_agent_name(agent_name):
+            msg = (
+                f"Invalid agent name: {agent_name!r}. "
+                "Agent names can only contain letters, numbers, hyphens, underscores, and spaces."
+            )
+            raise ValueError(msg)
+        return self.get_agents_root_dir() / agent_name
+
+    def ensure_agent_dir(self, agent_name: str) -> Path:
+        """Ensure the global agent directory exists and return its path.
+
+        Args:
+            agent_name: Name of the agent
+
+        Returns:
+            Path to ~/.nova/agents/{agent_name}
+        """
+        if not self._is_valid_agent_name(agent_name):
+            msg = (
+                f"Invalid agent name: {agent_name!r}. "
+                "Agent names can only contain letters, numbers, hyphens, underscores, and spaces."
+            )
+            raise ValueError(msg)
+        agent_dir = self.get_agent_dir(agent_name)
+        agent_dir.mkdir(parents=True, exist_ok=True)
+        return agent_dir
+
+    def ensure_project_deepagents_dir(self) -> Path | None:
+        """Ensure the project .nova directory exists and return its path.
+
+        Returns:
+            Path to project .nova directory, or None if not in a project
+        """
+        if not self.project_root:
+            return None
+
+        project_deepagents_dir = self.project_root / ".nova"
+        project_deepagents_dir.mkdir(parents=True, exist_ok=True)
+        return project_deepagents_dir
+
+    def get_user_skills_dir(self, agent_name: str | None = None) -> Path:
+        """Get user-level skills directory path (global, shared across agents).
+
+        Args:
+            agent_name: DEPRECATED - kept for backward compatibility, ignored.
+                       Skills are now global at ~/.nova/skills/
+
+        Returns:
+            Path to ~/.nova/skills/ (global skills directory)
+        """
+        # Skills are now global, not per-agent
+        return self.get_global_skills_dir()
+
+    def ensure_user_skills_dir(self, agent_name: str | None = None) -> Path:
+        """Ensure user-level skills directory exists and return its path.
+
+        Args:
+            agent_name: DEPRECATED - kept for backward compatibility, ignored.
+                       Skills are now global at ~/.nova/skills/
+
+        Returns:
+            Path to ~/.nova/skills/ (global skills directory)
+        """
+        # Skills are now global, not per-agent
+        skills_dir = self.get_global_skills_dir()
+        skills_dir.mkdir(parents=True, exist_ok=True)
+        return skills_dir
+
+    def get_project_skills_dir(self) -> Path | None:
+        """Get project-level skills directory path (legacy .nova/skills/).
+
+        Returns:
+            Path to {project_root}/.nova/skills/, or None if not in a project
+        """
+        if not self.project_root:
+            return None
+        return self.project_root / ".nova" / "skills"
+
+    def get_project_skills_dirs(self) -> list[Path]:
+        """Get all project-level skills directories (both .claude/ and .nova/).
+
+        Checks both:
+        - {project_root}/.claude/skills/
+        - {project_root}/.nova/skills/
+
+        Returns:
+            List of existing skills directory paths (may be empty if not in a project)
+        """
+        if not self.project_root:
+            return []
+
+        return find_project_skills(self.project_root)
+
+    def ensure_project_skills_dir(self) -> Path | None:
+        """Ensure project-level skills directory exists and return its path.
+
+        Returns:
+            Path to {project_root}/.nova/skills/, or None if not in a project
+        """
+        if not self.project_root:
+            return None
+        skills_dir = self.get_project_skills_dir()
+        if skills_dir:
+            skills_dir.mkdir(parents=True, exist_ok=True)
+        return skills_dir
+
+
+# Global settings instance (initialized once)
+settings = Settings.from_environment()

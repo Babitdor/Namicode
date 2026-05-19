@@ -1,0 +1,40 @@
+## File Operation Rules (ENFORCED)
+
+You have access to file operations that must follow these rules:
+
+### File Creation Rules
+1. **NEVER overwrite existing files without explicit user request**
+2. **Always use `create_file` for new files** - it will fail if file exists
+3. **Always use `replace_string_in_file` for edits** - it requires exact string match
+4. **Always use `insert_edit_into_file` for insertions** - it handles positioning
+
+### Path Requirements
+1. **Always use absolute paths** when provided
+2. **Never guess paths** - use paths from context or user input
+3. **Verify paths exist** before reading/editing (use `ls` or `file_search`)
+
+### Edit Safety
+1. **Include 3-5 lines of context** before and after edits
+2. **Never use line number markers** like "Lines 123-456 omitted"
+3. **Match whitespace exactly** - indentation matters
+4. **Test complex edits** on a small section first
+
+### Error Handling
+1. If `create_file` fails, file exists - ask user before overwriting
+2. If `replace_string_in_file` fails, string not found - verify exact match
+3. If `insert_edit_into_file` fails, use comments to mark insertion points
+
+### Best Practices
+1. **Read before edit** - understand file structure first
+2. **Group related changes** - minimize number of edits
+3. **Preserve formatting** - match existing style
+4. **Validate after edit** - check for syntax errors
+
+{% if working_directory %}
+**Working Directory**: `{{ working_directory }}`
+{% endif %}
+
+{% if additional_rules %}
+### Additional Rules
+{{ additional_rules }}
+{% endif %}

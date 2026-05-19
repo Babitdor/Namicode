@@ -1,0 +1,1062 @@
+"""Command handlers for slash commands and bash execution.
+
+This module provides the main handle_command function that routes
+slash commands to their respective handlers.
+"""
+
+import argparse
+import re
+import asyncio
+import io
+import subprocess
+import sys
+import uuid
+from contextlib import contextmanager
+from datetime import UTC, datetime
+from pathlib import Path
+
+from novacode_cli.config.config import COLORS, NOVA_CODE_ASCII, console
+from novacode_cli.states.Session import RalphTaskStatus
+from novacode_cli.ui.ui_elements import TokenTracker, show_interactive_help
+
+# Import command handlers from component modules
+from novacode_cli.commands.init_handler import handle_init_command
+from novacode_cli.commands.mcp_handler import handle_mcp_command
+from novacode_cli.commands.model_handler import handle_model_command
+from novacode_cli.commands.hooks_handler import handle_hooks_command
+from novacode_cli.commands.session_commands import (
+    handle_compact_command,
+    handle_save_command,
+    handle_sessions_command,
+)
+from novacode_cli.commands.server_commands import (
+    handle_kill_command,
+    handle_servers_command,
+    handle_tests_command,
+)
+from novacode_cli.commands.skills_commands import handle_skills_command
+from novacode_cli.commands.skill_invoke import _try_skill_invocation
+from novacode_cli.commands.agents_commands import handle_agents_command
+from novacode_cli.commands.file_commands import (
+    handle_files_command,
+    handle_images_command,
+    handle_restore_command,
+)
+from novacode_cli.commands.vision_handler import handle_vision_command
+from novacode_cli.commands.plan_handler import handle_plan_command
+from novacode_cli.commands.trace_handler import handle_trace_command
+from novacode_cli.commands.ralph_handler import (
+    handle_ralph_command,
+    _stop_and_save_all_ralph_tasks,
+)
+from novacode_cli.commands.browser_use_handler import handle_browser_use_command
+from novacode_cli.commands.dream_handler import handle_dream_command
+from novacode_cli.commands.research_handler import handle_research_command
+from novacode_cli.commands.log_commands import handle_log_command
+
+
+@contextmanager
+def silent_console_mode():
+    """Context manager that suppresses all Rich console output.
+
+    Works by redirecting the console's file handle to /dev/null.
+    This suppresses all console output including print, status, tables, etc.
+    """
+    from novacode_cli.config.config import console
+
+    # Save the original file handle
+    original_file = console.file
+
+    try:
+        # Redirect console output to a black hole (StringIO that's never read)
+        console.file = io.StringIO()
+        yield
+    finally:
+        # Restore the original file handle
+        console.file = original_file
+
+
+async def handle_command(
+    command: str,
+    agent,
+    token_tracker: TokenTracker,
+    session_state,
+    assistant_id: str,
+    session_manager=None,
+    model_name: str | None = None,
+    image_tracker=None,
+) -> str | bool:
+    """Handle slash commands. Returns 'exit' to exit, True if handled, False to pass to agent."""
+    # Parse command and optional arguments
+    cmd_parts = command.strip().lstrip("/").split(maxsplit=1)
+    cmd = cmd_parts[0].lower()
+    cmd_args = cmd_parts[1] if len(cmd_parts) > 1 else None
+
+    if cmd in ["quit", "exit", "q"]:
+        # Check if Ralph is still running
+        running_ralph_tasks = [
+            task
+            for task in session_state.background_ralph_tasks.values()
+            if task.status == RalphTaskStatus.RUNNING
+        ]
+
+        if running_ralph_tasks:
+            print()
+            print("⚠️  Ralph is still running in the background")
+            print()
+
+            # Show which tasks are running
+            for task in running_ralph_tasks:
+                elapsed = (datetime.now(UTC) - task.created_at).total_seconds()
+                print(
+                    f"  ⏳ Iteration {task.iteration}/{task.max_iterations} "
+                    f"(elapsed: {elapsed:.0f}s)"
+                )
+                task_desc = (
+                    task.task_description[:50] + "..."
+                    if len(task.task_description) > 50
+                    else task.task_description
+                )
+                print(f"  📝 {task_desc}")
+
+            print()
+            print("What would you like to do?")
+            print(
+                "  1 - Stop Ralph and save checkpoint "
+                "(resume later with /ralph --resume)"
+            )
+            print("  2 - Keep Ralph running and exit anyway")
+            print("  3 - Cancel exit and continue")
+            print()
+            sys.stdout.flush()
+
+            # Get user choice with validation using async-safe approach
+            loop = asyncio.get_event_loop()
+            choice = None
+            while True:
+                try:
+                    choice = await loop.run_in_executor(
+                        None, input, "Enter your choice (1-3): "
+                    )
+                    choice = choice.strip()
+                    if choice in ["1", "2", "3"]:
+                        break
+                    print("Invalid choice. Please enter 1, 2, or 3.")
+                    sys.stdout.flush()
+                except EOFError:
+                    return True
+
+            print()
+            sys.stdout.flush()
+
+            if choice == "1":
+                if _stop_and_save_all_ralph_tasks(session_state):
+                    console.print()
+                    console.print(
+                        "[green]✓[/green] Ralph has been stopped and state saved"
+                    )
+                    console.print(
+                        "[dim]You can resume your work anytime with: /ralph --resume[/dim]"
+                    )
+                    console.print()
+                    return "exit"
+            elif choice == "2":
+                print("Ralph will continue running in the background.")
+                print()
+                sys.stdout.flush()
+                return "exit"
+            else:
+                print("Exit cancelled. Continuing...")
+                print()
+                sys.stdout.flush()
+                return True
+
+        return "exit"
+
+    if cmd == "clear":
+        session_state.thread_id = str(uuid.uuid4())
+        token_tracker.reset()
+        console.clear()
+        console.print(NOVA_CODE_ASCII, style=f"bold {COLORS['primary']}")
+        console.print()
+        console.print(
+            "... Fresh start! Conversation history cleared.",
+            style=COLORS["agent"],
+        )
+        console.print()
+        return True
+
+    if cmd == "help":
+        show_interactive_help()
+        return True
+
+    if cmd == "tokens":
+        token_tracker.display_session()
+        return True
+
+    if cmd == "context":
+        try:
+            token_tracker.display_context()
+        except Exception as e:
+            console.print(f"[red]Error running /context command: {e}[/red]")
+        return True
+
+    if cmd == "compact":
+        try:
+            return await handle_compact_command(
+                agent, session_state, token_tracker, focus_instructions=cmd_args
+            )
+        except Exception as e:
+            console.print(f"[red]Error running /compact command: {e}[/red]")
+        return True
+
+    if cmd == "init":
+        try:
+            await handle_init_command(agent, session_state, assistant_id, token_tracker, cmd_args=cmd_args)
+        except Exception as e:
+            console.print(f"[red]Error running /init command: {e}[/red]")
+        return True
+
+    if cmd == "mcp":
+        try:
+            return await handle_mcp_command()
+        except Exception as e:
+            console.print(f"[red]Error running /mcp command: {e}[/red]")
+        return True
+
+    if cmd == "model":
+        try:
+            return await handle_model_command(session_state=session_state)
+        except Exception as e:
+            console.print(f"[red]Error running /model command: {e}[/red]")
+        return True
+
+    if cmd == "hooks":
+        try:
+            return await handle_hooks_command(cmd_args=cmd_args)
+        except Exception as e:
+            console.print(f"[red]Error running /hooks command: {e}[/red]")
+        return True
+
+    if cmd == "sessions":
+        try:
+            return await handle_sessions_command(session_state)
+        except Exception as e:
+            console.print(f"[red]Error running /sessions command: {e}[/red]")
+        return True
+
+    if cmd == "save":
+        try:
+            return await handle_save_command(
+                agent, session_state, assistant_id, session_manager, model_name
+            )
+        except Exception as e:
+            console.print(f"[red]Error running /save command: {e}[/red]")
+        return True
+
+    if cmd == "servers":
+        try:
+            return await handle_servers_command(session_state)
+        except Exception as e:
+            console.print(f"[red]Error running /servers command: {e}[/red]")
+        return True
+
+    if cmd == "tests":
+        try:
+            return await handle_tests_command(session_state, cmd_args)
+        except Exception as e:
+            console.print(f"[red]Error running /tests command: {e}[/red]")
+        return True
+
+    if cmd == "kill":
+        try:
+            return await handle_kill_command(session_state, cmd_args)
+        except Exception as e:
+            console.print(f"[red]Error running /kill command: {e}[/red]")
+        return True
+
+    if cmd == "skills":
+        try:
+            return await handle_skills_command(cmd_args, assistant_id)
+        except Exception as e:
+            console.print(f"[red]Error running /skills command: {e}[/red]")
+        return True
+
+    if cmd == "agents":
+        try:
+            return await handle_agents_command(cmd_args, assistant_id)
+        except Exception as e:
+            console.print(f"[red]Error running /agents command: {e}[/red]")
+        return True
+
+    if cmd == "trace":
+        try:
+            args_list = cmd_args.split() if cmd_args else []
+            return await handle_trace_command(args_list)
+        except Exception as e:
+            console.print(f"[red]Error running /trace command: {e}[/red]")
+        return True
+
+    if cmd == "files":
+        try:
+            return await handle_files_command()
+        except Exception as e:
+            console.print(f"[red]Error running /files command: {e}[/red]")
+        return True
+
+    if cmd == "plan":
+        try:
+            return await handle_plan_command(agent, session_state, cmd_args)
+        except Exception as e:
+            console.print(f"[red]Error running /plan command: {e}[/red]")
+        return True
+
+    if cmd == "verbose":
+        new_state = session_state.toggle_verbose()
+        if new_state:
+            console.print()
+            console.print(
+                "  [bold green]Verbose mode enabled[/bold green] — "
+                "internal agent context will be shown"
+            )
+            console.print()
+        else:
+            console.print()
+            console.print(
+                "  [bold yellow]Verbose mode disabled[/bold yellow] — "
+                "internal agent context will be collapsed"
+            )
+            console.print()
+        return True
+
+    if cmd == "decompose":
+        current = getattr(session_state, "prompt_decomposition_enabled", True)
+        session_state.prompt_decomposition_enabled = not current
+        new_val = session_state.prompt_decomposition_enabled
+        if new_val:
+            console.print()
+            console.print(
+                "  [bold green]Prompt decomposition enabled[/bold green] — "
+                "multi-step requests will be split into sequential sub-prompts"
+            )
+            console.print()
+        else:
+            console.print()
+            console.print(
+                "  [bold yellow]Prompt decomposition disabled[/bold yellow] — "
+                "all requests sent as a single prompt"
+            )
+            console.print()
+        return True
+
+    if cmd == "steer":
+        try:
+            return await _handle_steer_command(cmd_args, session_state, console)
+        except Exception as e:
+            console.print(f"[red]Error running /steer command: {e}[/red]")
+        return True
+
+    if cmd == "remote":
+        try:
+            return await _handle_remote_command(cmd_args, session_state, console)
+        except Exception as e:
+            import traceback
+            console.print(f"[red]Error running /remote command: {e}[/red]")
+            traceback.print_exc()
+        return True
+
+    if cmd == "images":
+        try:
+            return await handle_images_command(cmd_args, image_tracker)
+        except Exception as e:
+            console.print(f"[red]Error running /images command: {e}[/red]")
+        return True
+
+    if cmd == "vision":
+        try:
+            return await handle_vision_command(cmd_args, image_tracker)
+        except Exception as e:
+            console.print(f"[red]Error running /vision command: {e}[/red]")
+        return True
+
+    if cmd == "restore":
+        try:
+            return await handle_restore_command(cmd_args)
+        except Exception as e:
+            console.print(f"[red]Error running /restore command: {e}[/red]")
+        return True
+
+    if cmd == "ralph":
+        try:
+            return await handle_ralph_command(
+                agent, session_state, assistant_id, token_tracker, cmd_args
+            )
+        except Exception as e:
+            console.print(f"[red]Error running /ralph command: {e}[/red]")
+        return True
+
+    if cmd == "browser-use":
+        try:
+            return await handle_browser_use_command(
+                agent, session_state, assistant_id, token_tracker, cmd_args
+            )
+        except Exception as e:
+            console.print(f"[red]Error running /browser-use command: {e}[/red]")
+        return True
+
+    if cmd == "dream":
+        try:
+            result = await handle_dream_command(session_state)
+            # If result is a string (prompt), return it for agent processing
+            # If result is True, command was handled
+            return result
+        except Exception as e:
+            console.print(f"[red]Error running /dream command: {e}[/red]")
+        return True
+
+    if cmd == "research":
+        try:
+            await handle_research_command(
+                agent=agent,
+                session_state=session_state,
+                token_tracker=token_tracker,
+                cmd_args=cmd_args,
+            )
+        except Exception as e:
+            console.print(f"[red]Error running /research command: {e}[/red]")
+        return True
+
+    if cmd == "log":
+        try:
+            workspace_root = str(getattr(session_state, "workspace_root", None) or "")
+            return await handle_log_command(cmd_args, workspace_root or None)
+        except Exception as e:
+            console.print(f"[red]Error running /log command: {e}[/red]")
+        return True
+
+    if cmd == "reindex":
+        try:
+            from novacode_cli.tools.code_search_tools import (
+                _reset_index,
+                _get_index,
+                _is_semble_available,
+            )
+            from novacode_cli.config.config import settings as _settings
+            if not _is_semble_available():
+                console.print()
+                console.print("[yellow]Code search is not available.[/yellow]")
+                console.print(
+                    "[dim]Install the 'semble' package to enable semantic "
+                    "code search:[/dim]"
+                )
+                console.print("[dim]  pip install semble[/dim]")
+                console.print()
+            else:
+                _reset_index()
+                workspace = _settings.project_root or Path.cwd()
+                with console.status(
+                    f"[bold {COLORS['primary']}]Re-indexing codebase...[/]",
+                    spinner="dots",
+                ):
+                    idx = _get_index(workspace)
+                if idx is not None:
+                    console.print(
+                        "[green]\u2713[/green] Code search index rebuilt for "
+                        f"[cyan]{workspace}[/cyan]"
+                    )
+                else:
+                    console.print(
+                        "[red]Failed to build code search index.[/red]"
+                    )
+                console.print()
+        except Exception as e:
+            console.print(f"[red]Error running /reindex command: {e}[/red]")
+        return True
+
+    # Check if the command matches a skill name (e.g., /api-testing, /docker-deploy)
+    try:
+        skill_prompt = await _try_skill_invocation(
+            cmd, cmd_args, session_state, assistant_id
+        )
+        if skill_prompt is not None:
+            return skill_prompt
+    except Exception as e:
+        console.print(f"[red]Error running /{cmd} as skill: {e}[/red]")
+        return True
+
+    console.print()
+    console.print(f"[yellow]Unknown command: /{cmd}[/yellow]")
+    console.print("[dim]Type /help for available commands.[/dim]")
+    console.print()
+    return True
+
+
+def execute_bash_command(command: str) -> bool:
+    """Execute a bash command and display output. Returns True if handled."""
+    cmd = command.strip().lstrip("!")
+
+    if not cmd:
+        return True
+
+    try:
+        console.print()
+        console.print(f"[dim]$ {cmd}[/dim]")
+
+        result = subprocess.run(
+            cmd,
+            check=False,
+            shell=True,
+            capture_output=True,
+            timeout=30,
+            cwd=Path.cwd(),
+        )
+
+        stdout = (result.stdout or b"").decode("utf-8", errors="replace")
+        stderr = (result.stderr or b"").decode("utf-8", errors="replace")
+
+        if stdout.strip():
+            console.print(stdout, style=COLORS["dim"], markup=False)
+        if stderr.strip():
+            console.print(stderr, style="red", markup=False)
+
+        if result.returncode != 0:
+            console.print(f"[dim]Exit code: {result.returncode}[/dim]")
+
+        console.print()
+        return True
+
+    except subprocess.TimeoutExpired:
+        console.print("[red]Command timed out after 30 seconds[/red]")
+        console.print()
+        return True
+    except Exception as e:
+        console.print(f"[red]Error executing command: {e}[/red]")
+        console.print()
+        return True
+
+
+def execute_skills_command(args: argparse.Namespace) -> None:
+    """Execute skills subcommands based on parsed arguments.
+
+    Args:
+        args: Parsed command line arguments with skills_command attribute
+    """
+    from novacode_cli.skills.skill_creation import (
+        _add,
+        _create,
+        _find,
+        _info,
+        _list,
+        _remove,
+        _update,
+        _validate_name,
+    )
+
+    if args.agent:
+        is_valid, error_msg = _validate_name(args.agent)
+        if not is_valid:
+            console.print(
+                f"[bold red]Error:[/bold red] Invalid agent name: {error_msg}"
+            )
+            console.print(
+                "[dim]Agent names must only contain letters, numbers, "
+                "hyphens, and underscores.[/dim]",
+                style=COLORS["dim"],
+            )
+            return
+
+    if args.skills_command == "list":
+        _list(
+            agent=args.agent,
+            project=args.project,
+            global_scope=getattr(args, "global_scope", False),
+        )
+    elif args.skills_command == "create":
+        _create(
+            args.name,
+            agent=args.agent,
+            project=args.project,
+            global_scope=getattr(args, "global_scope", False),
+        )
+    elif args.skills_command == "info":
+        _info(
+            args.name,
+            agent=args.agent,
+            project=args.project,
+            global_scope=getattr(args, "global_scope", False),
+        )
+    elif args.skills_command == "add":
+        _add(
+            args.url,
+            agent=args.agent,
+            project=args.project,
+            global_scope=getattr(args, "global_scope", False),
+            force=getattr(args, "force", False),
+            skill_name=getattr(args, "skill_name", None),
+        )
+    elif args.skills_command == "remove":
+        _remove(
+            args.name,
+            agent=args.agent,
+            project=args.project,
+            global_scope=getattr(args, "global_scope", False),
+            yes=getattr(args, "yes", False),
+        )
+    elif args.skills_command == "update":
+        _update(
+            skill_name=getattr(args, "name", None),
+            agent=args.agent,
+            project=args.project,
+            global_scope=getattr(args, "global_scope", False),
+            all_skills=getattr(args, "all_skills", False),
+        )
+    elif args.skills_command in ("find", "search"):
+        _find(args.query)
+    else:
+        console.print("[yellow]Please specify a skills subcommand.[/yellow]")
+        console.print("\n[bold]Usage:[/bold]", style=COLORS["primary"])
+        console.print("  Nova skills <command> [options]\n")
+        console.print("[bold]Available commands:[/bold]", style=COLORS["primary"])
+        console.print("  list                    List all available skills")
+        console.print("  create <name>           Create a new skill")
+        console.print(
+            "  info <name>             Show detailed information about a skill"
+        )
+        console.print("  add <url>               Install a skill from GitHub URL")
+        console.print("  remove <name>           Remove an installed skill")
+        console.print(
+            "  update [name]           Update skill(s) from their original source"
+        )
+        console.print("  find <query>            Search GitHub for skills")
+        console.print("  search <query>          Alias for find")
+        console.print("\n[bold]Examples:[/bold]", style=COLORS["primary"])
+        console.print(
+            "  Nova skills add https://github.com/owner/repo --skill my-skill"
+        )
+        console.print("  Nova skills remove my-skill -y")
+        console.print("  Nova skills update my-skill")
+        console.print("  Nova skills update --all --global")
+        console.print("  Nova skills find kubernetes")
+        console.print(
+            "\n[dim]For more help on a specific command:[/dim]", style=COLORS["dim"]
+        )
+        console.print("  Nova skills <command> --help", style=COLORS["dim"])
+
+
+async def _handle_steer_command(cmd_args: str | None, session_state, console) -> bool:
+    """Handle the /steer command for managing persistent steering instructions.
+
+    Subcommands:
+        /steer <instruction>     Add a new steering instruction
+        /steer list              Show all active steering instructions
+        /steer clear             Remove all steering instructions
+        /steer remove <N>        Remove instruction number N
+
+    If no subcommand is given, defaults to 'list'.
+
+    Args:
+        cmd_args: Arguments after /steer.
+        session_state: Current session state.
+        console: Rich console for output.
+
+    Returns:
+        True (command was handled).
+    """
+    from novacode_cli.bootstrap.steering import (
+        SteeringInstruction,
+        classify_instruction,
+        format_steering_status,
+    )
+
+    args = (cmd_args or "").strip()
+
+    # Initialize the list if it doesn't exist yet
+    if not hasattr(session_state, "steering_instructions"):
+        session_state.steering_instructions = []
+
+    instructions = session_state.steering_instructions
+
+    # No args or "list" → show current instructions
+    if not args or args.lower() in ("list", "ls", "show"):
+        console.print()
+        console.print(format_steering_status(instructions))
+        console.print()
+        console.print("[dim]Usage: /steer <instruction>  |  /steer remove <N>  |  /steer clear[/dim]")
+        console.print()
+        return True
+
+    # "clear" → remove all
+    if args.lower() in ("clear", "reset", "clear all"):
+        if instructions:
+            count = len(instructions)
+            instructions.clear()
+            console.print()
+            console.print(f"  [green]\u2713[/green] Cleared {count} steering instruction(s)")
+            console.print()
+        else:
+            console.print()
+            console.print("[dim]No steering instructions to clear.[/dim]")
+            console.print()
+        return True
+
+    # "remove <N>" → remove by index
+    remove_match = re.match(r"(?:remove|rm|delete|del)\s+(\d+)", args, re.IGNORECASE)
+    if remove_match:
+        idx = int(remove_match.group(1)) - 1  # 1-based to 0-based
+        if 0 <= idx < len(instructions):
+            removed = instructions.pop(idx)
+            console.print()
+            console.print(
+                f"  [green]\u2713[/green] Removed: [bold]{removed.label}[/bold]: {removed.instruction}"
+            )
+            console.print()
+        else:
+            console.print()
+            console.print(f"  [yellow]Invalid index: {idx + 1}. Use /steer list to see numbered items.[/yellow]")
+            console.print()
+        return True
+
+    # Otherwise, treat the entire args as a new instruction
+    label = classify_instruction(args)
+    instructions.append(SteeringInstruction(label=label, instruction=args))
+
+    console.print()
+    console.print(
+        f"  [green]\u2713[/green] Added steering instruction: [bold]{label}[/bold]"
+    )
+    console.print(f"  {args}")
+    console.print()
+    console.print(
+        f"  [dim]{len(instructions)} instruction(s) active. "
+        "These will be injected into every model call this session.[/dim]"
+    )
+    console.print()
+    return True
+
+
+async def _handle_remote_command(cmd_args: str | None, session_state, console) -> bool:
+    """Handle the /remote command for managing remote bridges.
+
+    Tokens and IDs are saved to ~/.nova/remote.json so they can be reused
+    without re-typing.  Use /remote forget to delete them.
+    """
+    from novacode_cli.remote.bridge import RemoteBridgeManager, RemotePlatform
+    from novacode_cli.remote.config import (
+        load_remote_config, save_remote_config,
+        save_discord_config, save_telegram_config,
+    )
+
+    # Get or create the bridge manager on the session state
+    if session_state._remote_bridge_manager is None:
+        queue = getattr(session_state, "_remote_message_queue", None)
+        if queue is None:
+            queue = asyncio.Queue()
+            session_state._remote_message_queue = queue
+        session_state._remote_bridge_manager = RemoteBridgeManager(queue)
+
+    manager: RemoteBridgeManager = session_state._remote_bridge_manager
+    args = (cmd_args or "").strip()
+
+    # ── /remote (no args) or /remote status ────────────────────────
+    if not args or args.lower() in ("status", "list", "ls"):
+        bridges = manager.active_bridges
+        saved = load_remote_config()
+        console.print()
+        if not bridges:
+            console.print("[dim]No remote bridges active.[/dim]")
+        else:
+            console.print(f"[cyan]{len(bridges)} bridge(s) active:[/cyan]")
+            for b in bridges:
+                status = b["status"]
+                if status == "running":
+                    icon = "\U0001f7e2"
+                elif "error" in status.lower():
+                    icon = "\U0001f534"
+                else:
+                    icon = "\U0001f7e1"
+                bot_info = ""
+                if b.get("bot_user"):
+                    bot_info = f" (@{b['bot_user']})"
+                console.print(
+                    f"  {icon} [bold]{b['platform']}[/bold]{bot_info} "
+                    f"\u2014 chat: {b['chat_id']} \u2014 {status}"
+                )
+
+        # Show saved config
+        if saved:
+            console.print()
+            console.print("[dim]Saved configuration:[/dim]")
+            if "discord" in saved:
+                d = saved["discord"]
+                has_token = "\u2713" if d.get("token") else "\u2717"
+                has_channel = "\u2713" if d.get("channel_id") else "\u2717"
+                console.print(f"  [dim]Discord:  token {has_token}  channel {has_channel} {d.get('channel_id', '')}[/dim]")
+            if "telegram" in saved:
+                t = saved["telegram"]
+                has_token = "\u2713" if t.get("token") else "\u2717"
+                has_chat = "\u2713" if t.get("chat_id") else "\u2717"
+                console.print(f"  [dim]Telegram: token {has_token}  chat_id {has_chat} {t.get('chat_id', '')}[/dim]")
+
+        console.print()
+        console.print("[dim]Quick start:[/dim]")
+        console.print("  [dim]/remote start discord    (uses saved token & channel)[/dim]")
+        console.print("  [dim]/remote start discord --token TOKEN --channel ID[/dim]")
+        console.print("  [dim]/remote start telegram --token TOKEN --chat ID[/dim]")
+        console.print("  [dim]/remote test  |  /remote stop  |  /remote forget[/dim]")
+
+        if not ("discord" in saved and saved.get("discord", {}).get("token")):
+            console.print()
+            console.print("[dim]Discord setup:[/dim]")
+            console.print("  [dim]1. Create app at https://discord.com/developers/applications[/dim]")
+            console.print("  [dim]2. Add Bot, enable [bold]Message Content Intent[/bold][/dim]")
+            console.print("  [dim]3. Generate token, invite bot to server[/dim]")
+        console.print()
+        return True
+
+    # ── /remote stop ──────────────────────────────────────────────
+    if args.lower() in ("stop", "stop all"):
+        await manager.stop_all()
+        console.print()
+        console.print("  [green]\u2713[/green] All remote bridges stopped")
+        console.print()
+        return True
+
+    # ── /remote stop BRIDGE_ID ─────────────────────────────────────
+    stop_match = re.match(r"stop\s+(\S+)", args, re.IGNORECASE)
+    if stop_match:
+        bridge_id = stop_match.group(1)
+        await manager.stop_bridge(bridge_id)
+        console.print()
+        console.print(f"  [green]\u2713[/green] Bridge {bridge_id} stopped")
+        console.print()
+        return True
+
+    # ── /remote test ──────────────────────────────────────────────
+    if args.lower().startswith("test"):
+        bridges = manager.active_bridges
+        if not bridges:
+            console.print()
+            console.print("[yellow]No active bridges to test.[/yellow]")
+            console.print("  [dim]Start a bridge first: /remote start discord[/dim]")
+            console.print()
+            return True
+
+        test_msg = "\u2709 [Remote Bridge Test] If you can see this, the bridge is working!"
+        sent = False
+        for b in bridges:
+            bridge_id = b["id"]
+            entry_dict = manager._bridges.get(bridge_id, {})
+            bridge_obj = entry_dict.get("bridge")
+            if bridge_obj is None:
+                continue
+
+            if b["platform"] == "discord" and hasattr(bridge_obj, "_client") and bridge_obj._client:
+                client = bridge_obj._client
+                channel_id = int(b["chat_id"])
+                channel = client.get_channel(channel_id)
+                if channel is None:
+                    try:
+                        channel = await client.fetch_channel(channel_id)
+                    except Exception as e:
+                        console.print(f"  [red]Channel {channel_id} not found: {e}[/red]")
+                        continue
+                if channel:
+                    try:
+                        await channel.send(test_msg)
+                        console.print(f"  [green]\u2713[/green] Test message sent to Discord channel {channel_id}")
+                        sent = True
+                    except Exception as e:
+                        console.print(f"  [red]Failed to send: {e}[/red]")
+
+            elif b["platform"] == "telegram" and hasattr(bridge_obj, "_session"):
+                config = entry_dict.get("config")
+                if config:
+                    try:
+                        import aiohttp
+                        async with aiohttp.ClientSession() as session:
+                            url = f"https://api.telegram.org/bot{config.token}/sendMessage"
+                            payload = {"chat_id": config.chat_id, "text": test_msg}
+                            async with session.post(url, json=payload) as resp:
+                                data = await resp.json()
+                                if data.get("ok"):
+                                    console.print(f"  [green]\u2713[/green] Test sent to Telegram chat {config.chat_id}")
+                                    sent = True
+                                else:
+                                    desc = data.get("description", "Unknown error")
+                                    console.print(f"  [red]Telegram API error: {desc}[/red]")
+                    except Exception as e:
+                        console.print(f"  [red]Failed to send: {e}[/red]")
+
+        if not sent and bridges:
+            console.print("  [yellow]Could not send through any bridge. Try /remote status.[/yellow]")
+        console.print()
+        return True
+
+    # ── /remote forget [discord|telegram] ──────────────────────────
+    forget_match = re.match(r"forget(?:\s+(discord|telegram))?$", args, re.IGNORECASE)
+    if forget_match:
+        platform = (forget_match.group(1) or "").lower()
+        saved = load_remote_config()
+        if platform and platform in saved:
+            del saved[platform]
+            save_remote_config(saved)
+            console.print()
+            console.print(f"  [green]\u2713[/green] Removed saved {platform} configuration")
+            console.print()
+        elif not platform:
+            save_remote_config({})
+            console.print()
+            console.print("  [green]\u2713[/green] Removed all saved remote configurations")
+            console.print()
+        else:
+            console.print()
+            console.print(f"  [yellow]No saved {platform} configuration to remove[/yellow]")
+            console.print()
+        return True
+
+    # ── /remote start discord|telegram [--token T] [--channel ID|--chat ID] ──
+    start_match = re.match(r"start\s+(discord|telegram)\s*(.*)", args, re.IGNORECASE)
+    if start_match:
+        platform_str = start_match.group(1).lower()
+        rest = start_match.group(2).strip()
+
+        # Parse --token and --channel/--chat from args
+        token = None
+        chat_id = None
+
+        token_match = re.search(r"--token\s+(\S+)", rest)
+        if token_match:
+            token = token_match.group(1)
+
+        if platform_str == "discord":
+            channel_match = re.search(r"--channel\s+(\d+)", rest)
+            if channel_match:
+                chat_id = channel_match.group(1)
+        else:
+            chat_match = re.search(r"(?:--chat|--chat-id)\s+(-?\d+)", rest)
+            if chat_match:
+                chat_id = chat_match.group(1)
+
+        # ── Load saved config as fallback ──
+        saved = load_remote_config()
+
+        if platform_str == "discord":
+            saved_discord = saved.get("discord", {})
+            if token is None:
+                token = saved_discord.get("token")
+            if chat_id is None:
+                chat_id = saved_discord.get("channel_id")
+
+            if not token:
+                console.print()
+                console.print("  [red]No Discord token provided or saved.[/red]")
+                console.print("  [dim]Usage: /remote start discord --token <TOKEN> [--channel <ID>][/dim]")
+                console.print("  [dim]The token will be saved for future use.[/dim]")
+                console.print()
+                return True
+
+            # Auto-create channel if not specified
+            if not chat_id:
+                # Derive channel name from project directory
+                from pathlib import Path
+                project_name = Path.cwd().name.lower().replace(" ", "-")
+                channel_name = re.sub(r"[^a-z0-9-]", "-", project_name).strip("-") or "nova-code"
+
+                console.print()
+                console.print(f"  No --channel specified. Creating #{channel_name}...")
+
+                success, error_msg = await manager.start_discord_auto_channel(
+                    token=token, channel_name=channel_name
+                )
+                if not success:
+                    console.print(f"  [red]✗[/red] Could not create channel: {error_msg}")
+                    console.print("  [dim]Specify a channel ID with --channel <ID> instead.[/dim]")
+                    console.print("  [dim]Tip: Right-click a Discord channel → Copy Channel ID[/dim]")
+                    console.print()
+                    return True
+
+                # Get the channel ID from the bridge config
+                for bid, entry in manager._bridges.items():
+                    if bid.startswith("discord:"):
+                        chat_id = entry["config"].chat_id
+                        break
+
+                if not chat_id:
+                    console.print("  [red]✗[/red] Failed to get auto-created channel ID")
+                    console.print()
+                    return True
+
+                console.print(f"  [green]✓[/green] Created channel #{channel_name} (ID: {chat_id})")
+                # Save the auto-created channel
+                save_discord_config(token, str(chat_id))
+
+        elif platform_str == "telegram":
+            saved_telegram = saved.get("telegram", {})
+            if token is None:
+                token = saved_telegram.get("token")
+            if chat_id is None:
+                chat_id = saved_telegram.get("chat_id")
+
+            if not token:
+                console.print()
+                console.print("  [red]No Telegram token provided or saved.[/red]")
+                console.print("  [dim]Usage: /remote start telegram --token <TOKEN> [--chat <ID>][/dim]")
+                console.print("  [dim]The token will be saved for future use.[/dim]")
+                console.print()
+                return True
+
+            if not chat_id:
+                console.print()
+                console.print("  [yellow]No --chat specified. Send any message to your Telegram bot,[/yellow]")
+                console.print("  [yellow]then use /remote start telegram --chat <CHAT_ID>[/yellow]")
+                console.print()
+                return True
+
+        # ── Save the config ──
+        if platform_str == "discord":
+            save_discord_config(token, str(chat_id))
+        else:
+            save_telegram_config(token, str(chat_id))
+
+        # ── Start the bridge ──
+        console.print()
+        console.print(f"  Starting {platform_str.title()} bridge (chat: {chat_id})...")
+
+        try:
+            if platform_str == "discord":
+                success, error_msg = await manager.start_discord(token=token, channel_id=chat_id)
+            else:
+                success, error_msg = await manager.start_telegram(token=token, chat_id=int(chat_id))
+        except Exception as e:
+            import traceback
+            console.print(f"  [red]\u2717[/red] Exception starting {platform_str.title()} bridge: {e}")
+            traceback.print_exc()
+            console.print()
+            return True
+
+        if success:
+            bridge_id = f"{platform_str}:{chat_id}"
+            bridge_info = manager.get_bridge(bridge_id)
+            bot_user = ""
+            if bridge_info and bridge_info.get("bot_user"):
+                bot_user = f" (@{bridge_info['bot_user']})"
+            console.print(f"  [green]\u2713[/green] {platform_str.title()} bridge started!{bot_user}")
+            console.print("  [dim]Credentials saved to ~/.nova/remote.json[/dim]")
+            if platform_str == "discord":
+                console.print("  [dim]Make sure [bold]Message Content Intent[/bold] is enabled in your bot settings.[/dim]")
+        else:
+            console.print(f"  [red]\u2717[/red] Failed to start {platform_str.title()} bridge: {error_msg}")
+        console.print()
+        return True
+
+    # ── Unknown subcommand ───────────────────────────────────────
+    console.print()
+    console.print(f"  [yellow]Unknown /remote subcommand: {args[:40]}[/yellow]")
+    console.print()
+    console.print("[dim]Usage:[/dim]")
+    console.print("  [dim]/remote start discord [--token TOKEN] [--channel ID][/dim]")
+    console.print("  [dim]/remote start telegram [--token TOKEN] [--chat ID][/dim]")
+    console.print("  [dim]/remote status  |  /remote test  |  /remote stop[/dim]")
+    console.print("  [dim]/remote forget [discord|telegram][/dim]")
+    console.print()
+    return True

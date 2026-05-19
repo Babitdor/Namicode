@@ -1,0 +1,182 @@
+[build-system]
+requires = ["setuptools >= 77.0.3"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "novacode-cli"
+version = "0.0.19"
+description = "Agentic Coding Tool that runs in your terminal"
+authors = [{ name = "Babitdor", email = "babitdorbryan14@gmail.com" }]
+readme = {file = "README.md", content-type = "text/markdown"}
+license = "MIT"
+keywords = ["nova", "code-cli", "nova-code", "agentic-code-cli"]
+
+requires-python = ">=3.11,<4.0"
+classifiers = [
+     "Development Status :: 3 - Alpha",
+     "Intended Audience :: Developers",
+     "Programming Language :: Python :: 3.11",
+     "Programming Language :: Python :: 3.12",                                                           
+     "Programming Language :: Python :: 3.13",
+     "Framework :: LangChain-DeepAgents",
+ ]
+dependencies = [
+    "requests",
+    "jinja2>=3.1.0",
+    "rich>=13.0.0",
+    "prompt-toolkit>=3.0.52",
+    # LangChain ecosystem (updated 2025-01)
+    "langchain>=1.2.13",
+    "langchain-core>=1.2.22",
+    "langchain-openai>=1.0.0",
+    "langchain-anthropic>=1.4.0",
+    "langchain-ollama>=1.0.1",
+    "langchain-google-genai>=4.2.1",
+    "langchain-mcp-adapters>=0.2.2",
+    "langgraph>=1.1.3",
+    "langsmith>=0.7.22",
+    # Other dependencies
+    "tavily-python",
+    "deepagents",
+    "python-dotenv",
+    "daytona>=0.113.0",
+    "modal>=0.65.0",
+    "markdownify>=0.13.0",
+    "runloop-api-client>=0.69.0",
+    "transformers>=4.57.3",
+    "mcp>=1.0.0",
+    "docker>=7.0.0",
+    "keyring>=24.0.0",
+    "nest-asyncio>=1.6.0",
+    "pillow",
+    "e2b-code-interpreter>=1.0.0",
+    "aiosqlite>=0.19.0",
+    # Format conversion and code formatting tools
+    "pyyaml>=6.0",
+    "tomli-w>=1.0.0",
+    "black>=24.0.0",
+    # Web search (no API key required)
+    "ddgs>=7.0.0",
+    # Image generation (Replicate API)
+    "replicate>=0.25.0",
+    # Code quality tools (linting, formatting, type checking)
+    "ruff>=0.8.0",
+    "mypy>=1.13.0",
+    "deepagents",
+    "browser-use>=0.1.0",
+    "playwright>=1.40.0",
+    "graphifyy>=0.4.0",
+]
+
+[project.optional-dependencies]
+graphify = [
+    "graphifyy>=0.4.0",
+]
+code-search = [
+    "semble>=0.1.8",
+]
+remote-discord = [
+    "discord.py>=2.3.0",
+]
+voice = [
+    "vision-agents[getstream,gemini,deepgram,elevenlabs]>=0.1.0",
+]
+
+[project.urls]
+    Homepage = "https://github.com/Babitdor/NovaCode"
+    Repository = "https://github.com/Babitdor/NovaCode"
+    Issues = "https://github.com/Babitdor/NovaCode/issues"
+    Changelog = "https://github.com/Babitdor/NovaCode/blob/main/CHANGELOG.md"
+
+[project.scripts]
+nova = "novacode_cli.main:cli_main"
+
+[tool.setuptools.package-data]
+"*" = ["*.jinja"]
+
+[tool.ruff]
+line-length = 100
+exclude = []
+
+[tool.ruff.format]
+docstring-code-format = true  # Formats code blocks in docstrings
+
+[tool.ruff.lint]
+select = [
+    "ALL"  # Enable all rules by default
+]
+ignore = [
+    "COM812",  # Messes with the formatter
+    "ISC001",  # Messes with the formatter
+    "PERF203", # Rarely useful
+    "SLF001",  # Private member access
+    "PLC0415", # Imports should be at the top. Not always desirable
+    "PLR0913", # Too many arguments in function definition
+    "PLC0414", # Inconsistent with how type checkers expect to be notified of intentional re-exports
+    "C901",    # Too complex
+]
+unfixable = ["B028"]  # Rules that shouldn't be auto-fixed
+
+[tool.ruff.lint.pyupgrade]
+keep-runtime-typing = true
+
+[tool.ruff.lint.flake8-annotations]
+allow-star-arg-any = true
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"  # Google-style docstrings
+ignore-var-parameters = true
+
+[tool.ruff.lint.per-file-ignores]
+"novacode_cli/cli.py" = [
+    "T201",    # Allow print statements in CLI
+]
+"novacode_cli/tools.py" = [
+    "PLR0912", # Too many branches - @tool decorated functions can't be easily refactored
+    "PLR0915", # Too many statements - @tool decorated functions can't be easily refactored
+    "PLR0911", # Too many return statements - @tool decorated functions can't be easily refactored
+    "PLW0603", # Global statement for session caching - intentional pattern
+    "FBT001",  # Boolean args in @tool decorated functions
+    "FBT002",  # Boolean default args in @tool decorated functions
+    "S603",    # subprocess call check - intentional for linting/type-checking tools
+    "S607",    # Partial executable path - intentional for external tool calls
+    "S311",    # Pseudo-random for User-Agent rotation - not security sensitive
+    "PLR2004", # Magic values - HTTP status codes and timeouts
+    "ANN",     # Annotation rules - many functions intentionally lack annotations
+    "TRY300",  # Consider else - structural pattern in error handling
+    "PERF401", # List comprehension - performance hint not applicable
+    "SIM105",  # contextlib.suppress - try/except is clearer here
+    "PGH003",  # Specific type ignore codes - not critical
+    "E402",    # Module level import not at top - conditional imports for optional deps
+]
+"tests/*" = [
+    "D1",      # Skip documentation rules in tests
+    "S101",    # Allow asserts in tests
+    "S311",    # Allow pseudo-random generators in tests
+    "ANN201",  # Missing return type annotation
+    "INP001",  # Implicit namespace package
+    "PLR2004", # Magic value comparisons are fine in tests
+]
+
+[tool.pytest.ini_options]
+timeout = 10  # Default timeout for all tests (can be overridden per-test)
+timeout_method = "thread"  # Forcefully interrupt hung tests on Windows
+asyncio_mode = "auto"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "pytest-timeout>=2.3",
+]
+
+[tool.mypy]
+strict = true
+ignore_missing_imports = true
+enable_error_code = ["deprecated"]
+# Optional: reduce strictness if needed
+disallow_any_generics = false
+warn_return_any = false
+
+[tool.setuptools.packages.find]
+include = ["novacode_cli*"]

@@ -1,0 +1,36 @@
+## MCP (Model Context Protocol) Tools
+
+You have access to MCP servers that provide additional tools and resources.
+
+### What is MCP?
+MCP (Model Context Protocol) is a standard for connecting AI models to external tools and data sources.
+MCP servers provide:
+- **Tools**: Functions you can call (like custom commands)
+- **Resources**: Data you can read (like files or APIs)
+- **Prompts**: Pre-defined prompt templates
+
+### Available MCP Servers
+{% if servers %}
+{% for server in servers %}
+- **{{ server.name }}**: {{ server.description }}
+{% endfor %}
+{% else %}
+MCP servers are configured in `~/.nova/mcp_config.json`
+{% endif %}
+
+### Using MCP Tools
+1. **List available tools** from each server
+2. **Call tools** with appropriate parameters
+3. **Handle responses** - they may return data, errors, or prompts
+4. **Chain calls** when needed for complex workflows
+
+### Best Practices
+- Check tool descriptions before calling
+- Validate parameters match expected types
+- Handle errors gracefully
+- Use resources for read-only data
+- Use tools for actions with side effects
+
+{% if mcp_instruction %}
+{{ mcp_instruction }}
+{% endif %}
