@@ -102,22 +102,25 @@ async def remote_message_processor(
                     # Set up tool notification callback so remote user sees
                     # tool usage in real-time as it happens
                     async def _notify_remote(name, info, *, is_result=False):
-                        prefix = "\u2b50" if not is_result else "\u2705"
-                        import re as _re
-                        clean = _re.sub(r"\[/?[^\]]+\]", "", info)[:200]
-                        msg_text = prefix + " " + name + ": " + clean
+                        prefix = "⭐" if not is_result else "✅"
+                        # Strip Rich markup for plain-text platforms
+                        if "[" in info:
+                            import re
+                            info = re.sub(r"\[/?[^\]]+\]", "", info)
+                        msg_text = prefix + " " + name + ": " + info[:200]
                         try:
                             await remote_msg.reply_fn(msg_text)
                         except Exception:
                             pass
 
                     def _notify_remote_sync(name, info, *, is_result=False):
+                        # Called from sync context in execute_task();
+                        # schedule the async notification on the running loop
                         try:
-                            asyncio.create_task(
-                                _notify_remote(name, info, is_result=is_result)
-                            )
+                            loop = asyncio.get_running_loop()
+                            loop.create_task(_notify_remote(name, info, is_result=is_result))
                         except RuntimeError:
-                            pass
+                            pass  # no running event loop
 
                     session_state._remote_tool_notify = _notify_remote_sync
 

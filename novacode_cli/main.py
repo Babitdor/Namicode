@@ -1109,6 +1109,76 @@ async def simple_cli(
             console.print("[yellow]Interrupted[/yellow]")
             console.print("[dim]Press Ctrl+C twice during input to exit.[/dim]")
             console.print()
+        except SystemExit as _exit_code:
+            # sys.exit(2) from _run_agent_session means rate-limit / API error
+            # that should NOT crash the CLI — return to the prompt instead.
+            if _exit_code.code == 2:
+                _exec_task = None
+                # Rate-limit/API messages were already printed by the handler above
+                console.print("[dim]Press Enter to continue or type 'exit' to quit.[/dim]")
+                console.print()
+                continue
+            # sys.exit(1) = fatal error — let it propagate
+            raise
+        except Exception as _api_err:
+            # Catch rate-limit / API errors that bubble up from execute_task
+            # without going through sys.exit — show a friendly message and
+            # return to the prompt instead of crashing the CLI.
+            _exec_task = None
+            if _is_rate_limit_error(_api_err):
+                console.print()
+                console.print("[bold yellow]Warning: Rate Limit Reached[/bold yellow]")
+                console.print("The model provider is rate-limiting requests.")
+                console.print("[dim]Wait a moment and try again, or check your API usage/plan limits.[/dim]")
+                console.print()
+                continue
+            if _is_api_error(_api_err):
+                console.print()
+                console.print(f"[bold red]API Error[/bold red]: {str(_api_err)[:300]}")
+                console.print("[dim]The request failed. Try again or use a different model.[/dim]")
+                console.print()
+                continue
+            # Unknown error — re-raise for the top-level crash handler
+            raise
+
+
+def _is_rate_limit_error(e: Exception) -> bool:
+    """Check if an exception is a rate limit or API quota error."""
+    msg = str(e).lower()
+    if any(kw in msg for kw in ("429", "rate limit", "usage limit", "quota", "too many requests")):
+        return True
+    try:
+        from openai import RateLimitError, APIStatusError
+        if isinstance(e, (RateLimitError, APIStatusError)):
+            return True
+    except ImportError:
+        pass
+    try:
+        from httpx import HTTPStatusError
+        if isinstance(e, HTTPStatusError) and getattr(e.response, "status_code", 0) == 429:
+            return True
+    except ImportError:
+        pass
+    return False
+
+
+def _is_api_error(e: Exception) -> bool:
+    """Check if an exception is an API/model error that shouldn't crash the CLI."""
+    try:
+        from openai import APIStatusError, APIConnectionError
+        if isinstance(e, (APIStatusError, APIConnectionError)):
+            return True
+    except ImportError:
+        pass
+    try:
+        from httpx import HTTPStatusError
+        if isinstance(e, HTTPStatusError) and getattr(e.response, "status_code", 0) >= 400:
+            return True
+    except ImportError:
+        pass
+    return False
+
+
 
 async def _run_agent_session(
     model,
@@ -1626,13 +1696,24 @@ async def main(
             console.print("\n\n[yellow]Interrupted[/yellow]")
             sys.exit(0)
         except Exception as e:
-            console.print(f"\n[bold red]Fatal error:[/bold red] {e}\n")
+            # Rate limit / API quota errors - show friendly message instead of crash
+            if _is_rate_limit_error(e):
+                console.print()
+                console.print("[bold yellow]Warning: Rate Limit Reached[/bold yellow]")
+                console.print("The model provider is rate-limiting requests.")
+                console.print("[dim]Wait a moment and try again, or check your API usage/plan limits.[/dim]")
+                console.print()
+                sys.exit(2)  # Distinct exit code - caller can retry
+            if _is_api_error(e):
+                console.print()
+                console.print(f"[bold red]API Error[/bold red]: {str(e)[:300]}")
+                console.print("[dim]The request failed. Try again or use a different model.[/dim]")
+                console.print()
+                sys.exit(2)
+            console.print("[bold red]Fatal error:[/bold red]", str(e))
             console.print_exception()
             if session_state.session_id:
-                console.print(
-                    f"[dim]Session may have been saved — resume with:[/dim]\n"
-                    f"  nova --continue {session_state.session_id}"
-                )
+                console.print(f"[dim]Session may have been saved -- resume with:[/dim]\n  nova --continue {session_state.session_id}")
             sys.exit(1)
 
     # Branch 2: User wants local mode (none or default)
@@ -1653,13 +1734,24 @@ async def main(
             console.print("\n\n[yellow]Interrupted[/yellow]")
             sys.exit(0)
         except Exception as e:
-            console.print(f"\n[bold red]Fatal error:[/bold red] {e}\n")
+            # Rate limit / API quota errors - show friendly message instead of crash
+            if _is_rate_limit_error(e):
+                console.print()
+                console.print("[bold yellow]Warning: Rate Limit Reached[/bold yellow]")
+                console.print("The model provider is rate-limiting requests.")
+                console.print("[dim]Wait a moment and try again, or check your API usage/plan limits.[/dim]")
+                console.print()
+                sys.exit(2)  # Distinct exit code - caller can retry
+            if _is_api_error(e):
+                console.print()
+                console.print(f"[bold red]API Error[/bold red]: {str(e)[:300]}")
+                console.print("[dim]The request failed. Try again or use a different model.[/dim]")
+                console.print()
+                sys.exit(2)
+            console.print("[bold red]Fatal error:[/bold red]", str(e))
             console.print_exception()
             if session_state.session_id:
-                console.print(
-                    f"[dim]Session may have been saved — resume with:[/dim]\n"
-                    f"  nova --continue {session_state.session_id}"
-                )
+                console.print(f"[dim]Session may have been saved -- resume with:[/dim]\n  nova --continue {session_state.session_id}")
             sys.exit(1)
 
 
