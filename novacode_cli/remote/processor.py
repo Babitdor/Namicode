@@ -69,17 +69,31 @@ async def remote_message_processor(
             async with lock:
                 try:
                     # Show "typing" indicator on the remote platform while thinking
-                    # Discord: channel.typing() is an async context manager
-                    # Telegram: typing_fn() is a regular coroutine
+                    # Discord: channel.typing is an async context manager method
+                    #   — calling it returns an object with __aenter__/__aexit__.
+                    # Telegram: typing_fn is a regular async function
+                    #   — calling it returns a coroutine that sends a chatAction.
+                    #
+                    # We probe which type it is by calling it ONCE, then:
+                    #   - If the result has __aenter__, it's a context manager (Discord)
+                    #   - Otherwise, close the probe coroutine and use the loop (Telegram)
                     _typing_cm = None
                     typing_task: asyncio.Task | None = None
                     typing_fn = getattr(remote_msg, "typing_fn", None)
                     if typing_fn is not None:
-                        try:
-                            _typing_cm = typing_fn()
-                            await _typing_cm.__aenter__()
-                        except (AttributeError, TypeError):
-                            _typing_cm = None
+                        # Probe once to decide the type
+                        _probe = typing_fn()
+                        if hasattr(_probe, "__aenter__"):
+                            # Discord-style async context manager
+                            _typing_cm = _probe
+                            try:
+                                await _typing_cm.__aenter__()
+                            except Exception:
+                                _typing_cm = None
+                        else:
+                            # Telegram-style coroutine — close the probe to
+                            # suppress RuntimeWarning, then loop the real calls
+                            _probe.close()
                             async def _typing_loop():
                                 try:
                                     while True:
