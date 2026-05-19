@@ -96,6 +96,9 @@ async def remote_message_processor(
 
                     # Auto-approve tool actions during remote processing so
                     # the agent doesn't block waiting for local CLI input.
+                    # /remote start already set auto_approve=True persistently,
+                    # but we still save/restore here as a safety net in case
+                    # someone toggled it off mid-session.
                     _prev_auto_approve = getattr(session_state, "auto_approve", False)
                     session_state.auto_approve = True
 

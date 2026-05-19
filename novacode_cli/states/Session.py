@@ -60,6 +60,8 @@ class SessionState:
         self._remote_message_queue: asyncio.Queue | None = None
         self._remote_message_lock: asyncio.Lock | None = None
         self._remote_bridge_manager: Any = None  # RemoteBridgeManager
+        # Track auto-approve state before remote bridge so we can restore on /remote stop
+        self._pre_remote_auto_approve: bool | None = None
 
         # Agent components for dynamic model switching
         self._agent: Any = None  # The compiled agent graph

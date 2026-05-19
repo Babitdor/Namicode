@@ -816,6 +816,12 @@ async def _handle_remote_command(cmd_args: str | None, session_state, console) -
     # ── /remote stop ──────────────────────────────────────────────
     if args.lower() in ("stop", "stop all"):
         await manager.stop_all()
+        # Restore auto-approve to its pre-remote state
+        if session_state._pre_remote_auto_approve is not None:
+            session_state.auto_approve = session_state._pre_remote_auto_approve
+            session_state._pre_remote_auto_approve = None
+            if not session_state.auto_approve:
+                console.print("  [dim]Auto-approve restored to off.[/dim]")
         console.print()
         console.print("  [green]\u2713[/green] All remote bridges stopped")
         console.print()
@@ -826,6 +832,12 @@ async def _handle_remote_command(cmd_args: str | None, session_state, console) -
     if stop_match:
         bridge_id = stop_match.group(1)
         await manager.stop_bridge(bridge_id)
+        # If no more active bridges, restore auto-approve
+        if not manager.active_bridges and session_state._pre_remote_auto_approve is not None:
+            session_state.auto_approve = session_state._pre_remote_auto_approve
+            session_state._pre_remote_auto_approve = None
+            if not session_state.auto_approve:
+                console.print("  [dim]Auto-approve restored to off.[/dim]")
         console.print()
         console.print(f"  [green]\u2713[/green] Bridge {bridge_id} stopped")
         console.print()
@@ -1044,6 +1056,13 @@ async def _handle_remote_command(cmd_args: str | None, session_state, console) -
             console.print("  [dim]Credentials saved to ~/.nova/remote.json[/dim]")
             if platform_str == "discord":
                 console.print("  [dim]Make sure [bold]Message Content Intent[/bold] is enabled in your bot settings.[/dim]")
+            # Auto-approve tool actions so remote messages don't block waiting
+            # for local CLI input.  The processor also sets/restores this per-message,
+            # but having it on persistently prevents any approval prompt from hanging.
+            if not session_state.auto_approve:
+                session_state._pre_remote_auto_approve = False  # was off before remote
+                session_state.auto_approve = True
+                console.print("  [dim]Auto-approve enabled for remote bridge.[/dim]")
         else:
             console.print(f"  [red]\u2717[/red] Failed to start {platform_str.title()} bridge: {error_msg}")
         console.print()
