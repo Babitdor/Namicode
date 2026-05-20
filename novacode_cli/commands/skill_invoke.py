@@ -1,14 +1,13 @@
-"""Handler for /<skill-name> direct skill invocation.
+"""Handler for /skill:<name> direct skill invocation.
 
-When the user types a slash command that doesn't match any built-in
-command (like /help, /init, etc.), we check if it matches a skill name.
-If it does, we read the skill's SKILL.md and return its content as a
-prompt for the agent to follow.
+When the user types /skill:<name>, we check if the name matches a known
+skill. If it does, we read the skill's SKILL.md and return its content
+as a prompt for the agent to follow.
 
 Examples:
-    /api-testing          → invoke the "api-testing" skill
-    /docker-deploy        → invoke the "docker-deploy" skill
-    /code-review fix.py   → invoke "code-review" with "fix.py" as extra args
+    /skill:api-testing          → invoke the "api-testing" skill
+    /skill:docker-deploy        → invoke the "docker-deploy" skill
+    /skill:code-review fix.py   → invoke "code-review" with "fix.py" as args
 """
 
 from __future__ import annotations

@@ -1212,11 +1212,11 @@ def show_interactive_help() -> None:
     console.print()
     console.print("[bold]Skill Invocation:[/bold]", style=COLORS["primary"])
     console.print(
-        "  /<skill-name>   Invoke a skill directly (e.g., /api-testing, /docker-deploy)",
+        "  /skill:<name>   Invoke a skill directly (e.g., /skill:api-testing, /skill:docker-deploy)",
         style=COLORS["dim"],
     )
     console.print(
-        "                  Append arguments after the skill name (e.g., /code-review src/app.py)",
+        "                  Append arguments after the name (e.g., /skill:code-review src/app.py)",
         style=COLORS["dim"],
     )
     console.print(

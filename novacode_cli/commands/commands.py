@@ -92,6 +92,33 @@ async def handle_command(
     cmd = cmd_parts[0].lower()
     cmd_args = cmd_parts[1] if len(cmd_parts) > 1 else None
 
+    # /skill:<name> syntax — extract skill name and route to skill invocation
+    # e.g. /skill:api-testing  → cmd="skill:api-testing", we split to
+    # skill_name="api-testing", cmd_args=None
+    if cmd.startswith("skill:"):
+        _skill_name = cmd[len("skill:"):]
+        _skill_args = cmd_args
+        if not _skill_name:
+            console.print()
+            console.print("[yellow]Usage: /skill:<name> [args][/yellow]")
+            console.print("[dim]Example: /skill:api-testing[/dim]")
+            console.print()
+            return True
+        try:
+            skill_prompt = await _try_skill_invocation(
+                _skill_name, _skill_args, session_state, assistant_id
+            )
+            if skill_prompt is not None:
+                return skill_prompt
+        except Exception as e:
+            console.print(f"[red]Error running /skill:{_skill_name}: {e}[/red]")
+            return True
+        console.print()
+        console.print(f"[yellow]Unknown skill: {_skill_name}[/yellow]")
+        console.print("[dim]Use /skills to list available skills.[/dim]")
+        console.print()
+        return True
+
     if cmd in ["quit", "exit", "q"]:
         # Check if Ralph is still running
         running_ralph_tasks = [
@@ -471,17 +498,6 @@ async def handle_command(
                 console.print()
         except Exception as e:
             console.print(f"[red]Error running /reindex command: {e}[/red]")
-        return True
-
-    # Check if the command matches a skill name (e.g., /api-testing, /docker-deploy)
-    try:
-        skill_prompt = await _try_skill_invocation(
-            cmd, cmd_args, session_state, assistant_id
-        )
-        if skill_prompt is not None:
-            return skill_prompt
-    except Exception as e:
-        console.print(f"[red]Error running /{cmd} as skill: {e}[/red]")
         return True
 
     console.print()

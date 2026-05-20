@@ -27,7 +27,7 @@ from novacode_cli.states.Session import SessionState
 
 # Regex patterns for context-aware completion
 AT_MENTION_RE = re.compile(r"@(?P<path>(?:[^\s@]|(?<=\\)\s)*)$")
-SLASH_COMMAND_RE = re.compile(r"^/(?P<command>[a-z][a-z0-9-]*)$")
+SLASH_COMMAND_RE = re.compile(r"^/(?P<command>[a-z][a-z0-9:-]*)$")
 # Pattern for @agent_name with optional query at start of input
 AGENT_MENTION_RE = re.compile(r"^@([a-zA-Z0-9_-]+)(?:\s+(.+))?$", re.DOTALL)
 
@@ -192,7 +192,7 @@ class CommandCompleter(Completer):
 
 
 class SkillCompleter(Completer):
-    """Provide completion for /skill-name invocations at the start of input."""
+    """Provide completion for /skill:<name> invocations at the start of input."""
 
     def __init__(self) -> None:
         self._skills_cache: list[tuple[str, str]] | None = None
@@ -235,20 +235,21 @@ class SkillCompleter(Completer):
         return skills_list
 
     def get_completions(self, document, _complete_event):  # type: ignore
-        """Get skill name completions when / is at the start."""
+        """Get skill name completions when /skill: is at the start."""
         text = document.text_before_cursor
 
-        m = SLASH_COMMAND_RE.match(text)
-        if not m:
+        # Only activate after /skill: prefix
+        if not text.startswith("/skill:"):
             return
 
-        command_fragment = m.group("command")
+        # Extract the skill name fragment after /skill:
+        skill_fragment = text[len("/skill:"):]
 
         for skill_name, skill_desc in self._load_skills():
-            if skill_name.startswith(command_fragment.lower()):
+            if skill_name.startswith(skill_fragment.lower()):
                 yield Completion(
                     text=skill_name,
-                    start_position=-len(command_fragment),
+                    start_position=-len(skill_fragment),
                     display=skill_name,
                     display_meta=skill_desc,
                 )
