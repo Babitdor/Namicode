@@ -24,6 +24,11 @@ Available Events:
     - agent.message: When the agent sends a message
     - user.message: When the user sends a message
     - error: When an error occurs
+    - prompt.decompose: When a prompt is decomposed into sub-prompts
+    - remote.message: When a remote (Discord/Telegram) message arrives
+    - context.warning: When context usage is high (warning/critical)
+    - compact: When conversation compaction occurs
+    - init.complete: When /init pipeline finishes
 """
 
 from __future__ import annotations
@@ -251,6 +256,13 @@ class HookEvent:
     
     # Error events
     ERROR = "error"
+    
+    # Lifecycle events
+    PROMPT_DECOMPOSE = "prompt.decompose"
+    REMOTE_MESSAGE = "remote.message"
+    CONTEXT_WARNING = "context.warning"
+    COMPACT = "compact"
+    INIT_COMPLETE = "init.complete"
 
 
 __all__ = [

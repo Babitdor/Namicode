@@ -65,6 +65,18 @@ async def remote_message_processor(
             )
             console.print()
 
+            # Fire remote.message hook
+            try:
+                from novacode_cli.hooks import dispatch_hook_fire_and_forget, HookEvent
+                dispatch_hook_fire_and_forget(HookEvent.REMOTE_MESSAGE, {
+                    "platform": remote_msg.platform.value,
+                    "user": remote_msg.user_name,
+                    "text": remote_msg.text[:500],
+                    "session_id": getattr(session_state, "session_id", ""),
+                })
+            except Exception:
+                pass
+
             # Serialize with the lock so remote and local messages don't conflict
             async with lock:
                 try:

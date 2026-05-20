@@ -502,3 +502,13 @@ def _show_success_panel(
         "[dim]Run [bold]/init --update[/bold] to re-analyze only changed files[/dim]"
     )
     console.print()
+
+    # Fire init.complete hook
+    try:
+        from novacode_cli.hooks import dispatch_hook_fire_and_forget, HookEvent
+        dispatch_hook_fire_and_forget(HookEvent.INIT_COMPLETE, {
+            "project_root": str(settings.project_root),
+            "session_id": getattr(session_state, "session_id", ""),
+        })
+    except Exception:
+        pass

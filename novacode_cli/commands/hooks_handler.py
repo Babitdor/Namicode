@@ -436,6 +436,15 @@ def _list_events() -> bool:
     console.print(f"  • {HookEvent.ERROR} - Error occurred")
     console.print()
     
+    # Lifecycle events
+    console.print("[bold]Lifecycle Events:[/bold]")
+    console.print(f"  • {HookEvent.PROMPT_DECOMPOSE} - Prompt decomposed into sub-prompts")
+    console.print(f"  • {HookEvent.REMOTE_MESSAGE} - Remote (Discord/Telegram) message received")
+    console.print(f"  • {HookEvent.CONTEXT_WARNING} - Context usage warning/critical")
+    console.print(f"  • {HookEvent.COMPACT} - Conversation compacted")
+    console.print(f"  • {HookEvent.INIT_COMPLETE} - /init pipeline completed")
+    console.print()
+    
     console.print("[dim]Leave 'events' empty to subscribe to all events[/dim]")
     console.print()
     

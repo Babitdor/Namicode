@@ -226,6 +226,16 @@ async def execute_task(  # type: ignore
         markdown = Markdown(pending_text.rstrip())
         console.print(agent_display_name, style=agent_colors)
         console.print(markdown, justify="full")
+        # Fire agent.message hook
+        try:
+            from novacode_cli.hooks import dispatch_hook_fire_and_forget, HookEvent
+            dispatch_hook_fire_and_forget(HookEvent.AGENT_MESSAGE, {
+                "session_id": getattr(session_state, "session_id", ""),
+                "thread_id": getattr(session_state, "thread_id", ""),
+                "message": pending_text[:500],
+            })
+        except Exception:
+            pass
         if current_ai_message_id and seen_message_ids:
             seen_message_ids.add(current_ai_message_id)
             current_ai_message_id = None
@@ -636,6 +646,18 @@ async def execute_task(  # type: ignore
                                             except Exception:
                                                 pass
 
+                                        # Fire tool.result hook
+                                        try:
+                                            from novacode_cli.hooks import dispatch_hook_fire_and_forget, HookEvent
+                                            dispatch_hook_fire_and_forget(HookEvent.TOOL_RESULT, {
+                                                "tool": tool_name,
+                                                "status": tool_status,
+                                                "preview": preview[:300],
+                                                "session_id": getattr(session_state, "session_id", ""),
+                                            })
+                                        except Exception:
+                                            pass
+
                         continue
 
                     if hasattr(message, "content_blocks"):
@@ -831,6 +853,17 @@ async def execute_task(  # type: ignore
 
                                     # Use bordered panel for tool display
                                     render_tool_panel(buffer_name, display_str, icon)
+
+                                    # Fire tool.call hook
+                                    try:
+                                        from novacode_cli.hooks import dispatch_hook_fire_and_forget, HookEvent
+                                        dispatch_hook_fire_and_forget(HookEvent.TOOL_CALL, {
+                                            "tool": buffer_name,
+                                            "args": str(parsed_args)[:500] if parsed_args else "",
+                                            "session_id": getattr(session_state, "session_id", ""),
+                                        })
+                                    except Exception:
+                                        pass
 
                                     # Notify remote bridges of tool usage
                                     _notify = getattr(session_state, "_remote_tool_notify", None)

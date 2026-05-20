@@ -147,7 +147,18 @@ class SessionState:
         self._agent = new_agent
         self._backend = new_backend
         self._model = new_model
-        
+
+        # Fire model.switch hook
+        try:
+            from novacode_cli.hooks import dispatch_hook_fire_and_forget, HookEvent
+            model_name = getattr(new_model, "model_name", None) or getattr(new_model, "model", "unknown")
+            dispatch_hook_fire_and_forget(HookEvent.MODEL_SWITCH, {
+                "new_model": str(model_name),
+                "session_id": self.session_id,
+            })
+        except Exception:
+            pass
+
         return new_agent, new_backend
 
     def toggle_auto_approve(self) -> bool:

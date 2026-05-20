@@ -1,31 +1,23 @@
-#!/bin/bash
-# Example hook: Session Logger
-# Logs all session events to a file
+#!/usr/bin/env bash
+# session-logger.sh — Logs Nova session start/end events to a file.
+#
+# Install: Copy to ~/.nova/hooks/session-logger.sh and make executable.
+# The hook receives a JSON payload on stdin with event details.
+#
+# Payload example (session.start):
+#   {"event": "session.start", "session_id": "abc-123", "thread_id": "...",
+#    "assistant_id": "nova-agent", "model": "gpt-4o", "sandbox": "none",
+#    "continued": false}
 
-# Read JSON payload from stdin
-read -r payload
+LOG_FILE="$HOME/.nova/logs/session-hooks.log"
+mkdir -p "$(dirname "$LOG_FILE")"
 
-# Parse event type
-event=$(echo "$payload" | jq -r '.event')
+# Read payload from stdin
+PAYLOAD=$(cat)
 
-# Create logs directory if it doesn't exist
-mkdir -p ~/.nova/logs
+# Extract event name and session ID
+EVENT=$(echo "$PAYLOAD" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('event','?'))" 2>/dev/null || echo "?")
+SESSION_ID=$(echo "$PAYLOAD" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('session_id','?')[:8])" 2>/dev/null || echo "?")
+TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-# Log to file with timestamp
-echo "$(date -Iseconds) [$event] $payload" >> ~/.nova/logs/hooks.log
-
-# Send to webhook for session.end events
-if [ "$event" = "session.end" ]; then
-    # Extract session ID and duration
-    session_id=$(echo "$payload" | jq -r '.session_id')
-    duration=$(echo "$payload" | jq -r '.duration')
-    message_count=$(echo "$payload" | jq -r '.message_count')
-    
-    # Log summary
-    echo "Session $session_id ended: $message_count messages, ${duration}s duration" >> ~/.nova/logs/sessions.log
-    
-    # Optional: Send to webhook
-    # curl -X POST https://api.example.com/webhook \
-    #     -H "Content-Type: application/json" \
-    #     -d "$payload"
-fi
+echo "[$TIMESTAMP] event=$EVENT session=$SESSION_ID" >> "$LOG_FILE"

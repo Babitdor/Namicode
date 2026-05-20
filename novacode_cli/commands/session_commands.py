@@ -267,6 +267,18 @@ async def handle_compact_command(
         # Reset token tracker counters
         token_tracker.reset()
 
+        # Fire compact hook
+        try:
+            from novacode_cli.hooks import dispatch_hook_fire_and_forget, HookEvent
+            dispatch_hook_fire_and_forget(HookEvent.COMPACT, {
+                "messages_before": result.messages_before,
+                "messages_after": result.messages_after,
+                "tokens_saved": result.tokens_saved,
+                "session_id": session_state.session_id,
+            })
+        except Exception:
+            pass
+
     else:
         console.print("[red]✗[/red] ", end="")
         console.print(f"[red]Compaction failed: {result.error}[/red]")

@@ -1,70 +1,49 @@
 #!/usr/bin/env python3
-"""Example hook: Tool Monitor
+"""tool-monitor.py — Prints tool call/result events to a log file.
 
-Monitors tool execution and logs performance metrics.
+Install: Copy to ~/.nova/hooks/tool-monitor.py and make executable.
+The hook receives a JSON payload on stdin with event details.
+
+Payload example (tool.call):
+  {"event": "tool.call", "tool": "shell", "args": "ls -la",
+   "session_id": "abc-123"}
+
+Payload example (tool.result):
+  {"event": "tool.result", "tool": "shell", "status": "success",
+   "preview": "file1.py\\nfile2.py", "session_id": "abc-123"}
 """
 
-import sys
 import json
-from datetime import datetime
+import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
-# Create logs directory
-log_dir = Path.home() / ".nova" / "logs"
-log_dir.mkdir(parents=True, exist_ok=True)
+LOG_FILE = Path.home() / ".nova" / "logs" / "tool-hooks.log"
+LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+
 
 def main():
-    # Read JSON payload from stdin
     try:
         payload = json.load(sys.stdin)
-    except json.JSONDecodeError as e:
-        print(f"Invalid JSON: {e}", file=sys.stderr)
+    except (json.JSONDecodeError, EOFError):
         return
-    
-    event = payload.get('event')
-    
-    if event == 'tool.call':
-        tool_name = payload.get('tool')
-        args = payload.get('args', {})
-        timestamp = payload.get('timestamp', datetime.now().isoformat())
-        
-        # Log tool call
-        log_entry = {
-            "timestamp": timestamp,
-            "event": "tool_call",
-            "tool": tool_name,
-            "args": args
-        }
-        
-        with open(log_dir / "tool_calls.jsonl", "a") as f:
-            f.write(json.dumps(log_entry) + "\n")
-        
-        print(f"[{timestamp}] Tool called: {tool_name}")
-        
-    elif event == 'tool.result':
-        tool_name = payload.get('tool')
-        result = payload.get('result', {})
-        duration = payload.get('duration', 0)
-        timestamp = payload.get('timestamp', datetime.now().isoformat())
-        
-        # Log tool result
-        log_entry = {
-            "timestamp": timestamp,
-            "event": "tool_result",
-            "tool": tool_name,
-            "duration": duration,
-            "success": "error" not in result
-        }
-        
-        with open(log_dir / "tool_calls.jsonl", "a") as f:
-            f.write(json.dumps(log_entry) + "\n")
-        
-        print(f"[{timestamp}] Tool completed: {tool_name} ({duration:.2f}s)")
-        
-        # Alert on slow operations
-        if duration > 5.0:
-            with open(log_dir / "slow_operations.log", "a") as f:
-                f.write(f"{timestamp} - {tool_name} took {duration:.2f}s\n")
 
-if __name__ == '__main__':
+    event = payload.get("event", "?")
+    tool = payload.get("tool", "?")
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    if event == "tool.call":
+        args = payload.get("args", "")[:100]
+        line = f"[{timestamp}] CALL  tool={tool} args={args!r}\n"
+    elif event == "tool.result":
+        status = payload.get("status", "?")
+        line = f"[{timestamp}] RESULT tool={tool} status={status}\n"
+    else:
+        line = f"[{timestamp}] {event} tool={tool}\n"
+
+    with LOG_FILE.open("a", encoding="utf-8") as f:
+        f.write(line)
+
+
+if __name__ == "__main__":
     main()

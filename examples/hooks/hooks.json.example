@@ -9,6 +9,14 @@
       "events": ["tool.call", "tool.result"]
     },
     {
+      "command": ["python", "~/.nova/hooks/context-alert.py"],
+      "events": ["context.warning"]
+    },
+    {
+      "command": ["python", "~/.nova/hooks/error-alert.py"],
+      "events": ["error"]
+    },
+    {
       "command": ["node", "~/.nova/hooks/webhook-forwarder.js"]
     }
   ]

@@ -191,6 +191,7 @@ from novacode_cli.server_runner.dev_server import (
 )
 from novacode_cli.server_runner.test_runner import run_tests_tool
 from novacode_cli.ui.ui_elements import TokenTracker, show_help
+from novacode_cli.hooks import dispatch_hook_fire_and_forget, HookEvent
 
 
 def check_cli_dependencies() -> None:
@@ -490,6 +491,17 @@ async def simple_cli(
         restored_session_data: Tuple of (session_data, warnings, nova_md_loaded) for continuation
     """
     console.clear()
+
+    # Fire session.start hook
+    dispatch_hook_fire_and_forget(HookEvent.SESSION_START, {
+        "session_id": session_state.session_id,
+        "thread_id": session_state.thread_id,
+        "assistant_id": assistant_id,
+        "model": model_name,
+        "sandbox": sandbox_type,
+        "continued": bool(restored_session_data),
+    })
+
     # Check path approval before proceeding
     if not await check_path_approval():
         console.print()
@@ -546,6 +558,11 @@ async def simple_cli(
             warnings=warnings,
             Nova_md_loaded=Nova_md_loaded,
         )
+        # Fire session.continue hook
+        dispatch_hook_fire_and_forget(HookEvent.SESSION_CONTINUE, {
+            "session_id": session_state.session_id,
+            "thread_id": session_state.thread_id,
+        })
 
     # Display auto-approve status if enabled
     display_auto_approve_status(console, session_state.auto_approve)
@@ -650,6 +667,13 @@ async def simple_cli(
                 )
                 if not silent:
                     console.print(f"[dim]Session saved to {session_dir}[/dim]")
+                # Fire session.save hook
+                dispatch_hook_fire_and_forget(HookEvent.SESSION_SAVE, {
+                    "session_id": session_state.session_id,
+                    "thread_id": session_state.thread_id,
+                    "session_dir": str(session_dir),
+                    "message_count": len(messages),
+                })
                 return True
         except Exception as e:
             error_msg = f"[red]Error saving session: {type(e).__name__}: {e}[/red]"
@@ -661,6 +685,13 @@ async def simple_cli(
     # Helper to clean up and save session on exit
     async def _cleanup_and_save_session() -> None:
         """Clean up managed processes and save session state when user exits."""
+        # Fire session.end hook
+        dispatch_hook_fire_and_forget(HookEvent.SESSION_END, {
+            "session_id": session_state.session_id,
+            "thread_id": session_state.thread_id,
+            "assistant_id": assistant_id,
+        })
+
         # Stop Vixie WebSocket server
         try:
             await stop_vixie_server()
@@ -883,6 +914,14 @@ async def simple_cli(
             console.print("\nGoodbye!", style=COLORS["primary"])
             break
 
+        # Fire user.message hook
+        if user_input:
+            dispatch_hook_fire_and_forget(HookEvent.USER_MESSAGE, {
+                "session_id": session_state.session_id,
+                "thread_id": session_state.thread_id,
+                "message": user_input[:500],  # truncate for safety
+            })
+
         # Wrap the rest of the loop body so that KeyboardInterrupt
         # during execute_task or between task/prompt doesn't crash the
         # CLI — it just returns to the prompt.
@@ -1019,6 +1058,12 @@ async def simple_cli(
                             console.print()
                             console.print(msg)
                             console.print()
+                        # Fire prompt.decompose hook
+                        dispatch_hook_fire_and_forget(HookEvent.PROMPT_DECOMPOSE, {
+                            "original_prompt": user_input[:300],
+                            "sub_prompt_count": len(decomp.sub_prompts),
+                            "session_id": session_state.session_id,
+                        })
                     sub_prompts = decomp.sub_prompts
 
                 # Execute sub-prompts sequentially
@@ -1087,6 +1132,11 @@ async def simple_cli(
                     console.print(
                         f"[dim red]  Use /context to see detailed breakdown.[/dim red]"
                     )
+                    dispatch_hook_fire_and_forget(HookEvent.CONTEXT_WARNING, {
+                        "level": "critical",
+                        "usage_percentage": pct,
+                        "session_id": session_state.session_id,
+                    })
                 elif breakdown.is_warning:
                     console.print(
                         f"[yellow]⚠ Context usage high: {pct:.0f}%[/yellow] "
@@ -1095,6 +1145,11 @@ async def simple_cli(
                     console.print(
                         f"[dim]  Use /context to see detailed breakdown.[/dim]"
                     )
+                    dispatch_hook_fire_and_forget(HookEvent.CONTEXT_WARNING, {
+                        "level": "warning",
+                        "usage_percentage": pct,
+                        "session_id": session_state.session_id,
+                    })
 
             # Track message for auto-save and check if we should save
             auto_save_manager.increment_messages()
@@ -1712,6 +1767,11 @@ async def main(
                 sys.exit(2)
             console.print("[bold red]Fatal error:[/bold red]", str(e))
             console.print_exception()
+            dispatch_hook_fire_and_forget(HookEvent.ERROR, {
+                "error": str(e)[:500],
+                "type": type(e).__name__,
+                "session_id": session_state.session_id,
+            })
             if session_state.session_id:
                 console.print(f"[dim]Session may have been saved -- resume with:[/dim]\n  nova --continue {session_state.session_id}")
             sys.exit(1)
@@ -1750,6 +1810,11 @@ async def main(
                 sys.exit(2)
             console.print("[bold red]Fatal error:[/bold red]", str(e))
             console.print_exception()
+            dispatch_hook_fire_and_forget(HookEvent.ERROR, {
+                "error": str(e)[:500],
+                "type": type(e).__name__,
+                "session_id": session_state.session_id,
+            })
             if session_state.session_id:
                 console.print(f"[dim]Session may have been saved -- resume with:[/dim]\n  nova --continue {session_state.session_id}")
             sys.exit(1)
