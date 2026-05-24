@@ -73,6 +73,10 @@ class SessionState:
         self._model: Any = None  # Current model instance
         self._sandbox_type: str | None = None  # Sandbox type
         self.token_tracker: Any = None  # TokenTracker for toolbar context display
+        self._image_tracker: Any = None  # ImageTracker for remote message processor
+        self._seen_message_ids: set = set()  # Message IDs seen by remote bridge
+        self._console: Any = None  # Rich Console reference
+        self._composite_backend: Any = None  # Composite backend for remote bridge
         
         # Plan agent components (for plan mode)
         self.plan_agent: Any = None  # Plan agent for planning phase

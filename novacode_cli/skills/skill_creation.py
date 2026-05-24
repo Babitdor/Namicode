@@ -49,6 +49,9 @@ async def _generate_skill(
     description: str | None = None,
 ) -> str | None:
     """Generate skill content using the configured LLM and return SKILL.md content."""
+    import logging
+    logger = logging.getLogger(__name__)
+
     try:
         console.print(
             "[dim]Generating comprehensive skill content...[/dim]",
@@ -58,10 +61,15 @@ async def _generate_skill(
 
         skill_query_prompt = _get_skill_query(skill_name, description)
 
+        # Use virtual_mode=True so the agent's file operations are scoped
+        # to the skill directory (path traversal and absolute paths are blocked).
+        # The system prompt must instruct the agent to use virtual paths like
+        # "/SKILL.md" rather than absolute filesystem paths, matching how the
+        # core agent works (see core_agent.py for the same pattern).
         skill_creation_agent = create_deep_agent(
             name="Skill-Creation-Agent",
             model=create_model(),
-            system_prompt=SKILL_CREATION.format(skill_dir=skill_dir),
+            system_prompt=SKILL_CREATION.format(),
             tools=[web_search],
             backend=FilesystemBackend(root_dir=skill_dir, virtual_mode=True),
         )
@@ -71,15 +79,13 @@ async def _generate_skill(
             {"messages": [{"role": "user", "content": skill_query_prompt}]}
         )
 
+        # Collect the full text response for fallback extraction
         responded = str(response["messages"][-1].content).strip()
+        logger.debug("Skill agent responded with %d chars", len(responded))
 
-        if responded:
-            # Now read the actual SKILL.md file
-            skill_file = skill_dir / "SKILL.md"
-            if not skill_file.exists():
-                console.print("[yellow]Warning: SKILL.md was not created by the agent.[/yellow]")
-                return None
-
+        # --- Strategy 1: check if the agent wrote SKILL.md to disk ---
+        skill_file = skill_dir / "SKILL.md"
+        if skill_file.exists():
             skill_content = skill_file.read_text(encoding="utf-8").strip()
 
             # Validate frontmatter
@@ -87,13 +93,7 @@ async def _generate_skill(
                 console.print(
                     "[yellow]Warning: SKILL.md missing valid frontmatter. Adding defaults.[/yellow]"
                 )
-                skill_content = f"""---
-                name: {skill_name}
-                description: {description}
-                ---
-
-                {skill_content}
-                """
+                skill_content = _add_frontmatter(skill_content, skill_name, description)
                 skill_file.write_text(skill_content, encoding="utf-8")
 
             console.print(
@@ -102,13 +102,92 @@ async def _generate_skill(
             )
             return skill_content
 
-        return "Skill creation failed"
+        # --- Strategy 2: extract SKILL.md content from agent's text response ---
+        if responded:
+            extracted = _extract_skill_md_from_response(responded, skill_name)
+            if extracted:
+                console.print(
+                    "[dim]Extracted SKILL.md from agent response (file was not written).[/dim]",
+                    style=COLORS["dim"],
+                )
+                skill_file.parent.mkdir(parents=True, exist_ok=True)
+                skill_file.write_text(extracted, encoding="utf-8")
+                return extracted
+
+            logger.debug(
+                "Agent responded (%d chars) but SKILL.md was not written and "
+                "no markdown content could be extracted from the response.",
+                len(responded),
+            )
+
+        console.print("[yellow]Warning: SKILL.md was not created by the agent.[/yellow]")
+        return None
 
     except Exception as e:
+        logger.debug("Skill generation exception", exc_info=True)
         console.print(
             f"[yellow]Warning: LLM generation failed ({e}), using static template.[/yellow]"
         )
         return None
+
+
+def _add_frontmatter(content: str, name: str, description: str | None) -> str:
+    """Ensure YAML frontmatter with name and description."""
+    return f"---\nname: {name}\ndescription: {description or 'No description provided'}\n---\n\n{content}"
+
+
+def _extract_skill_md_from_response(response: str, skill_name: str) -> str | None:
+    """Try to extract SKILL.md content from the agent's text response.
+
+    Some models return markdown content inline instead of writing it via
+    write_file.  This function tries to pull out the SKILL.md payload.
+
+    Strategies (in order):
+    1. Find a ```markdown ... ``` fenced block
+    2. Find content between YAML frontmatter delimiters (--- ... ---)
+    3. Use the entire response if it looks like valid markdown
+
+    Returns:
+        Extracted SKILL.md content with frontmatter, or None.
+    """
+    import re
+
+    # Strategy 1: Extract from fenced code block
+    # Match ```markdown, ```md, or ``` (with optional language tag)
+    fence_pattern = re.compile(
+        r"```(?:markdown|md|yaml)?\s*\n(.*?)```",
+        re.DOTALL,
+    )
+    matches = fence_pattern.findall(response)
+    for match in matches:
+        stripped = match.strip()
+        if stripped.startswith("---") or "# " in stripped:
+            return _ensure_frontmatter(stripped, skill_name)
+
+    # Strategy 2: Find YAML frontmatter block in the response
+    fm_pattern = re.compile(
+        r"(---\s*\n.*?\n---\s*\n.*?)(?=\n---\s*\n|$)",
+        re.DOTALL,
+    )
+    fm_matches = fm_pattern.findall(response)
+    for match in fm_matches:
+        stripped = match.strip()
+        if stripped.startswith("---") and len(stripped) > 50:
+            return stripped
+
+    # Strategy 3: Check if the response itself looks like SKILL.md content
+    stripped_response = response.strip()
+    if stripped_response.startswith("---") or stripped_response.startswith("# "):
+        return _ensure_frontmatter(stripped_response, skill_name)
+
+    return None
+
+
+def _ensure_frontmatter(content: str, skill_name: str) -> str:
+    """Ensure content has valid YAML frontmatter."""
+    if content.startswith("---"):
+        return content
+    return f"---\nname: {skill_name}\ndescription: Auto-generated skill\n---\n\n{content}"
 
 
 def _get_static_template(skill_name: str) -> str:

@@ -101,6 +101,11 @@ except ImportError:
     _SQLITE_CHECKPOINTER_AVAILABLE = False
 from deepagents.backends.protocol import SandboxBackendProtocol
 
+# Apply safety patches for backends that don't handle all content block types
+# (e.g., Ollama crashes on "file" type blocks from PDF reads)
+from novacode_cli.utils.backend_patches import apply_ollama_content_block_patch
+apply_ollama_content_block_patch()
+
 from novacode_cli.agents.core_agent import (
     create_agent_with_config,
     list_agents,

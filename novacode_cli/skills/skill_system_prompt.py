@@ -24,10 +24,19 @@ Audience: A highly capable AI agent.
 DIRECTORY STRUCTURE
 ================================================================================
 
-All files must live under {skill_dir}.
+The filesystem backend is rooted at `/` which maps to the skill directory on disk.
+All file operations must use virtual paths starting with `/`.
+
+**IMPORTANT — Path Handling:**
+- All file paths must be absolute virtual paths starting with `/`
+- The root `/` maps to the skill directory
+- Example: To create SKILL.md, use `write_file(path="/SKILL.md", ...)`
+- Example: To create a script, use `write_file(path="/scripts/helper.sh", ...)`
+- **Never use Windows-style absolute paths** (e.g., `C:\...`) — they will cause path errors
+- **Never use relative paths** — always start with `/`
 
 Allowed structure:
-{skill_dir}/
+/
 ├── SKILL.md            (required)
 ├── scripts/            (optional)
 ├── references/         (optional)
@@ -36,7 +45,7 @@ Allowed structure:
 Rules:
 - No other directories or files
 - No README, INSTALL, CHANGELOG, or metadata files
-- Always run `ls` before creating or modifying files
+- Always run `ls` on `/` before creating or modifying files
 
 ================================================================================
 SKILL.md CONTRACT (STRICT)
@@ -141,9 +150,9 @@ SKILL CREATION PROCESS
 
 1. Define scope and usage triggers
 2. Decide what belongs in SKILL.md vs resources
-3. Inspect or initialize {skill_dir}
+3. Inspect or initialize the skill directory with `ls`
 4. Implement resources first
-5. Write SKILL.md (frontmatter first, always)
+5. Use `write_file` to write SKILL.md to `/SKILL.md` — you MUST create the file on disk, not just describe it
 6. Validate structure and constraints
 7. Refine based on real usage
 

@@ -375,7 +375,12 @@ class FileTrackerMiddleware(AgentMiddleware):
         request: ModelRequest,
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> ModelResponse:
-        """Inject file operation rules into the system prompt."""
+        """Inject file operation rules into the system prompt and sanitize messages."""
+        # Sanitize any file-type content blocks in message history (e.g., from
+        # restored sessions) so they don't crash backends like Ollama
+        from novacode_cli.utils.pdf_extraction import sanitize_messages_file_blocks
+        sanitize_messages_file_blocks(request.messages)
+
         if self.include_system_prompt:
             import time
             current_time = time.time()
@@ -407,7 +412,12 @@ class FileTrackerMiddleware(AgentMiddleware):
         request: ModelRequest,
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
     ) -> ModelResponse:
-        """(async) Inject file operation rules into the system prompt."""
+        """(async) Inject file operation rules into the system prompt and sanitize messages."""
+        # Sanitize any file-type content blocks in message history (e.g., from
+        # restored sessions) so they don't crash backends like Ollama
+        from novacode_cli.utils.pdf_extraction import sanitize_messages_file_blocks
+        sanitize_messages_file_blocks(request.messages)
+
         if self.include_system_prompt:
             import time
             current_time = time.time()
@@ -481,17 +491,45 @@ class FileTrackerMiddleware(AgentMiddleware):
         else:
             return result
 
-        # Track read_file operations
-        if (
-            tool_name == "read_file"
-            and isinstance(content, str)
-            and not content.startswith("Error")
+        # Convert PDF and other "file" type content blocks to text.
+        # Ollama (and some other backends) don't support type="file" content
+        # blocks, so we extract text from PDFs before they enter the message
+        # history — preventing a fatal "Blocks of type file not supported" crash.
+        if isinstance(content, list) and tool_name == "read_file":
+            from novacode_cli.utils.pdf_extraction import convert_file_content_block_to_text
+
+            converted = convert_file_content_block_to_text(content)
+            if converted is not content:  # something was converted
+                # Rebuild ToolMessage with converted content and preserve metadata
+                result = ToolMessage(
+                    content=converted,
+                    tool_call_id=result.tool_call_id,
+                    name=result.name if hasattr(result, "name") else None,
+                )
+                content = converted
+
+        # Track read_file operations (text string or extracted PDF text)
+        if tool_name == "read_file" and not (
+            isinstance(content, str) and content.startswith("Error")
         ):
             file_path = args.get("file_path") or args.get("path", "")
             offset = args.get("offset", 0)
             limit = args.get("limit")
             if file_path:
-                self.tracker.record_read(file_path, content, offset, limit)
+                # For string content, track directly
+                # For list content (e.g., extracted PDF), use a summary
+                if isinstance(content, str):
+                    self.tracker.record_read(file_path, content, offset, limit)
+                elif isinstance(content, list):
+                    # Compose a text summary from text blocks for tracking
+                    text_parts = []
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "text":
+                            text_parts.append(block.get("text", ""))
+                        elif isinstance(block, str):
+                            text_parts.append(block)
+                    tracking_text = "\n".join(text_parts) or "[binary file read]"
+                    self.tracker.record_read(file_path, tracking_text, offset, limit)
 
         # Track write_file operations
         if tool_name == "write_file" and isinstance(content, str) and "success" in content.lower():
