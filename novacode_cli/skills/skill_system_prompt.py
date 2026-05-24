@@ -32,7 +32,7 @@ All file operations must use virtual paths starting with `/`.
 - The root `/` maps to the skill directory
 - Example: To create SKILL.md, use `write_file(path="/SKILL.md", ...)`
 - Example: To create a script, use `write_file(path="/scripts/helper.sh", ...)`
-- **Never use Windows-style absolute paths** (e.g., `C:\...`) — they will cause path errors
+- **Never use Windows-style absolute paths** (e.g., `C:\\...`) — they will cause path errors
 - **Never use relative paths** — always start with `/`
 
 Allowed structure:
