@@ -11,7 +11,7 @@ from deepagents.graph import create_deep_agent
 from novacode_cli.config.config import COLORS, Settings, console
 from novacode_cli.config.model_create import create_model
 from novacode_cli.skills.load import list_skills
-from novacode_cli.skills.skill_system_prompt import SKILL_CREATION
+from novacode_cli.skills.skill_system_prompt import render_skill_creation_prompt
 from novacode_cli.tools import web_search
 
 
@@ -69,7 +69,7 @@ async def _generate_skill(
         skill_creation_agent = create_deep_agent(
             name="Skill-Creation-Agent",
             model=create_model(),
-            system_prompt=SKILL_CREATION.format(),
+            system_prompt=render_skill_creation_prompt(),
             tools=[web_search],
             backend=FilesystemBackend(root_dir=skill_dir, virtual_mode=True),
         )
