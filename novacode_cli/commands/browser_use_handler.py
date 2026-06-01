@@ -181,6 +181,7 @@ async def handle_browser_use_command(
     assistant_id: str,
     token_tracker: TokenTracker,
     cmd_args: str | list[str] | None,
+    execute_fn=None,
 ) -> bool:
     """Handle /browser-use command - AI-powered browser automation.
 
@@ -200,7 +201,10 @@ async def handle_browser_use_command(
     Returns:
         True if handled, 'exit' if user requests exit.
     """
-    from novacode_cli.ui.execution import execute_task
+    if execute_fn is None:
+        from novacode_cli.ui.execution import execute_task
+
+        execute_fn = execute_task
 
     # Parse arguments
     parsed = _parse_browser_use_args(cmd_args)
@@ -263,7 +267,7 @@ async def handle_browser_use_command(
             )
             
             # Execute the agent with the browser results
-            await execute_task(
+            await execute_fn(
                 user_input=agent_message,
                 agent=agent,
                 assistant_id=assistant_id,

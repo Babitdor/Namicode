@@ -389,6 +389,48 @@ uv pip install browser-use
 ollama pull llama3.1:8b
 ```
 
+## Trello Task Board
+
+NOVA includes a browser-based task board for managing and processing tasks visually. Start it with the `/trello` slash command — it opens a self-contained HTML page served from a local HTTP server.
+
+### Usage
+
+```
+/trello              Start the task board server and open browser
+/trello stop         Stop the task board server
+/trello status       Show current task board state
+```
+
+### How It Works
+
+1. Run `/trello` — a local HTTP server starts and opens the task board in your browser
+2. Add tasks via the web UI (description, priority, etc.)
+3. Tasks are automatically picked up and processed by the agent one at a time
+4. Completed tasks are marked "Done" in the board
+
+### Task Lifecycle
+
+| Status | Description |
+|--------|-------------|
+| **Loaded** | Task has been added to the board, waiting to be processed |
+| **Processing** | Agent is currently working on the task |
+| **Done** | Task has been completed by the agent |
+
+Tasks move through the lifecycle automatically — no manual intervention needed. You can also click **"Start"** in the web UI to explicitly move a task to processing.
+
+### Example
+
+```bash
+# Start the task board
+/trello
+
+# Check status
+/trello status
+
+# Stop the server
+/trello stop
+```
+
 ## Configuration
 
 ### Directory Structure

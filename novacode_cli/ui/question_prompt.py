@@ -14,6 +14,7 @@ from typing import TypedDict
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import HTML
 from rich import box
+from rich.markup import escape
 from rich.panel import Panel
 
 from novacode_cli.config.config import console
@@ -46,11 +47,11 @@ def prompt_for_structured_question(
     # Build question panel with beautiful styling
     body_lines = [
         "",  # Top padding
-        f"  [bold]{question}[/bold]",  # Question with proper spacing
+        f"  [bold]{escape(question)}[/bold]",  # Question with proper spacing
     ]
     if context:
         body_lines.append("")  # Spacing
-        body_lines.append(f"  [dim]{context}[/dim]")  # Context with dim styling
+        body_lines.append(f"  [dim]{escape(context)}[/dim]")  # Context with dim styling
     body_lines.append("")  # Bottom padding
 
     # Get terminal width and calculate responsive panel width
@@ -180,11 +181,11 @@ async def prompt_for_open_question(
     # Build question panel with beautiful styling
     body_lines = [
         "",  # Top padding
-        f"  [bold]{question}[/bold]",  # Question with proper spacing
+        f"  [bold]{escape(question)}[/bold]",  # Question with proper spacing
     ]
     if context:
         body_lines.append("")  # Spacing
-        body_lines.append(f"  [dim]{context}[/dim]")  # Context with dim styling
+        body_lines.append(f"  [dim]{escape(context)}[/dim]")  # Context with dim styling
     body_lines.append("")  # Bottom padding
 
     # Get terminal width and calculate responsive panel width
@@ -279,7 +280,7 @@ def prompt_for_plan_approval(
     body_lines = []
 
     if plan_summary:
-        body_lines.append(f"[bold]{plan_summary}[/bold]\n")
+        body_lines.append(f"[bold]{escape(plan_summary)}[/bold]\n")
 
     if todos:
         body_lines.append("[bold cyan]Plan Steps:[/bold cyan]\n")
@@ -295,7 +296,7 @@ def prompt_for_plan_approval(
             else:
                 indicator = "[dim]○[/dim]"
 
-            body_lines.append(f"  {indicator} {i}. {content}")
+            body_lines.append(f"  {indicator} {i}. {escape(content)}")
     else:
         body_lines.append("[dim]Plan written to file — review it above before choosing.[/dim]")
 

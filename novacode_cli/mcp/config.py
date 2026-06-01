@@ -18,10 +18,16 @@ Configuration is stored at ~/.nova/mcp.json in the following format:
 """
 
 import json
+import logging
+import os
+import shutil
+import time
 from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+logger = logging.getLogger(__name__)
 
 # Environment variables that could be used for code injection
 _DANGEROUS_ENV_VARS = {
@@ -33,6 +39,52 @@ _DANGEROUS_ENV_VARS = {
 
 # Shell metacharacters that indicate command injection
 _SHELL_METACHARACTERS = set("`$|;&")
+
+
+def _atomic_write_json(path: Path, data: dict) -> None:
+    """Write JSON data atomically via temp file + replace.
+
+    Uses Path.replace (os.replace), not rename: on Windows rename raises
+    FileExistsError when the target exists; replace overwrites atomically.
+    """
+    tmp_path = path.with_suffix(".tmp." + str(os.getpid()))
+    try:
+        tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        tmp_path.replace(path)
+    except Exception:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise
+
+
+def _acquire_lock(lock_path: Path, timeout: float = 5.0) -> bool:
+    """Try to acquire an exclusive lock file with a timeout."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(fd)
+            return True
+        except FileExistsError:
+            try:
+                mtime = lock_path.stat().st_mtime
+                if time.time() - mtime > 2.0:
+                    lock_path.unlink(missing_ok=True)
+                    continue
+            except OSError:
+                pass
+            time.sleep(0.05)
+    return False
+
+
+def _release_lock(lock_path: Path) -> None:
+    """Release an exclusive lock file."""
+    try:
+        lock_path.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 class MCPServerConfig(BaseModel):
@@ -48,13 +100,22 @@ class MCPServerConfig(BaseModel):
     @field_validator("command")
     @classmethod
     def validate_command(cls, v: str | None) -> str | None:
-        """Reject commands containing shell metacharacters or path traversal."""
+        """Reject commands containing shell metacharacters, path traversal, or missing binaries."""
         if v is not None:
             if any(c in v for c in _SHELL_METACHARACTERS):
                 msg = "Shell metacharacters not allowed in command"
                 raise ValueError(msg)
             if ".." in v:
                 msg = "Path traversal not allowed in command"
+                raise ValueError(msg)
+            # Validate binary exists: absolute path must be a file;
+            # simple name must be found on PATH.
+            if "/" in v:
+                if not Path(v).is_file():
+                    msg = f"Command binary not found: {v}"
+                    raise ValueError(msg)
+            elif not shutil.which(v):
+                msg = f"Command not found on PATH: {v}"
                 raise ValueError(msg)
         return v
 
@@ -112,7 +173,8 @@ class MCPConfig:
         """Load MCP server configurations from disk.
 
         Returns:
-            Dictionary mapping server names to configurations
+            Dictionary mapping server names to configurations.
+            Returns empty dict on error (graceful degradation).
         """
         if not self.config_path.exists():
             return {}
@@ -124,11 +186,16 @@ class MCPConfig:
             servers = data.get("mcpServers", {})
             return {name: MCPServerConfig(**config) for name, config in servers.items()}
         except (json.JSONDecodeError, ValueError) as e:
-            msg = f"Failed to load MCP config from {self.config_path}: {e}"
-            raise RuntimeError(msg) from e
+            logger.warning(
+                "Failed to load MCP config from %s: %s",
+                self.config_path,
+                e,
+                exc_info=True,
+            )
+            return {}
 
     def save(self, servers: dict[str, MCPServerConfig]) -> None:
-        """Save MCP server configurations to disk.
+        """Save MCP server configurations to disk atomically.
 
         Args:
             servers: Dictionary mapping server names to configurations
@@ -139,8 +206,14 @@ class MCPConfig:
             }
         }
 
-        with self.config_path.open("w") as f:
-            json.dump(data, f, indent=2)
+        lock_path = self.config_path.with_suffix(".lock")
+        if not _acquire_lock(lock_path):
+            msg = f"Could not acquire lock for {self.config_path}"
+            raise RuntimeError(msg)
+        try:
+            _atomic_write_json(self.config_path, data)
+        finally:
+            _release_lock(lock_path)
 
     def add_server(self, name: str, config: MCPServerConfig) -> None:
         """Add or update an MCP server configuration.

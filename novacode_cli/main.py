@@ -381,8 +381,15 @@ def parse_args():
     parser.add_argument(
         "--sandbox",
         choices=["none", "modal", "daytona", "runloop", "docker"],
-        default="none",
-        help="Sandbox for code execution (default: none - local only)",
+        default=None,
+        help="Sandbox for code execution. Defaults to 'docker' (project bind-mounted "
+        "at /workspace) when omitted; falls back to local if Docker is unavailable. "
+        "Use --no-sandbox to force local mode.",
+    )
+    parser.add_argument(
+        "--no-sandbox",
+        action="store_true",
+        help="Force local execution on the host (disables the default Docker sandbox)",
     )
     parser.add_argument(
         "--sandbox-id",
@@ -402,6 +409,17 @@ def parse_args():
         "--no-splash",
         action="store_true",
         help="Disable the startup splash screen",
+    )
+    parser.add_argument(
+        "--tui",
+        action="store_true",
+        dest="legacy_ui",
+        help="Use the classic Rich-based REPL instead of the default TUI (deprecated, use --legacy-ui)",
+    )
+    parser.add_argument(
+        "--legacy-ui",
+        action="store_true",
+        help="Use the classic Rich-based REPL instead of the default TUI",
     )
     parser.add_argument(
         "--continue",
@@ -669,6 +687,8 @@ async def simple_cli(
                     current_task=current_task,
                     task_status=task_status,
                     memory=memory_content,
+                    sandbox_id=sandbox_id,
+                    sandbox_type=sandbox_type,
                 )
                 if not silent:
                     console.print(f"[dim]Session saved to {session_dir}[/dim]")
@@ -721,6 +741,15 @@ async def simple_cli(
                 await bridge_mgr.stop_all()
         except Exception as e:
             console.print(f"[dim]Could not stop remote bridges: {e}[/dim]")
+
+        # Stop Trello task board server
+        try:
+            trello_server = getattr(session_state, "trello_server", None)
+            if trello_server and trello_server.is_running:
+                trello_server.stop()
+                session_state.trello_server = None
+        except Exception as e:
+            console.print(f"[dim]Could not stop Trello server: {e}[/dim]")
 
         # Cancel remote message processor task
         try:
@@ -1240,6 +1269,44 @@ def _is_api_error(e: Exception) -> bool:
 
 
 
+async def _shutdown_background_services(session_state) -> None:
+    """Best-effort teardown of background services on exit. Never raises.
+
+    The classic REPL does this in ``_cleanup_and_save_session``; the TUI path
+    needs the same so the Vixie server, managed processes, remote bridges and
+    background tasks don't dangle and throw during event-loop teardown (which
+    can leave the terminal in a broken state).
+    """
+    # Vixie desktop-pet websocket server
+    try:
+        await stop_vixie_server()
+    except Exception:  # noqa: BLE001, S110
+        pass
+    # Managed dev servers / processes
+    try:
+        await ProcessManager.get_instance().stop_all()
+    except Exception:  # noqa: BLE001, S110
+        pass
+    # Remote (Discord/Telegram) bridges
+    try:
+        bridge_mgr = getattr(session_state, "_remote_bridge_manager", None)
+        if bridge_mgr is not None:
+            await bridge_mgr.stop_all()
+    except Exception:  # noqa: BLE001, S110
+        pass
+    # Any remote message-processor task
+    try:
+        task = getattr(session_state, "_remote_processor_task", None)
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except BaseException:  # noqa: BLE001, S110
+                pass
+    except Exception:  # noqa: BLE001, S110
+        pass
+
+
 async def _run_agent_session(
     model,
     assistant_id: str,
@@ -1331,6 +1398,7 @@ async def _run_agent_session(
         store=store,
         checkpointer=checkpointer,
         is_continuation=bool(initial_messages),
+        steering_instructions=session_state.steering_instructions,
     )
 
     # Set agent context in session state for dynamic model switching
@@ -1435,13 +1503,18 @@ async def _run_agent_session(
             if exc:
                 console.print(f"\n  [red]\u274c Remote processor task died: {exc}[/red]\n")
 
-        _remote_processor_task = asyncio.create_task(
-            _remote_processor_wrapper(),
-            name="remote-message-processor",
-        )
-        _remote_processor_task.add_done_callback(_on_processor_done)
-        # Store on session_state to prevent garbage collection
-        session_state._remote_processor_task = _remote_processor_task
+        # In TUI mode the Textual app runs its own remote consumer that renders
+        # remote prompts through the event stream; skip the legacy console
+        # processor so the queue isn't double-consumed and the TUI isn't
+        # overwritten by console.print output.
+        if not getattr(session_state, "use_tui", False):
+            _remote_processor_task = asyncio.create_task(
+                _remote_processor_wrapper(),
+                name="remote-message-processor",
+            )
+            _remote_processor_task.add_done_callback(_on_processor_done)
+            # Store on session_state to prevent garbage collection
+            session_state._remote_processor_task = _remote_processor_task
     except Exception as _remote_proc_exc:
         import logging as _logging
         _logging.getLogger("novacode_cli.remote").error(
@@ -1479,6 +1552,45 @@ async def _run_agent_session(
     model_name = getattr(model, "model_name", None) or getattr(
         model, "model", "unknown"
     )
+
+    # Experimental Textual TUI (Phase 1). Opt-in via --tui; the classic REPL
+    # The TUI shares the same agent/backend/session
+    # but renders via novacode_cli.tui consuming run_agent_stream. Use --legacy-ui
+    # to switch back to the classic Rich-based REPL.
+    if getattr(session_state, "use_tui", False):
+        from novacode_cli.input import ImageTracker
+        from novacode_cli.tui import run_tui
+        from novacode_cli.ui.ui_elements import TokenTracker
+
+        token_tracker = TokenTracker()
+        token_tracker.set_baseline(baseline_tokens)
+        if model_name:
+            token_tracker.set_model(model_name)
+        session_state.token_tracker = token_tracker
+        # Prior conversation turns to replay into the transcript on resume.
+        _restored_msgs = None
+        if restored_session_data:
+            try:
+                _restored_msgs = getattr(restored_session_data[0], "messages", None)
+            except Exception:  # noqa: BLE001
+                _restored_msgs = None
+        try:
+            await run_tui(
+                agent=agent,
+                assistant_id=assistant_id,
+                session_state=session_state,
+                backend=composite_backend,
+                token_tracker=token_tracker,
+                image_tracker=ImageTracker(),
+                model_name=model_name,
+                session_manager=session_manager,
+                restored_messages=_restored_msgs,
+            )
+        finally:
+            # Always tear down background services so quitting can't crash on
+            # dangling tasks / servers after the TUI exits.
+            await _shutdown_background_services(session_state)
+        return
 
     try:
         await simple_cli(
@@ -1554,6 +1666,7 @@ async def main(
     continue_session: bool | str = False,
     resume: bool = False,
     ports: dict[int, int] | None = None,
+    explicit_sandbox: bool = True,
 ) -> None:
     """Main entry point with conditional sandbox support.
 
@@ -1566,7 +1679,17 @@ async def main(
         continue_session: If True, continue last session. If string, use as session ID.
         resume: If True, show interactive session picker to select a session to resume.
         ports: Optional port mapping for Docker sandbox {container_port: host_port}
+        explicit_sandbox: Whether the user explicitly chose the sandbox. When False
+            (the implicit Docker default), a sandbox-creation failure falls back to
+            local mode instead of exiting.
     """
+    # Hydrate API keys stored in the OS keychain into the environment so model
+    # clients (which read os.environ) can find them — keys may live only in the
+    # keychain, not in .env. Must run before create_model() below.
+    from novacode_cli.onboarding import load_secrets_into_env
+
+    load_secrets_into_env()
+
     # Initialize Vixie WebSocket server for desktop pet integration (non-blocking)
     # Server runs in background; if port is in use, it gracefully skips
     await start_vixie_server()
@@ -1584,28 +1707,34 @@ async def main(
         # Clean up checkpoint DBs older than 30 days to prevent unbounded growth
         _cleanup_old_checkpoints(checkpoints_dir, max_age_days=30)
         _db_path = str(checkpoints_dir / "nova_checkpoints.db")
-        checkpointer = _AsyncSqliteSaver.from_conn_string(_db_path)  # type: ignore
 
-        async def _setup_checkpointer_with_wal() -> None:
-            await checkpointer.setup()
-            # Enable WAL mode: concurrent reads don't block writes, and writes
-            # don't block reads — critical for async streaming + checkpoint writes.
+        async def _setup_sqlite_checkpointer():
+            # AsyncSqliteSaver.from_conn_string() is an *async context manager*,
+            # not a saver — entering/leaving it would close the connection while
+            # the session is still running. Instead, open a persistent aiosqlite
+            # connection and build the saver directly so it lives for the whole
+            # session (closed implicitly on process exit).
+            import aiosqlite
+
+            conn = await aiosqlite.connect(_db_path)
+            saver = _AsyncSqliteSaver(conn)  # type: ignore[call-arg]
+            await saver.setup()
+            # Enable WAL mode on the saver's own connection: concurrent reads
+            # don't block writes — critical for async streaming + checkpoint writes.
             try:
-                import aiosqlite
-
-                async with aiosqlite.connect(_db_path) as _db:
-                    await _db.execute("PRAGMA journal_mode=WAL")
-                    await _db.execute("PRAGMA synchronous=NORMAL")
-                    await _db.execute("PRAGMA busy_timeout=5000")
-                    await _db.commit()
+                await conn.execute("PRAGMA journal_mode=WAL")
+                await conn.execute("PRAGMA synchronous=NORMAL")
+                await conn.execute("PRAGMA busy_timeout=5000")
+                await conn.commit()
             except Exception:
                 pass  # non-fatal — default journal mode still works
+            return saver
 
         # Run model creation (heavy SDK imports) and checkpointer setup (SQLite I/O)
         # concurrently — saves ~1-2s on cold start.
-        model, _ = await asyncio.gather(
+        model, checkpointer = await asyncio.gather(
             asyncio.to_thread(create_model),
-            _setup_checkpointer_with_wal(),
+            _setup_sqlite_checkpointer(),
         )
     else:
         checkpointer = InMemorySaver()
@@ -1625,6 +1754,10 @@ async def main(
             return
         # Convert resume selection into a continue_session with the selected ID
         continue_session = selected_id
+
+    # Sandbox identity recovered from a resumed session (for reconnect).
+    restored_sandbox_id: str | None = None
+    restored_sandbox_type: str | None = None
 
     # Handle session continuation
     if continue_session:
@@ -1686,6 +1819,11 @@ async def main(
             session_state.thread_id = session_data.meta.thread_id
             session_state.is_continued = True
 
+            # Recover the sandbox used last time so we can reconnect to its
+            # container (preserving installed deps / in-container state).
+            restored_sandbox_id = getattr(session_data.meta, "sandbox_id", None)
+            restored_sandbox_type = getattr(session_data.meta, "sandbox_type", None)
+
             # Restore todos if available
             if session_data.todos:
                 session_state.todos = session_data.todos
@@ -1714,75 +1852,8 @@ async def main(
     else:
         restored_session_data = None
 
-    # Branch 1: User wants a sandbox
-    if sandbox_type != "none":
-        # Try to create sandbox
-        try:
-            console.print()
-            # Pass ports only for Docker sandbox
-            sandbox_kwargs = {
-                "sandbox_id": sandbox_id,
-                "setup_script_path": setup_script_path,
-            }
-            if sandbox_type == "docker" and ports:
-                sandbox_kwargs["ports"] = ports  # type: ignore
-
-            with create_sandbox(sandbox_type, **sandbox_kwargs) as sandbox_backend:  # type: ignore
-                console.print(
-                    f"[yellow]⚡ Remote execution enabled ({sandbox_type})[/yellow]"
-                )
-                console.print()
-
-                await _run_agent_session(
-                    model,
-                    assistant_id,
-                    session_state,
-                    sandbox_backend,
-                    sandbox_type=sandbox_type,
-                    setup_script_path=setup_script_path,
-                    initial_messages=initial_messages,
-                    session_manager=session_manager,
-                    store=store,
-                    checkpointer=checkpointer,
-                    restored_session_data=restored_session_data,
-                )
-        except (ImportError, ValueError, RuntimeError, NotImplementedError) as e:
-            # Sandbox creation failed - fail hard (no silent fallback)
-            console.print()
-            console.print("[red]❌ Sandbox creation failed[/red]")
-            console.print(f"[dim]{e}[/dim]")
-            sys.exit(1)
-        except KeyboardInterrupt:
-            console.print("\n\n[yellow]Interrupted[/yellow]")
-            sys.exit(0)
-        except Exception as e:
-            # Rate limit / API quota errors - show friendly message instead of crash
-            if _is_rate_limit_error(e):
-                console.print()
-                console.print("[bold yellow]Warning: Rate Limit Reached[/bold yellow]")
-                console.print("The model provider is rate-limiting requests.")
-                console.print("[dim]Wait a moment and try again, or check your API usage/plan limits.[/dim]")
-                console.print()
-                sys.exit(2)  # Distinct exit code - caller can retry
-            if _is_api_error(e):
-                console.print()
-                console.print(f"[bold red]API Error[/bold red]: {str(e)[:300]}")
-                console.print("[dim]The request failed. Try again or use a different model.[/dim]")
-                console.print()
-                sys.exit(2)
-            console.print("[bold red]Fatal error:[/bold red]", str(e))
-            console.print_exception()
-            dispatch_hook_fire_and_forget(HookEvent.ERROR, {
-                "error": str(e)[:500],
-                "type": type(e).__name__,
-                "session_id": session_state.session_id,
-            })
-            if session_state.session_id:
-                console.print(f"[dim]Session may have been saved -- resume with:[/dim]\n  nova --continue {session_state.session_id}")
-            sys.exit(1)
-
-    # Branch 2: User wants local mode (none or default)
-    else:
+    async def _run_local_session() -> None:
+        """Run the agent locally on the host (no sandbox)."""
         try:
             await _run_agent_session(
                 model,
@@ -1815,6 +1886,9 @@ async def main(
                 sys.exit(2)
             console.print("[bold red]Fatal error:[/bold red]", str(e))
             console.print_exception()
+            logging.getLogger("novacode_cli").error(
+                "Fatal error during session: %s", e, exc_info=True
+            )
             dispatch_hook_fire_and_forget(HookEvent.ERROR, {
                 "error": str(e)[:500],
                 "type": type(e).__name__,
@@ -1823,6 +1897,118 @@ async def main(
             if session_state.session_id:
                 console.print(f"[dim]Session may have been saved -- resume with:[/dim]\n  nova --continue {session_state.session_id}")
             sys.exit(1)
+
+    # Branch 1: User wants a sandbox
+    if sandbox_type != "none":
+        # Try to create sandbox
+        try:
+            console.print()
+            # If resuming and the user didn't pass an explicit --sandbox-id,
+            # reconnect to the container recorded in the saved session (when it
+            # was a docker session). create_docker_sandbox self-heals to a fresh
+            # container if that one no longer exists.
+            effective_sandbox_id = sandbox_id
+            if (
+                not sandbox_id
+                and sandbox_type == "docker"
+                and restored_sandbox_type == "docker"
+                and restored_sandbox_id
+            ):
+                effective_sandbox_id = restored_sandbox_id
+                console.print(
+                    f"[dim]Resuming — reconnecting to sandbox {restored_sandbox_id[:12]}...[/dim]"
+                )
+
+            sandbox_kwargs = {
+                "sandbox_id": effective_sandbox_id,
+                "setup_script_path": setup_script_path,
+            }
+            # Docker-only options: bind-mount, port forwarding, persistence.
+            if sandbox_type == "docker":
+                if ports:
+                    sandbox_kwargs["ports"] = ports  # type: ignore
+                # Bind-mount the project so the agent operates on the real files
+                # in isolation. Used only on fresh/fallback create; a reconnected
+                # container keeps its original mount.
+                sandbox_kwargs["mount_dir"] = str(Path.cwd())  # type: ignore
+                # Persist the container on exit and tie it to this session so a
+                # later resume can reconnect (preserving installed deps/state).
+                sandbox_kwargs["persist"] = True  # type: ignore
+                sandbox_kwargs["session_id"] = session_state.session_id  # type: ignore
+
+            with create_sandbox(sandbox_type, **sandbox_kwargs) as sandbox_backend:  # type: ignore
+                console.print(
+                    f"[yellow]⚡ Isolated execution enabled ({sandbox_type})[/yellow]"
+                )
+                console.print()
+
+                await _run_agent_session(
+                    model,
+                    assistant_id,
+                    session_state,
+                    sandbox_backend,
+                    sandbox_type=sandbox_type,
+                    setup_script_path=setup_script_path,
+                    initial_messages=initial_messages,
+                    session_manager=session_manager,
+                    store=store,
+                    checkpointer=checkpointer,
+                    restored_session_data=restored_session_data,
+                )
+        except (ImportError, ValueError, RuntimeError, NotImplementedError) as e:
+            console.print()
+            if not explicit_sandbox:
+                # We defaulted to Docker but it isn't available — fall back to
+                # local mode instead of blocking the user.
+                console.print(
+                    f"[yellow]⚠ Docker sandbox unavailable ({e}).[/yellow]"
+                )
+                console.print(
+                    "[dim]Falling back to local execution. "
+                    "Start Docker for isolation, or use --no-sandbox to silence this.[/dim]"
+                )
+                console.print()
+                await _run_local_session()
+            else:
+                # Sandbox was explicitly requested — fail hard (no silent fallback).
+                console.print("[red]❌ Sandbox creation failed[/red]")
+                console.print(f"[dim]{e}[/dim]")
+                sys.exit(1)
+        except KeyboardInterrupt:
+            console.print("\n\n[yellow]Interrupted[/yellow]")
+            sys.exit(0)
+        except Exception as e:
+            # Rate limit / API quota errors - show friendly message instead of crash
+            if _is_rate_limit_error(e):
+                console.print()
+                console.print("[bold yellow]Warning: Rate Limit Reached[/bold yellow]")
+                console.print("The model provider is rate-limiting requests.")
+                console.print("[dim]Wait a moment and try again, or check your API usage/plan limits.[/dim]")
+                console.print()
+                sys.exit(2)  # Distinct exit code - caller can retry
+            if _is_api_error(e):
+                console.print()
+                console.print(f"[bold red]API Error[/bold red]: {str(e)[:300]}")
+                console.print("[dim]The request failed. Try again or use a different model.[/dim]")
+                console.print()
+                sys.exit(2)
+            console.print("[bold red]Fatal error:[/bold red]", str(e))
+            console.print_exception()
+            logging.getLogger("novacode_cli").error(
+                "Fatal error during session: %s", e, exc_info=True
+            )
+            dispatch_hook_fire_and_forget(HookEvent.ERROR, {
+                "error": str(e)[:500],
+                "type": type(e).__name__,
+                "session_id": session_state.session_id,
+            })
+            if session_state.session_id:
+                console.print(f"[dim]Session may have been saved -- resume with:[/dim]\n  nova --continue {session_state.session_id}")
+            sys.exit(1)
+
+    # Branch 2: User wants local mode (none or default)
+    else:
+        await _run_local_session()
 
 
 def _execute_paths_command(args) -> None:
@@ -2149,9 +2335,29 @@ def cli_main() -> None:
             session_state = SessionState(
                 auto_approve=args.auto_approve, no_splash=args.no_splash
             )
+            # Textual TUI is the default UI. Use --legacy-ui to opt out.
+            session_state.use_tui = not bool(args.legacy_ui)
 
             # Parse port forwarding argument
             ports = parse_ports(args.ports)
+
+            # Resolve the effective sandbox and whether the user chose it
+            # explicitly. Docker is the default when nothing is specified; an
+            # explicit choice (or --no-sandbox) is honored without fallback.
+            if args.no_sandbox:
+                if args.sandbox and args.sandbox != "none":
+                    console.print("[red]Error: --no-sandbox conflicts with --sandbox.[/red]")
+                    sys.exit(1)
+                sandbox_type = "none"
+                explicit_sandbox = True
+            elif args.sandbox is not None:
+                sandbox_type = args.sandbox
+                explicit_sandbox = True
+            else:
+                # Default: bind-mounted Docker sandbox, with graceful fallback
+                # to local mode if Docker is unavailable.
+                sandbox_type = "docker"
+                explicit_sandbox = False
 
             # --resume and --continue are mutually exclusive
             if args.resume and args.continue_session:
@@ -2164,12 +2370,13 @@ def cli_main() -> None:
                 main(
                     args.agent,
                     session_state,
-                    args.sandbox,
+                    sandbox_type,
                     args.sandbox_id,
                     args.sandbox_setup,
                     args.continue_session,
                     resume=args.resume,
                     ports=ports,
+                    explicit_sandbox=explicit_sandbox,
                 )
             )
     except KeyboardInterrupt:

@@ -52,6 +52,7 @@ from novacode_cli.commands.ralph_handler import (
 from novacode_cli.commands.browser_use_handler import handle_browser_use_command
 from novacode_cli.commands.dream_handler import handle_dream_command
 from novacode_cli.commands.research_handler import handle_research_command
+from novacode_cli.commands.trello_handler import handle_trello_command
 from novacode_cli.commands.log_commands import handle_log_command
 
 
@@ -265,6 +266,17 @@ async def handle_command(
             console.print(f"[red]Error running /hooks command: {e}[/red]")
         return True
 
+    if cmd == "notifications":
+        try:
+            from novacode_cli.commands.notifications_handler import (
+                handle_notifications_command,
+            )
+
+            return await handle_notifications_command(session_state, cmd_args)
+        except Exception as e:
+            console.print(f"[red]Error running /notifications command: {e}[/red]")
+        return True
+
     if cmd == "sessions":
         try:
             return await handle_sessions_command(session_state)
@@ -451,6 +463,19 @@ async def handle_command(
             )
         except Exception as e:
             console.print(f"[red]Error running /research command: {e}[/red]")
+        return True
+
+    if cmd == "trello":
+        try:
+            return await handle_trello_command(
+                agent=agent,
+                session_state=session_state,
+                assistant_id=assistant_id,
+                token_tracker=token_tracker,
+                cmd_args=cmd_args,
+            )
+        except Exception as e:
+            console.print(f"[red]Error running /trello command: {e}[/red]")
         return True
 
     if cmd == "log":

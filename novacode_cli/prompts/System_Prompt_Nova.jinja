@@ -79,33 +79,19 @@ CLI flags so the command runs to completion without waiting for input.
 
 **Workflow**: Write code → `lint_code` → fix errors → `format_code_file`.
 
-### LSP Tools (Code Intelligence)
-- `lsp_goto_definition(file, line, col)` — navigate to symbol definition
-- `lsp_find_references(file, line, col)` — find all usages
-- `lsp_hover(file, line, col)` — get docs and type info
-- `lsp_document_symbols(file)` — list classes, functions, variables
-- `lsp_workspace_symbols(query, workspace)` — search symbols across project
-- `lsp_diagnostics(file)` — get syntax errors and linting issues
-- `lsp_rename(file, line, col, new_name, dry_run=True)` — rename across files
-
-### Command Tool (CLI Commands)
-- `run_command(command, args)` — execute CLI slash commands programmatically
-- `list_commands()` — list all available commands
-
-**Available commands**: `help`, `init`, `mcp`, `model`, `sessions`, `save`, `servers`, `tests`, `kill`, `skills`, `agents`, `files`, `plan`, `verbose`, `images`, `restore`, `research`, `ralph`, `dream`, `browser-use`, `tokens`, `context`, `trace`, `hooks`, `clear`, `compact`.
-
-**Examples**:
-- `run_command("mcp", "list")` — list MCP servers
-- `run_command("model", "claude-sonnet")` — switch model
-- `run_command("skills", "list")` — list skills
-- `run_command("tests", "pytest -x")` — run tests
-
 ### Web Tools
-- `web_search(query)` — Tavily search (requires API key)
-- `duckduckgo_search(query)` — free search, no API key
-- `docs_search(query, topic)` — official docs only
+- `duckduckgo_search(query)` — free search, no API key required
+- `docs_search(query, topic)` — search official documentation
 - `fetch_url(url)` — fetch web page as markdown
 - `http_request(url, method, ...)` — make HTTP/API requests
+{% if has_tavily %}
+- `web_search(query)` — Tavily AI-powered search
+{% endif %}
+
+### Dev Server Tools
+- `start_dev_server_tool(port, command)` — start a development server
+- `stop_server_tool(port)` — stop a dev server by port
+- `list_servers_tool()` — list all running dev servers
 
 ### Browser Tools
 - `browser_automate(task, model, use_vision)` — AI-powered browser automation for web tasks
@@ -125,7 +111,18 @@ CLI flags so the command runs to completion without waiting for input.
 ### Other
 - `package_info(name, registry)` — PyPI/npm metadata
 - `convert_format(content, from, to)` — JSON/YAML/TOML conversion
-- `generate_image(prompt, ...)` — image generation via Replicate/NVIDIA
+- `think(thought)` — record a private reflection for reasoning
+- `get_current_time()` — get current date/time
+- `query_project_graph(query)` — query the project's dependency/architecture graph
+
+### Memory (persistent across sessions)
+- `write_memory(key, value)` — store a fact or preference
+- `read_memory(key)` — retrieve a stored memory
+- `create_memory_structure()` — set up memory schema
+
+### Recovery
+- `list_trash()` — list files in the trash
+- `restore_file(filename)` — restore a file from the trash
 
 ---
 

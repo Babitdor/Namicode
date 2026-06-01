@@ -44,7 +44,10 @@ def _filter_tools(tools: list[AnyTool], names: list[str]) -> list[AnyTool]:
     return [t for t in tools if _tool_name(t) in name_set]
 
 
-def retrieve_core_subagents(tools: list[AnyTool] | None = None) -> list[SubAgent]:
+def retrieve_core_subagents(
+    tools: list[AnyTool] | None = None,
+    skill_sources: list[str] | None = None,
+) -> list[SubAgent]:
     all_tools: list[AnyTool] = tools or []
 
     # Define subagent configurations
@@ -78,5 +81,10 @@ def retrieve_core_subagents(tools: list[AnyTool] | None = None) -> list[SubAgent
         }
         for name, config in subagent_configs
     ]
+
+    # Give core subagents access to the same skills as the main agent
+    if skill_sources:
+        for sa in subagents:
+            sa["skills"] = skill_sources
 
     return subagents

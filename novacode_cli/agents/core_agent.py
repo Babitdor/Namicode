@@ -30,6 +30,36 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+# ── Patch deepagents validate_path to accept Windows paths ──────────────────
+# The deepagents FilesystemMiddleware rejects Windows absolute paths (e.g.
+# B:\...), but LLMs running on Windows sometimes produce them.  Convert
+# Windows paths to be relative to the workspace root before validation.
+import deepagents.backends.utils as _dab_utils
+
+_original_validate = _dab_utils.validate_path
+
+
+def _patched_validate_path(path: str, allowed_prefixes=None) -> str:
+    """Normalize Windows absolute paths before delegating to the real validator."""
+    # If the LLM produces a Windows absolute path, resolve it relative to the
+    # workspace root (cwd) so the virtual filesystem backend can map it.
+    m = re.match(r"^[a-zA-Z]:[/\\]", path)
+    if m:
+        try:
+            workspace = Path.cwd()
+            abs_path = Path(path)
+            rel = abs_path.relative_to(workspace)
+            path = "/" + rel.as_posix()
+        except ValueError:
+            # Not under workspace — strip drive and hope for the best
+            stripped = path[m.end() :].replace("\\", "/")
+            path = f"/{stripped}"
+    return _original_validate(path, allowed_prefixes=allowed_prefixes)
+
+
+_dab_utils.validate_path = _patched_validate_path
+# ────────────────────────────────────────────────────────────────────────────
+
 from langchain.tools import BaseTool
 from langchain_core.language_models import BaseChatModel
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -414,6 +444,7 @@ def get_system_prompt(assistant_id: str, sandbox_type: str | None = None) -> str
 
     has_tavily = getattr(settings, "has_tavily", False)
     has_e2b = bool(os.environ.get("E2B_API_KEY"))
+    has_graph = getattr(settings, "has_graph", False)
     shell_info = _get_shell_platform_info(sandbox_type)
 
     return render_template(
@@ -423,6 +454,7 @@ def get_system_prompt(assistant_id: str, sandbox_type: str | None = None) -> str
         skills_directory=agent_dir_path,
         has_tavily=has_tavily,
         has_e2b=has_e2b,
+        has_graph=has_graph,
         **shell_info,
     )
 
@@ -439,6 +471,7 @@ def create_agent_with_config(
     store: InMemoryStore | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
     is_continuation: bool = False,
+    steering_instructions: list | None = None,
 ) -> tuple[Pregel, CompositeBackend]:
     """Create and configure an agent with the specified model and tools.
 
@@ -629,7 +662,6 @@ def create_agent_with_config(
     # Lazy imports for middleware (speeds up startup)
     from novacode_cli.bootstrap import BootstrapMiddleware, GraphContextMiddleware
     from novacode_cli.bootstrap.steering import SteeringMiddleware
-    from novacode_cli.tracking.run_logger import RunLoggerMiddleware
     from novacode_cli.memory.agent_memory import AgentMemoryMiddleware
     from novacode_cli.shell import ShellMiddleware
     from novacode_cli.tracking.file_tracker import FileTrackerMiddleware
@@ -653,10 +685,11 @@ def create_agent_with_config(
     agent_middleware = [
         BootstrapMiddleware(workspace_root=str(workspace_root)),
         GraphContextMiddleware(workspace_root=str(workspace_root)),
-        SteeringMiddleware(),
-        RunLoggerMiddleware(
-            workspace_root=str(workspace_root), model_name=str(_model_name)
-        ),
+        # Connect to the session's shared steering list so /steer AND live
+        # mid-run steering (TUI) reach the model — the middleware reads this
+        # list on every model call, so appends made while the agent is working
+        # take effect on its next step.
+        SteeringMiddleware(instructions=steering_instructions),
         FileTrackerMiddleware(
             enforce_read_before_edit=True,
             truncate_results=True,
@@ -666,6 +699,11 @@ def create_agent_with_config(
             workspace_root=str(workspace_root),
             env=dict(os.environ),
             backend=composite_backend,  # Route through CompositeBackend for /skills/ etc.
+            # When in a sandbox, show the in-sandbox working dir (e.g. /workspace)
+            # in the tool description instead of the host path.
+            sandbox_working_dir=(
+                get_default_working_dir(sandbox_type) if sandbox_type else None
+            ),
         ),
         AgentMemoryMiddleware(
             settings=settings,
@@ -682,8 +720,13 @@ def create_agent_with_config(
 
         agent_middleware.insert(2, get_shared_mcp_middleware())
 
+    # NOTE: automatic context-window summarization is provided by
+    # create_deep_agent's built-in SummarizationMiddleware (part of its tail
+    # stack) — do NOT add another here or agent creation fails with
+    # "duplicate middleware instances".
+
     # Load pre-defined default and user defined subagents
-    Nova_SubAgent.extend(retrieve_core_subagents(tools=tools))  # type: ignore
+    Nova_SubAgent.extend(retrieve_core_subagents(tools=tools, skill_sources=skill_sources))  # type: ignore
     Nova_SubAgent.extend(build_named_subagents(assistant_id=assistant_id, tools=tools))  # type: ignore
 
     # Load async subagents (run on remote LangGraph servers in background)

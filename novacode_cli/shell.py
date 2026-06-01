@@ -244,6 +244,14 @@ DANGEROUS_PATTERNS = [
     r"(curl|wget)\s+.*\|\s*(bash|sh|python|python3|node|ruby|perl)",
     # Recursive world-writable permission on /
     r"chmod\s+(-\w*R|-R\w*)\s+[0-7]*7+\s+/",
+    # Privilege escalation
+    r"\bsudo\b",
+    # Environment dump (leaks API keys)
+    r"\benv\b",
+    # SSH key theft
+    r"\bcat\s+.*\.ssh[/\\]",
+    # File ownership change (often used in container escape)
+    r"\bchown\b",
 ]
 
 _COMPILED_PATTERNS = [re.compile(p, re.IGNORECASE) for p in PROMPT_PATTERNS]
@@ -264,6 +272,9 @@ _COMPILED_AUTO_ANSWER: dict[re.Pattern[str], str] = {
 # Regex to detect `npx` commands that don't already have --yes/-y so we can inject it.
 _NPX_YES_RE = re.compile(r"^(npx)\s+(?!--yes\b)(?!-y\b)", re.IGNORECASE)
 
+# Known API key / token environment variable suffixes.
+_API_KEY_SUFFIXES = frozenset({"_API_KEY", "_API_TOKEN", "_TOKEN", "_SECRET"})
+
 # Environment variables that can redirect interpreter loading or import resolution.
 # Stripped from the subprocess environment before execution.
 _DANGEROUS_ENV_VARS: frozenset[str] = frozenset(
@@ -273,12 +284,48 @@ _DANGEROUS_ENV_VARS: frozenset[str] = frozenset(
         "PYTHONEXECUTABLE",
         "PYTHONHOME",
         "COMSPEC",  # Windows command interpreter
-        "LD_PRELOAD",  # Linux dyNovac linker injection
+        "LD_PRELOAD",  # Linux dynamic linker injection
         "LD_LIBRARY_PATH",
         "DYLD_INSERT_LIBRARIES",  # macOS equivalent of LD_PRELOAD
         "DYLD_LIBRARY_PATH",
+        # API keys — never leak to subprocesses
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GOOGLE_API_KEY",
+        "OPENROUTER_API_KEY",
+        "TAVILY_API_KEY",
+        "REPLICATE_API_KEY",
+        "REPLICATE_API_TOKEN",
+        "E2B_API_KEY",
+        "GROQ_API_KEY",
+        "NVIDIA_API_KEY",
+        "LANGSMITH_API_KEY",
     }
 )
+
+
+def _sanitize_env(env: dict[str, str]) -> dict[str, str]:
+    """Strip dangerous and secret env vars from a subprocess environment copy.
+
+    Removes all env vars whose names appear in ``_DANGEROUS_ENV_VARS`` OR
+    that end with common API-key / token suffixes.
+
+    Args:
+        env: A mutable copy of working environment (e.g. ``os.environ.copy()``).
+
+    Returns:
+        The cleaned env dict.
+    """
+    to_strip: set[str] = set(_DANGEROUS_ENV_VARS)
+    for key in env:
+        upper = key.upper()
+        for suffix in _API_KEY_SUFFIXES:
+            if upper.endswith(suffix):
+                to_strip.add(key)
+                break
+    for k in to_strip:
+        env.pop(k, None)
+    return env
 
 
 def is_dangerous_command(command: str) -> tuple[bool, str]:
@@ -392,6 +439,7 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         max_output_bytes: int = 100_000,
         env: dict[str, str] | None = None,
         backend: Any = None,
+        sandbox_working_dir: str | None = None,
     ) -> None:
         """Initialize an instance of `ShellMiddleware`.
 
@@ -406,12 +454,15 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
             backend: Optional sandbox backend for remote execution. When provided,
                 commands will be executed in the sandbox instead of locally.
                 Must implement SandboxBackendProtocol with an execute() method.
+            sandbox_working_dir: Working directory inside the sandbox (e.g.
+                "/workspace"), used only for the tool description shown to the
+                model when running in a sandbox. Falls back to workspace_root.
         """
         super().__init__()
         self._timeout = timeout
         self._max_output_bytes = max_output_bytes
         self._tool_name = "shell"
-        self._env = ShellMiddleware._sanitize_env(
+        self._env = _sanitize_env(
             env if env is not None else os.environ.copy()
         )
         self._workspace_root = workspace_root
@@ -425,11 +476,23 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
 
         atexit.register(self._cleanup_background_processes)
 
+        # Whether commands actually execute in a sandbox. A CompositeBackend is
+        # always passed (for /skills/ etc. routing), so "backend is not None" is
+        # not a reliable signal — check whether the *default* backend supports
+        # remote execution.
+        _is_sandbox = self._supports_sandbox_execution()
+        # Directory shown to the model in the tool description.
+        _display_dir = (
+            (sandbox_working_dir or self._workspace_root)
+            if _is_sandbox
+            else self._workspace_root
+        )
+
         # Determine shell and platform for this environment
-        if backend is not None:
+        if _is_sandbox:
             # Sandboxes are always Linux/bash
             _shell_name = "bash"
-            _platform_note = "You are operating in a **remote Linux sandbox** — always use bash syntax."
+            _platform_note = "You are operating in an **isolated Linux sandbox** — always use bash syntax."
         elif sys.platform == "win32":
             _shell_name = "PowerShell"
             _platform_note = (
@@ -446,13 +509,13 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
             _platform_note = "The host is **Linux** — use bash syntax."
 
         # Determine execution context for description
-        if backend is not None:
+        if _is_sandbox:
             execution_context = (
-                f"You are operating in a **remote sandbox environment** at {self._workspace_root}. "
-                f"All commands execute remotely in the sandbox, not on the local machine. "
+                f"You are operating in an **isolated sandbox environment** at {_display_dir}. "
+                f"All commands execute inside the sandbox, not on the local machine. "
             )
         else:
-            execution_context = f"Commands run in **{_shell_name}** in the working directory: {self._workspace_root}. "
+            execution_context = f"Commands run in **{_shell_name}** in the working directory: {_display_dir}. "
 
         # Build description with working directory and platform information
         description = (
@@ -540,18 +603,6 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
             pass
 
     @staticmethod
-    def _sanitize_env(env: dict[str, str]) -> dict[str, str]:
-        """Remove env vars that can redirect interpreter or import resolution.
-
-        Args:
-            env: The environment dict to sanitize.
-
-        Returns:
-            A new dict with dangerous variables removed.
-        """
-        return {k: v for k, v in env.items() if k not in _DANGEROUS_ENV_VARS}
-
-    @staticmethod
     def _preprocess_command(command: str) -> str:
         """Inject --yes into npx commands to skip package-install prompts."""
         return _NPX_YES_RE.sub(r"\1 --yes ", command)
@@ -621,45 +672,39 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
             )
 
     def _supports_sandbox_execution(self) -> bool:
-        """Check if the backend supports sandbox execution.
+        """Check whether the backend can actually execute shell commands.
 
-        CompositeBackend always has an ``execute`` attribute, but it raises
-        ``NotImplementedError`` when the *default* backend doesn't implement
-        ``SandboxBackendProtocol``.  We therefore check the default backend
-        directly rather than just testing for the attribute.
+        This must use the *exact same* test that ``CompositeBackend.execute``
+        uses internally — ``isinstance(default, SandboxBackendProtocol)`` —
+        otherwise the two disagree: the old duck-typed check (``hasattr
+        execute``) returned True for any non-Filesystem default with an
+        ``execute`` attr (including ``CompositeBackend`` itself, whose
+        ``execute`` always exists but raises ``NotImplementedError`` when the
+        default isn't a real sandbox). That mismatch produced the
+        "Sandbox execution not available" error. By checking the protocol
+        directly we guarantee that whenever this returns True, ``execute``
+        succeeds — and when it returns False we fall back to local execution.
 
         Returns:
-            True if backend implements SandboxBackendProtocol with execute method.
+            True only if the (default) backend implements SandboxBackendProtocol.
         """
         if self._backend is None:
             return False
 
-        # CompositeBackend: check the *default* backend, not the composite itself.
-        # CompositeBackend.execute() always exists but raises NotImplementedError
-        # when the default backend isn't a sandbox.
+        from deepagents.backends.protocol import SandboxBackendProtocol
+
+        # CompositeBackend: execution always delegates to the *default* backend,
+        # so the sandbox question is really "is the default a sandbox?".
         try:
             from deepagents.backends import CompositeBackend
-            from deepagents.backends.filesystem import FilesystemBackend
 
             if isinstance(self._backend, CompositeBackend):
-                default = self._backend.default
-                # FilesystemBackend is the local-mode default — it does NOT
-                # support sandbox execution even though CompositeBackend has
-                # an execute() method (which raises NotImplementedError).
-                if isinstance(default, FilesystemBackend):
-                    return False
-                # Any other default (ModalBackend, DockerBackend, etc.) is a
-                # real sandbox backend that supports execute().
-                return hasattr(default, "execute") and callable(
-                    getattr(default, "execute", None)
-                )
+                return isinstance(self._backend.default, SandboxBackendProtocol)
         except ImportError:
             pass
 
-        # Direct backend: duck-type check for execute method.
-        return hasattr(self._backend, "execute") and callable(
-            getattr(self._backend, "execute", None)
-        )
+        # Direct backend: it supports execution iff it is a sandbox backend.
+        return isinstance(self._backend, SandboxBackendProtocol)
 
     def _run_shell_command(
         self,
@@ -748,7 +793,7 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
             result = self._backend.execute(command)
 
             # Format output for LLM consumption
-            output = result.output if result.output else "<no output>"
+            output = result.output or "<no output>"
 
             if len(output) > self._max_output_bytes:
                 output = output[: self._max_output_bytes]
@@ -881,58 +926,18 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
                     initial_output=partial_output,
                 )  # type: ignore
 
-            # No prompt detected - it's just a slow command, let it continue
-            # Run again with full timeout
-            try:
-                result = subprocess.run(  # noqa: S602
-                    command,
-                    check=False,
-                    shell=True,
-                    capture_output=True,
-                    timeout=self._timeout,
-                    env=self._env,
-                    cwd=self._workspace_root,
-                )
-
-                stdout = (result.stdout or b"").decode("utf-8", errors="replace")
-                stderr = (result.stderr or b"").decode("utf-8", errors="replace")
-
-                output_parts = []
-                if stdout.strip():
-                    output_parts.append(stdout)
-                if stderr.strip():
-                    stderr_lines = stderr.strip().split("\n")
-                    output_parts.extend(f"[stderr] {line}" for line in stderr_lines)
-
-                output = "\n".join(output_parts) if output_parts else "<no output>"
-
-                if len(output) > self._max_output_bytes:
-                    output = output[: self._max_output_bytes]
-                    output += (
-                        f"\n\n... Output truncated at {self._max_output_bytes} bytes."
-                    )
-
-                if result.returncode != 0:
-                    output = f"{output.rstrip()}\n\nExit code: {result.returncode}"
-                    status = "error"
-                else:
-                    status = "success"
-
-                return ToolMessage(
-                    content=output,
-                    tool_call_id=tool_call_id,
-                    name=self._tool_name,
-                    status=status,
-                )
-
-            except subprocess.TimeoutExpired:
-                output = f"Error: Command timed out after {self._timeout:.1f} seconds."
-                return ToolMessage(
-                    content=output,
-                    tool_call_id=tool_call_id,
-                    name=self._tool_name,
-                    status="error",
-                )
+            # No prompt detected — return partial output from the first attempt
+            # instead of re-running. This avoids double-execution of side-effectful
+            # commands (INSERT, git push, etc.) and wasteful re-execution.
+            partial_output = (partial_output.strip() or "<no output before timeout>")
+            return ToolMessage(
+                content=partial_output
+                + f"\n\n[Command timed out after {prompt_detection_timeout:.1f}s. "
+                f"No interactive prompt detected — partial output shown above.]",
+                tool_call_id=tool_call_id,
+                name=self._tool_name,
+                status="error",
+            )
 
     def _run_interactive_shell_command(
         self,
@@ -1191,7 +1196,7 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
                 # Wait briefly for graceful shutdown
                 try:
                     await asyncio.wait_for(process.wait(), timeout=2.0)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     # Force kill if process doesn't terminate
                     try:
                         process.kill()
@@ -1518,7 +1523,7 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
                                 )
                                 if not chunk:
                                     break
-                            except (_asyncio.TimeoutError, Exception):
+                            except (TimeoutError, Exception):
                                 if proc_stdout.at_eof():
                                     break
 

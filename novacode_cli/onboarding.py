@@ -5,8 +5,11 @@ workflow for first-time setup.
 """
 
 import json
+import logging
 import os
 import stat
+import sys
+import time
 from contextlib import contextmanager
 from getpass import getpass
 from typing import Any
@@ -14,16 +17,18 @@ from typing import Any
 import requests
 from rich.console import Console
 from rich.panel import Panel
-
+from pathlib import Path
 from novacode_cli.config.config import HOME_DIR
 from novacode_cli.config.nova_config import NovaConfig
 
-import sys
 if sys.platform == "win32":
     import io
+
     console = Console(file=io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8"))
 else:
     console = Console()
+
+logger = logging.getLogger(__name__)
 
 # API key names for all supported providers
 API_KEY_NAMES = {
@@ -31,11 +36,63 @@ API_KEY_NAMES = {
     "openai": "openai_api_key",
     "anthropic": "anthropic_api_key",
     "google": "google_api_key",
+    "openrouter": "openrouter_api_key",
     "groq": "groq_api_key",
     "e2b": "e2b_api_key",
     "replicate": "replicate_api_key",
     "nvidia": "nvidia_api_key",
 }
+
+
+def _atomic_write_json(path: Path, data: Any) -> None:
+    """Write JSON data atomically to *path* via a temp file + replace.
+
+    Uses Path.replace (os.replace), not rename: on Windows rename raises
+    FileExistsError when the target exists; replace overwrites atomically.
+    """
+    tmp_path = path.with_suffix(".tmp." + str(os.getpid()))
+    try:
+        tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        tmp_path.replace(path)
+    except Exception:
+        # Clean up temp file on failure
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise
+
+
+def _acquire_lock(lock_path: Path, timeout: float = 5.0) -> bool:
+    """Try to acquire an exclusive lock file with a timeout.
+
+    Returns True if the lock was acquired, False if it timed out.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(fd)
+            return True
+        except FileExistsError:
+            # Check if the lock is stale (>2 seconds old)
+            try:
+                mtime = lock_path.stat().st_mtime
+                if time.time() - mtime > 2.0:
+                    lock_path.unlink(missing_ok=True)
+                    continue
+            except OSError:
+                pass
+            time.sleep(0.05)
+    return False
+
+
+def _release_lock(lock_path: Path) -> None:
+    """Release an exclusive lock file."""
+    try:
+        lock_path.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 @contextmanager
@@ -50,6 +107,30 @@ def _temporary_env(key: str, value: str):
             os.environ.pop(key, None)
         else:
             os.environ[key] = old
+
+
+def load_secrets_into_env() -> None:
+    """Copy stored API keys from the secret manager into ``os.environ``.
+
+    Model clients (ChatOpenAI, ChatAnthropic, ...) read their keys from
+    environment variables, but keys may be stored only in the OS keychain.
+    This hydrates them into the environment — without overriding values already
+    set via ``.env`` or the shell — so providers work at startup and after
+    switching via ``/model``. Env var name is derived as ``<KEY>.upper()``
+    (e.g. ``openrouter_api_key`` -> ``OPENROUTER_API_KEY``).
+    """
+    try:
+        secret_manager = SecretManager()
+    except Exception:  # noqa: BLE001
+        return  # keyring unavailable — nothing to hydrate
+
+    for key_name in API_KEY_NAMES.values():
+        try:
+            value = secret_manager.get_secret(key_name)
+        except Exception:  # noqa: BLE001
+            value = None
+        if value:
+            os.environ.setdefault(key_name.upper(), value)
 
 
 class SecretManager:
@@ -77,7 +158,9 @@ class SecretManager:
             pass
 
         if not self.use_keyring:
-            console.print("[yellow]⚠ OS keychain not available, using file-based storage[/yellow]")
+            console.print(
+                "[yellow]⚠ OS keychain not available, using file-based storage[/yellow]"
+            )
             self._ensure_fallback_file()
 
     def _ensure_fallback_file(self) -> None:
@@ -111,16 +194,32 @@ class SecretManager:
         try:
             if self.use_keyring:
                 self.keyring.set_password(self.SERVICE_NAME, key, value)
-            else:
-                # Fallback: JSON file
+                return True
+
+            # Fallback: JSON file with locking + atomic write
+            lock_path = self.FALLBACK_FILE.with_suffix(".lock")
+            if not _acquire_lock(lock_path):
+                logger.warning("Could not acquire lock for secrets file (store)")
+                console.print("[red]✗ Could not lock secrets file[/red]")
+                return False
+            try:
                 secrets = {}
                 if self.FALLBACK_FILE.exists():
                     secrets = json.loads(self.FALLBACK_FILE.read_text(encoding="utf-8"))
                 secrets[key] = value
-                self.FALLBACK_FILE.write_text(json.dumps(secrets, indent=2), encoding="utf-8")
+                _atomic_write_json(self.FALLBACK_FILE, secrets)
+            finally:
+                _release_lock(lock_path)
             return True
-        except Exception as e:  # noqa: BLE001
+        except OSError as e:
+            logger.error("Failed to store secret %s: %s", key, e, exc_info=True)
             console.print(f"[red]✗ Failed to store secret: {e}[/red]")
+            return False
+        except json.JSONDecodeError as e:
+            logger.error(
+                "Corrupted secrets file when storing %s: %s", key, e, exc_info=True
+            )
+            console.print("[red]✗ Corrupted secrets file[/red]")
             return False
 
     def get_secret(self, key: str) -> str | None:
@@ -135,12 +234,23 @@ class SecretManager:
         try:
             if self.use_keyring:
                 return self.keyring.get_password(self.SERVICE_NAME, key)
-            # Fallback: JSON file
-            if self.FALLBACK_FILE.exists():
+
+            # Fallback: JSON file with lock
+            if not self.FALLBACK_FILE.exists():
+                return None
+
+            lock_path = self.FALLBACK_FILE.with_suffix(".lock")
+            _acquire_lock(lock_path, timeout=2.0)
+            try:
                 secrets = json.loads(self.FALLBACK_FILE.read_text(encoding="utf-8"))
                 return secrets.get(key)
+            finally:
+                _release_lock(lock_path)
+        except OSError as e:
+            logger.warning("Failed to read secrets file for %s: %s", key, e)
             return None
-        except Exception:  # noqa: BLE001
+        except json.JSONDecodeError as e:
+            logger.warning("Corrupted secrets file when reading %s: %s", key, e)
             return None
 
     def delete_secret(self, key: str) -> bool:
@@ -157,16 +267,26 @@ class SecretManager:
                 try:
                     self.keyring.delete_password(self.SERVICE_NAME, key)
                 except self.keyring.errors.PasswordDeleteError:
-                    # Key doesn't exist, that's ok
                     pass
-            # Fallback: JSON file
-            elif self.FALLBACK_FILE.exists():
+                return True
+
+            # Fallback: JSON file with locking + atomic write
+            if not self.FALLBACK_FILE.exists():
+                return True
+
+            lock_path = self.FALLBACK_FILE.with_suffix(".lock")
+            if not _acquire_lock(lock_path):
+                logger.warning("Could not acquire lock for secrets file (delete)")
+                return False
+            try:
                 secrets = json.loads(self.FALLBACK_FILE.read_text(encoding="utf-8"))
                 secrets.pop(key, None)
-                self.FALLBACK_FILE.write_text(json.dumps(secrets, indent=2), encoding="utf-8")
+                _atomic_write_json(self.FALLBACK_FILE, secrets)
+            finally:
+                _release_lock(lock_path)
             return True
-        except Exception as e:  # noqa: BLE001
-            console.print(f"[red]✗ Failed to delete secret: {e}[/red]")
+        except OSError as e:
+            logger.error("Failed to delete secret %s: %s", key, e, exc_info=True)
             return False
 
     def list_secrets(self) -> list[str]:
@@ -177,17 +297,26 @@ class SecretManager:
         """
         if self.use_keyring:
             # Keyring doesn't provide list functionality, so we check known keys
-            return [
-                key
-                for key in API_KEY_NAMES.values()
-                if self.keyring.get_password(self.SERVICE_NAME, key)
-            ]
+            secrets: list[str] = []
+            for key in API_KEY_NAMES.values():
+                try:
+                    if self.keyring.get_password(self.SERVICE_NAME, key):
+                        secrets.append(key)
+                except Exception:  # noqa: BLE001
+                    continue
+            return secrets
         # Fallback: JSON file
         if self.FALLBACK_FILE.exists():
             try:
-                secrets = json.loads(self.FALLBACK_FILE.read_text(encoding="utf-8"))
-                return list(secrets.keys())
-            except Exception:  # noqa: BLE001
+                lock_path = self.FALLBACK_FILE.with_suffix(".lock")
+                _acquire_lock(lock_path, timeout=2.0)
+                try:
+                    secrets = json.loads(self.FALLBACK_FILE.read_text(encoding="utf-8"))
+                    return list(secrets.keys())
+                finally:
+                    _release_lock(lock_path)
+            except (json.JSONDecodeError, OSError) as e:
+                logger.warning("Failed to list secrets: %s", e)
                 return []
         return []
 
@@ -207,6 +336,8 @@ class OnboardingWizard:
         "1": {"name": "ollama", "display": "Ollama (local)"},
         "2": {"name": "openai", "display": "OpenAI"},
         "3": {"name": "anthropic", "display": "Anthropic"},
+        "4": {"name": "google", "display": "Google (Gemini)"},
+        "5": {"name": "openrouter", "display": "OpenRouter"},
     }
 
     def __init__(self) -> None:
@@ -278,7 +409,9 @@ class OnboardingWizard:
         if self.secret_manager.use_keyring:
             console.print("[dim]API keys stored in system keychain[/dim]")
         else:
-            console.print(f"[dim]API keys stored in {self.secret_manager.FALLBACK_FILE}[/dim]")
+            console.print(
+                f"[dim]API keys stored in {self.secret_manager.FALLBACK_FILE}[/dim]"
+            )
         console.print()
         console.print("[bold cyan]You're ready to go![/bold cyan]\"")
 
@@ -359,7 +492,9 @@ class OnboardingWizard:
         """
         console.print()
         console.print("[bold]Sandbox execution provider (E2B):[/bold]")
-        console.print("  [dim]Required for secure code execution. Press Enter to skip.[/dim]")
+        console.print(
+            "  [dim]Required for secure code execution. Press Enter to skip.[/dim]"
+        )
         console.print("  [dim]Get your free API key at: https://e2b.dev[/dim]")
         e2b_key = getpass("  E2B API key: ")
 
@@ -377,7 +512,9 @@ class OnboardingWizard:
         """
         console.print()
         console.print("[bold]Image generation provider (Replicate):[/bold]")
-        console.print("  [dim]Required for AI image generation. 50 free images/month.[/dim]")
+        console.print(
+            "  [dim]Required for AI image generation. 50 free images/month.[/dim]"
+        )
         console.print(
             "  [dim]Get your free API key at: https://replicate.com/account/api-tokens[/dim]"
         )
@@ -399,9 +536,7 @@ class OnboardingWizard:
         console.print()
         console.print("[bold]NVIDIA NIM provider:[/bold]")
         console.print("  [dim]Required for NVIDIA NIM models and tools.[/dim]")
-        console.print(
-            "  [dim]Get your free API key at: https://build.nvidia.com[/dim]"
-        )
+        console.print("  [dim]Get your free API key at: https://build.nvidia.com[/dim]")
         console.print("  [dim]Press Enter to skip.[/dim]")
         nvidia_key = getpass("  NVIDIA API key: ")
 
@@ -489,7 +624,9 @@ class OnboardingWizard:
 
                 executor = E2BExecutor(api_key=e2b_key)
                 # Simple test execution
-                result = executor.execute("print('test')", language="python", timeout=10)
+                result = executor.execute(
+                    "print('test')", language="python", timeout=10
+                )
                 if result.exit_code == 0:
                     console.print("[green]✓[/green]")
                 else:
@@ -592,18 +729,30 @@ class OnboardingWizard:
                 # No models installed
                 model_name = "minimax-m2.1:cloud"  # Set as default anyway
                 console.print()
-                console.print("[yellow]⚠ No Ollama models found on your system[/yellow]")
+                console.print(
+                    "[yellow]⚠ No Ollama models found on your system[/yellow]"
+                )
                 console.print()
                 console.print("[bold]To install Ollama models:[/bold]")
-                console.print("  1. Install a model: [cyan]ollama pull minimax-m2.1:cloud[/cyan]")
-                console.print("  2. Or browse models: [cyan]https://ollama.com/library[/cyan]")
+                console.print(
+                    "  1. Install a model: [cyan]ollama pull minimax-m2.1:cloud[/cyan]"
+                )
+                console.print(
+                    "  2. Or browse models: [cyan]https://ollama.com/library[/cyan]"
+                )
                 console.print()
                 console.print(
                     "[dim]After installing models, use the [bold]/model[/bold] command to configure them[/dim]"
                 )
                 console.print()
         else:
-            model_name = "default"
+            # Cloud providers: persist the provider's real default model id
+            # (e.g. "anthropic/claude-3.5-sonnet") so model creation gets a valid
+            # name rather than the literal "default".
+            from novacode_cli.config.model_manager import MODEL_PRESETS
+
+            preset = MODEL_PRESETS.get(provider)
+            model_name = preset["default_model"] if preset else "default"
 
         self.Nova_config.set_model_config(provider, model_name)
 

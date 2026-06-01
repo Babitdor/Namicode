@@ -1,19 +1,20 @@
 """Handler for the /hooks command for hook management."""
 
 import json
+import shutil
+import time
 from pathlib import Path
+
 from prompt_toolkit import PromptSession
-from rich.console import Console
 from rich.table import Table
-from rich.text import Text
 
 from novacode_cli.config.config import COLORS, console
 from novacode_cli.hooks import (
-    HOOKS_FILE,
     HOOKS_DIR,
+    HOOKS_FILE,
+    HookEvent,
     _load_hooks,
     reload_hooks,
-    HookEvent,
 )
 
 
@@ -27,7 +28,7 @@ async def handle_hooks_command(cmd_args: str | None = None) -> bool:
         True (command always handled)
     """
     session = PromptSession()
-    
+
     # Parse command arguments
     if cmd_args:
         args = cmd_args.strip().split()
@@ -36,37 +37,36 @@ async def handle_hooks_command(cmd_args: str | None = None) -> bool:
     else:
         subcommand = None
         subargs = []
-    
+
     # Handle subcommands
     if subcommand == "list":
         return _list_hooks()
-    elif subcommand == "add":
+    if subcommand == "add":
         return await _add_hook(session, subargs)
-    elif subcommand == "remove":
+    if subcommand == "remove":
         return await _remove_hook(session, subargs)
-    elif subcommand == "enable":
+    if subcommand == "enable":
         return await _enable_hook(session, subargs)
-    elif subcommand == "disable":
+    if subcommand == "disable":
         return await _disable_hook(session, subargs)
-    elif subcommand == "test":
+    if subcommand == "test":
         return await _test_hook(session, subargs)
-    elif subcommand == "reload":
+    if subcommand == "reload":
         return _reload_hooks()
-    elif subcommand == "logs":
+    if subcommand == "logs":
         return _view_logs(subargs)
-    elif subcommand == "events":
+    if subcommand == "events":
         return _list_events()
-    elif subcommand == "help":
+    if subcommand == "help":
         return _show_help()
-    else:
-        # Interactive menu
-        return await _interactive_menu(session)
+    # Interactive menu
+    return await _interactive_menu(session)
 
 
 def _list_hooks() -> bool:
     """List all configured hooks."""
     hooks = _load_hooks()
-    
+
     if not hooks:
         console.print()
         console.print("[yellow]No hooks configured[/yellow]")
@@ -74,19 +74,19 @@ def _list_hooks() -> bool:
         console.print("[dim]Use '/hooks add' to add a new hook[/dim]")
         console.print()
         return True
-    
+
     table = Table(title="Configured Hooks", show_header=True, header_style="bold")
     table.add_column("#", style="dim", width=3)
     table.add_column("Command", style="cyan")
     table.add_column("Events", style="green")
     table.add_column("Status", style="yellow")
-    
+
     for i, hook in enumerate(hooks, 1):
         command = " ".join(hook.get("command", []))
         events = ", ".join(hook.get("events", ["<all>"]))
         status = "✓" if hook.get("enabled", True) else "✗"
         table.add_row(str(i), command, events, status)
-    
+
     console.print()
     console.print(table)
     console.print()
@@ -100,52 +100,69 @@ async def _add_hook(session: PromptSession, args: list[str]) -> bool:
     console.print()
     console.print("[bold]Add New Hook[/bold]", style=COLORS["primary"])
     console.print()
-    
+
     # Get command
     if args:
         command_str = " ".join(args)
     else:
         console.print("[dim]Enter the command to execute (e.g., 'python /path/to/script.py')[/dim]")
         command_str = (await session.prompt_async("Command: ")).strip()
-    
+
     if not command_str:
         console.print("[red]✗ Command is required[/red]")
         return True
-    
+
+    # Validate command before splitting
+    _SHELL_METACHARACTERS = set("`$|;&")
+    for c in _SHELL_METACHARACTERS:
+        if c in command_str:
+            console.print(f"[red]✗ Shell metacharacter '{c}' not allowed in command[/red]")
+            return True
+
     command = command_str.split()
-    
+
+    # Validate the binary exists
+    binary = command[0]
+    if "/" in binary and not Path(binary).is_file():
+        console.print(f"[red]✗ Command binary not found: {binary}[/red]")
+        return True
+    if "/" not in binary and not shutil.which(binary):
+        console.print(f"[red]✗ Command not found on PATH: {binary}[/red]")
+        console.print("[dim]Install the tool or use an absolute path[/dim]")
+        return True
+
     # Get events
     console.print()
     console.print("[dim]Enter events to subscribe to (comma-separated), or press Enter for all events[/dim]")
     console.print(f"[dim]Available events: {', '.join([e for e in dir(HookEvent) if not e.startswith('_')])}[/dim]")
-    
+
     events_str = (await session.prompt_async("Events: ")).strip()
-    
+
     if events_str:
         events = [e.strip() for e in events_str.split(",")]
         # Validate events
-        valid_events = {e for e in dir(HookEvent) if not e.startswith('_')}
+        valid_events = {e for e in dir(HookEvent) if not e.startswith("_")}
         invalid_events = [e for e in events if e not in valid_events]
-        
+
         if invalid_events:
             console.print(f"[red]✗ Invalid events: {', '.join(invalid_events)}[/red]")
             console.print(f"[dim]Valid events: {', '.join(valid_events)}[/dim]")
             return True
     else:
         events = []
-    
+
     # Load existing hooks
     hooks = _load_hooks()
-    
+
     # Add new hook
     new_hook = {
         "command": command,
         "events": events,
         "enabled": True
     }
-    
+
     hooks.append(new_hook)
-    
+
     # Save hooks
     if _save_hooks(hooks):
         console.print()
@@ -158,19 +175,19 @@ async def _add_hook(session: PromptSession, args: list[str]) -> bool:
         console.print()
     else:
         console.print("[red]✗ Failed to save hook configuration[/red]")
-    
+
     return True
 
 
 async def _remove_hook(session: PromptSession, args: list[str]) -> bool:
     """Remove a hook by index."""
     hooks = _load_hooks()
-    
+
     if not hooks:
         console.print()
         console.print("[yellow]No hooks configured[/yellow]")
         return True
-    
+
     # Get hook index
     if args:
         try:
@@ -182,25 +199,25 @@ async def _remove_hook(session: PromptSession, args: list[str]) -> bool:
         console.print()
         console.print("[bold]Remove Hook[/bold]", style=COLORS["primary"])
         console.print()
-        
+
         # Show hooks
         _list_hooks()
-        
+
         index_str = (await session.prompt_async("Enter hook number to remove: ")).strip()
-        
+
         try:
             index = int(index_str) - 1
         except ValueError:
             console.print("[red]✗ Invalid hook number[/red]")
             return True
-    
+
     if index < 0 or index >= len(hooks):
         console.print(f"[red]✗ Hook {index + 1} does not exist[/red]")
         return True
-    
+
     # Remove hook
     removed_hook = hooks.pop(index)
-    
+
     # Save hooks
     if _save_hooks(hooks):
         console.print()
@@ -209,7 +226,7 @@ async def _remove_hook(session: PromptSession, args: list[str]) -> bool:
         console.print()
     else:
         console.print("[red]✗ Failed to save hook configuration[/red]")
-    
+
     return True
 
 
@@ -226,12 +243,12 @@ async def _disable_hook(session: PromptSession, args: list[str]) -> bool:
 async def _toggle_hook(session: PromptSession, args: list[str], enabled: bool) -> bool:
     """Toggle hook enabled/disabled status."""
     hooks = _load_hooks()
-    
+
     if not hooks:
         console.print()
         console.print("[yellow]No hooks configured[/yellow]")
         return True
-    
+
     # Get hook index
     if args:
         try:
@@ -244,25 +261,25 @@ async def _toggle_hook(session: PromptSession, args: list[str], enabled: bool) -
         action = "Enable" if enabled else "Disable"
         console.print(f"[bold]{action} Hook[/bold]", style=COLORS["primary"])
         console.print()
-        
+
         # Show hooks
         _list_hooks()
-        
+
         index_str = (await session.prompt_async(f"Enter hook number to {action.lower()}: ")).strip()
-        
+
         try:
             index = int(index_str) - 1
         except ValueError:
             console.print("[red]✗ Invalid hook number[/red]")
             return True
-    
+
     if index < 0 or index >= len(hooks):
         console.print(f"[red]✗ Hook {index + 1} does not exist[/red]")
         return True
-    
+
     # Toggle hook
     hooks[index]["enabled"] = enabled
-    
+
     # Save hooks
     if _save_hooks(hooks):
         action = "enabled" if enabled else "disabled"
@@ -271,19 +288,19 @@ async def _toggle_hook(session: PromptSession, args: list[str], enabled: bool) -
         console.print()
     else:
         console.print("[red]✗ Failed to save hook configuration[/red]")
-    
+
     return True
 
 
 async def _test_hook(session: PromptSession, args: list[str]) -> bool:
     """Test a hook by firing a test event."""
     hooks = _load_hooks()
-    
+
     if not hooks:
         console.print()
         console.print("[yellow]No hooks configured[/yellow]")
         return True
-    
+
     # Get hook index
     if args:
         try:
@@ -295,42 +312,42 @@ async def _test_hook(session: PromptSession, args: list[str]) -> bool:
         console.print()
         console.print("[bold]Test Hook[/bold]", style=COLORS["primary"])
         console.print()
-        
+
         # Show hooks
         _list_hooks()
-        
+
         index_str = (await session.prompt_async("Enter hook number to test: ")).strip()
-        
+
         try:
             index = int(index_str) - 1
         except ValueError:
             console.print("[red]✗ Invalid hook number[/red]")
             return True
-    
+
     if index < 0 or index >= len(hooks):
         console.print(f"[red]✗ Hook {index + 1} does not exist[/red]")
         return True
-    
+
     # Test hook
     hook = hooks[index]
     command = hook.get("command", [])
-    
+
     console.print()
     console.print(f"[bold]Testing hook {index + 1}:[/bold] {' '.join(command)}")
     console.print("[dim]Sending test event...[/dim]")
     console.print()
-    
+
     # Import here to avoid circular dependency
+
     from novacode_cli.hooks import dispatch_hook
-    import asyncio
-    
+
     # Fire test event
     test_payload = {
         "test": True,
-        "timestamp": "2026-04-05T12:00:00Z",
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "message": "This is a test event"
     }
-    
+
     try:
         await dispatch_hook("test", test_payload)
         console.print("[green]✓ Test event fired successfully[/green]")
@@ -339,7 +356,7 @@ async def _test_hook(session: PromptSession, args: list[str]) -> bool:
     except Exception as e:
         console.print(f"[red]✗ Test failed: {e}[/red]")
         console.print()
-    
+
     return True
 
 
@@ -355,48 +372,48 @@ def _reload_hooks() -> bool:
 def _view_logs(args: list[str]) -> bool:
     """View hook logs."""
     log_dir = HOOKS_DIR / "logs"
-    
+
     if not log_dir.exists():
         console.print()
         console.print("[yellow]No logs directory found[/yellow]")
         console.print("[dim]Logs will appear here after hooks are executed[/dim]")
         console.print()
         return True
-    
+
     # Get log file
     log_file = log_dir / "hooks.log"
-    
+
     if not log_file.exists():
         console.print()
         console.print("[yellow]No hook logs found[/yellow]")
         console.print("[dim]Logs will appear after hooks are executed[/dim]")
         console.print()
         return True
-    
+
     # Read last N lines
     try:
         lines_count = int(args[0]) if args else 20
     except ValueError:
         lines_count = 20
-    
+
     try:
-        with open(log_file, "r") as f:
+        with open(log_file) as f:
             lines = f.readlines()
             last_lines = lines[-lines_count:]
-        
+
         console.print()
         console.print(f"[bold]Last {lines_count} log entries:[/bold]")
         console.print()
-        
+
         for line in last_lines:
             console.print(line.rstrip())
-        
+
         console.print()
         console.print(f"[dim]{log_file}[/dim]")
         console.print()
     except Exception as e:
         console.print(f"[red]✗ Failed to read logs: {e}[/red]")
-    
+
     return True
 
 
@@ -405,7 +422,7 @@ def _list_events() -> bool:
     console.print()
     console.print("[bold]Available Hook Events[/bold]", style=COLORS["primary"])
     console.print()
-    
+
     # Session events
     console.print("[bold]Session Events:[/bold]")
     console.print(f"  • {HookEvent.SESSION_START} - New session begins")
@@ -413,29 +430,29 @@ def _list_events() -> bool:
     console.print(f"  • {HookEvent.SESSION_SAVE} - Session saved")
     console.print(f"  • {HookEvent.SESSION_CONTINUE} - Session continued")
     console.print()
-    
+
     # Model events
     console.print("[bold]Model Events:[/bold]")
     console.print(f"  • {HookEvent.MODEL_SWITCH} - Model switched")
     console.print()
-    
+
     # Tool events
     console.print("[bold]Tool Events:[/bold]")
     console.print(f"  • {HookEvent.TOOL_CALL} - Tool invoked")
     console.print(f"  • {HookEvent.TOOL_RESULT} - Tool completed")
     console.print()
-    
+
     # Message events
     console.print("[bold]Message Events:[/bold]")
     console.print(f"  • {HookEvent.AGENT_MESSAGE} - Agent sends message")
     console.print(f"  • {HookEvent.USER_MESSAGE} - User sends message")
     console.print()
-    
+
     # Error events
     console.print("[bold]Error Events:[/bold]")
     console.print(f"  • {HookEvent.ERROR} - Error occurred")
     console.print()
-    
+
     # Lifecycle events
     console.print("[bold]Lifecycle Events:[/bold]")
     console.print(f"  • {HookEvent.PROMPT_DECOMPOSE} - Prompt decomposed into sub-prompts")
@@ -444,10 +461,10 @@ def _list_events() -> bool:
     console.print(f"  • {HookEvent.COMPACT} - Conversation compacted")
     console.print(f"  • {HookEvent.INIT_COMPLETE} - /init pipeline completed")
     console.print()
-    
+
     console.print("[dim]Leave 'events' empty to subscribe to all events[/dim]")
     console.print()
-    
+
     return True
 
 
@@ -480,7 +497,7 @@ def _show_help() -> bool:
     console.print(f"[dim]Configuration file: {HOOKS_FILE}[/dim]")
     console.print(f"[dim]Logs directory: {HOOKS_DIR / 'logs'}[/dim]")
     console.print()
-    
+
     return True
 
 
@@ -489,7 +506,7 @@ async def _interactive_menu(session: PromptSession) -> bool:
     console.print()
     console.print("[bold]Hook Management[/bold]", style=COLORS["primary"])
     console.print()
-    
+
     console.print("What would you like to do?")
     console.print("  1. List configured hooks")
     console.print("  2. Add a new hook")
@@ -501,44 +518,42 @@ async def _interactive_menu(session: PromptSession) -> bool:
     console.print("  8. List available events")
     console.print("  9. Cancel")
     console.print()
-    
+
     choice = (await session.prompt_async("Choose (1-9): ")).strip()
-    
+
     if choice == "1":
         return _list_hooks()
-    elif choice == "2":
+    if choice == "2":
         return await _add_hook(session, [])
-    elif choice == "3":
+    if choice == "3":
         return await _remove_hook(session, [])
-    elif choice == "4":
+    if choice == "4":
         console.print()
         console.print("[bold]Toggle Hook[/bold]")
         console.print("  1. Enable a hook")
         console.print("  2. Disable a hook")
         console.print()
         toggle_choice = (await session.prompt_async("Choose (1-2): ")).strip()
-        
+
         if toggle_choice == "1":
             return await _enable_hook(session, [])
-        elif toggle_choice == "2":
+        if toggle_choice == "2":
             return await _disable_hook(session, [])
-        else:
-            console.print("[red]✗ Invalid choice[/red]")
-            return True
-    elif choice == "5":
-        return await _test_hook(session, [])
-    elif choice == "6":
-        return _reload_hooks()
-    elif choice == "7":
-        return _view_logs([])
-    elif choice == "8":
-        return _list_events()
-    elif choice == "9":
-        console.print("[dim]Cancelled[/dim]")
-        return True
-    else:
         console.print("[red]✗ Invalid choice[/red]")
         return True
+    if choice == "5":
+        return await _test_hook(session, [])
+    if choice == "6":
+        return _reload_hooks()
+    if choice == "7":
+        return _view_logs([])
+    if choice == "8":
+        return _list_events()
+    if choice == "9":
+        console.print("[dim]Cancelled[/dim]")
+        return True
+    console.print("[red]✗ Invalid choice[/red]")
+    return True
 
 
 def _save_hooks(hooks: list[dict]) -> bool:
@@ -553,14 +568,14 @@ def _save_hooks(hooks: list[dict]) -> bool:
     try:
         # Ensure directory exists
         HOOKS_DIR.mkdir(parents=True, exist_ok=True)
-        
+
         # Write configuration
         config = {"hooks": hooks}
         HOOKS_FILE.write_text(json.dumps(config, indent=2))
-        
+
         # Reload hooks
         reload_hooks()
-        
+
         return True
     except Exception as e:
         console.print(f"[red]✗ Failed to save hooks: {e}[/red]")

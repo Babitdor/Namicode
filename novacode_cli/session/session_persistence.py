@@ -42,6 +42,8 @@ class SessionMeta:
         task_status: Task status - 'active', 'blocked', or 'complete'
         blocked_reason: Reason for blockage if task_status is 'blocked'
         next_step_hint: Optional hint for what to do next
+        sandbox_id: ID of the sandbox/container used this session (for reconnect)
+        sandbox_type: Sandbox provider used ("docker", "modal", ...) or None
     """
 
     session_id: str
@@ -58,6 +60,8 @@ class SessionMeta:
     task_status: str = "active"  # active | blocked | complete
     blocked_reason: str | None = None
     next_step_hint: str | None = None
+    sandbox_id: str | None = None
+    sandbox_type: str | None = None
     storage_version: int = 2  # v2: recent+archive, no conversation.jsonl
 
     def to_dict(self) -> dict[str, Any]:
@@ -73,6 +77,8 @@ class SessionMeta:
             "task_status": "active",
             "blocked_reason": None,
             "next_step_hint": None,
+            "sandbox_id": None,
+            "sandbox_type": None,
             "storage_version": 1,  # Old sessions default to v1
         }
         # Merge defaults with provided data (data takes precedence)
@@ -139,6 +145,8 @@ class SessionManager:
         memory: str | None = None,
         workspace_state: dict | None = None,
         shared_memory: dict | None = None,
+        sandbox_id: str | None = None,
+        sandbox_type: str | None = None,
     ) -> Path:
         """Save a session to disk.
 
@@ -191,6 +199,8 @@ class SessionManager:
             task_status=task_status,
             blocked_reason=blocked_reason,
             next_step_hint=next_step_hint,
+            sandbox_id=sandbox_id,
+            sandbox_type=sandbox_type,
         )
 
         # Save metadata
@@ -477,7 +487,7 @@ class SessionManager:
         return recent_messages
 
     def delete_session(self, session_id: str) -> bool:
-        """Delete a session from disk.
+        """Delete a session from disk and its associated Docker sandbox (if any).
 
         Args:
             session_id: Session identifier to delete
@@ -489,10 +499,103 @@ class SessionManager:
         if not session_dir.exists():
             return False
 
+        # Clean up associated Docker sandbox before removing session files.
+        self._cleanup_session_sandbox(session_id)
+
         import shutil
 
         shutil.rmtree(session_dir)
         return True
+
+    @staticmethod
+    def _cleanup_session_sandbox(session_id: str) -> None:
+        """Remove the Docker container associated with a session (best-effort).
+
+        Looks up the session metadata for sandbox_id / sandbox_type, and if a
+        Docker container is attached, stops and removes it. Failure to clean up
+        the container does not prevent session deletion.
+
+        Args:
+            session_id: Session identifier whose sandbox should be removed
+        """
+        try:
+            import docker
+            from docker.errors import NotFound
+        except ImportError:
+            return  # Docker SDK not installed — nothing to clean up
+
+        # First, try matching by session label (finds containers even when the
+        # container ID in meta.json is stale).
+        try:
+            client = docker.from_env()
+        except Exception:
+            return  # Docker daemon not reachable — skip
+
+        containers = client.containers.list(
+            all=True,
+            filters={"label": f"nova.session={session_id}"},
+        )
+        for container in containers:
+            try:
+                if container.status != "removing":
+                    container.remove(force=True)
+                logger.info(
+                    "Removed Docker sandbox %s for deleted session %s",
+                    container.id[:12],
+                    session_id[:8],
+                )
+            except Exception:
+                logger.debug(
+                    "Could not remove Docker sandbox %s for session %s",
+                    container.id[:12],
+                    session_id[:8],
+                    exc_info=True,
+                )
+
+        # Fallback: if no container was found by label, try the sandbox_id
+        # stored in the session meta.
+        if not containers:
+            sandbox_id, sandbox_type = SessionManager._read_sandbox_meta(session_id)
+            if sandbox_type == "docker" and sandbox_id:
+                try:
+                    container = client.containers.get(sandbox_id)
+                    container.remove(force=True)
+                    logger.info(
+                        "Removed Docker sandbox %s for deleted session %s",
+                        sandbox_id[:12],
+                        session_id[:8],
+                    )
+                except NotFound:
+                    pass  # Already gone — nothing to do
+                except Exception:
+                    logger.debug(
+                        "Could not remove Docker sandbox %s for session %s",
+                        sandbox_id[:12],
+                        session_id[:8],
+                        exc_info=True,
+                    )
+
+    @staticmethod
+    def _read_sandbox_meta(session_id: str) -> tuple[str | None, str | None]:
+        """Read sandbox_id and sandbox_type from a session's meta.json.
+
+        Args:
+            session_id: Session identifier
+
+        Returns:
+            (sandbox_id, sandbox_type) tuple — both None if the meta file
+            is missing or unreadable.
+        """
+        sessions_dir = Path.home() / ".nova" / "sessions"
+        meta_path = sessions_dir / session_id / "meta.json"
+        if not meta_path.exists():
+            return None, None
+        try:
+            with open(meta_path) as f:
+                meta = json.load(f)
+            return meta.get("sandbox_id"), meta.get("sandbox_type")
+        except (json.JSONDecodeError, OSError):
+            return None, None
 
     def _serialize_message(self, msg: BaseMessage) -> dict[str, Any]:
         """Serialize a LangChain message to JSON-serializable dict.

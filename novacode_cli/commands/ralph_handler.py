@@ -548,6 +548,18 @@ async def _execute_all_ralph_iterations_background(
         print(f"{'='*60}\n", file=sys.stderr)
         sys.stderr.flush()
 
+        # Notify that the background run finished.
+        try:
+            session_state.add_notification(
+                level="error" if failed and not completed else
+                ("warning" if failed else "success"),
+                title="Ralph background run finished",
+                message=f"{completed} completed, {failed} failed of {total_tasks} task(s)",
+                source="ralph",
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
         # Restore original auto_approve state
         session_state.auto_approve = original_auto_approve
 
@@ -558,6 +570,7 @@ async def handle_ralph_command(
     assistant_id: str,
     token_tracker: TokenTracker,
     cmd_args: str | list[str] | None,
+    execute_fn=None,
 ) -> bool:
     """Handle /ralph command - autonomous looping mode.
 
@@ -579,7 +592,10 @@ async def handle_ralph_command(
     Returns:
         True if handled, 'exit' if user requests exit.
     """
-    from novacode_cli.ui.execution import execute_task
+    if execute_fn is None:
+        from novacode_cli.ui.execution import execute_task
+
+        execute_fn = execute_task
 
     # Parse arguments
     if not cmd_args:
@@ -835,7 +851,7 @@ async def handle_ralph_command(
 
             # Execute task synchronously (foreground mode only)
             # Use "ralph" as assistant_id so the agent displays as "Ralph" instead of "Nova"
-            await execute_task(
+            await execute_fn(
                 prompt,
                 agent,
                 "ralph",  # Use "ralph" ID so agent displays as "Ralph"
@@ -995,6 +1011,16 @@ async def handle_ralph_command(
         f"[green]Ralph mode completed after {iteration - 1} iteration(s).[/green]"
     )
     console.print()
+
+    try:
+        session_state.add_notification(
+            level="success",
+            title="Ralph mode completed",
+            message=f"{task.task_description[:80]} — {iteration - 1} iteration(s)",
+            source="ralph",
+        )
+    except Exception:  # noqa: BLE001
+        pass
 
     # Restore original auto_approve state
     session_state.auto_approve = original_auto_approve

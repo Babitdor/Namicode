@@ -81,13 +81,21 @@ async def handle_research_command(
     session_state,
     token_tracker,
     cmd_args: str | None = None,
+    execute_fn=None,
 ) -> None:
     """Handle the /research command.
 
     Builds the research swarm prompt and executes it via Dora (research agent).
+
+    ``execute_fn`` lets callers (e.g. the Textual TUI) substitute their own
+    renderer for the agent run; defaults to the classic ``execute_task``.
     """
     from novacode_cli.config.config import console
-    from novacode_cli.ui.execution import execute_task
+
+    if execute_fn is None:
+        from novacode_cli.ui.execution import execute_task
+
+        execute_fn = execute_task
 
     if not cmd_args or not cmd_args.strip():
         console.print()
@@ -122,7 +130,17 @@ async def handle_research_command(
     base_agents = _MODE_AGENTS[mode]
     agents = (base_agents * ((agent_count // len(base_agents)) + 1))[:agent_count]
 
+    # Output folder, relative to the project root so it resolves the same way
+    # in local mode and inside a bind-mounted sandbox (/workspace/.nova/research).
     base_dir = Path(".nova") / "research"
+
+    # Pre-create the base dir on the host so the swarm always has a real folder
+    # to write into — even if the agent's shell/backend can't create it. The
+    # per-query subfolder is still created by the agents.
+    try:
+        base_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as ex:
+        console.print(f"[yellow]Could not create {base_dir}: {ex}[/yellow]")
 
     if fast_mode:
         console.print("[dim]Fast mode: skipping fact-check phase[/dim]")
@@ -140,7 +158,7 @@ async def handle_research_command(
 
     backend = getattr(agent, "backend", None)
 
-    await execute_task(
+    await execute_fn(
         prompt,
         agent,
         "dora",  # Display as Dora instead of Nova

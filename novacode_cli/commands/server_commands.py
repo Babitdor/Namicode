@@ -247,6 +247,27 @@ async def handle_tests_command(session_state, cmd_args: str | None = None) -> bo
     if result.error:
         console.print(f"[red]Error: {result.error}[/red]")
 
+    # Record a notification summarizing the run.
+    try:
+        passed = result.tests_passed
+        total = result.tests_run
+        title = (
+            f"Tests: {passed}/{total} passed"
+            if passed is not None and total
+            else ("Tests passed" if result.success else "Tests failed")
+        )
+        msg = f"{result.tests_failed} failed" if result.tests_failed is not None else ""
+        if result.duration_seconds is not None:
+            msg = (msg + " · " if msg else "") + f"{result.duration_seconds:.1f}s"
+        session_state.add_notification(
+            level="success" if result.success else "error",
+            title=title,
+            message=msg or ("ok" if result.success else "failed"),
+            source="tests",
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
     console.print()
     return True
 

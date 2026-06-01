@@ -23,7 +23,7 @@ def create_model() -> BaseChatModel:
     3. Default to Ollama (fallback)
 
     Returns:
-        ChatModel instance (OpenAI, Anthropic, Google, or Ollama)
+        ChatModel instance (OpenAI, Anthropic, Google, OpenRouter, or Ollama)
     """
     # Load saved configuration - this takes precedence over .env
     from novacode_cli.config.nova_config import NovaConfig
@@ -100,6 +100,24 @@ def create_model() -> BaseChatModel:
                     max_tokens=None,
                 )
 
+        elif provider == "openrouter":
+            from langchain_openai import ChatOpenAI
+
+            from novacode_cli.config.model_manager import OPENROUTER_BASE_URL
+
+            # Verify API key is available
+            if not os.environ.get("OPENROUTER_API_KEY"):
+                console.print(
+                    "[yellow]Warning: OPENROUTER_API_KEY not set, falling back to Ollama[/yellow]"
+                )
+            else:
+                # OpenRouter is OpenAI-compatible: ChatOpenAI + custom base URL/key.
+                return ChatOpenAI(
+                    model=model_name,
+                    base_url=OPENROUTER_BASE_URL,
+                    api_key=os.environ.get("OPENROUTER_API_KEY"),  # type: ignore[arg-type]
+                )
+
     # No saved config - fall back to environment variables and .env file
     # Check available API keys in order of priority
     if settings.has_openai:
@@ -141,6 +159,18 @@ def create_model() -> BaseChatModel:
             model=model_name,
             temperature=0,
             max_tokens=None,
+        )
+    if settings.has_openrouter:
+        from langchain_openai import ChatOpenAI
+
+        from novacode_cli.config.model_manager import OPENROUTER_BASE_URL
+
+        model_name = os.environ.get("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet")
+        console.print(f"[dim]Using OpenRouter model: {model_name}[/dim]")
+        return ChatOpenAI(
+            model=model_name,
+            base_url=OPENROUTER_BASE_URL,
+            api_key=os.environ.get("OPENROUTER_API_KEY"),  # type: ignore[arg-type]
         )
 
     # Default to Ollama if no API keys are configured

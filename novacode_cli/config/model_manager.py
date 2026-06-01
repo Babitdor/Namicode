@@ -1,7 +1,7 @@
 """Model provider management for Nova CLI.
 
-Handles switching between different LLM providers (OpenAI, Anthropic, Ollama, Google)
-during interactive sessions.
+Handles switching between different LLM providers (OpenAI, Anthropic, Ollama,
+Google, OpenRouter) during interactive sessions.
 """
 
 import os
@@ -13,8 +13,11 @@ from langchain_core.language_models import BaseChatModel
 from novacode_cli.config.config import Settings, console
 from novacode_cli.config.nova_config import NovaConfig
 
+# OpenRouter is OpenAI-API-compatible; routed through ChatOpenAI with this base URL.
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
 # Type for supported providers
-ProviderType = Literal["openai", "anthropic", "ollama", "google"]
+ProviderType = Literal["openai", "anthropic", "ollama", "google", "openrouter"]
 
 
 # Model provider presets
@@ -77,6 +80,23 @@ MODEL_PRESETS: dict[str, dict[str, Any]] = {
             "gemini-2.0-flash-exp",
             "gemini-1.5-pro",
             "gemini-1.5-flash",
+        ],
+    },
+    "openrouter": {
+        "name": "OpenRouter",
+        "description": "Unified access to many models (Anthropic, OpenAI, Llama, etc.)",
+        "default_model": "anthropic/claude-3.5-sonnet",
+        "env_var": "OPENROUTER_MODEL",
+        "api_key_var": "OPENROUTER_API_KEY",
+        "requires_api_key": True,
+        "base_url": OPENROUTER_BASE_URL,
+        "models": [
+            "anthropic/claude-3.5-sonnet",
+            "openai/gpt-4o",
+            "openai/gpt-4o-mini",
+            "google/gemini-2.0-flash-exp",
+            "meta-llama/llama-3.3-70b-instruct",
+            "deepseek/deepseek-chat",
         ],
     },
 }
@@ -176,6 +196,9 @@ class ModelManager:
         if self.settings.has_google:
             model = os.environ.get("GOOGLE_MODEL", "gemini-3-pro-preview")
             return ("Google", model)
+        if self.settings.has_openrouter:
+            model = os.environ.get("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet")
+            return ("OpenRouter", model)
         # Default to Ollama (always available, no API key needed)
         model = os.environ.get("OLLAMA_MODEL", "qwen3-coder:480b-cloud")
         return ("Ollama", model)
@@ -241,6 +264,16 @@ class ModelManager:
                 model=model_name,
                 temperature=0,
                 max_tokens=None,
+            )
+
+        if provider == "openrouter":
+            from langchain_openai import ChatOpenAI
+
+            # OpenRouter is OpenAI-compatible: same client, custom base URL + key.
+            return ChatOpenAI(
+                model=model_name,  # type: ignore
+                base_url=preset.get("base_url", OPENROUTER_BASE_URL),
+                api_key=os.environ.get("OPENROUTER_API_KEY"),  # type: ignore[arg-type]
             )
 
         raise ValueError(f"Provider {provider} not implemented")

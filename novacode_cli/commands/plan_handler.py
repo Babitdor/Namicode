@@ -154,6 +154,7 @@ async def _start_plan_mode(
             model=model,
             assistant_id=session_state._assistant_id or "nova",
             tools=[ask_user_question, enter_plan_mode, exit_plan_mode],
+            steering_instructions=session_state.steering_instructions,
         )
 
         # Store the plan agent in session state for later use

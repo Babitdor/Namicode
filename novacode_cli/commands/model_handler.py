@@ -78,19 +78,20 @@ async def handle_model_command(session_state: Any | None = None) -> bool:
                 console.print()
 
     elif choice == "2":
-        # Switch provider
-        available = model_manager.get_available_providers()
-
-        if not available:
-            console.print()
-            console.print("[yellow]No providers available[/yellow]")
-            console.print("[dim]Configure API keys to enable more providers[/dim]")
-            return True
+        # Switch provider. List *all* providers (not just configured ones) so the
+        # user can pick one without a key yet — they'll be prompted for it below.
+        all_providers = list(MODEL_PRESETS.items())
+        configured = {pid for pid, _ in model_manager.get_available_providers()}
 
         console.print()
-        console.print("[bold]Available Providers:[/bold]", style=COLORS["primary"])
-        for i, (provider_id, preset) in enumerate(available, 1):
-            console.print(f"  {i}. {preset['name']} ({preset['default_model']})")
+        console.print("[bold]Providers:[/bold]", style=COLORS["primary"])
+        for i, (provider_id, preset) in enumerate(all_providers, 1):
+            marker = (
+                "" if provider_id in configured else "  [dim](needs API key)[/dim]"
+            )
+            console.print(
+                f"  {i}. {preset['name']} ({preset['default_model']}){marker}"
+            )
 
         console.print()
         provider_choice = (
@@ -100,8 +101,8 @@ async def handle_model_command(session_state: Any | None = None) -> bool:
         if provider_choice.lower() != "cancel":
             try:
                 provider_idx = int(provider_choice) - 1
-                if 0 <= provider_idx < len(available):
-                    provider_id, preset = available[provider_idx]
+                if 0 <= provider_idx < len(all_providers):
+                    provider_id, preset = all_providers[provider_idx]
 
                     # Validate API key for cloud providers
                     if preset["requires_api_key"]:
@@ -149,8 +150,7 @@ async def handle_model_command(session_state: Any | None = None) -> bool:
 
                             # Store the API key
                             if secret_manager.store_secret(api_key_name, new_api_key):
-                                # Also set in environment for immediate use
-                                os.environ[preset["api_key_var"]] = new_api_key
+                                api_key = new_api_key
                                 console.print()
                                 console.print(
                                     "[green]✓ API key saved to system keychain[/green]"
@@ -161,6 +161,12 @@ async def handle_model_command(session_state: Any | None = None) -> bool:
                                 console.print("[red]✗ Failed to save API key[/red]")
                                 console.print()
                                 return True
+
+                        # Export the resolved key (from keychain or just entered)
+                        # into the environment so create_model() — which reads
+                        # os.environ — can find it.
+                        if api_key:
+                            os.environ[preset["api_key_var"]] = api_key
 
                     # Ask if user wants to specify a different model
                     console.print()
@@ -185,19 +191,32 @@ async def handle_model_command(session_state: Any | None = None) -> bool:
                         )
                         console.print(f"  {i}. {model}{default_marker}")
 
+                    console.print(
+                        "[dim]  These are suggestions — you can also type any "
+                        f"model name {preset['name']} supports.[/dim]"
+                    )
+
                     console.print()
                     model_choice = (
                         await session.prompt_async(
-                            "Choose model number (or press Enter for default): ",
+                            "Choose a number, type a model name, or press Enter for default: ",
                             default="",
                         )
                     ).strip()
 
                     model_name = None
-                    if model_choice and model_choice.isdigit():
-                        model_idx = int(model_choice) - 1
-                        if 0 <= model_idx < len(models_list):
-                            model_name = models_list[model_idx]
+                    if model_choice:
+                        if model_choice.isdigit():
+                            model_idx = int(model_choice) - 1
+                            if 0 <= model_idx < len(models_list):
+                                model_name = models_list[model_idx]
+                            else:
+                                console.print(
+                                    f"[yellow]No model #{model_choice}; using default.[/yellow]"
+                                )
+                        else:
+                            # Free-form model name (e.g. an OpenRouter slug not listed)
+                            model_name = model_choice
 
                     # Set the provider
                     try:

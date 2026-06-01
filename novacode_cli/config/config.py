@@ -272,6 +272,7 @@ COMMANDS = {
     "dream": "Run memory consolidation to organize and clean up memory files",
     "research": "Run agent swarm research (e.g., /research <query>, /research academic <query>, /research market <query>)",
     "reindex": "Rebuild the semantic code search index (after significant code changes)",
+    "trello": "Start a task board in the browser (add tasks, agent processes them one at a time)",
     "exit": "Exit the CLI",
 }
 
@@ -422,7 +423,10 @@ def get_default_coding_instructions() -> str:
     """
     from novacode_cli.prompts import render_template
 
-    return render_template("System_Prompt_Nova.jinja")
+    return render_template(
+        "System_Prompt_Nova.jinja",
+        has_tavily=settings.has_tavily,
+    )
 
 
 @dataclass
@@ -447,6 +451,7 @@ class Settings:
     openai_api_key: str | None
     anthropic_api_key: str | None
     google_api_key: str | None
+    openrouter_api_key: str | None
     tavily_api_key: str | None
     langsmith_api_key: str | None
     replicate_api_key: str | None
@@ -500,6 +505,9 @@ class Settings:
             google_key = secret_manager.get_secret("google_api_key") or os.environ.get(
                 "GOOGLE_API_KEY"
             )
+            openrouter_key = secret_manager.get_secret(
+                "openrouter_api_key"
+            ) or os.environ.get("OPENROUTER_API_KEY")
             tavily_key = secret_manager.get_secret("tavily_api_key") or os.environ.get(
                 "TAVILY_API_KEY"
             )
@@ -510,6 +518,7 @@ class Settings:
             openai_key = os.environ.get("OPENAI_API_KEY")
             anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
             google_key = os.environ.get("GOOGLE_API_KEY")
+            openrouter_key = os.environ.get("OPENROUTER_API_KEY")
             tavily_key = os.environ.get("TAVILY_API_KEY")
             replicate_key = os.environ.get("REPLICATE_API_TOKEN")
 
@@ -530,6 +539,7 @@ class Settings:
             openai_api_key=openai_key,
             anthropic_api_key=anthropic_key,
             google_api_key=google_key,
+            openrouter_api_key=openrouter_key,
             tavily_api_key=tavily_key,
             langsmith_api_key=langsmith_key,
             replicate_api_key=replicate_key,
@@ -556,6 +566,11 @@ class Settings:
         return self.google_api_key is not None
 
     @property
+    def has_openrouter(self) -> bool:
+        """Check if OpenRouter API key is configured."""
+        return self.openrouter_api_key is not None
+
+    @property
     def has_tavily(self) -> bool:
         """Check if Tavily API key is configured."""
         return self.tavily_api_key is not None
@@ -574,6 +589,17 @@ class Settings:
     def has_project(self) -> bool:
         """Check if currently in a git project."""
         return self.project_root is not None
+
+    @property
+    def has_graph(self) -> bool:
+        """Check if a project graph is available (built by /init).
+
+        Returns:
+            True if `.nova/project-graph.json` exists under the project root.
+        """
+        if not self.project_root:
+            return False
+        return (self.project_root / ".nova" / "project-graph.json").exists()
 
     def get_onboarding_status(self) -> bool:
         """Check if onboarding has been completed.
@@ -631,6 +657,15 @@ class Settings:
 
         Returns:
             Path to ~/.nova
+        """
+        return HOME_DIR
+
+    @property
+    def nova_dir(self) -> Path:
+        """Base user-level .nova directory (~/.nova).
+
+        Alias of :attr:`user_deepagents_dir`; used for paths like checkpoints
+        and other per-user state under ~/.nova.
         """
         return HOME_DIR
 

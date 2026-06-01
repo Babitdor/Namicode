@@ -36,7 +36,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import subprocess  # noqa: S404
+import os
+import shutil
+import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -52,6 +54,50 @@ _background_tasks: set[asyncio.Task[None]] = set()
 # Default hooks directory
 HOOKS_DIR = Path.home() / ".nova"
 HOOKS_FILE = HOOKS_DIR / "hooks.json"
+
+# Shell metacharacters that indicate command injection
+_SHELL_METACHARACTERS = set("`$|;&")
+
+# Known API key / token environment variable suffixes.
+_API_KEY_SUFFIXES = frozenset({"_API_KEY", "_API_TOKEN", "_TOKEN", "_SECRET"})
+
+
+def _validate_command(command: list[str]) -> str | None:
+    """Validate a hook command tuple.
+
+    Returns ``None`` if valid, or an error string if invalid.
+    """
+    if not command:
+        return "Command list is empty"
+    if not isinstance(command, list):
+        return "Command must be a list of strings"
+    if not all(isinstance(part, str) for part in command):
+        return "All command parts must be strings"
+    # Check the binary (first element) exists on PATH
+    binary = command[0]
+    if "/" in binary and not Path(binary).is_file():
+        return f"Command binary not found: {binary}"
+    if "/" not in binary and not shutil.which(binary):
+        return f"Command not found on PATH: {binary}"
+    # Check all parts for shell metacharacters
+    for part in command:
+        if any(c in part for c in _SHELL_METACHARACTERS):
+            return f"Shell metacharacters not allowed in command part: {part}"
+    return None
+
+
+def _sanitize_env_for_hook(env: dict[str, str]) -> dict[str, str]:
+    """Strip API key / token env vars from a subprocess environment."""
+    to_strip: set[str] = set()
+    for key in env:
+        upper = key.upper()
+        for suffix in _API_KEY_SUFFIXES:
+            if upper.endswith(suffix):
+                to_strip.add(key)
+                break
+    for k in to_strip:
+        env.pop(k, None)
+    return env
 
 
 def _load_hooks() -> list[dict[str, Any]]:
@@ -99,6 +145,9 @@ def _load_hooks() -> list[dict[str, Any]]:
 def _run_single_hook(command: list[str], event: str, payload_bytes: bytes) -> None:
     """Execute a single hook command, writing the JSON payload to its stdin.
 
+    Validates the command before executing and strips API keys from the
+    subprocess environment to prevent secret leakage.
+
     Uses `subprocess.run` which automatically kills the child process on
     timeout, preventing zombie/orphan process leaks.
 
@@ -107,6 +156,15 @@ def _run_single_hook(command: list[str], event: str, payload_bytes: bytes) -> No
         event: Event name (for logging).
         payload_bytes: JSON payload to write to the command's stdin.
     """
+    # Validate command before execution
+    error = _validate_command(command)
+    if error:
+        logger.warning("Hook command validation failed for event %s: %s — %s", event, command, error)
+        return
+
+    # Sanitize environment: strip API keys to prevent secret leakage
+    clean_env = _sanitize_env_for_hook(os.environ.copy())
+
     try:
         subprocess.run(  # noqa: S603
             command,
@@ -116,6 +174,7 @@ def _run_single_hook(command: list[str], event: str, payload_bytes: bytes) -> No
             start_new_session=True,
             timeout=5,
             check=False,
+            env=clean_env,
         )
     except subprocess.TimeoutExpired:
         logger.warning("Hook command timed out (>5s) for event %s: %s", event, command)
@@ -236,27 +295,27 @@ def reload_hooks() -> None:
 # Event type constants for convenience
 class HookEvent:
     """Constants for hook event names."""
-    
+
     # Session events
     SESSION_START = "session.start"
     SESSION_END = "session.end"
     SESSION_SAVE = "session.save"
     SESSION_CONTINUE = "session.continue"
-    
+
     # Model events
     MODEL_SWITCH = "model.switch"
-    
+
     # Tool events
     TOOL_CALL = "tool.call"
     TOOL_RESULT = "tool.result"
-    
+
     # Message events
     AGENT_MESSAGE = "agent.message"
     USER_MESSAGE = "user.message"
-    
+
     # Error events
     ERROR = "error"
-    
+
     # Lifecycle events
     PROMPT_DECOMPOSE = "prompt.decompose"
     REMOTE_MESSAGE = "remote.message"
@@ -264,10 +323,13 @@ class HookEvent:
     COMPACT = "compact"
     INIT_COMPLETE = "init.complete"
 
+    # In-terminal notification (long-running task completed/failed, etc.)
+    NOTIFICATION = "notification"
+
 
 __all__ = [
+    "HookEvent",
     "dispatch_hook",
     "dispatch_hook_fire_and_forget",
     "reload_hooks",
-    "HookEvent",
 ]

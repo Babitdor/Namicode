@@ -157,19 +157,24 @@ def resolve_plan_content(
         and session_state.plan_content
     ):
         plan_content = session_state.plan_content
-        if dbg_func:
-            dbg_func("PLAN-CONTENT", f"Using plan content from session state ({len(plan_content)} chars)")  # type: ignore
-        # Still try to get the path for display
-        try:
-            from novacode_cli.config.config import settings
+        # Guard: plan_content must be a string (may be a stale object from a
+        # previous buggy read).
+        if not isinstance(plan_content, str):
+            plan_content = None
+        else:
+            if dbg_func:
+                dbg_func("PLAN-CONTENT", f"Using plan content from session state ({len(plan_content)} chars)")  # type: ignore
+            # Still try to get the path for display
+            try:
+                from novacode_cli.config.config import settings
 
-            Nova_dir = settings.ensure_project_deepagents_dir()
-            if Nova_dir:
-                plans_dir = Nova_dir / "plans"
-                plan_path = find_latest_plan_file(plans_dir, backend=backend)
-        except Exception:
-            pass
-        return plan_content, plan_path
+                Nova_dir = settings.ensure_project_deepagents_dir()
+                if Nova_dir:
+                    plans_dir = Nova_dir / "plans"
+                    plan_path = find_latest_plan_file(plans_dir, backend=backend)
+            except Exception:
+                pass
+            return plan_content, plan_path
 
     try:
         from novacode_cli.config.config import settings

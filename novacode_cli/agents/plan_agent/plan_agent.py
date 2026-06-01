@@ -14,6 +14,7 @@ from langchain_core.tools import BaseTool
 from langgraph.pregel import Pregel
 
 from novacode_cli.agents.plan_agent.plan_mode_middleware import PlanModeMiddleware
+from novacode_cli.bootstrap.steering import SteeringMiddleware
 from novacode_cli.hitl.interrupts import get_interrupt_configs
 from novacode_cli.config.config import settings
 from novacode_cli.prompts import render_template
@@ -67,6 +68,7 @@ def create_plan_agent_with_config(
     sandbox_type: str | None = None,
     system_prompt: str | None = None,
     auto_approve: bool = False,
+    steering_instructions: list | None = None,
 ) -> tuple[Pregel, CompositeBackend]:
     """Create and configure a plan-mode agent with the specified model and tools.
 
@@ -242,7 +244,10 @@ def create_plan_agent_with_config(
         store=None,
         interrupt_on=interrupt_on,  # type: ignore
         subagents=[],  # Plan agents don't use subagents by default
-        middleware=[PlanModeMiddleware(workspace_root=workspace_root)],
+        middleware=[
+            PlanModeMiddleware(workspace_root=workspace_root),
+            SteeringMiddleware(instructions=steering_instructions or []),
+        ],
     )
 
     return agent, composite_backend

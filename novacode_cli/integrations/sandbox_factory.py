@@ -285,21 +285,82 @@ def create_daytona_sandbox(
             console.print(f"[yellow]⚠ Cleanup failed: {e}[/yellow]")
 
 
+def _cleanup_stale_docker_containers(
+    client, *, keep_id: str | None = None, max_age_days: int = 30
+) -> None:
+    """Remove Nova-managed Docker containers older than max_age_days.
+
+    Persisted containers are stopped (not removed) on exit so sessions can
+    reconnect. This best-effort sweep prevents unbounded accumulation of
+    abandoned containers. The container currently being reconnected (keep_id)
+    is never removed.
+
+    Args:
+        client: Docker client
+        keep_id: Container ID to exclude from cleanup (the one we're reusing)
+        max_age_days: Age threshold; containers created before this are removed
+    """
+    import time
+    from datetime import datetime
+
+    cutoff = time.time() - max_age_days * 86400
+    try:
+        managed = client.containers.list(
+            all=True, filters={"label": "nova.managed=1"}
+        )
+    except Exception:  # noqa: BLE001
+        return  # Docker API hiccup — skip cleanup silently
+
+    for cont in managed:
+        try:
+            if keep_id and (cont.id == keep_id or cont.id.startswith(keep_id)):
+                continue
+            created_raw = cont.attrs.get("Created", "")
+            # Docker timestamps look like 2026-05-30T12:00:00.000000000Z
+            created_str = created_raw.split(".")[0].rstrip("Z")
+            created_ts = datetime.fromisoformat(created_str).timestamp()
+            if created_ts < cutoff:
+                cont.remove(force=True)
+                console.print(
+                    f"[dim]Removed stale sandbox container {cont.id[:12]} "
+                    f"(age > {max_age_days}d)[/dim]"
+                )
+        except Exception:  # noqa: BLE001, S112
+            continue  # Best effort — never block startup on cleanup
+
+
 @contextmanager
 def create_docker_sandbox(
     *,
     sandbox_id: str | None = None,
     setup_script_path: str | None = None,
     ports: dict[int, int] | None = None,
+    mount_dir: str | None = None,
+    persist: bool = False,
+    session_id: str | None = None,
 ) -> Generator[SandboxBackendProtocol, None, None]:
     """Create or connect to Docker container sandbox.
 
     Args:
-        sandbox_id: Optional existing container ID to reuse
-        setup_script_path: Optional path to setup script to run after container starts
+        sandbox_id: Optional existing container ID to reuse. If the container no
+               longer exists, a fresh one is created (and the project re-mounted).
+        setup_script_path: Optional path to setup script to run after container
+               starts. Only runs for freshly-created containers (skipped on
+               reconnect, where dependencies already persist).
         ports: Optional port mapping as {container_port: host_port}.
                Example: {8080: 8080, 3000: 3000} maps container ports to same host ports.
                If None, no ports are exposed.
+        mount_dir: Optional host directory to bind-mount into the container at
+               /workspace (read-write). When set, the agent operates on the real
+               project files (edits write through to disk) while running isolated
+               inside the container. Used only when creating a container; a
+               reconnected container keeps its original mount.
+        persist: When True, the container is stopped (not removed) on exit so a
+               later session can reconnect to it, preserving installed packages
+               and other in-container state. When False, freshly-created
+               containers are removed on exit (ephemeral).
+        session_id: Session identifier used to name/label the container
+               (nova-<session_id>) so it can be discovered and reconnected.
 
     Yields:
         DockerBackend instance
@@ -323,71 +384,109 @@ def create_docker_sandbox(
         msg = f"Failed to connect to Docker daemon: {e}\nIs Docker running?"
         raise RuntimeError(msg) from e
 
+    # Best-effort prune of abandoned managed containers (never the one we reuse).
+    _cleanup_stale_docker_containers(client, keep_id=sandbox_id)
+
+    def _create_new_container():
+        """Create and start a fresh container; returns the container."""
+        console.print("[dim]Creating new container...[/dim]")
+
+        # Default image: Python with common tools
+        image = "python:3.11-slim"
+
+        # Pull image if not present
+        try:
+            client.images.get(image)
+        except docker.errors.ImageNotFound:
+            console.print(f"[dim]Pulling image {image}...[/dim]")
+            client.images.pull(image)
+
+        # Convert port mapping to Docker format
+        # {8080: 8080} -> {'8080/tcp': 8080}
+        port_bindings = None
+        if ports:
+            port_bindings = {
+                f"{container_port}/tcp": host_port
+                for container_port, host_port in ports.items()
+            }
+            console.print(f"[dim]Exposing ports: {ports}[/dim]")
+
+        # Bind-mount the host project directory into the container at
+        # /workspace (read-write). Edits made by the agent write through
+        # to the real project on disk, while execution stays isolated.
+        volumes: dict[str, dict[str, str]] = {}
+        if mount_dir:
+            host_path = str(Path(mount_dir).resolve())
+            volumes[host_path] = {"bind": "/workspace", "mode": "rw"}
+            console.print(f"[dim]Mounting {host_path} → /workspace (rw)[/dim]")
+
+        # Name + label so the container can be discovered and reconnected, and
+        # swept by _cleanup_stale_docker_containers when abandoned.
+        name = f"nova-{session_id}" if session_id else None
+        labels = {"nova.managed": "1", "nova.session": session_id or ""}
+
+        run_kwargs = dict(
+            image=image,
+            command="sleep infinity",  # Keep container running
+            detach=True,
+            working_dir="/workspace",
+            volumes=volumes,
+            environment={},
+            stdin_open=True,
+            tty=True,
+            ports=port_bindings,  # Port forwarding
+            labels=labels,
+        )
+        try:
+            cont = client.containers.run(name=name, **run_kwargs)
+        except docker.errors.APIError as e:
+            # 409 name conflict: a container by this name already exists —
+            # reuse it instead of failing.
+            if name and "Conflict" in str(e):
+                console.print(
+                    f"[dim]Container name {name} in use; reconnecting to it...[/dim]"
+                )
+                cont = client.containers.get(name)
+                if cont.status != "running":
+                    cont.start()
+                return cont, False
+            raise
+
+        # Wait for container to be ready
+        import time
+
+        for _ in range(30):  # 30 second timeout
+            cont.reload()
+            if cont.status == "running":
+                break
+            time.sleep(1)
+        else:
+            msg = "Docker container failed to start within timeout"
+            raise RuntimeError(msg)
+
+        return cont, True
+
     container = None
-    should_cleanup = True
+    created_new = False
 
     try:
         if sandbox_id:
-            # Reuse existing container
+            # Try to reuse an existing container; self-heal if it's gone.
             console.print(
                 f"[dim]Connecting to existing container {sandbox_id}...[/dim]"
             )
-            container = client.containers.get(sandbox_id)
-            should_cleanup = False  # Don't cleanup reused containers
-
-            # Ensure container is running
-            if container.status != "running":
-                console.print("[dim]Starting stopped container...[/dim]")
-                container.start()
-
-        else:
-            # Create new container
-            console.print("[dim]Creating new container...[/dim]")
-
-            # Default image: Python with common tools
-            image = "python:3.11-slim"
-
-            # Pull image if not present
             try:
-                client.images.get(image)
-            except docker.errors.ImageNotFound:
-                console.print(f"[dim]Pulling image {image}...[/dim]")
-                client.images.pull(image)
-
-            # Convert port mapping to Docker format
-            # {8080: 8080} -> {'8080/tcp': 8080}
-            port_bindings = None
-            if ports:
-                port_bindings = {
-                    f"{container_port}/tcp": host_port
-                    for container_port, host_port in ports.items()
-                }
-                console.print(f"[dim]Exposing ports: {ports}[/dim]")
-
-            # Create and start container
-            container = client.containers.run(
-                image=image,
-                command="sleep infinity",  # Keep container running
-                detach=True,
-                working_dir="/workspace",
-                volumes={},
-                environment={},
-                stdin_open=True,
-                tty=True,
-                ports=port_bindings,  # Port forwarding
-            )
-
-            # Wait for container to be ready
-            import time
-
-            for _ in range(30):  # 30 second timeout
-                container.reload()
-                if container.status == "running":
-                    break
-                time.sleep(1)
-            else:
-                msg = "Docker container failed to start within timeout"
-                raise RuntimeError(msg)
+                container = client.containers.get(sandbox_id)
+                if container.status != "running":
+                    console.print("[dim]Starting stopped container...[/dim]")
+                    container.start()
+            except docker.errors.NotFound:
+                console.print(
+                    f"[yellow]⚠ Container {sandbox_id} not found; creating a fresh one...[/yellow]"
+                )
+                container, created_new = _create_new_container()
+        else:
+            container, created_new = _create_new_container()
 
         backend = DockerBackend(container)
         console.print(f"[green]✓ Docker container ready: {backend.id}[/green]")
@@ -399,25 +498,44 @@ def create_docker_sandbox(
                     f"[dim]Port forwarding: localhost:{host_port} -> container:{container_port}[/dim]"
                 )
 
-        # Run setup script if provided
-        if setup_script_path:
+        # Run setup script only for freshly-created containers — a reconnected
+        # container already has its dependencies installed.
+        if setup_script_path and created_new:
             _run_sandbox_setup(backend, setup_script_path)
 
         yield backend
 
     finally:
-        if container and should_cleanup:
-            console.print(
-                f"[dim]Stopping Docker container {container.id[:12]}...[/dim]"
-            )
-            try:
-                container.stop(timeout=10)
-                container.remove()
+        if container:
+            if persist:
+                # Keep the container (and its writable layer + mount) so a later
+                # session can reconnect. Stop it to free resources.
                 console.print(
-                    f"[dim]✓ Docker container {container.id[:12]} terminated[/dim]"
+                    f"[dim]Stopping Docker container {container.id[:12]} "
+                    f"(kept for resume)...[/dim]"
                 )
-            except Exception as e:
-                console.print(f"[yellow]⚠ Cleanup failed: {e}[/yellow]")
+                try:
+                    container.stop(timeout=10)
+                    console.print(
+                        f"[dim]✓ Container {container.id[:12]} stopped "
+                        f"(reconnect with the same session)[/dim]"
+                    )
+                except Exception as e:  # noqa: BLE001
+                    console.print(f"[yellow]⚠ Could not stop container: {e}[/yellow]")
+            elif created_new:
+                # Ephemeral: remove the freshly-created container on exit.
+                console.print(
+                    f"[dim]Stopping Docker container {container.id[:12]}...[/dim]"
+                )
+                try:
+                    container.stop(timeout=10)
+                    container.remove()
+                    console.print(
+                        f"[dim]✓ Docker container {container.id[:12]} terminated[/dim]"
+                    )
+                except Exception as e:  # noqa: BLE001
+                    console.print(f"[yellow]⚠ Cleanup failed: {e}[/yellow]")
+            # else: reused & not persisted — leave running as-is.
 
 
 _PROVIDER_TO_WORKING_DIR = {
@@ -445,6 +563,9 @@ def create_sandbox(
     sandbox_id: str | None = None,
     setup_script_path: str | None = None,
     ports: dict[int, int] | None = None,
+    mount_dir: str | None = None,
+    persist: bool = False,
+    session_id: str | None = None,
 ) -> Generator[SandboxBackendProtocol, None, None]:
     """Create or connect to a sandbox of the specified provider.
 
@@ -456,6 +577,9 @@ def create_sandbox(
         sandbox_id: Optional existing sandbox ID to reuse
         setup_script_path: Optional path to setup script to run after sandbox starts
         ports: Optional port mapping for Docker sandbox {container_port: host_port}
+        mount_dir: Optional host directory to bind-mount at /workspace (Docker only)
+        persist: Keep the container on exit for later reconnect (Docker only)
+        session_id: Session id used to name/label the container (Docker only)
 
     Yields:
         (SandboxBackend, sandbox_id)
@@ -475,9 +599,17 @@ def create_sandbox(
         "setup_script_path": setup_script_path,
     }
 
-    # Only pass ports to Docker sandbox
-    if provider == "docker" and ports:
-        sandbox_kwargs["ports"] = ports
+    # Only pass Docker-specific options (ports, bind-mount, persistence) to the
+    # Docker sandbox. Cloud providers (modal/runloop/daytona) cannot bind-mount a
+    # local directory or persist/reconnect by container id the same way.
+    if provider == "docker":
+        if ports:
+            sandbox_kwargs["ports"] = ports
+        if mount_dir:
+            sandbox_kwargs["mount_dir"] = mount_dir
+        sandbox_kwargs["persist"] = persist
+        if session_id:
+            sandbox_kwargs["session_id"] = session_id
 
     with sandbox_provider(**sandbox_kwargs) as backend:
         yield backend

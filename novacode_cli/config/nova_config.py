@@ -4,9 +4,10 @@ Manages persistent settings stored in ~/.nova/Nova.config.json
 """
 
 import json
+import os
 from typing import Any
 
-from novacode_cli.config.config import Settings
+from novacode_cli.config.config import Settings, console
 
 
 class NovaConfig:
@@ -28,19 +29,30 @@ class NovaConfig:
                     self._config = json.load(f)
             except (json.JSONDecodeError, OSError) as e:
                 # If config is corrupted, start fresh
-                print(f"Warning: Could not load config: {e}")
+                console.print(f"[yellow]Warning: Could not load config: {e}[/yellow]")
                 self._config = {}
         else:
             self._config = {}
 
     def _save(self) -> None:
-        """Save configuration to disk."""
+        """Save configuration to disk atomically (temp file + rename)."""
         # Ensure config directory exists
         self.config_dir.mkdir(parents=True, exist_ok=True)
 
-        # Write config file
-        with open(self.config_path, "w", encoding="utf-8") as f:
-            json.dump(self._config, f, indent=2)
+        # Write to temp file first, then atomically replace.
+        # Use Path.replace (os.replace), not rename: on Windows rename raises
+        # FileExistsError when the target exists, whereas replace overwrites
+        # atomically on both Windows and POSIX.
+        tmp_path = self.config_path.with_suffix(".tmp." + str(os.getpid()))
+        try:
+            tmp_path.write_text(json.dumps(self._config, indent=2), encoding="utf-8")
+            tmp_path.replace(self.config_path)
+        except Exception:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            raise
 
     def get_model_config(self) -> dict[str, str] | None:
         """Get saved model provider configuration.

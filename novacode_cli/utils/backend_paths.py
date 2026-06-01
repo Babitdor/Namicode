@@ -284,9 +284,16 @@ def read_via_backend(
             if result.startswith("Error:") or result.startswith("error:"):
                 return None
             return result
-        # Some backends return ReadResult objects.
+        # Some backends return ReadResult objects (content attribute).
         if hasattr(result, "content"):
             return result.content
+        # FilesystemBackend returns ReadResult with file_data (FileData wrapper).
+        if hasattr(result, "file_data"):
+            # Check for error responses first.
+            if hasattr(result, "error") and result.error:
+                return None
+            if result.file_data is not None:
+                return result.file_data.get("content", "")
         return str(result)
     except Exception:
         logger.debug("Failed to read %s via backend", virtual_path, exc_info=True)

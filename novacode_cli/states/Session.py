@@ -1,9 +1,23 @@
 import asyncio
 import uuid
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
+
+
+@dataclass
+class Notification:
+    """A single in-terminal notification event."""
+
+    id: str  # short uuid hex
+    level: str  # "info" | "success" | "warning" | "error"
+    title: str  # short headline (e.g. "Ralph task completed")
+    message: str  # longer description
+    source: str  # e.g. "ralph", "tests", "process", "system"
+    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
+    dismissed: bool = False
 
 
 class RalphTaskStatus(Enum):
@@ -55,6 +69,12 @@ class SessionState:
         self.steering_instructions: list[SteeringInstruction] = []
         # Ralph background tasks: task_id -> BackgroundRalphTask
         self.background_ralph_tasks: dict[str, BackgroundRalphTask] = {}
+
+        # Trello task board server
+        self.trello_server: Any = None  # TrelloServer instance
+
+        # In-terminal notifications (bounded queue, newest first)
+        self.notifications: deque[Notification] = deque(maxlen=100)
 
         # Remote bridge (Discord/Telegram) support
         self._remote_message_queue: asyncio.Queue | None = None
@@ -145,6 +165,7 @@ class SessionState:
             store=self._store,
             checkpointer=self._checkpointer,
             is_continuation=True,  # Mark as continuation to preserve state
+            steering_instructions=self.steering_instructions,
         )
         
         # Update stored references
@@ -215,10 +236,64 @@ class SessionState:
 
     def consume_approved_plan(self) -> str | None:
         """Get and clear the approved plan content.
-        
+
         Returns:
             The approved plan content, or None if not set
         """
         content = self.approved_plan_content
         self.approved_plan_content = None
         return content
+
+    # -- notifications --------------------------------------------------------
+    def add_notification(
+        self, level: str, title: str, message: str, source: str
+    ) -> str:
+        """Create and store a notification, fire the notification hook, return id.
+
+        Safe to call from any thread: the deque append is atomic and the hook
+        dispatch silently no-ops when there is no running event loop.
+        """
+        n = Notification(
+            id=uuid.uuid4().hex[:8],
+            level=level,
+            title=title,
+            message=message,
+            source=source,
+        )
+        self.notifications.appendleft(n)
+        try:
+            from novacode_cli.hooks import HookEvent, dispatch_hook_fire_and_forget
+
+            dispatch_hook_fire_and_forget(
+                HookEvent.NOTIFICATION,
+                {
+                    "id": n.id,
+                    "level": n.level,
+                    "title": n.title,
+                    "message": n.message,
+                    "source": n.source,
+                    "timestamp": n.timestamp.isoformat(),
+                    "session_id": self.session_id,
+                },
+            )
+        except Exception:  # noqa: BLE001 — notifications must never break callers
+            pass
+        return n.id
+
+    def dismiss_notification(self, notification_id: str) -> bool:
+        """Mark a notification as dismissed. Returns True if found."""
+        for n in self.notifications:
+            if n.id == notification_id:
+                n.dismissed = True
+                return True
+        return False
+
+    def clear_notifications(self) -> int:
+        """Drop all notifications. Returns how many were removed."""
+        count = len(self.notifications)
+        self.notifications.clear()
+        return count
+
+    def unread_notification_count(self) -> int:
+        """Number of non-dismissed notifications."""
+        return sum(1 for n in self.notifications if not n.dismissed)

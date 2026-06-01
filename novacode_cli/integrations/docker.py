@@ -50,13 +50,18 @@ class DockerBackend(BaseSandbox):
     and implements execute(), download_files(), and upload_files() using Docker's API.
     """
 
-    def __init__(self, container: Container) -> None:
+    def __init__(self, container: Container, workdir: str = "/workspace") -> None:
         """Initialize the DockerBackend with a Docker container instance.
 
         Args:
             container: Active Docker Container instance
+            workdir: Working directory for executed commands. Matches the
+                container's configured working_dir (and the bind-mount target
+                when the project is mounted), so shell commands run against the
+                mounted project rather than the container root.
         """
         self._container = container
+        self._workdir = workdir
         self._timeout = 30 * 60  # 30 minutes default timeout
 
     @property
@@ -74,7 +79,9 @@ class DockerBackend(BaseSandbox):
             ExecuteResponse with combined output, exit code, and truncation flag
         """
         try:
-            # Execute command in container
+            # Execute command in container. exec_run defaults to the image's
+            # working dir ("/"), so set workdir explicitly to run commands in
+            # the mounted project at /workspace.
             exec_result = self._container.exec_run(
                 cmd=["bash", "-c", command],
                 stdout=True,
@@ -82,6 +89,7 @@ class DockerBackend(BaseSandbox):
                 stdin=False,
                 tty=False,
                 demux=False,  # Combine stdout and stderr
+                workdir=self._workdir,
             )
 
             # Decode output
