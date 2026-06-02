@@ -2,15 +2,38 @@
 
 ### Context
 Your previous work is in the filesystem. Continue making progress toward completing the task.
+{% if conversation_context %}
+
+### Prior Conversation (context)
+Use the recent conversation with the user to interpret the task and proceed accordingly:
+
+```
+{{ conversation_context }}
+```
+{% endif %}
+
+### 📒 Progress Log — READ FIRST  (`{{ progress_path }}`)
+{% if progress_notes %}
+Notes recorded by previous iterations. **Read these before doing anything** so you
+continue where the last iteration left off and do NOT repeat completed work:
+
+```
+{{ progress_notes }}
+```
+{% else %}
+No progress recorded yet — this is the first iteration. You will create
+`{{ progress_path }}` at the end of this iteration (see Progress Tracking below).
+{% endif %}
 
 ### Current Task
 {{ task }}
 
 ### Your Objectives
-1. **Assess Progress**: Review what has been done and what remains
+1. **Review the Progress Log** above + the filesystem to see what's done and what remains
 2. **Make Concrete Progress**: Implement the next logical step
 3. **Validate Work**: Test, lint, or verify changes where applicable
 4. **Document Decisions**: Note any important choices or trade-offs
+5. **Update the Progress Log** at `{{ progress_path }}` (see Progress Tracking below)
 
 ### Action Guidelines
 - **If the task is incomplete**: Identify and execute the next critical step
@@ -56,15 +79,26 @@ Skills are loaded from your system prompt. To use a skill:
 Example: If you see `- **testing-skills**: ... -> Read 'C:/Users/.../skills/testing-skills/SKILL.md'`
 Then call: `read_file("C:/Users/.../skills/testing-skills/SKILL.md")` and follow those instructions.
 
-### Output Format
-End your response with:
-- **Progress Summary**: What you accomplished in this iteration
-- **Current Status**: Complete or Incomplete (with remaining work)
-- **Next Steps**: What should be done next (if any)
-- **Skills Used**: List any skills invoked and why
+### 📝 Progress Tracking (MANDATORY — do this every iteration)
+Before you finish, **update `{{ progress_path }}`** so the next iteration has your memory:
+
+1. Write the FULL file = the previous Progress Log shown above (verbatim) **plus**
+   a new entry appended at the bottom. Never delete or overwrite earlier entries.
+2. Each entry must be:
+   ```
+   ## Iteration {{ iteration_display }}
+   - Implemented: <what you changed — files, key edits>
+   - Learned: <decisions, gotchas, dead-ends to avoid>
+   - Next: <the immediate next step for the following iteration>
+   ```
+3. Use `write_file("{{ progress_path }}", <full updated contents>)`. Keep entries
+   concise (a few bullets). This file persists across iterations — it is how a
+   later iteration knows what earlier ones did.
 
 ### Output Format
 End your response with:
 - **Progress Summary**: What you accomplished in this iteration
 - **Current Status**: Complete or Incomplete (with remaining work)
 - **Next Steps**: What should be done next (if any)
+- **Skills Used**: List any skills invoked and why
+- **Progress Log**: Confirm you updated `{{ progress_path }}`

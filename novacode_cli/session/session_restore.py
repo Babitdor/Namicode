@@ -270,6 +270,18 @@ async def select_session_interactive(
         console.print()
         return None
 
+    # Prefer the native Textual picker; fall back to the prompt_toolkit table
+    # below if Textual isn't available or we're not on an interactive terminal.
+    try:
+        import sys as _sys
+
+        if _sys.stdin.isatty() and _sys.stdout.isatty():
+            from novacode_cli.tui.pickers import pick_session_tui
+
+            return await pick_session_tui(sessions)
+    except Exception:  # noqa: BLE001 — fall back to the legacy picker on any error
+        pass
+
     # Build Rich table
     table = Table(
         title="Resume Session",

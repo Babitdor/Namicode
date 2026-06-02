@@ -246,7 +246,14 @@ def create_plan_agent_with_config(
         subagents=[],  # Plan agents don't use subagents by default
         middleware=[
             PlanModeMiddleware(workspace_root=workspace_root),
-            SteeringMiddleware(instructions=steering_instructions or []),
+            # Keep the SHARED session list reference even when empty — using
+            # `or []` would swap in a fresh list and break live steering, since
+            # the list is usually empty at plan-agent creation time.
+            SteeringMiddleware(
+                instructions=steering_instructions
+                if steering_instructions is not None
+                else []
+            ),
         ],
     )
 

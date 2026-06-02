@@ -1474,6 +1474,8 @@ class NovaApp(App):
                 self._log(Text(art, style="bold #7aa2f7"))
         except Exception:  # noqa: BLE001
             pass
+        # Native startup panel (model / cwd / sandbox / memory / web-search).
+        self._render_startup_info()
         # Replay prior conversation when resuming a session.
         self._replay_history()
         # Route remote bridge status messages into the transcript (not stdout).
@@ -1606,6 +1608,68 @@ class NovaApp(App):
                     parts.append(block)
             return "\n".join(parts)
         return str(content)
+
+    def _render_startup_info(self) -> None:
+        """Render a compact native session-info panel (replaces the legacy
+        pre-TUI Rich panels, which never appeared in TUI mode)."""
+        from pathlib import Path
+
+        try:
+            from novacode_cli.config.config import settings
+        except Exception:  # noqa: BLE001
+            return
+
+        t = Text()
+        t.append("session\n", style="bold")
+        t.append("  model: ", style="dim")
+        t.append(f"{self.model_name}\n", style="cyan")
+
+        sandbox_type = getattr(self.session_state, "_sandbox_type", None)
+        if sandbox_type:
+            try:
+                from novacode_cli.integrations.sandbox_factory import (
+                    get_default_working_dir,
+                )
+
+                wd = get_default_working_dir(sandbox_type)
+            except Exception:  # noqa: BLE001
+                wd = "?"
+            t.append("  sandbox: ", style="dim")
+            t.append(f"{sandbox_type} ({wd})\n", style="yellow")
+            t.append(f"  local dir: {Path.cwd()}\n", style="dim")
+        else:
+            t.append("  sandbox: ", style="dim")
+            t.append("local\n", style="dim")
+            t.append(f"  cwd: {Path.cwd()}\n", style="dim")
+
+        # Memory status (agent.md / project memory).
+        try:
+            aid = self.assistant_id
+            has_user = bool(aid) and settings.get_user_agent_md_path(aid).exists()
+            proj = settings.get_project_agent_md_paths()
+            if has_user or proj:
+                parts = []
+                if has_user:
+                    parts.append(f"~/.nova/agents/{aid}/agent.md")
+                if proj:
+                    parts.append("project: " + ", ".join(p.name for p in proj))
+                t.append(f"  memory: {' · '.join(parts)}\n", style="dim")
+            else:
+                t.append("  memory: none (use /init to create project memory)\n", style="dim")
+        except Exception:  # noqa: BLE001
+            pass
+
+        # Web search availability.
+        try:
+            if not settings.has_tavily:
+                t.append(
+                    "  ⚠ web search disabled — set TAVILY_API_KEY to enable\n",
+                    style="#e0af68",
+                )
+        except Exception:  # noqa: BLE001
+            pass
+
+        self._log(t)
 
     @work
     async def _replay_history(self) -> None:
@@ -2115,7 +2179,8 @@ class NovaApp(App):
             from pathlib import Path
 
             config = {"configurable": {"thread_id": self.session_state.thread_id}}
-            state = await self.agent.aget_state(config)
+            # Bound the checkpointer read so a slow/contended DB can't hang /quit.
+            state = await asyncio.wait_for(self.agent.aget_state(config), timeout=5.0)
             messages = state.values.get("messages", [])
             if not messages:
                 return

@@ -22,6 +22,37 @@ from novacode_cli.prompts import render_template
 from novacode_cli.states.Session import BackgroundRalphTask, RalphTaskStatus
 from novacode_cli.ui.ui_elements import TokenTracker
 
+# Cross-iteration progress log. The agent reads it at the start of every
+# iteration and appends what it implemented/learned at the end, so a Ralph run
+# carries memory forward. POSIX path so the model never sees a backslashed form.
+RALPH_PROGRESS_PATH = ".nova/ralph/progress.md"
+
+
+def _ensure_ralph_dir() -> None:
+    """Make sure .nova/ralph/ exists so progress.md has a home."""
+    from pathlib import Path
+
+    try:
+        (Path(".nova") / "ralph").mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+
+
+def _read_ralph_progress() -> str:
+    """Return the current progress.md contents (bounded), or '' if absent."""
+    from pathlib import Path
+
+    p = Path(".nova") / "ralph" / "progress.md"
+    try:
+        if p.exists():
+            text = p.read_text(encoding="utf-8", errors="replace").strip()
+            if len(text) > 6000:
+                text = "…(earlier progress trimmed)…\n" + text[-6000:]
+            return text
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
 
 # =============================================================================
 # Ralph Checkpoint Management
@@ -446,6 +477,20 @@ async def _execute_all_ralph_iterations_background(
     original_auto_approve = session_state.auto_approve
     session_state.auto_approve = True
 
+    # Ground the loop in the prior conversation (read once before iterating).
+    conversation_context = ""
+    try:
+        from novacode_cli.utils.conversation_context import (
+            get_recent_conversation_digest,
+        )
+
+        conversation_context = await get_recent_conversation_digest(
+            agent, session_state.thread_id
+        )
+    except Exception:  # noqa: BLE001
+        conversation_context = ""
+
+    _ensure_ralph_dir()
     iteration = start_iteration
 
     try:
@@ -474,11 +519,16 @@ async def _execute_all_ralph_iterations_background(
             print(f"  Status: Created", file=sys.stderr)
             sys.stderr.flush()
 
-            # Build prompt for this iteration using Jinja template
+            # Build prompt for this iteration using Jinja template.
+            # Read progress.md fresh each iteration so the agent sees what prior
+            # iterations implemented and learned.
             prompt = render_template(
                 "ralph_iteration.jinja",
                 iteration_display=iter_display,
                 task=task,
+                conversation_context=conversation_context,
+                progress_notes=_read_ralph_progress(),
+                progress_path=RALPH_PROGRESS_PATH,
             )
 
             # Execute this iteration (sequentially, one at a time)
@@ -824,6 +874,21 @@ async def handle_ralph_command(
     original_auto_approve = session_state.auto_approve
     session_state.auto_approve = True
 
+    # Ground the loop in the prior conversation (read once before iterating).
+    conversation_context = ""
+    try:
+        from novacode_cli.utils.conversation_context import (
+            get_recent_conversation_digest,
+        )
+
+        conversation_context = await get_recent_conversation_digest(
+            agent, session_state.thread_id
+        )
+    except Exception:  # noqa: BLE001
+        conversation_context = ""
+
+    _ensure_ralph_dir()
+
     # Run autonomous loop
     iteration = start_iteration
     background_tasks = []  # Track background tasks for cleanup
@@ -842,11 +907,16 @@ async def handle_ralph_command(
             console.print(f"[bold cyan]{'─' * 50}[/bold cyan]")
             console.print()
 
-            # Build prompt for this iteration using Jinja template
+            # Build prompt for this iteration using Jinja template.
+            # Read progress.md fresh each iteration so the agent picks up what
+            # earlier iterations recorded.
             prompt = render_template(
                 "ralph_iteration.jinja",
                 iteration_display=iter_display,
                 task=task,
+                conversation_context=conversation_context,
+                progress_notes=_read_ralph_progress(),
+                progress_path=RALPH_PROGRESS_PATH,
             )
 
             # Execute task synchronously (foreground mode only)

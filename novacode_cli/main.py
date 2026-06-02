@@ -66,8 +66,11 @@ import time
 from pathlib import Path
 
 # Fix Windows console encoding to handle Unicode characters
-# This must be done before any output is written
-if sys.platform == "win32":
+# This must be done before any output is written.
+# Skip under pytest: replacing sys.stdout/stderr here would detach pytest's
+# output capture (its buffers get closed at session end -> "I/O operation on
+# closed file"). The real CLI never runs under pytest, so this only guards tests.
+if sys.platform == "win32" and "pytest" not in sys.modules:
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
@@ -1277,32 +1280,60 @@ async def _shutdown_background_services(session_state) -> None:
     background tasks don't dangle and throw during event-loop teardown (which
     can leave the terminal in a broken state).
     """
-    # Vixie desktop-pet websocket server
+    async def _guard(coro, timeout: float = 4.0) -> None:
+        """Await a teardown step but never let it hang or raise on quit."""
+        try:
+            await asyncio.wait_for(coro, timeout=timeout)
+        except BaseException:  # noqa: BLE001 — incl. TimeoutError/CancelledError
+            pass
+
+    # Build best-effort stop coroutines and run them CONCURRENTLY, each bounded
+    # by its own timeout — a single slow service (websocket, subprocess, bridge
+    # socket) must not make /quit hang or feel unresponsive.
+    steps: list = []
+
+    steps.append(_guard(stop_vixie_server()))
+
     try:
-        await stop_vixie_server()
-    except Exception:  # noqa: BLE001, S110
+        steps.append(_guard(ProcessManager.get_instance().stop_all()))
+    except Exception:  # noqa: BLE001
         pass
-    # Managed dev servers / processes
-    try:
-        await ProcessManager.get_instance().stop_all()
-    except Exception:  # noqa: BLE001, S110
-        pass
-    # Remote (Discord/Telegram) bridges
-    try:
-        bridge_mgr = getattr(session_state, "_remote_bridge_manager", None)
-        if bridge_mgr is not None:
-            await bridge_mgr.stop_all()
-    except Exception:  # noqa: BLE001, S110
-        pass
-    # Any remote message-processor task
+
+    bridge_mgr = getattr(session_state, "_remote_bridge_manager", None)
+    if bridge_mgr is not None:
+        steps.append(_guard(bridge_mgr.stop_all()))
+
+    # Trello task-board server (sync or async stop/close/shutdown).
+    trello = getattr(session_state, "trello_server", None)
+    if trello is not None:
+        stop_fn = (
+            getattr(trello, "stop", None)
+            or getattr(trello, "close", None)
+            or getattr(trello, "shutdown", None)
+        )
+        if callable(stop_fn):
+
+            async def _stop_trello() -> None:
+                res = stop_fn()
+                if asyncio.iscoroutine(res):
+                    await res
+
+            steps.append(_guard(_stop_trello()))
+
+    if steps:
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*steps, return_exceptions=True), timeout=8.0
+            )
+        except BaseException:  # noqa: BLE001
+            pass
+
+    # Cancel any remote message-processor task (bounded).
     try:
         task = getattr(session_state, "_remote_processor_task", None)
         if task is not None and not task.done():
             task.cancel()
-            try:
-                await task
-            except BaseException:  # noqa: BLE001, S110
-                pass
+            await _guard(task, timeout=2.0)
     except Exception:  # noqa: BLE001, S110
         pass
 
@@ -2253,6 +2284,24 @@ def _execute_secrets_command(args) -> None:
             console.print()
 
 
+def _run_onboarding() -> bool:
+    """Run first-run/reset onboarding, preferring the native Textual screen.
+
+    Falls back to the legacy prompt_toolkit wizard when Textual isn't usable
+    (e.g. not an interactive terminal).
+    """
+    from novacode_cli.onboarding import OnboardingWizard
+
+    try:
+        if sys.stdin.isatty() and sys.stdout.isatty():
+            from novacode_cli.tui.pickers import run_onboarding_tui
+
+            return run_onboarding_tui()
+    except Exception:  # noqa: BLE001 — fall back to the legacy wizard
+        pass
+    return bool(OnboardingWizard().run())
+
+
 def cli_main() -> None:
     """Entry point for console script."""
     # Fix for gRPC fork issue on macOS
@@ -2269,14 +2318,11 @@ def cli_main() -> None:
         # First-run detection (skip for init and doctor commands)
         if args.command not in ["init", "doctor", "help"]:
             if not settings.get_onboarding_status():
-                from novacode_cli.onboarding import OnboardingWizard
-
                 console.print()
                 console.print("[yellow]→ First run detected[/yellow]")
                 console.print()
 
-                wizard = OnboardingWizard()
-                if wizard.run():
+                if _run_onboarding():
                     console.print()
                     console.print(
                         "[dim]You can now run your command or start an interactive session.[/dim]"
@@ -2292,8 +2338,6 @@ def cli_main() -> None:
         if args.command == "init":
             # Check if --reset flag is set (re-run onboarding)
             if args.reset:
-                from novacode_cli.onboarding import OnboardingWizard
-
                 console.print()
                 console.print(
                     "[yellow]⚠ This will overwrite your current configuration.[/yellow]"
@@ -2302,8 +2346,7 @@ def cli_main() -> None:
 
                 confirm = prompt("Continue? [y/N]: ").strip().lower()
                 if confirm == "y":
-                    wizard = OnboardingWizard()
-                    wizard.run()
+                    _run_onboarding()
                 else:
                     console.print("[dim]Cancelled.[/dim]")
 

@@ -676,6 +676,66 @@ def test_tui_live_steering():
     asyncio.run(_drive_live_steering())
 
 
+async def _drive_startup_info():
+    """The native startup panel renders model/cwd on mount."""
+    from textual.widgets import Static
+
+    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.ui.ui_elements import TokenTracker
+
+    app = NovaApp(
+        agent=_FakeAgent(),
+        assistant_id="nova-agent",
+        session_state=_SS(),
+        backend=None,
+        token_tracker=TokenTracker(),
+        image_tracker=None,
+        model_name="deepseek-v4",
+        session_manager=None,
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        blob = " ".join(
+            str(w.render()) for w in app.query("#transcript .logline").results(Static)
+        )
+        assert "session" in blob and "deepseek-v4" in blob, blob
+
+
+def test_tui_startup_info():
+    if not _HAS_TEXTUAL:
+        return
+    asyncio.run(_drive_startup_info())
+
+
+def test_plan_agent_shares_steering_list(monkeypatch):
+    """The plan agent's SteeringMiddleware holds the SAME list as the session,
+    even when it starts empty (regression for the `or []` reference bug)."""
+    import deepagents.graph as dg
+    from langchain_core.language_models.fake_chat_models import FakeListChatModel
+
+    from novacode_cli.agents.plan_agent import create_plan_agent_with_config
+
+    captured: dict = {}
+
+    def _fake_create_deep_agent(**kw):
+        captured["middleware"] = kw.get("middleware")
+        return object()  # the factory wraps this as (agent, backend)
+
+    monkeypatch.setattr(dg, "create_deep_agent", _fake_create_deep_agent)
+
+    shared: list = []  # empty on purpose — the bug swapped this for a fresh []
+    create_plan_agent_with_config(
+        model=FakeListChatModel(responses=["x"]),
+        assistant_id="nova",
+        tools=[],
+        steering_instructions=shared,
+    )
+    mws = captured["middleware"] or []
+    steer = next(m for m in mws if type(m).__name__ == "SteeringMiddleware")
+    # Must be the SAME object, so live appends are visible to the plan agent.
+    assert steer._instructions is shared
+
+
 async def _drive_approval():
     """Rich approval modal: 'a' auto-approves and sets the session flag."""
     import novacode_cli.ui_events as ev
@@ -1656,6 +1716,7 @@ if __name__ == "__main__":
         asyncio.run(_drive_markup_safe())
         asyncio.run(_drive_context_warning())
         asyncio.run(_drive_live_steering())
+        asyncio.run(_drive_startup_info())
         print(
             "TUI HEADLESS + ROUTING + SAVE + SESSIONS + MCP + AUTOCOMPLETE + "
             "AGENTS/SKILLS + SKILL/@ + REMOTE + LIVE + APPROVAL + FILEOPS + DIFF + "

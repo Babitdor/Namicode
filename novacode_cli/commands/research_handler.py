@@ -145,6 +145,20 @@ async def handle_research_command(
     if fast_mode:
         console.print("[dim]Fast mode: skipping fact-check phase[/dim]")
 
+    # Ground the swarm in the prior conversation so it (and its subagents)
+    # proceed from what was already discussed with the core agent.
+    conversation_context = ""
+    try:
+        from novacode_cli.utils.conversation_context import (
+            get_recent_conversation_digest,
+        )
+
+        conversation_context = await get_recent_conversation_digest(
+            agent, session_state.thread_id
+        )
+    except Exception:  # noqa: BLE001
+        conversation_context = ""
+
     prompt = render_template(
         "research_swarm.jinja",
         research_query=query,
@@ -152,8 +166,13 @@ async def handle_research_command(
         mode_description=_MODE_DESCRIPTIONS[mode],
         agent_count=agent_count,
         agents=agents,
-        base_dir=str(base_dir),
+        # POSIX form (forward slashes) so the model never sees a backslashed,
+        # Windows-style ".nova\\research" — which it tends to mangle into a
+        # dotless "nova" folder. The virtual filesystem accepts forward slashes
+        # on every platform.
+        base_dir=base_dir.as_posix(),
         fast_mode=fast_mode,
+        conversation_context=conversation_context,
     )
 
     backend = getattr(agent, "backend", None)
