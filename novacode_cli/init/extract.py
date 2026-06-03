@@ -187,23 +187,69 @@ def _build_chunk_listing(project_root: Path, paths: list[Path]) -> str:
 
 
 def _parse_extraction_json(text: str) -> dict[str, Any] | None:
-    """Parse a (possibly fenced / prose-wrapped) JSON extraction fragment."""
+    """Parse a graph-fragment JSON written by a subagent — defensively.
+
+    Weak models mangle the fragment in predictable ways; this recovers all of
+    them so a malformed write doesn't lose the whole chunk:
+      • markdown code fences (```json … ```)
+      • the whole JSON wrapped in surrounding quotes ('…' or "…")
+      • double-encoded JSON (a JSON *string* whose value is the JSON object)
+      • trailing "Extra data" after the object (decode just the first value)
+      • leading/trailing prose around the object
+      • a Python-repr dict (single quotes) — via ast.literal_eval
+
+    Returns the dict, or None if nothing parseable is found.
+    """
+    import ast
     import json
     import re
 
     s = (text or "").strip()
+    if not s:
+        return None
+    # 1) strip code fences
     if s.startswith("```"):
-        s = re.sub(r"^```[a-zA-Z]*\n", "", s)
-        s = re.sub(r"\n```$", "", s).strip()
+        s = re.sub(r"^```[a-zA-Z]*\n?", "", s)
+        s = re.sub(r"\n?```$", "", s).strip()
+    # 2) direct / double-encoded JSON (model sometimes json.dumps() the string)
+    probe = s
+    for _ in range(2):
+        try:
+            v = json.loads(probe)
+        except Exception:  # noqa: BLE001
+            break
+        if isinstance(v, dict):
+            return v
+        if isinstance(v, str):  # double-encoded → decode the inner string again
+            probe = v.strip()
+            continue
+        break
+    # 3) strip a single layer of surrounding quotes the model may have added
+    if len(s) >= 2 and s[0] in "'\"" and s[-1] == s[0] and s[1:-1].lstrip().startswith("{"):
+        s = s[1:-1].strip()
+    # 4) decode the first JSON object, ignoring any trailing "Extra data"
+    start = s.find("{")
+    if start == -1:
+        return None
     try:
-        return json.loads(s)
+        obj, _ = json.JSONDecoder().raw_decode(s[start:])
+        if isinstance(obj, dict):
+            return obj
     except Exception:  # noqa: BLE001
-        m = re.search(r"\{.*\}", s, re.S)
-        if m:
-            try:
-                return json.loads(m.group(0))
-            except Exception:  # noqa: BLE001
-                return None
+        pass
+    # 5) last resort: greedy braces, JSON then Python-repr (single quotes)
+    m = re.search(r"\{.*\}", s[start:], re.S)
+    if m:
+        frag = m.group(0)
+        try:
+            return json.loads(frag)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            v = ast.literal_eval(frag)
+            return v if isinstance(v, dict) else None
+        except Exception:  # noqa: BLE001
+            return None
     return None
 
 

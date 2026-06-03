@@ -22,6 +22,27 @@ def test_parse_extraction_json_handles_fences_and_prose():
     assert ex._parse_extraction_json("not json") is None
 
 
+def test_parse_extraction_json_recovers_model_malformations():
+    """Weak models mangle the fragment in predictable ways — all must recover."""
+    import json
+
+    ok = {"nodes": [{"id": "a"}], "edges": []}
+    raw = json.dumps(ok)
+
+    # whole JSON wrapped in surrounding quotes (single and double)
+    assert ex._parse_extraction_json("'" + raw + "'") == ok
+    assert ex._parse_extraction_json('"' + raw + '"') == ok
+    # double-encoded: a JSON string whose value is the JSON object
+    assert ex._parse_extraction_json(json.dumps(raw)) == ok
+    # trailing "Extra data" after a complete object
+    assert ex._parse_extraction_json(raw + "\n" + raw) == ok
+    # Python-repr dict (single quotes) — e.g. a str()'d dict
+    assert ex._parse_extraction_json(str(ok)) == ok
+    # fenced + surrounding whitespace
+    fence = "`" * 3
+    assert ex._parse_extraction_json(f"{fence}\n{raw}\n{fence}") == ok
+
+
 def test_merge_ast_semantic_ast_wins_and_keeps_hyperedges():
     ast = {
         "nodes": [{"id": "x"}],
