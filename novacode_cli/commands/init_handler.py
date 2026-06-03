@@ -39,12 +39,17 @@ class InitFlags:
         self.update = False
         self.deep = False
         self.no_viz = False
+        # By default the graphify pipeline now has the LLM author a narrative
+        # NOVA.md grounded in the computed facts. --no-llm (or --template) forces
+        # the deterministic template render instead.
+        self.no_llm = False
 
         if args:
             parts = args.lower().split()
             self.update = "--update" in parts
             self.deep = "--deep" in parts
             self.no_viz = "--no-viz" in parts
+            self.no_llm = "--no-llm" in parts or "--template" in parts
 
 
 async def handle_init_command(
@@ -144,6 +149,61 @@ async def handle_init_command(
     from novacode_cli.init.detect import is_graphify_available
 
     if is_graphify_available():
+        # Build an execute_fn so the LLM-bearing stages (semantic extraction,
+        # NOVA.md authoring) run through the Nova agent itself — its tools and
+        # `task` subagents — grounded in the graph, instead of stateless model
+        # calls. The agent needs to read/write files unattended here, so we
+        # enable auto-approve for the duration of the pipeline.
+        execute_fn = None
+        if agent is not None and not flags.no_llm:
+            from novacode_cli.ui.execution import execute_task
+
+            # Prefer a dedicated NO-HITL, LOCAL-filesystem agent for /init:
+            # - auto_approve=True → interrupt_on={} → no approval prompts on the
+            #   main agent OR its `task` subagents (a subagent's HITL interrupt is
+            #   unresolvable — it bubbles out of `task`'s ainvoke as a
+            #   GraphInterrupt and crashes the run).
+            # - sandbox=None → a LOCAL FilesystemBackend rooted at the project.
+            #   /init reads local files and must write graph fragments to the
+            #   local .nova/; through a sandbox backend, `/`-prefixed virtual
+            #   paths hit the container root (project is at /workspace → reads
+            #   404) and any writes land inside the sandbox.
+            # Fall back to the shared agent if we can't build one.
+            init_agent = agent
+            try:
+                from novacode_cli.agents.core_agent import create_agent_with_config
+
+                _model = getattr(session_state, "_model", None)
+                if _model is not None:
+                    init_agent, _ = create_agent_with_config(
+                        model=_model,
+                        assistant_id=getattr(session_state, "_assistant_id", None)
+                        or assistant_id,
+                        tools=getattr(session_state, "_tools", None) or [],
+                        sandbox=None,        # LOCAL filesystem (see comment)
+                        sandbox_type=None,
+                        store=getattr(session_state, "_store", None),
+                        checkpointer=getattr(session_state, "_checkpointer", None),
+                        auto_approve=True,
+                        is_continuation=True,
+                    )
+            except Exception:  # noqa: BLE001
+                init_agent = agent
+
+            async def execute_fn(prompt: str) -> None:
+                original_auto_approve = session_state.auto_approve
+                session_state.auto_approve = True
+                try:
+                    await execute_task(
+                        prompt,
+                        init_agent,
+                        assistant_id,
+                        session_state,
+                        token_tracker,
+                    )
+                finally:
+                    session_state.auto_approve = original_auto_approve
+
         await _run_graphify_pipeline(
             project_root=project_root,
             nova_dir=nova_dir,
@@ -151,6 +211,8 @@ async def handle_init_command(
             agents_md_path=agents_md_path,
             flags=flags,
             console=console,
+            agent=agent,
+            execute_fn=execute_fn,
         )
     else:
         _show_graphify_unavailable(console)
@@ -171,14 +233,20 @@ async def _run_graphify_pipeline(
     agents_md_path: Path,
     flags: InitFlags,
     console: Console,
+    agent=None,
+    execute_fn=None,
 ) -> None:
     """Run the graphify-powered multi-step /init pipeline.
 
-    Steps: detect → extract → build & cluster → analyze → generate → export.
+    Steps: detect → extract (AST) → semantic extract → build & cluster →
+    analyze → author NOVA.md → export.
 
-    Heavy synchronous graphify calls are dispatched to a worker thread via
-    ``asyncio.to_thread()`` so they don't freeze the event loop.  Rich
-    console prints happen on the main thread between steps.
+    graphify computes the **graph and facts** (deterministic). The two
+    LLM-bearing stages — semantic extraction and NOVA.md authoring — are run
+    through the **Nova agent itself** (``execute_fn`` + its ``task`` subagents
+    and tools) so they can read files, follow imports, look things up, and stay
+    grounded in the graph. They fall back to a single model call / deterministic
+    template only when no agent is available (e.g. non-interactive, or --no-llm).
 
     Args:
         project_root: Path to the project root.
@@ -187,6 +255,8 @@ async def _run_graphify_pipeline(
         agents_md_path: Path to the AGENTS.md file.
         flags: Parsed command flags.
         console: Rich console for output.
+        agent: The Nova agent (for tool/subagent-driven stages).
+        execute_fn: Runs a prompt through the agent (TUI stream / execute_task).
     """
     import asyncio
 
@@ -207,7 +277,11 @@ async def _run_graphify_pipeline(
         cluster_project_graph,
         export_project_graph,
     )
-    from novacode_cli.init.generate import generate_agents_md, generate_nova_md
+    from novacode_cli.init.generate import (
+        generate_agents_md,
+        generate_nova_md,
+        generate_nova_md_llm,
+    )
 
     # ── Step 1: Detect ──────────────────────────────────────────
     console.print(
@@ -220,13 +294,9 @@ async def _run_graphify_pipeline(
         )
         # If no changes, use full detection as fallback
         if not detection:
-            detection = await asyncio.to_thread(
-                detect_project, project_root, console
-            )
+            detection = await asyncio.to_thread(detect_project, project_root, console)
     else:
-        detection = await asyncio.to_thread(
-            detect_project, project_root, console
-        )
+        detection = await asyncio.to_thread(detect_project, project_root, console)
 
     if not detection:
         console.print("[red]❌ Detection failed — no files found[/red]")
@@ -242,7 +312,11 @@ async def _run_graphify_pipeline(
     if flags.update:
         cached = await asyncio.to_thread(load_extraction_cache, project_root)
         extraction = await asyncio.to_thread(
-            extract_project_incremental, project_root, detection, cached, console,
+            extract_project_incremental,
+            project_root,
+            detection,
+            cached,
+            console,
         )
     else:
         extraction = await asyncio.to_thread(
@@ -254,6 +328,46 @@ async def _run_graphify_pipeline(
             "[yellow]⚠ No entities extracted — falling back to prompt-based exploration[/yellow]"
         )
         return
+
+    # ── Step 2b: Semantic extraction ────────────────────────────────
+    # AST only captures code structure. The semantic stage adds document
+    # concepts and the call/data/architecture edges AST can't see, grounding a
+    # much richer graph. Run through the Nova AGENT (tools + subagents) when
+    # available so extractors can read files / follow imports / look things up;
+    # fall back to a stateless model call otherwise. Skipped on --no-llm/--update.
+    if not flags.no_llm and not flags.update:
+        from novacode_cli.init.extract import (
+            merge_ast_semantic,
+            semantic_extract_project,
+            semantic_extract_via_agent,
+        )
+
+        console.print()
+        console.print(
+            f"[bold {COLORS['primary']}]Step 2b/5: Semantic extraction "
+            f"(agent concepts + relationships)...[/bold {COLORS['primary']}]"
+        )
+        if execute_fn is not None:
+            semantic = await semantic_extract_via_agent(
+                project_root=project_root,
+                detection=detection,
+                execute_fn=execute_fn,
+                console=console,
+                deep=flags.deep,
+            )
+        else:
+            semantic = await semantic_extract_project(
+                project_root=project_root,
+                detection=detection,
+                console=console,
+                deep=flags.deep,
+            )
+        if semantic.get("nodes") or semantic.get("edges"):
+            extraction = merge_ast_semantic(extraction, semantic)
+            console.print(
+                f"  [cyan]Merged graph:[/cyan] {len(extraction.get('nodes', []))} nodes, "
+                f"{len(extraction.get('edges', []))} edges"
+            )
 
     # Save extraction cache for future incremental updates
     await asyncio.to_thread(save_extraction_cache, project_root, extraction)
@@ -279,28 +393,16 @@ async def _run_graphify_pipeline(
     # graphify.analyze — includes betweenness centrality, O(V*E) worst case
     analysis = await asyncio.to_thread(analyze_project_graph, G, communities, console)
 
-    # ── Step 5: Generate & Export ────────────────────────────────────
+    # ── Step 5: Export graph + author docs ───────────────────────────
     console.print()
     console.print(
         f"[bold {COLORS['primary']}]Step 5/5: Generating documentation...[/bold {COLORS['primary']}]"
     )
 
-    # Generate NOVA.md (template rendering + file write — I/O bound, run in thread)
-    nova_md_content = await asyncio.to_thread(
-        generate_nova_md,
-        project_root=project_root,
-        detection=detection,
-        extraction=extraction,
-        analysis=analysis,
-        communities=communities,
-        console=console,
-    )
-
-    # Write files
+    # Export the graph FIRST so NOVA.md authoring can query it live
+    # (query_project_graph reads .nova/project-graph.json) and the agent can
+    # open it directly.
     nova_dir.mkdir(parents=True, exist_ok=True)
-    nova_md_path.write_text(nova_md_content, encoding="utf-8")
-
-    # Export graph (JSON + HTML generation — I/O bound, run in thread)
     await asyncio.to_thread(
         export_project_graph,
         G=G,
@@ -310,6 +412,59 @@ async def _run_graphify_pipeline(
         console=console,
         include_html=not flags.no_viz,
     )
+
+    # Author NOVA.md. Preferred: the Nova AGENT writes a rich, grounded doc using
+    # its tools (query_project_graph / read_file). Fallbacks: a single grounded
+    # model call, then the deterministic template — used only when no agent is
+    # available, --no-llm is set, or the agent didn't produce a file.
+    authored = False
+    if execute_fn is not None and not flags.no_llm:
+        from novacode_cli.init.generate import build_nova_md_author_prompt
+
+        console.print(
+            "  [dim]Authoring NOVA.md with the Nova agent (grounded in the graph)…[/dim]"
+        )
+        prompt = build_nova_md_author_prompt(
+            project_root=project_root,
+            detection=detection,
+            extraction=extraction,
+            analysis=analysis,
+            communities=communities,
+        )
+        try:
+            await execute_fn(prompt)
+            authored = (
+                nova_md_path.exists()
+                and len(nova_md_path.read_text(encoding="utf-8").strip()) > 200
+            )
+        except Exception as ex:  # noqa: BLE001
+            console.print(
+                f"[yellow]⚠ Agent authoring failed ({ex}); using fallback.[/yellow]"
+            )
+            authored = False
+
+    if not authored:
+        nova_md_content = None
+        if not flags.no_llm:
+            nova_md_content = await generate_nova_md_llm(
+                project_root=project_root,
+                detection=detection,
+                extraction=extraction,
+                analysis=analysis,
+                communities=communities,
+                console=console,
+            )
+        if not nova_md_content:
+            nova_md_content = await asyncio.to_thread(
+                generate_nova_md,
+                project_root=project_root,
+                detection=detection,
+                extraction=extraction,
+                analysis=analysis,
+                communities=communities,
+                console=console,
+            )
+        nova_md_path.write_text(nova_md_content, encoding="utf-8")
 
     # Save detection manifest for incremental updates
     await asyncio.to_thread(save_manifest, project_root, detection)
@@ -506,9 +661,13 @@ def _show_success_panel(
     # Fire init.complete hook
     try:
         from novacode_cli.hooks import dispatch_hook_fire_and_forget, HookEvent
-        dispatch_hook_fire_and_forget(HookEvent.INIT_COMPLETE, {
-            "project_root": str(settings.project_root),
-            "session_id": getattr(session_state, "session_id", ""),
-        })
+
+        dispatch_hook_fire_and_forget(
+            HookEvent.INIT_COMPLETE,
+            {
+                "project_root": str(settings.project_root),
+                "session_id": getattr(session_state, "session_id", ""),
+            },
+        )
     except Exception:
         pass

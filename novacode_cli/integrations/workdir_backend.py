@@ -1,0 +1,192 @@
+"""Workdir-rebasing wrapper for sandbox backends.
+
+## Why this exists
+
+Nova's agents are told (by the filesystem tool descriptions / system prompt) to
+use **virtual paths starting with ``/``** that denote the *project root*. In
+LOCAL mode this works because the backend is a ``FilesystemBackend`` with
+``virtual_mode=True`` rooted at the project, so ``/novacode_cli/x`` →
+``<project>/novacode_cli/x``.
+
+In SANDBOX mode the project lives at the sandbox **working directory** (e.g.
+``/workspace`` for modal/docker, ``/home/user`` for runloop), but the raw
+sandbox backend's file ops treat a leading ``/`` as the **container root**. So
+``/novacode_cli/x`` resolves to ``/novacode_cli/x`` at the container root and
+404s — even though ``execute`` (shell) correctly runs in the working directory.
+A LangSmith trace of ``/init`` showed 39 consecutive ``read_file`` failures from
+exactly this mismatch.
+
+``WorkdirSandboxBackend`` closes the gap: it subclasses ``BaseSandbox`` (so it
+still satisfies ``SandboxBackendProtocol`` / ``isinstance`` checks and inherits
+the script-building file ops), delegates the execution primitives to the wrapped
+backend, and **rebases every file path onto the working directory** before the
+inherited methods build their scripts. After wrapping, the agent's ``/``-rooted
+virtual paths map to ``<workdir>/…`` — consistent with both the agent's mental
+model and where ``execute`` actually runs.
+
+The rebase is idempotent: a path already under the workdir is returned
+unchanged, so internal re-entrant calls never double-prefix.
+"""
+
+from __future__ import annotations
+
+import posixpath
+from typing import TYPE_CHECKING, Any
+
+from deepagents.backends.sandbox import BaseSandbox
+
+if TYPE_CHECKING:
+    from deepagents.backends.protocol import (
+        EditResult,
+        ExecuteResponse,
+        FileDownloadResponse,
+        FileUploadResponse,
+        GlobResult,
+        GrepResult,
+        LsResult,
+        ReadResult,
+        WriteResult,
+    )
+
+
+class WorkdirSandboxBackend(BaseSandbox):
+    """Wrap a sandbox backend so ``/``-rooted virtual paths map to its workdir.
+
+    Args:
+        inner: The real sandbox backend (Docker/Modal/Daytona/Runloop, all of
+            which subclass ``BaseSandbox``).
+        workdir: Absolute working directory inside the sandbox where the project
+            lives (e.g. ``/workspace``). Virtual ``/foo`` paths become
+            ``<workdir>/foo``.
+    """
+
+    def __init__(self, inner: BaseSandbox, workdir: str) -> None:
+        self._inner = inner
+        # Normalise the workdir once; everything rebases against it.
+        self._workdir = posixpath.normpath("/" + workdir.strip("/")) if workdir else "/"
+
+    # ── path rebasing ────────────────────────────────────────────────────
+    def _rebase(self, path: str) -> str:
+        """Map a virtual/relative path onto the sandbox working directory.
+
+        Idempotent: paths already under the workdir pass through unchanged.
+        """
+        if not isinstance(path, str) or not path:
+            return path
+        wd = self._workdir
+        # Relative paths resolve under the workdir; absolute paths are treated as
+        # rooted at the *project* (workdir), not the container root.
+        joined = path if path.startswith("/") else posixpath.join(wd, path)
+        norm = posixpath.normpath(joined)
+        if norm == wd or norm.startswith(wd + "/"):
+            return norm
+        return posixpath.normpath(wd + "/" + norm.lstrip("/"))
+
+    def _rebase_opt(self, path: str | None) -> str:
+        """Rebase, defaulting ``None`` to the working directory (for grep/glob)."""
+        return self._workdir if path is None else self._rebase(path)
+
+    # ── abstract primitives → delegate to the wrapped backend ────────────
+    @property
+    def id(self) -> str:
+        return self._inner.id
+
+    def execute(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
+        return self._inner.execute(command, timeout=timeout)
+
+    async def aexecute(
+        self, command: str, *, timeout: int | None = None
+    ) -> ExecuteResponse:
+        return await self._inner.aexecute(command, timeout=timeout)
+
+    def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
+        return self._inner.download_files([self._rebase(p) for p in paths])
+
+    async def adownload_files(self, paths: list[str]) -> list[FileDownloadResponse]:
+        return await self._inner.adownload_files([self._rebase(p) for p in paths])
+
+    def upload_files(
+        self, files: list[tuple[str, bytes]]
+    ) -> list[FileUploadResponse]:
+        return self._inner.upload_files([(self._rebase(p), b) for p, b in files])
+
+    async def aupload_files(
+        self, files: list[tuple[str, bytes]]
+    ) -> list[FileUploadResponse]:
+        return await self._inner.aupload_files([(self._rebase(p), b) for p, b in files])
+
+    # ── file ops → rebase the path, then run the inherited implementation ──
+    # super().<m>() builds the script with the rebased path and calls
+    # self.execute → our delegating execute → the wrapped sandbox.
+    def ls(self, path: str) -> LsResult:
+        return super().ls(self._rebase(path))
+
+    async def als(self, path: str) -> LsResult:
+        return await super().als(self._rebase(path))
+
+    def ls_info(self, path: str) -> list[Any]:
+        return super().ls_info(self._rebase(path))
+
+    async def als_info(self, path: str) -> list[Any]:
+        return await super().als_info(self._rebase(path))
+
+    def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
+        return super().read(self._rebase(file_path), offset, limit)
+
+    async def aread(
+        self, file_path: str, offset: int = 0, limit: int = 2000
+    ) -> ReadResult:
+        return await super().aread(self._rebase(file_path), offset, limit)
+
+    def write(self, file_path: str, content: str) -> WriteResult:
+        return super().write(self._rebase(file_path), content)
+
+    async def awrite(self, file_path: str, content: str) -> WriteResult:
+        return await super().awrite(self._rebase(file_path), content)
+
+    def edit(
+        self, file_path: str, old_string: str, new_string: str, replace_all: bool = False
+    ) -> EditResult:
+        return super().edit(self._rebase(file_path), old_string, new_string, replace_all)
+
+    async def aedit(
+        self, file_path: str, old_string: str, new_string: str, replace_all: bool = False
+    ) -> EditResult:
+        return await super().aedit(
+            self._rebase(file_path), old_string, new_string, replace_all
+        )
+
+    def grep(
+        self, pattern: str, path: str | None = None, glob: str | None = None
+    ) -> GrepResult:
+        return super().grep(pattern, self._rebase_opt(path), glob)
+
+    async def agrep(
+        self, pattern: str, path: str | None = None, glob: str | None = None
+    ) -> GrepResult:
+        return await super().agrep(pattern, self._rebase_opt(path), glob)
+
+    def grep_raw(
+        self, pattern: str, path: str | None = None, glob: str | None = None
+    ) -> list[Any] | str:
+        return super().grep_raw(pattern, self._rebase_opt(path), glob)
+
+    async def agrep_raw(
+        self, pattern: str, path: str | None = None, glob: str | None = None
+    ) -> list[Any] | str:
+        return await super().agrep_raw(pattern, self._rebase_opt(path), glob)
+
+    def glob(self, pattern: str, path: str = "/") -> GlobResult:
+        return super().glob(pattern, self._rebase(path))
+
+    async def aglob(self, pattern: str, path: str = "/") -> GlobResult:
+        return await super().aglob(pattern, self._rebase(path))
+
+    def glob_info(self, pattern: str, path: str = "/") -> list[Any]:
+        return super().glob_info(pattern, self._rebase(path))
+
+    async def aglob_info(self, pattern: str, path: str = "/") -> list[Any]:
+        return await super().aglob_info(pattern, self._rebase(path))
+
+
+__all__ = ["WorkdirSandboxBackend"]

@@ -35,6 +35,13 @@ from textual.widgets import (
     Static,
 )
 from textual.widgets.option_list import Option
+from textual.css.query import NoMatches
+
+# Transcript is pruned from the top once it exceeds this many widgets, down to
+# _TRANSCRIPT_LOW_WATER — keeps Textual's layout/scroll/repaint fast in long
+# sessions (the DOM would otherwise grow without bound).
+_MAX_TRANSCRIPT_WIDGETS = 400
+_TRANSCRIPT_LOW_WATER = 320
 
 # Slash commands routed through the legacy handle_command via console capture.
 # Restricted to commands that only print or toggle state — never read stdin or
@@ -1397,6 +1404,13 @@ class NovaApp(App):
         self._reasoning_buf = ""  # accumulating reasoning trace
         self._stream_msg: ChatMessage | None = None  # in-progress Nova answer widget
         self._reason_msg: ChatMessage | None = None  # in-progress reasoning widget
+        # Streaming coalescing: deltas append to the buffers above, but the widget
+        # is only repainted on a ~50ms timer (see _flush_stream) so a fast token
+        # stream doesn't trigger a full re-render + scroll per token.
+        self._stream_flush_scheduled = False
+        # Cached singleton widget refs (resolved once in on_mount) to avoid a
+        # query_one DOM walk on every delta / keystroke / status tick.
+        self._w_cache: dict[str, Any] = {}
         # call_id -> (collapsible, body Static, base title) for open tool calls
         self._tool_components: dict[str, tuple[Collapsible, Static, str]] = {}
         # fallback for tool calls that arrive without an id
@@ -1419,6 +1433,9 @@ class NovaApp(App):
         self._input_pulse_mode: str | None = None
         self._input_pulse_timer: Any = None
         self._pulse_on = False
+        # Per-keystroke de-churn: last (plan, bash) mode state + last palette list.
+        self._last_mode_state: tuple[bool, bool] | None = None
+        self._last_palette: list[str] | None = None
         # Notification badge: last seen unread count (drives status refresh).
         self._last_notif_count = 0
         # Context-window management: warn once per crossing; auto-compact at critical.
@@ -1461,6 +1478,19 @@ class NovaApp(App):
         # Register Nova's palette and apply the saved (or default) theme first,
         # so the whole UI renders with the right colors from the first frame.
         self._apply_saved_theme()
+        # Warm the singleton-widget cache so hot paths (streaming, status ticks,
+        # keystrokes) skip the query_one DOM walk. See _w().
+        for _sel, _kind in (
+            ("#transcript", VerticalScroll),
+            ("#status", Static),
+            ("#prompt", Input),
+            ("#mode-badge", Static),
+            ("#cmdpalette", OptionList),
+        ):
+            try:
+                self._w_cache[_sel] = self.query_one(_sel, _kind)
+            except NoMatches:
+                pass
         self.query_one("#cmdpalette", OptionList).display = False
         self._set_status("ready")
         self._update_mode_badge()
@@ -1502,11 +1532,73 @@ class NovaApp(App):
             )
 
     # -- helpers --------------------------------------------------------------
+    def _w(self, selector: str, kind: Any) -> Any:
+        """Return a cached singleton widget, resolving (and caching) on first use.
+
+        Avoids a `query_one` DOM walk on every delta / keystroke / status tick.
+        Raises NoMatches (like query_one) if the widget isn't mounted yet — hot
+        callers that may run before mount guard with try/except.
+        """
+        w = self._w_cache.get(selector)
+        if w is None:
+            w = self.query_one(selector, kind)
+            self._w_cache[selector] = w
+        return w
+
+    def _transcript(self) -> VerticalScroll:
+        return self._w("#transcript", VerticalScroll)
+
+    def _prune_transcript(self) -> None:
+        """Cap the transcript: drop the oldest widgets once it grows too large.
+
+        Skips the in-progress widgets we still hold references to (streaming
+        answer/reasoning, open tool/subagent cards, todo, /init tracker) so a
+        live turn is never disturbed.
+        """
+        try:
+            tr = self._transcript()
+        except NoMatches:
+            return
+        children = tr.children
+        if len(children) <= _MAX_TRANSCRIPT_WIDGETS:
+            return
+        protected: set[int] = {
+            id(w)
+            for w in (
+                self._stream_msg,
+                self._reason_msg,
+                self._todo_widget,
+                self._init_widget,
+                *(t[0] for t in self._tool_components.values()),
+                *(s[0] for s in self._subagent_widgets.values()),
+            )
+            if w is not None
+        }
+        if self._last_tool is not None:
+            protected.add(id(self._last_tool[0]))
+        to_remove = []
+        # Oldest first; stop once we're back at the low-water mark.
+        target = len(children) - _TRANSCRIPT_LOW_WATER
+        for w in children:
+            if len(to_remove) >= target:
+                break
+            if id(w) not in protected:
+                to_remove.append(w)
+        for w in to_remove:
+            try:
+                w.remove()
+            except Exception:  # noqa: BLE001
+                pass
+
     def _scroll_end(self) -> None:
-        self.query_one("#transcript", VerticalScroll).scroll_end(animate=False)
+        try:
+            self._transcript().scroll_end(animate=False)
+        except NoMatches:
+            pass
 
     async def _mount(self, widget) -> None:
-        await self.query_one("#transcript", VerticalScroll).mount(widget)
+        await self._transcript().mount(widget)
+        self._prune_transcript()
         self._scroll_end()
 
     def _remote_send(self, text: str) -> None:
@@ -1522,9 +1614,8 @@ class NovaApp(App):
 
     def _log(self, renderable: Any) -> None:
         """Mount an ancillary line (errors, command output, notices)."""
-        self.query_one("#transcript", VerticalScroll).mount(
-            Static(renderable, classes="logline")
-        )
+        self._transcript().mount(Static(renderable, classes="logline"))
+        self._prune_transcript()
         self._scroll_end()
 
     _INIT_STEP_GLYPH = {
@@ -1719,11 +1810,39 @@ class NovaApp(App):
         self._reason_msg = None
         self._live_buf = ""
         self._reasoning_buf = ""
+        self._stream_flush_scheduled = False
         self._tool_components.clear()
         self._last_tool = None
         self._subagent_widgets.clear()
         self._subagent_count = 0
         self._todo_widget = None  # next turn starts a fresh todo block
+
+    def _flush_stream(self) -> None:
+        """Repaint the in-progress stream/reasoning widgets from their buffers.
+
+        Called on a coalescing ~50ms timer (and forced at finalize) so a fast
+        token stream triggers ~20 repaints/sec instead of one per token. Updates
+        both live widgets in one pass and scrolls once.
+        """
+        self._stream_flush_scheduled = False
+        painted = False
+        if self._stream_msg is not None:
+            self._stream_msg.update_body(Text(self._live_buf))
+            painted = True
+        if self._reason_msg is not None:
+            self._reason_msg.update_body(
+                Text(self._reasoning_buf[-2000:], style="dim italic")
+            )
+            painted = True
+        if painted:
+            self._scroll_end()
+
+    def _schedule_stream_flush(self) -> None:
+        """Ensure a flush happens soon, coalescing bursts of deltas into one."""
+        if self._stream_flush_scheduled:
+            return
+        self._stream_flush_scheduled = True
+        self.set_timer(0.05, self._flush_stream)
 
     @staticmethod
     def _render_todos(todos: list, agent_name: str | None) -> Text:
@@ -1929,7 +2048,10 @@ class NovaApp(App):
         if notif:
             line.append("  🔔 ", style="bold #e0af68")
             line.append(str(notif), style="bold #e0af68")
-        self.query_one("#status", Static).update(line)
+        try:
+            self._w("#status", Static).update(line)
+        except NoMatches:
+            pass
 
     def _unread_count(self) -> int:
         """Unread notification count (0 on any error)."""
@@ -1960,10 +2082,19 @@ class NovaApp(App):
         classes (``bash-mode`` / ``plan-mode``) plus a per-mode pulse so each
         mode has a distinct look *and* a distinct animation.
         """
-        badge = self.query_one("#mode-badge", Static)
-        prompt = self.query_one("#prompt", Input)
         plan = getattr(self.session_state, "plan_mode_enabled", False)
         bash = input_value.startswith("!")
+        # Skip the badge/class/pulse work entirely when the mode is unchanged —
+        # this runs on every keystroke, so the common case (mode didn't change)
+        # must be a cheap no-op.
+        if self._last_mode_state == (plan, bash):
+            return
+        self._last_mode_state = (plan, bash)
+        try:
+            badge = self._w("#mode-badge", Static)
+            prompt = self._w("#prompt", Input)
+        except NoMatches:
+            return
 
         if plan and bash:
             t = Text()
@@ -2070,22 +2201,38 @@ class NovaApp(App):
         return []
 
     def _update_palette(self, value: str) -> None:
-        palette = self.query_one("#cmdpalette", OptionList)
         matches = self._palette_candidates(value)
-        if matches and not (len(matches) == 1 and matches[0] == value.lower()):
-            palette.clear_options()
-            for c in matches:
-                palette.add_option(Option(c))
-            palette.display = True
-            try:
-                palette.highlighted = 0
-            except Exception:  # noqa: BLE001
-                pass
-        else:
+        show = bool(matches) and not (
+            len(matches) == 1 and matches[0] == value.lower()
+        )
+        if not show:
             self._hide_palette()
+            return
+        # No-op when the candidate list is identical to what's already shown —
+        # this runs on every keystroke, and rebuilding the OptionList (clear +
+        # re-add) every time is the bulk of typing lag in completion contexts.
+        if matches == self._last_palette:
+            return
+        self._last_palette = list(matches)
+        try:
+            palette = self._w("#cmdpalette", OptionList)
+        except NoMatches:
+            return
+        palette.clear_options()
+        for c in matches:
+            palette.add_option(Option(c))
+        palette.display = True
+        try:
+            palette.highlighted = 0
+        except Exception:  # noqa: BLE001
+            pass
 
     def _hide_palette(self) -> None:
-        palette = self.query_one("#cmdpalette", OptionList)
+        self._last_palette = None
+        try:
+            palette = self._w("#cmdpalette", OptionList)
+        except NoMatches:
+            return
         palette.clear_options()
         palette.display = False
 
@@ -2097,7 +2244,12 @@ class NovaApp(App):
         inp.focus()
 
     def on_key(self, event) -> None:
-        palette = self.query_one("#cmdpalette", OptionList)
+        # Runs on EVERY keystroke — use the cached ref and bail immediately when
+        # the palette is hidden (the common case) to avoid a DOM walk per key.
+        try:
+            palette = self._w("#cmdpalette", OptionList)
+        except NoMatches:
+            return
         if not palette.display:
             return
         if event.key == "down":
@@ -2684,6 +2836,47 @@ class NovaApp(App):
         """Open the MCP servers screen (view + remove)."""
         await self.push_screen_wait(McpScreen())
 
+    def _build_init_agent(self) -> tuple[Any, Any]:
+        """Build a dedicated **no-HITL, LOCAL-filesystem** agent for /init.
+
+        Two deliberate deviations from the session agent:
+
+        1. ``auto_approve=True`` → ``interrupt_on={}``: the main agent AND every
+           subagent (incl. deepagents' auto-injected general-purpose one) run
+           tools without approval interrupts. A subagent's HITL interrupt is
+           unresolvable (it bubbles out of `task`'s ainvoke as a GraphInterrupt),
+           so this is required for /init's `task` workers to run unattended.
+
+        2. ``sandbox=None`` → a LOCAL FilesystemBackend rooted at the project
+           (virtual_mode). /init is inherently a local operation: graphify reads
+           the local files, and the graph fragments must be written to the local
+           ``.nova/graph_fragments/`` so `_read_and_merge_fragments` can read
+           them back. Running through the session's *sandbox* backend broke this
+           two ways — `/`-prefixed virtual paths resolve to the container root
+           (project is at ``/workspace`` → every read_file 404'd), and any
+           fragment write would land inside the sandbox, invisible to the local
+           merge step. Forcing the local backend fixes both.
+
+        Reuses the session model/tools/store. Raises if no model is configured.
+        """
+        from novacode_cli.agents.core_agent import create_agent_with_config
+
+        ss = self.session_state
+        model = getattr(ss, "_model", None)
+        if model is None:
+            raise RuntimeError("no model configured")
+        return create_agent_with_config(
+            model=model,
+            assistant_id=getattr(ss, "_assistant_id", None) or self.assistant_id,
+            tools=getattr(ss, "_tools", None) or [],
+            sandbox=None,        # ← LOCAL filesystem (see docstring #2)
+            sandbox_type=None,
+            store=getattr(ss, "_store", None),
+            checkpointer=getattr(ss, "_checkpointer", None),
+            auto_approve=True,   # ← no HITL anywhere (see docstring #1)
+            is_continuation=True,
+        )
+
     async def _run_init(self, text: str) -> None:
         """Generate NOVA.md natively: graphify pipeline (captured) or stream the
         fallback exploration through the TUI."""
@@ -2730,15 +2923,43 @@ class NovaApp(App):
             self._init_widget = Static("", classes="initlog")
             await self._mount(self._init_widget)
             self._init_render_steps()
+            # Non-interactive console: the pipeline's plain console.print lines
+            # still flow to the sink (→ native step tracker), but Rich live
+            # widgets (Progress spinners) DON'T animate. With force_terminal=True
+            # they ran as a live auto-refresh, streaming spinner frames into the
+            # transcript — a stray "Rich component" (most visible on --update's
+            # re-extract Progress). _init_emit strips ANSI, so we lose nothing.
             tui_console = _Console(
                 file=_TuiSink(self),
-                force_terminal=True,
-                color_system="standard",
+                force_terminal=False,
+                force_interactive=False,
                 width=100,
             )
             self._turn_active = True
             self._turn_start = time.monotonic()
             self._set_status("indexing codebase…")
+            # The agent-driven stages (semantic extraction, NOVA.md authoring)
+            # run unattended through _tui_execute_fn → must auto-approve their
+            # read/write tool calls for the pipeline's duration.
+            _prev_auto = self.session_state.auto_approve
+            self.session_state.auto_approve = True
+            # Build a dedicated no-HITL agent for /init: with interrupt_on={} the
+            # main agent AND every subagent (incl. the auto-injected
+            # general-purpose one) run tools without prompting. This is required
+            # because /init dispatches `task` subagents, and a subagent's HITL
+            # interrupt can't be auto-resolved (it bubbles out of ainvoke as a
+            # GraphInterrupt). _active_agent prefers self._init_agent while set.
+            init_agent = init_backend = None
+            try:
+                init_agent, init_backend = self._build_init_agent()
+            except Exception as ex:  # noqa: BLE001
+                # Fall back to the shared agent (its own tool calls still
+                # auto-approve via the stream; only subagents are at risk).
+                self._log(
+                    Text(f"(/init: using shared agent — {ex})", style="dim")
+                )
+            self._init_agent = init_agent
+            self._init_backend = init_backend
             try:
                 await _run_graphify_pipeline(
                     project_root=Path(project_root),
@@ -2747,11 +2968,16 @@ class NovaApp(App):
                     agents_md_path=nova_dir / "AGENTS.md",
                     flags=InitFlags(cmd_args),
                     console=tui_console,
+                    agent=init_agent or self.agent,
+                    execute_fn=self._tui_execute_fn,
                 )
                 self._init_finish()
             except Exception as ex:  # noqa: BLE001
                 self._log(Text(f"/init failed: {ex}", style="red"))
             finally:
+                self._init_agent = None
+                self._init_backend = None
+                self.session_state.auto_approve = _prev_auto
                 self._turn_active = False
                 self._set_status("ready")
                 self._init_widget = None
@@ -2993,7 +3219,16 @@ class NovaApp(App):
 
     # -- plan mode ------------------------------------------------------------
     def _active_agent(self) -> tuple[Any, Any]:
-        """Route to the plan agent while plan mode is active, else the main agent."""
+        """Route to the plan agent while plan mode is active, else the main agent.
+
+        During /init a dedicated no-HITL agent (``_init_agent``) takes priority so
+        the pipeline's `task` subagents can read/write files unattended — the
+        shared session agent gates those tools and a subagent's interrupt is
+        unresolvable (it bubbles out of `task`'s ainvoke as a GraphInterrupt).
+        """
+        init_agent = getattr(self, "_init_agent", None)
+        if init_agent is not None:
+            return init_agent, getattr(self, "_init_backend", None)
         if getattr(self.session_state, "plan_mode_enabled", False) and (
             getattr(self.session_state, "plan_agent", None) is not None
         ):
@@ -4241,29 +4476,28 @@ class NovaApp(App):
             self._set_status(e.message or "ready")
         elif isinstance(e, ev.ReasoningDelta):
             # Stream the model's reasoning into a dim, transient message widget.
+            # The actual repaint is coalesced (~20fps) via _schedule_stream_flush.
             self._reasoning_buf += e.text
             if self._reason_msg is None:
                 self._reason_msg = ChatMessage(
                     Text("💭 reasoning", style="dim italic"), "reason"
                 )
                 await self._mount(self._reason_msg)
-            self._reason_msg.update_body(
-                Text(self._reasoning_buf[-2000:], style="dim italic")
-            )
-            self._scroll_end()
+            self._schedule_stream_flush()
             if self._activity != "thinking…":
                 self._set_status("thinking…")
         elif isinstance(e, ev.TextDelta):
             # Stream incremental prose into the in-progress Nova message widget.
+            # Coalesced repaint (~20fps) — see _schedule_stream_flush/_flush_stream.
             self._live_buf += e.text
             if self._stream_msg is None:
                 self._stream_msg = ChatMessage(Text("Nova", style="green"), "nova")
                 await self._mount(self._stream_msg)
-            self._stream_msg.update_body(Text(self._live_buf))
-            self._scroll_end()
+            self._schedule_stream_flush()
             if self._activity != "responding…":
                 self._set_status("responding…")
         elif isinstance(e, ev.TextDiscard):
+            self._stream_flush_scheduled = False
             if self._stream_msg is not None:
                 try:
                     await self._stream_msg.remove()
@@ -4272,7 +4506,9 @@ class NovaApp(App):
                 self._stream_msg = None
             self._live_buf = ""
         elif isinstance(e, ev.AssistantMessage):
-            # Commit: finalize the streaming widget as rendered markdown.
+            # Commit: finalize the streaming widget as rendered markdown. Cancel
+            # any pending coalesced flush so it can't repaint a finalized widget.
+            self._stream_flush_scheduled = False
             if self._stream_msg is not None:
                 self._stream_msg.update_body(Markdown(e.text))
                 self._stream_msg = None

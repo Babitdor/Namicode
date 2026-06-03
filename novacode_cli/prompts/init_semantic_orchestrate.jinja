@@ -1,0 +1,49 @@
+Extract a **semantic knowledge-graph** from this project to enrich the structural
+(AST) graph.
+
+## ⚡ Dispatch ALL subagents in parallel — this is mandatory
+There are **{{ total }} chunks** below. Spawn **one `task` subagent per chunk** and
+run them **concurrently**: emit **all {{ total }} `task` tool calls in a SINGLE
+message** (multiple tool calls in one turn run in parallel). Do **not** process
+chunks one at a time, do **not** wait for one subagent before starting the next,
+and do **not** do the extraction yourself in the main thread. The whole point is
+the {{ total }} workers run at once. After dispatching, wait for all of them to
+finish, then verify every fragment file was written.
+
+Each chunk's worker:
+
+1. **Reads** its listed files with `read_file`. It MAY also `read_file`
+   closely-related files or follow imports — but stay focused on the assigned
+   files. Use ONLY `read_file` and `write_file`. Do **NOT** run shell commands
+   (`execute`/`shell`/`wc`/`ls`/`cat`); they pause this automated run for
+   approval and stall it.
+   **Paths:** all paths below are relative to the workspace root — read and write
+   them exactly as given (relative, forward slashes). NEVER prepend an absolute
+   or Windows path (`B:\…`); the filesystem rejects those.
+2. **Extracts** the entities and the *semantic* relationships AST can't see:
+   `calls`, `shares_data_with`, `implements`, `references`, `cites`,
+   `conceptually_related_to`, `rationale_for`, `semantically_similar_to`
+   (non-obvious only). For docs/papers: named concepts, decisions, rationale.
+3. **Writes** the fragment to its output path with `write_file`. The file is the
+   deliverable — do not return the JSON inline.
+   ⚠️ **`write_file`'s `content` argument MUST be a STRING** — pass the JSON
+   *serialized as text* (e.g. `"{\"nodes\": [...], \"edges\": [...]}"`), NOT a
+   raw JSON object/dict. Passing an object fails validation
+   (`content: Input should be a valid string`).
+
+## JSON schema for each fragment
+{"nodes":[{"id":"filestem_entity","label":"Human Name","file_type":"code|document|paper","source_file":"relative/path","source_location":null}],"edges":[{"source":"id","target":"id","relation":"calls|implements|references|cites|conceptually_related_to|shares_data_with|semantically_similar_to|rationale_for","confidence":"EXTRACTED|INFERRED|AMBIGUOUS","confidence_score":1.0,"source_file":"relative/path","weight":1.0}],"hyperedges":[]}
+
+Confidence: EXTRACTED=1.0, INFERRED=0.6–0.9, AMBIGUOUS=0.1–0.3 (flag, don't omit).
+Use stable ids `<filestem>_<entity>` so fragments link across files. Never invent
+relationships unsupported by the source.
+
+## Chunks ({{ total }} total) — write each fragment to its `out` path
+{% for c in chunks %}
+### Chunk {{ c.n }} → write to `{{ c.out }}`
+Files:
+{% for f in c.files %}  - {{ f }}
+{% endfor %}
+{% endfor %}
+
+When all fragments are written, confirm in one sentence how many you wrote.

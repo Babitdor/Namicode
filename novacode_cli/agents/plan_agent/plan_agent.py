@@ -13,6 +13,8 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from langgraph.pregel import Pregel
 
+from langchain.agents.middleware import ModelRetryMiddleware
+
 from novacode_cli.agents.plan_agent.plan_mode_middleware import PlanModeMiddleware
 from novacode_cli.bootstrap.steering import SteeringMiddleware
 from novacode_cli.hitl.interrupts import get_interrupt_configs
@@ -245,6 +247,13 @@ def create_plan_agent_with_config(
         interrupt_on=interrupt_on,  # type: ignore
         subagents=[],  # Plan agents don't use subagents by default
         middleware=[
+            # Retry transient model failures (rate limits / 429, timeouts,
+            # network blips) with exponential backoff before erroring out.
+            ModelRetryMiddleware(
+                max_retries=3,
+                backoff_factor=2.0,
+                initial_delay=1.0,
+            ),
             PlanModeMiddleware(workspace_root=workspace_root),
             # Keep the SHARED session list reference even when empty — using
             # `or []` would swap in a fresh list and break live steering, since

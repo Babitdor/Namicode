@@ -493,6 +493,25 @@ async def run_agent_stream(  # noqa: C901, PLR0912, PLR0915
         return
 
     except Exception as e:  # noqa: BLE001
+        # A GraphInterrupt that reaches here came from a NESTED graph (a `task`
+        # subagent hitting a HITL-gated tool like shell/execute/write_file).
+        # The parent stream only auto-resolves interrupts surfaced as the
+        # top-level `__interrupt__` event, not exceptions bubbling out of a
+        # subagent — so render a concise, actionable note instead of dumping the
+        # raw interrupt value as a scary error.
+        try:
+            from langgraph.errors import GraphInterrupt
+        except Exception:  # noqa: BLE001
+            GraphInterrupt = ()  # type: ignore[assignment]
+        if GraphInterrupt and isinstance(e, GraphInterrupt):
+            yield ev.Error(
+                "A subagent requested approval for a guarded tool "
+                "(shell/execute/write) and the run could not auto-approve it. "
+                "Re-run with auto-approve enabled, or avoid shell commands in "
+                "automated flows.",
+                exception=e,
+            )
+            return
         yield ev.Error(str(e), exception=e)
         return
 

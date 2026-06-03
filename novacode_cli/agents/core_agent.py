@@ -574,8 +574,23 @@ def create_agent_with_config(
 
     else:
         # ========== REMOTE SANDBOX MODE ==========
-        # Backend: Remote sandbox for code execution
-        _default_backend = sandbox
+        # Backend: Remote sandbox for code execution.
+        # Wrap it so the agent's `/`-rooted *virtual* project paths (e.g.
+        # `/novacode_cli/x`) map to the sandbox **working directory** (e.g.
+        # `/workspace/novacode_cli/x`) for file ops. Without this, file reads
+        # hit the container root and 404, even though `execute` runs in the
+        # workdir — see novacode_cli/integrations/workdir_backend.py.
+        from novacode_cli.integrations.workdir_backend import WorkdirSandboxBackend
+
+        _sandbox_workdir = None
+        if sandbox_type:
+            try:
+                _sandbox_workdir = get_default_working_dir(sandbox_type)
+            except Exception:  # noqa: BLE001
+                _sandbox_workdir = None
+        if _sandbox_workdir is None:
+            _sandbox_workdir = getattr(sandbox, "_workdir", None) or "/workspace"
+        _default_backend = WorkdirSandboxBackend(sandbox, workdir=_sandbox_workdir)
 
     # ------------------------------------------------------------------
     # Build CompositeBackend with routes per deepagents 0.5.6 docs:
@@ -660,6 +675,7 @@ def create_agent_with_config(
     )
 
     # Lazy imports for middleware (speeds up startup)
+    from langchain.agents.middleware import ModelRetryMiddleware
     from novacode_cli.bootstrap import BootstrapMiddleware, GraphContextMiddleware
     from novacode_cli.bootstrap.steering import SteeringMiddleware
     from novacode_cli.memory.agent_memory import AgentMemoryMiddleware
@@ -683,6 +699,13 @@ def create_agent_with_config(
         else getattr(model, "model_name", getattr(model, "model", "unknown"))
     )
     agent_middleware = [
+        # Retry transient model failures (rate limits / 429, timeouts, network
+        # blips) with exponential backoff before surfacing an error to the user.
+        ModelRetryMiddleware(
+            max_retries=3,
+            backoff_factor=2.0,
+            initial_delay=1.0,
+        ),
         BootstrapMiddleware(workspace_root=str(workspace_root)),
         GraphContextMiddleware(workspace_root=str(workspace_root)),
         # Connect to the session's shared steering list so /steer AND live
@@ -714,11 +737,12 @@ def create_agent_with_config(
     ]
 
     # MCP middleware: only add when servers are actually configured.
-    # Position after ToolLimits so MCP tools participate in the limit circuit breaker.
+    # Insert after GraphContext (index 3 now that ModelRetryMiddleware leads the
+    # stack) so MCP tools keep their original position relative to the others.
     if _has_mcp:
         from novacode_cli.mcp import get_shared_mcp_middleware
 
-        agent_middleware.insert(2, get_shared_mcp_middleware())
+        agent_middleware.insert(3, get_shared_mcp_middleware())
 
     # NOTE: automatic context-window summarization is provided by
     # create_deep_agent's built-in SummarizationMiddleware (part of its tail
@@ -744,6 +768,25 @@ def create_agent_with_config(
     else:
         # Full HITL for destructive operations
         interrupt_on = get_interrupt_configs()
+
+    # Subagents run UNATTENDED — the main agent is the sole HITL boundary.
+    #
+    # Why: create_deep_agent propagates the main `interrupt_on` to every
+    # declarative subagent (deepagents.graph). But a subagent is invoked via
+    # `subagent.ainvoke()` inside the `task` tool, so a HITL interrupt raised
+    # INSIDE a subagent surfaces as a GraphInterrupt EXCEPTION bubbling out of
+    # the parent agent's stream — it never appears as a top-level
+    # `__interrupt__` event, so the approve/auto-approve path in run_agent_stream
+    # never sees it and the whole turn crashes (this is what broke /init's
+    # semantic-extraction and NOVA.md-authoring subagents, and would break any
+    # /research subagent that writes a file). Nested HITL is unresolvable in this
+    # architecture, so we explicitly clear `interrupt_on` on each declarative
+    # subagent. The main agent still gates its own destructive tools; subagents
+    # it dispatches do not independently prompt. Compiled/remote subagents own
+    # their own approval config and are left untouched.
+    for _spec in Nova_SubAgent:
+        if isinstance(_spec, dict) and "runnable" not in _spec and "url" not in _spec:
+            _spec["interrupt_on"] = {}
 
     # Pass named_subagents directly to create_deep_agent
     # It will create the SubAgentMiddleware internally

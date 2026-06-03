@@ -676,6 +676,158 @@ def test_tui_live_steering():
     asyncio.run(_drive_live_steering())
 
 
+async def _drive_stream_coalescing():
+    """A burst of TextDeltas schedules exactly ONE coalesced flush; the buffer is
+    intact and _flush_stream paints it; AssistantMessage finalizes + cancels."""
+    import novacode_cli.ui_events as ev
+    from textual.widgets import Static
+
+    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.ui.ui_elements import TokenTracker
+
+    app = NovaApp(
+        agent=_FakeAgent(),
+        assistant_id="nova-agent",
+        session_state=_SS(),
+        backend=None,
+        token_tracker=TokenTracker(),
+        image_tracker=None,
+        model_name="m",
+    )
+    async with app.run_test() as pilot:
+        # Stub set_timer so the coalesced flush never auto-fires — we drive it.
+        timer_calls = {"n": 0}
+        app.set_timer = lambda delay, fn, *a, **k: timer_calls.__setitem__(
+            "n", timer_calls["n"] + 1
+        )
+        for part in ("Hel", "lo ", "wor", "ld"):
+            await app._render(ev.TextDelta(part))
+        # Widget mounted once; the 4 deltas coalesced into a single scheduled flush.
+        assert app._stream_msg is not None
+        assert app._live_buf == "Hello world"
+        assert app._stream_flush_scheduled is True
+        assert timer_calls["n"] == 1, timer_calls
+        # The repaint reflects the full buffer and clears the pending flag.
+        app._flush_stream()
+        assert app._stream_flush_scheduled is False
+        body = app._stream_msg.query_one(".body", Static)
+        assert "Hello world" in str(body.render())
+        # Finalize: markdown commit clears buffers and cancels any pending flush.
+        await app._render(
+            ev.AssistantMessage(text="Hello world", agent_name="Nova", agent_color="cyan")
+        )
+        assert app._stream_msg is None and app._live_buf == ""
+        assert app._stream_flush_scheduled is False
+
+
+def test_tui_stream_coalescing():
+    if not _HAS_TEXTUAL:
+        return
+    asyncio.run(_drive_stream_coalescing())
+
+
+async def _drive_transcript_cap():
+    """The transcript is pruned from the top past the cap; tracked in-progress
+    widgets survive even when they're the oldest."""
+    from textual.widgets import Static
+
+    import novacode_cli.tui.app as appmod
+    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.ui.ui_elements import TokenTracker
+
+    hi, lo = appmod._MAX_TRANSCRIPT_WIDGETS, appmod._TRANSCRIPT_LOW_WATER
+    appmod._MAX_TRANSCRIPT_WIDGETS = 10
+    appmod._TRANSCRIPT_LOW_WATER = 6
+    try:
+        app = NovaApp(
+            agent=_FakeAgent(),
+            assistant_id="nova-agent",
+            session_state=_SS(),
+            backend=None,
+            token_tracker=TokenTracker(),
+            image_tracker=None,
+            model_name="m",
+        )
+        async with app.run_test() as pilot:
+            # Mark an (old) widget as in-progress so pruning must spare it.
+            protected = Static("PROTECTED")
+            await app._mount(protected)
+            app._init_widget = protected
+            for i in range(30):
+                await app._mount(Static(f"line {i}"))
+            tr = app._transcript()
+            assert len(tr.children) <= appmod._MAX_TRANSCRIPT_WIDGETS, len(tr.children)
+            assert protected in tr.children  # tracked widget survived pruning
+    finally:
+        appmod._MAX_TRANSCRIPT_WIDGETS = hi
+        appmod._TRANSCRIPT_LOW_WATER = lo
+
+
+def test_tui_transcript_cap():
+    if not _HAS_TEXTUAL:
+        return
+    asyncio.run(_drive_transcript_cap())
+
+
+async def _drive_palette_noop():
+    """_update_palette doesn't rebuild the OptionList when candidates are
+    unchanged; on_key bails fast when the palette is hidden."""
+    from textual.widgets import OptionList
+
+    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.ui.ui_elements import TokenTracker
+
+    app = NovaApp(
+        agent=_FakeAgent(),
+        assistant_id="nova-agent",
+        session_state=_SS(),
+        backend=None,
+        token_tracker=TokenTracker(),
+        image_tracker=None,
+        model_name="m",
+    )
+    async with app.run_test() as pilot:
+        palette = app._w("#cmdpalette", OptionList)
+        rebuilds = {"n": 0}
+        _orig_clear = palette.clear_options
+
+        def _counting_clear(*a, **k):
+            rebuilds["n"] += 1
+            return _orig_clear(*a, **k)
+
+        palette.clear_options = _counting_clear
+
+        app._update_palette("/h")  # matches /help, /hooks, … → builds once
+        assert app._last_palette and all(
+            c.startswith("/h") for c in app._last_palette
+        )
+        assert rebuilds["n"] == 1
+        first_list = list(app._last_palette)
+        app._update_palette("/h")  # identical input → candidates unchanged
+        assert rebuilds["n"] == 1, "palette rebuilt despite unchanged candidates"
+        assert app._last_palette == first_list
+
+        # on_key is a no-op (no exception) when the palette is hidden.
+        app._hide_palette()
+
+        class _K:
+            key = "down"
+
+            def stop(self):
+                pass
+
+            def prevent_default(self):
+                pass
+
+        assert app.on_key(_K()) is None
+
+
+def test_tui_palette_noop():
+    if not _HAS_TEXTUAL:
+        return
+    asyncio.run(_drive_palette_noop())
+
+
 async def _drive_startup_info():
     """The native startup panel renders model/cwd on mount."""
     from textual.widgets import Static

@@ -75,6 +75,155 @@ def generate_nova_md(
     return content
 
 
+def _strip_doc_fence(text: str) -> str:
+    """Drop a code fence wrapping the WHOLE document, if the model added one."""
+    s = text.strip()
+    if not s.startswith("```"):
+        return text
+    lines = s.split("\n")
+    if lines and lines[0].startswith("```"):
+        lines = lines[1:]
+    if lines and lines[-1].strip().startswith("```"):
+        lines = lines[:-1]
+    return "\n".join(lines)
+
+
+def _build_facts_brief(context: dict[str, Any]) -> str:
+    """Flatten the graphify-derived NOVA.md context into a ground-truth brief.
+
+    This is the verified data the LLM must write from (and not contradict).
+    """
+    out: list[str] = []
+    out.append(f"PROJECT: {context.get('project_name')}")
+    if context.get("project_description"):
+        out.append(f"DESCRIPTION: {context['project_description']}")
+    out.append(
+        f"SCALE: {context.get('total_files', 0)} files, "
+        f"{context.get('total_words', 0)} words; "
+        f"{context.get('community_count', 0)} module communities"
+    )
+
+    def _section(title: str, items, fmt) -> None:
+        items = items or []
+        if not items:
+            return
+        out.append(f"{title}:")
+        for it in items:
+            out.append(f"  - {fmt(it)}")
+
+    _section("COMMANDS", context.get("commands"),
+             lambda c: f"{c.get('task')}: {c.get('command')}")
+    _section("ARCHITECTURE INSIGHTS", context.get("architecture"),
+             lambda a: f"{a.get('insight')} — {a.get('detail')}")
+    _section(
+        "CENTRAL HUBS (god nodes)", context.get("god_nodes"),
+        lambda g: f"{g.get('label') or g.get('id')} "
+        f"({g.get('edges') or g.get('degree') or 0} connections)"
+        + (f" — {g.get('source_file')}" if g.get("source_file") else ""),
+    )
+    _section(
+        "CROSS-MODULE CONNECTIONS", context.get("surprising_connections"),
+        lambda s: f"{(s.get('source_files') or [s.get('source')])[0]} <-> {s.get('target')}",
+    )
+    _section("KEY FILES", context.get("key_files"),
+             lambda f: f"{f.get('path')}: {f.get('purpose')}")
+    _section("CONVENTIONS", context.get("conventions"),
+             lambda c: f"{c.get('rule')} — {c.get('detail')}")
+    _section("GUARDRAILS", context.get("guardrails"),
+             lambda g: f"{g.get('rule')} — {g.get('reason')}")
+    _section(
+        "SUGGESTED QUESTIONS", context.get("suggested_questions"),
+        lambda q: q.get("question") if isinstance(q, dict) else q,
+    )
+    return "\n".join(out)
+
+
+def build_nova_md_author_prompt(
+    project_root: Path,
+    detection: dict[str, Any],
+    extraction: dict[str, Any],
+    analysis: dict[str, Any],
+    communities: dict[int, list[str]],
+    nova_md_rel_path: str = ".nova/NOVA.md",
+) -> str:
+    """Build the prompt that has the Nova *agent* author NOVA.md.
+
+    Unlike :func:`generate_nova_md_llm` (a single stateless model call), this is
+    run through the agent so it can use tools (`query_project_graph`, `read_file`)
+    and write the file itself — richer and grounded in the live graph.
+    """
+    context = _build_nova_md_context(
+        project_root, detection, extraction, analysis, communities
+    )
+    facts = _build_facts_brief(context)
+    return render_template(
+        "init_nova_md_author.jinja",
+        facts=facts,
+        nova_md_path=nova_md_rel_path,
+        max_chars=NOVA_MD_MAX_CHARS,
+    )
+
+
+async def generate_nova_md_llm(
+    project_root: Path,
+    detection: dict[str, Any],
+    extraction: dict[str, Any],
+    analysis: dict[str, Any],
+    communities: dict[int, list[str]],
+    console: Console | None = None,
+) -> str | None:
+    """Author a narrative NOVA.md with the LLM, grounded in graphify facts.
+
+    Hybrid generation: graphify computes the graph + facts (communities, god
+    nodes, connections, commands, conventions…), then the model writes a rich,
+    readable NOVA.md constrained to those facts.
+
+    Returns the generated markdown, or ``None`` if the model is unavailable or
+    the call fails / looks invalid — the caller then falls back to the
+    deterministic template (:func:`generate_nova_md`).
+    """
+    if console is None:
+        console = _make_console()
+    try:
+        from langchain_core.messages import HumanMessage
+
+        from novacode_cli.config.model_create import create_model
+    except Exception:  # noqa: BLE001
+        return None
+
+    context = _build_nova_md_context(
+        project_root, detection, extraction, analysis, communities
+    )
+    facts = _build_facts_brief(context)
+    prompt = render_template(
+        "init_nova_md_llm.jinja",
+        facts=facts,
+        max_chars=NOVA_MD_MAX_CHARS,
+        **context,
+    )
+
+    try:
+        console.print(
+            "[dim]Authoring NOVA.md with the model (grounded in the graph)…[/dim]"
+        )
+        model = create_model()
+        resp = await model.ainvoke([HumanMessage(content=prompt)])
+        content = resp.content if isinstance(resp.content, str) else str(resp.content)
+        content = _strip_doc_fence(content).strip()
+    except Exception as exc:  # noqa: BLE001
+        console.print(
+            f"[yellow]⚠ LLM NOVA.md authoring failed ({exc}); using template.[/yellow]"
+        )
+        return None
+
+    # Sanity: a real document is substantial and looks like markdown.
+    if len(content) < 200 or not content.lstrip().startswith("#"):
+        return None
+    if len(content) > NOVA_MD_MAX_CHARS:
+        content = _trim_to_limit(content, NOVA_MD_MAX_CHARS)
+    return content
+
+
 def generate_agents_md(
     project_root: Path,
     detection: dict[str, Any],

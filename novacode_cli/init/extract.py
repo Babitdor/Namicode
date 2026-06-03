@@ -1,8 +1,13 @@
 """Project extraction module for /init pipeline.
 
-Wraps graphify.extract for AST-based code extraction and provides
-semantic extraction via Nova's subagent system. Merges both
-extraction results into a unified format for graph building.
+Two complementary stages, matching graphify's design:
+
+- ``extract_project`` — **structural** extraction via ``graphify.extract``
+  (tree-sitter AST) over **code files only**. Captures imports/defs/classes.
+- ``semantic_extract_project`` — **semantic** extraction via the LLM over docs,
+  papers, and (optionally) code. Captures the edges AST can't: call/data/
+  architecture relationships, document concepts, and cross-file links, with
+  INFERRED/AMBIGUOUS tags. Merged with the AST result before graph building.
 """
 
 from __future__ import annotations
@@ -35,10 +40,11 @@ def extract_project(
     console: Console | None = None,
     deep: bool = False,
 ) -> dict[str, Any]:
-    """Extract entities from project files using AST analysis.
+    """Structural (AST) extraction over **code files only**.
 
-    Uses graphify.extract for code files (tree-sitter AST extraction)
-    and returns a unified extraction result with nodes and edges.
+    Uses graphify.extract (tree-sitter) on code files. Doc/paper concepts are
+    NOT handled here — tree-sitter can't parse prose; they are captured by
+    :func:`semantic_extract_project` and merged before graph building.
 
     Args:
         project_root: Path to the project root directory.
@@ -65,11 +71,10 @@ def extract_project(
 
     files_dict = detection.get("files", {})
     code_files = files_dict.get("code", [])
-    doc_files = files_dict.get("document", [])
 
-    # Build list of paths to extract
+    # AST extraction is for CODE only (docs/papers go to semantic extraction).
     paths = []
-    for rel_path in code_files + doc_files:
+    for rel_path in code_files:
         full_path = project_root / rel_path
         if full_path.exists():
             paths.append(full_path)
@@ -106,6 +111,352 @@ def extract_project(
     _show_extraction_panel(nodes, edges, console)
 
     return result
+
+
+# Semantic extraction tuning.
+_SEM_CHUNK_SIZE = 12          # files per LLM call
+_SEM_MAX_FILES = 60          # cap (non-deep) to bound cost
+_SEM_MAX_CHUNKS = 6          # cap (non-deep) concurrent LLM calls
+_SEM_MAX_BYTES_PER_FILE = 8000  # truncate large files in the prompt
+
+# Agent-driven path: each chunk becomes one parallel `task` subagent. We want a
+# healthy fan-out, but the subagents fire concurrently and share the API rate
+# limit — too many at once → HTTP 429. So the subagent count is HARD-CAPPED
+# (always, deep included) and the per-chunk size grows to cover all files within
+# that cap. _SEM_AGENT_MIN_CHUNK keeps small projects from over-splitting.
+_SEM_AGENT_MIN_CHUNK = 4       # min files per subagent (avoid tiny chunks)
+_SEM_AGENT_MAX_SUBAGENTS = 6   # hard cap on concurrent subagents (rate-limit safe)
+
+# Canonical onboarding docs, most-important first. Plain (non-deep) /init orders
+# its document targets by this priority so the high-signal files (README,
+# CHANGELOG, …) always lead and are never dropped by the file cap. Matched
+# case-insensitively against the file's stem, then anywhere in its path.
+_DOC_PRIORITY: tuple[str, ...] = (
+    "readme",
+    "changelog", "history", "news", "releases",
+    "contributing",
+    "architecture", "design",
+    "agents", "claude", "nova",
+    "roadmap", "todo",
+    "adr", "decision",
+    "security", "code_of_conduct", "governance",
+)
+
+
+def _doc_priority_rank(path: str) -> int:
+    """Rank a document path by :data:`_DOC_PRIORITY` (lower = more important).
+
+    Matches the file stem first (so ``README.md`` beats ``docs/x/readme-notes``),
+    then falls back to a substring match anywhere in the path. Unmatched docs
+    sort last (kept, just after the canonical ones).
+    """
+    from pathlib import PurePosixPath
+
+    p = path.replace("\\", "/").lower()
+    stem = PurePosixPath(p).stem
+    for rank, key in enumerate(_DOC_PRIORITY):
+        if stem == key or stem.startswith(key):
+            return rank
+    for rank, key in enumerate(_DOC_PRIORITY):
+        if key in p:
+            return rank + len(_DOC_PRIORITY)  # weaker (substring) match
+    return 2 * len(_DOC_PRIORITY)
+
+
+def _prioritize_docs(paths: list[str]) -> list[str]:
+    """Order document paths canonical-first (stable within the same rank)."""
+    return sorted(paths, key=lambda p: (_doc_priority_rank(p), p.lower()))
+
+
+def _build_chunk_listing(project_root: Path, paths: list[Path]) -> str:
+    """Render a chunk of files (path + bounded contents) for the LLM prompt."""
+    parts: list[str] = []
+    for p in paths:
+        try:
+            rel = p.relative_to(project_root).as_posix()
+        except ValueError:
+            rel = p.name
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except Exception:  # noqa: BLE001
+            continue
+        if len(text) > _SEM_MAX_BYTES_PER_FILE:
+            text = text[:_SEM_MAX_BYTES_PER_FILE] + "\n…(truncated)…"
+        parts.append(f"### FILE: {rel}\n```\n{text}\n```")
+    return "\n\n".join(parts)
+
+
+def _parse_extraction_json(text: str) -> dict[str, Any] | None:
+    """Parse a (possibly fenced / prose-wrapped) JSON extraction fragment."""
+    import json
+    import re
+
+    s = (text or "").strip()
+    if s.startswith("```"):
+        s = re.sub(r"^```[a-zA-Z]*\n", "", s)
+        s = re.sub(r"\n```$", "", s).strip()
+    try:
+        return json.loads(s)
+    except Exception:  # noqa: BLE001
+        m = re.search(r"\{.*\}", s, re.S)
+        if m:
+            try:
+                return json.loads(m.group(0))
+            except Exception:  # noqa: BLE001
+                return None
+    return None
+
+
+async def semantic_extract_project(
+    project_root: Path,
+    detection: dict[str, Any],
+    console: Console | None = None,
+    deep: bool = False,
+) -> dict[str, Any]:
+    """LLM semantic extraction over docs/papers (+ code when ``deep``).
+
+    Captures the relationships AST cannot — document concepts, call/data/
+    architecture edges, cross-file links — using graphify's extraction schema.
+    Runs chunks concurrently and is bounded by ``_SEM_MAX_*`` unless ``deep``.
+
+    Returns ``{nodes, edges, hyperedges, input_tokens, output_tokens}`` (empty
+    on any failure — the caller proceeds with the AST result alone).
+    """
+    import asyncio
+
+    empty = {"nodes": [], "edges": [], "hyperedges": [], "input_tokens": 0, "output_tokens": 0}
+    if console is None:
+        console = _make_console()
+    try:
+        from langchain_core.messages import HumanMessage
+
+        from novacode_cli.config.model_create import create_model
+        from novacode_cli.prompts import render_template
+    except Exception:  # noqa: BLE001
+        return empty
+
+    files_dict = detection.get("files", {})
+    # Canonical-first ordering (README, CHANGELOG, …) so the high-signal docs lead.
+    docs = _prioritize_docs(
+        list(files_dict.get("document", [])) + list(files_dict.get("paper", []))
+    )
+    targets = docs + (list(files_dict.get("code", [])) if deep else [])
+    paths = [project_root / p for p in targets if (project_root / p).exists()]
+    if not paths:
+        return empty
+
+    if not deep and len(paths) > _SEM_MAX_FILES:
+        paths = paths[:_SEM_MAX_FILES]
+
+    chunks = [paths[i : i + _SEM_CHUNK_SIZE] for i in range(0, len(paths), _SEM_CHUNK_SIZE)]
+    if not deep and len(chunks) > _SEM_MAX_CHUNKS:
+        chunks = chunks[:_SEM_MAX_CHUNKS]
+
+    try:
+        model = create_model()
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[yellow]⚠ Semantic extraction skipped (no model: {exc})[/yellow]")
+        return empty
+
+    console.print(
+        f"  [dim]Semantic extraction: {len(paths)} file(s) → {len(chunks)} LLM chunk(s)…[/dim]"
+    )
+
+    async def _do_chunk(chunk: list[Path]) -> dict[str, Any] | None:
+        listing = _build_chunk_listing(project_root, chunk)
+        if not listing.strip():
+            return None
+        prompt = render_template("init_semantic_extract.jinja", files_block=listing)
+        try:
+            resp = await model.ainvoke([HumanMessage(content=prompt)])
+            text = resp.content if isinstance(resp.content, str) else str(resp.content)
+            return _parse_extraction_json(text)
+        except Exception:  # noqa: BLE001
+            return None
+
+    results = await asyncio.gather(
+        *[_do_chunk(c) for c in chunks], return_exceptions=True
+    )
+
+    nodes: list[dict] = []
+    edges: list[dict] = []
+    hyperedges: list[dict] = []
+    for r in results:
+        if isinstance(r, dict):
+            nodes.extend(r.get("nodes") or [])
+            edges.extend(r.get("edges") or [])
+            hyperedges.extend(r.get("hyperedges") or [])
+
+    seen: set = set()
+    deduped: list[dict] = []
+    for n in nodes:
+        nid = n.get("id")
+        if nid and nid not in seen:
+            seen.add(nid)
+            deduped.append(n)
+
+    console.print(
+        f"  [cyan]Semantic:[/cyan] {len(deduped)} nodes, {len(edges)} edges, "
+        f"{len(hyperedges)} hyperedges"
+    )
+    return {
+        "nodes": deduped,
+        "edges": edges,
+        "hyperedges": hyperedges,
+        "input_tokens": 0,
+        "output_tokens": 0,
+    }
+
+
+def _read_and_merge_fragments(
+    frag_dir: Path, console: Console | None = None
+) -> dict[str, Any]:
+    """Read every `chunk_*.json` graph fragment the agent wrote, dedup, merge."""
+    out = {"nodes": [], "edges": [], "hyperedges": [], "input_tokens": 0, "output_tokens": 0}
+    if not frag_dir.exists():
+        return out
+    nodes: list[dict] = []
+    edges: list[dict] = []
+    hyper: list[dict] = []
+    for f in sorted(frag_dir.glob("chunk_*.json")):
+        try:
+            data = _parse_extraction_json(f.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            data = None
+        if isinstance(data, dict):
+            nodes.extend(data.get("nodes") or [])
+            edges.extend(data.get("edges") or [])
+            hyper.extend(data.get("hyperedges") or [])
+    seen: set = set()
+    deduped: list[dict] = []
+    for n in nodes:
+        nid = n.get("id")
+        if nid and nid not in seen:
+            seen.add(nid)
+            deduped.append(n)
+    if console is not None:
+        console.print(
+            f"  [cyan]Semantic:[/cyan] {len(deduped)} nodes, {len(edges)} edges "
+            f"from agent fragments"
+        )
+    out["nodes"], out["edges"], out["hyperedges"] = deduped, edges, hyper
+    return out
+
+
+async def semantic_extract_via_agent(
+    project_root: Path,
+    detection: dict[str, Any],
+    execute_fn,
+    console: Console | None = None,
+    deep: bool = False,
+) -> dict[str, Any]:
+    """Semantic extraction driven by the **Nova agent** (tools + subagents).
+
+    Instead of a stateless model call, this dispatches the work through the agent
+    (``execute_fn(prompt)``): the agent reads the chunked files (and may follow
+    imports / fetch paper URLs), extracts graph fragments, and writes each to
+    ``.nova/graph_fragments/chunk_N.json``. We then read + merge those fragments.
+
+    Returns ``{nodes, edges, hyperedges, ...}`` (empty on failure → AST-only).
+    """
+    empty = {"nodes": [], "edges": [], "hyperedges": [], "input_tokens": 0, "output_tokens": 0}
+    if console is None:
+        console = _make_console()
+    if execute_fn is None:
+        return empty
+    try:
+        from novacode_cli.prompts import render_template
+    except Exception:  # noqa: BLE001
+        return empty
+
+    files_dict = detection.get("files", {})
+    # Docs/papers first, ordered canonical-first (README, CHANGELOG, …) so the
+    # high-signal onboarding files always lead. --deep additionally feeds the
+    # code through the semantic pass; without it, plain /init focuses on the docs.
+    docs = _prioritize_docs(
+        list(files_dict.get("document", [])) + list(files_dict.get("paper", []))
+    )
+    targets = docs + (list(files_dict.get("code", [])) if deep else [])
+
+    # graphify may return absolute paths; the agent's filesystem backend rejects
+    # absolute (esp. Windows) paths and wants workspace-relative ones. Normalize
+    # every target to a relative POSIX path (forward slashes) before listing it
+    # in the prompt — the agent then reads it via the virtual filesystem.
+    norm: list[str] = []
+    for p in targets:
+        path = Path(p)
+        if not path.is_absolute():
+            path = project_root / path
+        if not path.exists():
+            continue
+        try:
+            rel = path.resolve().relative_to(project_root.resolve())
+        except ValueError:
+            continue  # outside the workspace — skip (backend can't reach it)
+        norm.append(rel.as_posix())
+    targets = norm
+    if not targets:
+        return empty
+    if not deep and len(targets) > _SEM_MAX_FILES:
+        targets = targets[:_SEM_MAX_FILES]
+
+    # Bound concurrent subagents: derive a chunk size so the number of chunks
+    # (= subagents fired in parallel) never exceeds _SEM_AGENT_MAX_SUBAGENTS,
+    # even in deep mode. Keeps fan-out healthy without tripping the API rate
+    # limit (429). MIN_CHUNK stops small projects from over-splitting.
+    import math
+
+    chunk_size = max(
+        _SEM_AGENT_MIN_CHUNK,
+        math.ceil(len(targets) / _SEM_AGENT_MAX_SUBAGENTS),
+    )
+    chunks = [
+        targets[i : i + chunk_size] for i in range(0, len(targets), chunk_size)
+    ]
+
+    # Fresh fragment dir (clear stale fragments from a prior run).
+    frag_dir = project_root / ".nova" / "graph_fragments"
+    try:
+        if frag_dir.exists():
+            for f in frag_dir.glob("chunk_*.json"):
+                f.unlink()
+        frag_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:  # noqa: BLE001
+        pass
+
+    chunk_specs = [
+        {"n": i + 1, "files": list(c), "out": f".nova/graph_fragments/chunk_{i + 1}.json"}
+        for i, c in enumerate(chunks)
+    ]
+    prompt = render_template(
+        "init_semantic_orchestrate.jinja", chunks=chunk_specs, total=len(chunk_specs)
+    )
+    console.print(
+        f"  [dim]Semantic extraction via the agent: {len(targets)} file(s) → "
+        f"{len(chunk_specs)} task(s)…[/dim]"
+    )
+    try:
+        await execute_fn(prompt)
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[yellow]⚠ Agent semantic extraction failed ({exc})[/yellow]")
+        return empty
+
+    return _read_and_merge_fragments(frag_dir, console)
+
+
+def merge_ast_semantic(ast: dict[str, Any], semantic: dict[str, Any]) -> dict[str, Any]:
+    """Merge the AST and semantic extraction results into one extraction dict.
+
+    Nodes dedup by id (AST wins on conflict), edges dedup by
+    (source, target, relation), hyperedges concatenated.
+    """
+    # base=semantic, new=ast → on an id/edge conflict the AST (authoritative for
+    # code structure) wins, since merge_extractions lets `new` override `base`.
+    merged = merge_extractions(semantic, ast)
+    merged["hyperedges"] = (ast.get("hyperedges") or []) + (
+        semantic.get("hyperedges") or []
+    )
+    return merged
 
 
 def extract_project_incremental(
