@@ -159,13 +159,11 @@ from novacode_cli.skills.skill_creation import setup_skills_parser
 from novacode_cli.states.Session import SessionState
 from novacode_cli.tools import (
     code_search,
-    convert_format,
     create_memory_structure,
     docs_search,
     duckduckgo_search,
     fetch_url,
     find_related_code,
-    get_current_time,
     http_request,
     package_info,
     query_project_graph,
@@ -1369,9 +1367,7 @@ async def _run_agent_session(
         list_servers_tool,
         # Utility tools
         package_info,
-        convert_format,
         think,
-        get_current_time,
         query_project_graph,
         # Web search (always available, no API key needed)
         duckduckgo_search,
