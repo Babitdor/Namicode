@@ -158,33 +158,21 @@ from novacode_cli.path_approval import PathApprovalManager, check_path_approval
 from novacode_cli.skills.skill_creation import setup_skills_parser
 from novacode_cli.states.Session import SessionState
 from novacode_cli.tools import (
-    browser_automate,
-    capture_browser_console,
-    check_types,
     code_search,
     convert_format,
     create_memory_structure,
     docs_search,
     duckduckgo_search,
-    execute_in_e2b,
     fetch_url,
     find_related_code,
-    format_code_file,
     get_current_time,
     http_request,
-    lint_code,
     package_info,
     query_project_graph,
     read_memory,
     think,
     web_search,
     write_memory,
-)
-from novacode_cli.tools.git_tools import (
-    git_status,
-    git_log,
-    git_diff,
-    git_blame,
 )
 from novacode_cli.ui.execution import execute_task
 
@@ -1366,11 +1354,15 @@ async def _run_agent_session(
         session_manager: SessionManager for session persistence
         restored_session_data: Tuple of (session_data, warnings, nova_md_loaded) for continuation
     """
-    # Create agent with conditional tools
+    # Create agent with conditional tools.
+    # NOTE: several built-in tools are intentionally NOT registered to keep the
+    # agent lean — code execution (execute_in_e2b), browser automation
+    # (browser_automate / capture_browser_console), git tools, and the code-quality
+    # tools (lint_code / format_code_file / check_types). LSP tools are likewise
+    # not registered. The agent does these via the shell (`execute`) when needed.
     tools = [
         http_request,
         fetch_url,
-        execute_in_e2b,
         run_tests_tool,
         start_dev_server_tool,
         stop_server_tool,
@@ -1381,23 +1373,9 @@ async def _run_agent_session(
         think,
         get_current_time,
         query_project_graph,
-        # Code search (Semble-powered, optional — only if semble is installed)
-        # Code quality tools (linting, formatting, type checking)
-        lint_code,
-        format_code_file,
-        check_types,
         # Web search (always available, no API key needed)
         duckduckgo_search,
         docs_search,
-        # Git tools (version control)
-        git_status,
-        git_log,
-        git_diff,
-        git_blame,
-        # Browser automation (AI-powered web browsing)
-        browser_automate,
-        # Browser console capture (debug web applications)
-        capture_browser_console,
         # Memory management (persist across sessions)
         write_memory,
         read_memory,
