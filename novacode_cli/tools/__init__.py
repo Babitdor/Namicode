@@ -1,9 +1,8 @@
 """Tools package for novacode_cli.
 
 This package provides various tools for the CLI agent, organized into submodules:
-- http_tools: HTTP request tools
 - web_tools: Web search tools (Tavily, DuckDuckGo, docs search)
-- fetch_tools: URL fetching and content conversion
+- fetch_tools: URL fetching and content conversion (merged from http_tools)
 - package_tools: Package information from registries
 - memory_tools: Memory management tools
 - reflection_tools: Reflection tools for strategic thinking
@@ -11,15 +10,11 @@ This package provides various tools for the CLI agent, organized into submodules
 - code_search_tools: Semantic code search (Semble-powered, optional)
 """
 
-# URL fetching tools
+# URL fetching tools (covers all HTTP methods — http_request merged into fetch_url)
 from novacode_cli.tools.fetch_tools import fetch_url
-
-# HTTP tools
-from novacode_cli.tools.http_tools import http_request
 
 # Memory tools
 from novacode_cli.tools.memory_tools import (
-    create_memory_structure,
     read_memory,
     write_memory,
 )
@@ -53,13 +48,10 @@ from novacode_cli.tools.web_tools import (
 )
 
 __all__ = [
-    "create_memory_structure",
     "docs_search",
     "duckduckgo_search",
     # URL fetching tools
     "fetch_url",
-    # HTTP tools
-    "http_request",
     # Package information tools
     "package_info",
     # Project graph query tool

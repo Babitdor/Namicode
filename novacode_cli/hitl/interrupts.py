@@ -142,64 +142,6 @@ def _format_start_dev_server_description(
     )
 
 
-def _format_browser_automate_description(
-    tool_call: ToolCall, _state: AgentState, _runtime: Runtime
-) -> str:
-    """Format browser_automate tool call for approval prompt."""
-    args = tool_call["args"]
-    task = args.get("task", "unknown task")
-    model = args.get("model", "qwen3.5:cloud")
-    use_vision = args.get("use_vision", True)
-
-    task_preview = task[:100] + "..." if len(task) > 100 else task
-    return (
-        f"Browser Task: {task_preview}\n"
-        f"Model: {model}\n"
-        f"Vision: {'Enabled' if use_vision else 'Disabled'}\n\n"
-        "⚠️  Will launch browser and perform real web interactions"
-    )
-
-
-def _format_execute_in_e2b_description(
-    tool_call: ToolCall, _state: AgentState, _runtime: Runtime
-) -> str:
-    """Format execute_in_e2b tool call for approval prompt."""
-    args = tool_call["args"]
-    code = args.get("code", "")
-    language = args.get("language", "python")
-    timeout = args.get("timeout", 60)
-
-    code_preview = code[:150] + "..." if len(code) > 150 else code
-    return (
-        f"Language: {language}\n"
-        f"Timeout: {timeout}s\n"
-        f"Code:\n```\n{code_preview}\n```\n\n"
-        "⚠️  Will execute code in remote E2B sandbox (consumes API credits)"
-    )
-
-
-def _format_http_request_description(
-    tool_call: ToolCall, _state: AgentState, _runtime: Runtime
-) -> str:
-    """Format http_request tool call for approval prompt."""
-    args = tool_call["args"]
-    method = args.get("method", "GET")
-    url = args.get("url", "unknown")
-    timeout = args.get("timeout", 30)
-    has_data = args.get("data") is not None
-    has_auth = args.get("auth") is not None
-
-    lines = [f"HTTP {method} Request", f"URL: {url}", f"Timeout: {timeout}s"]
-    if has_data:
-        data = args.get("data", "")
-        data_preview = str(data)[:100] + "..." if len(str(data)) > 100 else str(data)
-        lines.append(f"Data: {data_preview}")
-    if has_auth:
-        lines.append("⚠️  Contains authentication credentials")
-    lines.append("\n⚠️  Will make network request to external URL")
-    return "\n".join(lines)
-
-
 def _format_write_memory_description(
     tool_call: ToolCall, _state: AgentState, _runtime: Runtime
 ) -> str:
@@ -218,31 +160,6 @@ def _format_write_memory_description(
         f"Content Preview:\n{content_preview}\n\n"
         "⚠️  Will write to memory file"
     )
-
-
-def _format_create_memory_description(
-    tool_call: ToolCall, _state: AgentState, _runtime: Runtime
-) -> str:
-    """Format create_memory_structure tool call for approval prompt."""
-    args = tool_call["args"]
-    structure_type = args.get("structure_type", "simple")
-    topics = args.get("topics", [])
-
-    topics_str = ", ".join(topics) if topics else "default topics"
-    return (
-        f"Structure Type: {structure_type}\n"
-        f"Topics: {topics_str}\n\n"
-        "⚠️  Will create memory directory structure"
-    )
-
-
-def _format_capture_browser_description(
-    tool_call: ToolCall, _state: AgentState, _runtime: Runtime
-) -> str:
-    """Format capture_browser_console tool call for approval prompt."""
-    args = tool_call["args"]
-    url = args.get("url", "unknown")
-    return f"URL: {url}\n\n⚠️  Will launch browser and navigate to URL"
 
 
 def _format_duckduckgo_description(
@@ -275,9 +192,9 @@ def get_interrupt_configs() -> dict[str, InterruptOnConfig]:
 
     Interrupt Categories:
         - Destructive operations: shell, execute, write_file, edit_file
-        - External operations: web_search, fetch_url, http_request, browser_automate
+        - External operations: web_search, fetch_url, browser_automate
         - Code execution: execute_in_e2b, run_tests, start_dev_server
-        - Memory operations: write_memory, create_memory_structure
+        - Memory operations: write_memory
         - Browser operations: capture_browser_console
         - Search operations: duckduckgo_search, docs_search
         - User interaction: ask_question
@@ -314,16 +231,6 @@ def get_interrupt_configs() -> dict[str, InterruptOnConfig]:
         "description": _format_fetch_url_description,  # type: ignore
     }
 
-    http_request_interrupt_config: InterruptOnConfig = {
-        "allowed_decisions": ["approve", "reject"],
-        "description": _format_http_request_description,  # type: ignore
-    }
-
-    browser_automate_interrupt_config: InterruptOnConfig = {
-        "allowed_decisions": ["approve", "reject"],
-        "description": _format_browser_automate_description,  # type: ignore
-    }
-
     # Code execution - remote and testing
     run_tests_interrupt_config: InterruptOnConfig = {
         "allowed_decisions": ["approve", "reject"],
@@ -335,35 +242,14 @@ def get_interrupt_configs() -> dict[str, InterruptOnConfig]:
         "description": _format_start_dev_server_description,  # type: ignore
     }
 
-    execute_in_e2b_interrupt_config: InterruptOnConfig = {
-        "allowed_decisions": ["approve", "reject"],
-        "description": _format_execute_in_e2b_description,  # type: ignore
-    }
-
     # Memory operations - file system
     write_memory_interrupt_config: InterruptOnConfig = {
         "allowed_decisions": ["approve", "reject"],
         "description": _format_write_memory_description,  # type: ignore
     }
 
-    create_memory_structure_interrupt_config: InterruptOnConfig = {
-        "allowed_decisions": ["approve", "reject"],
-        "description": _format_create_memory_description,  # type: ignore
-    }
-
-    # Browser operations
-    capture_browser_console_interrupt_config: InterruptOnConfig = {
-        "allowed_decisions": ["approve", "reject"],
-        "description": _format_capture_browser_description,  # type: ignore
-    }
-
     # Search operations
     duckduckgo_search_interrupt_config: InterruptOnConfig = {
-        "allowed_decisions": ["approve", "reject"],
-        "description": _format_duckduckgo_description,  # type: ignore
-    }
-
-    docs_search_interrupt_config: InterruptOnConfig = {
         "allowed_decisions": ["approve", "reject"],
         "description": _format_duckduckgo_description,  # type: ignore
     }
@@ -377,20 +263,13 @@ def get_interrupt_configs() -> dict[str, InterruptOnConfig]:
         # External operations
         "web_search": web_search_interrupt_config,
         "fetch_url": fetch_url_interrupt_config,
-        "http_request": http_request_interrupt_config,
-        "browser_automate": browser_automate_interrupt_config,
         # Code execution
         "run_tests": run_tests_interrupt_config,
         "start_dev_server": start_dev_server_interrupt_config,
-        "execute_in_e2b": execute_in_e2b_interrupt_config,
         # Memory operations
         "write_memory": write_memory_interrupt_config,
-        "create_memory_structure": create_memory_structure_interrupt_config,
-        # Browser operations
-        "capture_browser_console": capture_browser_console_interrupt_config,
         # Search operations
         "duckduckgo_search": duckduckgo_search_interrupt_config,
-        "docs_search": docs_search_interrupt_config,
     }
 
 

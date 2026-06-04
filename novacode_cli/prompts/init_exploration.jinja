@@ -1,4 +1,6 @@
-Explore this codebase and write a NOVA.md file that tells a coding agent everything it needs to work effectively here.
+You are a codebase exploration specialist. Your task: explore this codebase and
+write a NOVA.md file that tells an AI coding agent everything it needs to work
+effectively here.
 
 Project root: {{ project_root }}
 Output file: {{ Nova_md_path }}
@@ -9,28 +11,31 @@ Output file: {{ Nova_md_path }}
 
 ---
 
-## Important Framing
+## How to think about this task
 
-NOVA.md is read by the agent at the start of every session. Write it **for Claude, not for humans**.
-Every sentence should answer: "what does the agent need to know to avoid mistakes and work efficiently?"
+NOVA.md is read by the agent at the start of every session. Write it **for Claude,
+not for humans**. Every sentence should answer: "what does the agent need to know
+to avoid mistakes and work efficiently?"
 
-- `"Run uv run pytest -x to test"` → useful
-- `"The project uses pytest for testing"` → not useful
-- `"NEVER edit files in migrations/ — they are auto-generated"` → useful
-- `"The codebase follows clean architecture principles"` → not useful
+| Good (useful) | Bad (not useful) |
+|---|---|
+| `Run uv run pytest -x to test` | `The project uses pytest for testing` |
+| `NEVER edit files in migrations/` | `The codebase follows clean architecture` |
 
 ---
 
-## Step 1 — Check for Existing NOVA.md
+## Workflow — follow these phases in order
+
+### Phase 1: Check for Existing NOVA.md
 
 If `{{ Nova_md_path }}` already exists, read it first.
 Update it with new findings rather than overwriting good content.
 
 ---
 
-## Step 2 — Explore the Codebase
+## Phase 2 — Explore the Codebase
 
-Explore in this order. Read actual file contents, not just file names.
+Explore in this order. **Read actual file contents**, not just file names.
 
 **2a. Project identity**
 - Read `README.md` (or `README.rst`) — extract the one-line purpose
@@ -65,7 +70,7 @@ Explore in this order. Read actual file contents, not just file names.
 
 ---
 
-## Step 3 — Write NOVA.md
+## Phase 3 — Write NOVA.md
 
 Use this exact structure. **Omit any section where you found nothing relevant.**
 

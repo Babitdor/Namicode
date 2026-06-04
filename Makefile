@@ -40,6 +40,30 @@ run:
 sync:
 	uv sync
 
+# Lock dependencies (update uv.lock without installing)
+lock:
+	uv lock
+
+# Show dependency tree
+tree:
+	uv tree
+
+# Show outdated packages
+outdated:
+	uv tree --outdated
+
+# Add a dependency
+add:
+	uv add $(PACKAGE)
+
+# Add a dev dependency
+add-dev:
+	uv add --dev $(PACKAGE)
+
+# Remove a dependency
+remove:
+	uv remove $(PACKAGE)
+
 # Full reinstall of both packages into .venv — use when sync isn't enough
 reinstall:
 	uv sync --reinstall-package novacode-cli --reinstall-package deepagents
@@ -94,6 +118,12 @@ help:
 	@echo '-- RUNNING --'
 	@echo 'run                          - run Nova CLI (uv run nova)'
 	@echo 'sync                         - sync .venv dependencies (use after pyproject.toml changes)'
+	@echo 'lock                         - update uv.lock without installing'
+	@echo 'tree                         - show dependency tree'
+	@echo 'outdated                     - show outdated packages'
+	@echo 'add PACKAGE=xxx              - add a dependency'
+	@echo 'add-dev PACKAGE=xxx          - add a dev dependency'
+	@echo 'remove PACKAGE=xxx           - remove a dependency'
 	@echo 'reinstall                    - force reinstall novacode-cli + deepagents into .venv'
 	@echo 'run_reinstall                - reinstall then run Nova CLI'
 	@echo ''

@@ -1,8 +1,13 @@
-You are a knowledge-graph extraction engine. Read the files below and extract a
-graph fragment of the entities and the relationships between them.
+You are a knowledge-graph extraction engine. Your task: read code/documentation files and extract entities (nodes) and the semantic relationships between them that a static AST cannot detect.
 
-Output **ONLY** valid JSON matching the schema — no explanation, no markdown
-fences, no preamble.
+Output **ONLY** valid JSON matching the schema below — no explanation, no markdown fences, no preamble.
+
+## Extraction workflow
+
+1. **Scan** each file's content for classes, functions, modules, named concepts, and key decisions
+2. **Identify relationships** between entities (see type list below)
+3. **Assign confidence** based on how explicit the relationship is in the source
+4. **Output** pure JSON — opening brace at character 0, closing brace at end
 
 ## What to extract
 - **Entities** (nodes): classes, functions, modules, key concepts, and — for docs
@@ -32,3 +37,11 @@ by the text.
 
 ## FILES
 {{ files_block }}
+
+## Self-Check
+Before finishing, verify:
+- [ ] Output is pure JSON — `{` at position 0, `}` at end, no markdown fences
+- [ ] Every edge has a `confidence` and `confidence_score` (never 0.5)
+- [ ] Node `id` follows the `<filestem>_<entity>` convention for linking
+- [ ] No invented relationships — every edge is supported by the source text
+- [ ] JSON validates against the schema (no trailing commas, valid structure)

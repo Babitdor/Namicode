@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import posixpath
 import tarfile
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from typing import TYPE_CHECKING
 
 from deepagents.backends.protocol import (
@@ -69,28 +70,45 @@ class DockerBackend(BaseSandbox):
         """Unique identifier for the sandbox backend."""
         return self._container.id[:12]  # Use short container ID
 
-    def execute(self, command: str) -> ExecuteResponse:
+    def execute(
+        self, command: str, *, timeout: int | None = None
+    ) -> ExecuteResponse:
         """Execute a command in the Docker container and return ExecuteResponse.
 
         Args:
             command: Full shell command string to execute
+            timeout: Maximum time in seconds to wait for the command to complete.
+                If None, uses the backend's default timeout (30 minutes).
 
         Returns:
             ExecuteResponse with combined output, exit code, and truncation flag
         """
         try:
-            # Execute command in container. exec_run defaults to the image's
-            # working dir ("/"), so set workdir explicitly to run commands in
-            # the mounted project at /workspace.
-            exec_result = self._container.exec_run(
-                cmd=["bash", "-c", command],
-                stdout=True,
-                stderr=True,
-                stdin=False,
-                tty=False,
-                demux=False,  # Combine stdout and stderr
-                workdir=self._workdir,
-            )
+            # Docker SDK's Container.exec_run() does NOT support a timeout
+            # parameter, so we implement timeout ourselves via a thread pool.
+            timeout_sec = timeout if timeout is not None else self._timeout
+
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                fut = pool.submit(
+                    self._container.exec_run,
+                    cmd=["bash", "-c", command],
+                    stdout=True,
+                    stderr=True,
+                    stdin=False,
+                    tty=False,
+                    demux=False,  # Combine stdout and stderr
+                    workdir=self._workdir,
+                )
+                try:
+                    exec_result = fut.result(timeout=timeout_sec)
+                except FuturesTimeout:
+                    return ExecuteResponse(
+                        output=(
+                            f"Command timed out after {timeout_sec}s: {command[:200]}"
+                        ),
+                        exit_code=124,  # Standard timeout exit code
+                        truncated=False,
+                    )
 
             # Decode output
             output = exec_result.output.decode("utf-8") if exec_result.output else ""

@@ -143,7 +143,7 @@ from novacode_cli.config.config import (
     get_responsive_ascii,
 )
 from novacode_cli.config.model_create import create_model
-from novacode_cli.input import ImageTracker, create_prompt_session
+from novacode_cli.input import ImageTracker, PasteTracker, create_prompt_session, resolve_paste_placeholders
 from novacode_cli.tracking.tracing import auto_configure as _auto_configure_tracing
 
 # Initialize LangSmith tracing from environment variables (no-op when not configured)
@@ -159,12 +159,10 @@ from novacode_cli.skills.skill_creation import setup_skills_parser
 from novacode_cli.states.Session import SessionState
 from novacode_cli.tools import (
     code_search,
-    create_memory_structure,
     docs_search,
     duckduckgo_search,
     fetch_url,
     find_related_code,
-    http_request,
     package_info,
     query_project_graph,
     read_memory,
@@ -587,7 +585,8 @@ async def simple_cli(
     # Create prompt session and token tracker
     token_tracker = TokenTracker()
     image_tracker = ImageTracker()
-    session = create_prompt_session(assistant_id, session_state, image_tracker)
+    paste_tracker = PasteTracker()
+    session = create_prompt_session(assistant_id, session_state, image_tracker, paste_tracker)
     token_tracker.set_baseline(baseline_tokens)
     if model_name:
         token_tracker.set_model(model_name)
@@ -595,6 +594,8 @@ async def simple_cli(
     session_state.token_tracker = token_tracker
     # Store image_tracker on session_state for remote message processor access
     session_state._image_tracker = image_tracker
+    # Store paste_tracker on session_state for remote access
+    session_state._paste_tracker = paste_tracker
 
     # Helper to save session (used by both cleanup and auto-save)
     async def _save_session(*, silent: bool = False) -> bool:
@@ -926,6 +927,8 @@ async def simple_cli(
                 session_state.exit_hint_handle = None
             session_state.exit_hint_until = None
             user_input = user_input.strip()
+            # Resolve any paste placeholders to full text
+            user_input = resolve_paste_placeholders(user_input, paste_tracker)
         except EOFError:
             await _cleanup_and_save_session()
             break
@@ -1359,7 +1362,6 @@ async def _run_agent_session(
     # tools (lint_code / format_code_file / check_types). LSP tools are likewise
     # not registered. The agent does these via the shell (`execute`) when needed.
     tools = [
-        http_request,
         fetch_url,
         run_tests_tool,
         start_dev_server_tool,
@@ -1375,7 +1377,6 @@ async def _run_agent_session(
         # Memory management (persist across sessions)
         write_memory,
         read_memory,
-        create_memory_structure,
     ]
     # Conditionally add Semble-powered code search tools
     if code_search is not None:
@@ -1418,22 +1419,14 @@ async def _run_agent_session(
         sandbox_type=sandbox_type,
     )
 
-    # Wire the SteeringMiddleware's instruction list to the session state
-    # so /steer command changes are immediately visible to the middleware.
-    # The middleware was created in create_agent_with_config() with an
-    # internal empty list; we now swap it for the session state's list.
-    try:
-        from novacode_cli.bootstrap.steering import SteeringMiddleware
-        for mw in getattr(agent, "middleware", []):
-            if isinstance(mw, SteeringMiddleware):
-                # Copy any existing instructions from the middleware's list
-                if mw._instructions and not session_state.steering_instructions:
-                    session_state.steering_instructions = list(mw._instructions)
-                # Point middleware to the session state's shared list
-                mw._instructions = session_state.steering_instructions
-                break
-    except Exception:
-        pass  # Non-critical — steering still works with the middleware's own list
+    # Wire the SteeringMiddleware's instruction list to the session state.
+    #
+    # The middleware's `_instructions` list was already set to the shared
+    # `session_state.steering_instructions` list during agent creation
+    # (create_agent_with_config passes it as `steering_instructions=` to
+    # SteeringMiddleware.__init__). No post-hoc wiring is needed — the
+    # middleware reads that list on every model call, so /steer and live
+    # TUI-steer appends take effect immediately on the agent's next step.
 
     # Store references on session_state so the remote message processor
     # can access them (it runs as a background task, can't close over locals)

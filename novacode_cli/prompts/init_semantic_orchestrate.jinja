@@ -1,36 +1,18 @@
-Extract a **semantic knowledge-graph** from this project to enrich the structural
-(AST) graph.
+You are a knowledge-graph orchestration engine. Your task: extract a **semantic knowledge-graph** from this project to enrich the structural (AST) graph.
 
-## ⚡ Dispatch ALL subagents in parallel — this is mandatory
-There are **{{ total }} chunks** below. Spawn **one `task` subagent per chunk** and
-run them **concurrently**: emit **all {{ total }} `task` tool calls in a SINGLE
-message** (multiple tool calls in one turn run in parallel). Do **not** process
-chunks one at a time, do **not** wait for one subagent before starting the next,
-and do **not** do the extraction yourself in the main thread. The whole point is
-the {{ total }} workers run at once. After dispatching, wait for all of them to
-finish, then verify every fragment file was written.
+## Dispatch ALL subagents in parallel — this is mandatory
 
-Each chunk's worker:
+There are **{{ total }} chunks** below. Emit **all {{ total }} `task` tool calls in a SINGLE message** — multi-tool calls run in parallel. Do not process chunks one at a time, do not do the extraction yourself. After dispatching, wait for all workers to finish, then verify every fragment file was written.
 
-1. **Reads** its listed files with `read_file`. It MAY also `read_file`
-   closely-related files or follow imports — but stay focused on the assigned
-   files. Use ONLY `read_file` and `write_file`. Do **NOT** run shell commands
-   (`execute`/`shell`/`wc`/`ls`/`cat`); they pause this automated run for
-   approval and stall it.
-   **Paths:** all paths below are relative to the workspace root — read and write
-   them exactly as given (relative, forward slashes). NEVER prepend an absolute
-   or Windows path (`B:\…`); the filesystem rejects those.
-2. **Extracts** the entities and the *semantic* relationships AST can't see:
+Each worker receives one chunk and MUST:
+
+1. **Read** its assigned files with `read_file`. May also read closely-related files or follow imports. Use ONLY `read_file` and `write_file`. Do NOT run shell commands (`execute`/`shell`/`wc`/`ls`/`cat`); they pause for approval and stall the run.
+   **Paths:** all paths below are relative to workspace root — read and write them exactly as given (relative, forward slashes). NEVER prepend an absolute or Windows path (`B:\…`).
+2. **Extract** entities and semantic relationships AST can't see:
    `calls`, `shares_data_with`, `implements`, `references`, `cites`,
-   `conceptually_related_to`, `rationale_for`, `semantically_similar_to`
-   (non-obvious only). For docs/papers: named concepts, decisions, rationale.
-3. **Writes** the fragment to its output path with `write_file`. The file is the
-   deliverable — do not return the JSON inline.
-   ⚠️ **`content` is the fragment's JSON as plain text — nothing else.** The very
-   first character must be `{` and the last must be `}`. Do NOT surround it with
-   quotes, do NOT put it in a ``` code fence, do NOT add commentary before or
-   after, and do NOT pass a dict/object. The file, opened afterward, should read
-   exactly as valid JSON (e.g. it begins `{"nodes": [`).
+   `conceptually_related_to`, `rationale_for`, `semantically_similar_to` (non-obvious only).
+3. **Write** the fragment JSON to its output path with `write_file`. **The file is the deliverable** — do not return the JSON inline.
+   **⚠️ Plain text JSON only.** First char `{`, last char `}`. No code fence, no quotes, no commentary. The file, opened afterward, should begin with `{"nodes": [`.
 
 ## JSON schema for each fragment
 {"nodes":[{"id":"filestem_entity","label":"Human Name","file_type":"code|document|paper","source_file":"relative/path","source_location":null}],"edges":[{"source":"id","target":"id","relation":"calls|implements|references|cites|conceptually_related_to|shares_data_with|semantically_similar_to|rationale_for","confidence":"EXTRACTED|INFERRED|AMBIGUOUS","confidence_score":1.0,"source_file":"relative/path","weight":1.0}],"hyperedges":[]}
@@ -48,3 +30,8 @@ Files:
 {% endfor %}
 
 When all fragments are written, confirm in one sentence how many you wrote.
+
+## Self-Check
+- [ ] All {{ total }} `task` calls dispatched in a single message
+- [ ] Each fragment file verified as written (use `read_file` with limit=5 to check the `{` opening)
+- [ ] No shell commands used — only `read_file`, `write_file`, and `task`

@@ -18,6 +18,16 @@ from typing import Any
 from novacode_cli.config.config import COLORS, Settings, console
 from novacode_cli.skills.load import list_skills
 
+# File extensions to skip when scanning for supporting files
+_SKIP_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".pdf", ".zip",
+                    ".tar", ".gz", ".exe", ".bin"}
+_MAX_SUPPORTING_FILE_SIZE = 100_000  # 100 KB
+# Known non-content directories to skip
+_SKIP_DIRS = {".git", ".github", ".vscode", "__pycache__", "node_modules", ".venv", "dist", "build"}
+# Root-level metadata files that belong to the repo, not the skill content
+_ROOT_SKIP_FILES = {"README.md", "LICENSE.md", "CONTRIBUTING.md", "CODE_OF_CONDUCT.md",
+                    "CHANGELOG.md", "SECURITY.md", ".gitignore"}
+
 
 async def _try_skill_invocation(
     cmd: str,
@@ -74,7 +84,6 @@ async def _try_skill_invocation(
 
     # Found a matching skill — read its SKILL.md
     skill_name = matched_skill.get("name", cmd)
-    skill_path = matched_skill.get("path", "")
 
     # The skill's SKILL.md content
     skill_content = _read_skill_content(matched_skill, user_skills_dir, project_skills_dir)
@@ -104,16 +113,134 @@ async def _try_skill_invocation(
     if cmd_args:
         extra_context = f"\n\nUser provided additional context: {cmd_args}"
 
-    prompt = (
-        f"Follow the instructions in the skill below.\n\n"
-        f"--- SKILL: {skill_name} ---\n\n"
-        f"{skill_content}\n\n"
-        f"--- END SKILL: {skill_name} ---"
-        f"{extra_context}\n\n"
-        f"Execute the skill above. Apply it to the current project and context."
+    # Discover supporting files in the skill directory
+    skill_dir = _find_skill_dir(matched_skill, user_skills_dir, project_skills_dir)
+    supporting_files = _get_supporting_files(skill_dir) if skill_dir else {}
+
+    prompt_parts = [
+        "Follow the instructions in the skill below.\n\n",
+        f"--- SKILL: {skill_name} ---\n\n",
+        skill_content,
+    ]
+
+    if supporting_files:
+        prompt_parts.append("\n\n### Supporting files\n\n")
+        prompt_parts.append(
+            "This skill ships with supporting reference files listed below. "
+            "Read them — they contain definitions, glossaries, and patterns "
+            "the skill's instructions rely on.\n"
+        )
+        for rel_path, content in supporting_files.items():
+            prompt_parts.append(
+                f"--- FILE: {rel_path} ---\n\n{content}\n\n--- END FILE: {rel_path} ---\n"
+            )
+
+    prompt_parts.append(f"--- END SKILL: {skill_name} ---")
+    prompt_parts.append(extra_context)
+    prompt_parts.append(
+        "\n\nExecute the skill above. Apply it to the current project and context."
     )
 
+    prompt = "".join(prompt_parts)
+
+    # Show supporting file status to the user
+    if supporting_files:
+        file_list = ", ".join(sorted(supporting_files.keys()))
+        console.print(f"   [dim]Supporting files: {file_list}[/dim]")
+        console.print()
+
     return prompt
+
+
+def _find_skill_dir(
+    skill: dict[str, Any],
+    user_skills_dir: Path | None,
+    project_skills_dir: Path | None,
+) -> Path | None:
+    """Find the skill's directory on disk.
+
+    Tries path attribute, user skills dir, then project skills dir.
+    Returns None if the directory cannot be determined or doesn't exist.
+    """
+    skill_name = skill.get("name", "")
+
+    # Try the skill's path attribute first (may be the directory itself)
+    skill_path = skill.get("path", "")
+    if skill_path:
+        p = Path(skill_path)
+        if p.is_dir():
+            return p
+        # path might be the SKILL.md file itself — parent is the skill dir
+        if p.is_file() and p.name == "SKILL.md":
+            return p.parent
+
+    # Try user skills directory
+    if user_skills_dir and user_skills_dir.exists():
+        candidate = user_skills_dir / skill_name
+        if candidate.is_dir():
+            return candidate
+
+    # Try project skills directory
+    if project_skills_dir and project_skills_dir.exists():
+        candidate = project_skills_dir / skill_name
+        if candidate.is_dir():
+            return candidate
+
+    return None
+
+
+def _get_supporting_files(skill_dir: Path) -> dict[str, str]:
+    """Scan a skill directory for supporting files alongside SKILL.md.
+
+    Returns dict of {relative_path: file_content} for all non-binary
+    files at the skill root and in recognised subdirectories.
+    """
+    supporting: dict[str, str] = {}
+
+    if not skill_dir.is_dir():
+        return supporting
+
+    for item in skill_dir.rglob("*"):
+        if not item.is_file():
+            continue
+
+        # Relative to skill dir
+        rel = item.relative_to(skill_dir)
+        parts = rel.parts
+
+        # Skip SKILL.md itself and hidden files
+        if rel.name == "SKILL.md" or rel.name.startswith("."):
+            continue
+
+        # Exclusion-based filtering:
+        # - Hidden dirs (.github, .vscode): skip
+        # - Known build/CI directories: skip
+        # - Root-level metadata files (README.md, LICENSE.md): skip
+        # - Everything else: include
+        top_dir = parts[0]
+        if top_dir.startswith("."):
+            continue
+        if top_dir in _SKIP_DIRS:
+            continue
+        if len(parts) == 1 and rel.name in _ROOT_SKIP_FILES:
+            continue
+
+        # Skip binary extensions
+        suffix = item.suffix.lower()
+        if suffix in _SKIP_EXTENSIONS:
+            continue
+
+        # Skip files over size limit
+        if item.stat().st_size > _MAX_SUPPORTING_FILE_SIZE:
+            continue
+
+        try:
+            content = item.read_text(encoding="utf-8")
+            supporting[str(rel)] = content
+        except (OSError, UnicodeDecodeError):
+            pass
+
+    return supporting
 
 
 def _read_skill_content(

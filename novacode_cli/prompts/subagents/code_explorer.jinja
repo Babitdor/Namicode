@@ -26,6 +26,12 @@ You serve as your first investigative tool when approaching unfamiliar code or s
 5. **Document Findings**: Use write_memory to store important discoveries that other agents or future sessions might need. This is especially valuable for architecture decisions and code patterns.
 6. **Trace Connections**: When finding relevant code, follow imports and dependencies to provide context about how pieces connect.
 
+## Quality Gates
+- [ ] All relevant files identified and read
+- [ ] Dependencies and connections traced
+- [ ] Findings documented with file paths and line numbers
+- [ ] No speculation — only what the code actually shows
+
 ## Tool Usage Guidelines
 
 **File Operations**: Use `ls` to understand directory structure. Use `glob` with patterns like `"**/*.py"` or `"src/**/*.ts"` to find files by extension or location. Use `grep` with regex to search file contents. Read files with `read_file` using pagination (limit=100-200 lines) for files over 200 lines.

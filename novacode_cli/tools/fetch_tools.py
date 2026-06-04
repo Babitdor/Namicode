@@ -195,9 +195,14 @@ def _convert_github_to_raw_url(url: str) -> tuple[str, bool]:
 @tool
 def fetch_url(
     url: str,
+    method: str = "GET",
     timeout: int = 30,
     max_retries: int = 3,
     headers: dict[str, str] | None = None,
+    data: str | dict | None = None,
+    params: dict[str, str] | None = None,
+    auth: tuple[str, str] | None = None,
+    cookies: dict[str, str] | None = None,
     follow_redirects: bool = True,
     max_content_size: int = 10 * 1024 * 1024,  # 10MB default
     verify_ssl: bool = True,
@@ -206,34 +211,32 @@ def fetch_url(
     summarize_max_length: int = 8000,
     focus_query: str | None = None,
 ) -> dict[str, Any]:
-    """Fetch content from a URL and convert HTML to markdown format.
+    """Make HTTP requests with retry logic and content conversion.
 
-    Enhanced version with retry logic, connection pooling, and better error handling.
+    For GET requests to HTML pages, content is converted to clean markdown.
+    For other methods or JSON responses, content is returned as parsed JSON or
+    raw text with appropriate formatting.
 
-    This tool fetches web page content and converts it to clean markdown text,
-    making it easy to read and process HTML content. After receiving the markdown,
-    you MUST synthesize the information into a natural, helpful response for the user.
-
-    GitHub URL Support:
+    GitHub URL Support (GET only):
     - Automatically converts GitHub blob URLs to raw content URLs
-    - Example: https://github.com/owner/repo/blob/main/file.py
-      -> https://raw.githubusercontent.com/owner/repo/main/file.py
     - Handles tree URLs via GitHub API for directory listings
     - Handles repo root URLs via GitHub API for repository info
 
     Args:
         url: The URL to fetch (must be a valid HTTP/HTTPS URL)
-            - Supports GitHub URLs (blob, tree, repo root)
-            - Supports raw.githubusercontent.com URLs directly
+        method: HTTP method - GET, POST, PUT, DELETE, PATCH, etc. (default: GET)
         timeout: Request timeout in seconds (default: 30)
         max_retries: Maximum number of retry attempts (default: 3)
         headers: Additional HTTP headers to include
+        data: Request body — a dict is sent as JSON, a string is sent as-is
+        params: URL query parameters as a dict
+        auth: Tuple of (username, password) for basic authentication
+        cookies: Dict of cookies to send with the request
         follow_redirects: Whether to follow HTTP redirects (default: True)
         max_content_size: Maximum content size in bytes (default: 10MB)
         verify_ssl: Whether to verify SSL certificates (default: True)
-        user_agent: User agent type - "browser" for real browser UA, "bot" for bot UA,
-                   or provide custom string (default: "browser")
-        summarize: Whether to summarize large content (default: False)
+        user_agent: "browser" for real browser UA, "bot" for bot UA, or custom string
+        summarize: Whether to summarize large content (default: False, GET only)
         summarize_max_length: Max length for summarized content (default: 8000 chars)
         focus_query: Optional query to focus summarization on relevant sections
 
@@ -241,38 +244,44 @@ def fetch_url(
         Dictionary containing:
         - success: Whether the request succeeded
         - url: The final URL after redirects
-        - original_url: The original URL (before GitHub conversion)
-        - github_url_converted: Whether the URL was converted from GitHub format
-        - markdown_content: The page content converted to markdown
         - status_code: HTTP status code
-        - content_length: Length of the markdown content in characters
-        - attempts: Number of attempts made (useful for debugging retries)
-        - final_url: The final URL after any redirects
-        - summarized: Whether content was summarized (if summarize=True)
+        - content: Page content (markdown for HTML, parsed JSON for JSON, text otherwise)
+        - content_type: MIME type of the response
+        - content_length: Length of the content in characters
+        - attempts: Number of attempts made
 
     IMPORTANT: After using this tool:
-    1. Read through the markdown content
-    2. Extract relevant information that answers the user's question
-    3. Synthesize this into a clear, natural language response
-    4. NEVER show the raw markdown to the user unless specifically requested
+    1. Read through the content and extract relevant information
+    2. Synthesize this into a clear, natural language response
+    3. NEVER show raw JSON or markdown to the user unless specifically requested
+
+    Example:
+        fetch_url("https://example.com")  # GET, HTML -> markdown
+        fetch_url("https://api.example.com/data", params={"q": "test"})  # GET, JSON -> parsed
+        fetch_url("https://api.example.com/users", method="POST", data={"name": "John"})
     """
-    # Convert GitHub URLs to raw content URLs for better fetching
-    original_url = url
-    url, was_github_url = _convert_github_to_raw_url(url)
-    is_github_api_url = url.startswith("https://api.github.com")
+    method = method.upper()
+
+    # Convert GitHub URLs to raw content URLs for better fetching (GET only)
+    was_github_url = False
+    is_github_api_url = False
+    if method == "GET":
+        url, was_github_url = _convert_github_to_raw_url(url)
+        is_github_api_url = url.startswith("https://api.github.com")
 
     # Build headers
-    request_headers = {
+    request_headers: dict[str, str] = {
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
         "Accept-Encoding": "gzip, deflate, br",
         "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
     }
 
     # For GitHub API URLs, use JSON Accept header
     if is_github_api_url:
         request_headers["Accept"] = "application/vnd.github.v3+json"
+    elif method != "GET":
+        request_headers["Accept"] = "application/json, text/plain, */*"
 
     # Set User-Agent
     if user_agent == "browser":
@@ -286,6 +295,10 @@ def fetch_url(
     if headers:
         request_headers.update(headers)
 
+    # Determine whether the response should be converted to markdown.
+    # Only GET requests to HTML pages get markdown conversion.
+    _convert_to_markdown = method == "GET"
+
     # Get session with connection pooling
     session = _get_fetch_session()
 
@@ -296,41 +309,70 @@ def fetch_url(
         attempts = attempt + 1
 
         try:
-            # Use separate timeouts for connect and read
-            response = session.get(
+            # Build request kwargs
+            req_kwargs: dict[str, Any] = {
+                "timeout": (timeout // 2, timeout),  # (connect timeout, read timeout)
+                "allow_redirects": follow_redirects,
+                "stream": True,
+                "verify": verify_ssl,
+            }
+
+            if params:
+                req_kwargs["params"] = params
+
+            if auth:
+                req_kwargs["auth"] = auth
+
+            if cookies:
+                req_kwargs["cookies"] = cookies
+
+            if data is not None:
+                if isinstance(data, dict):
+                    req_kwargs["json"] = data
+                    if "Content-Type" not in request_headers:
+                        request_headers["Content-Type"] = "application/json"
+                else:
+                    req_kwargs["data"] = data
+
+            response = session.request(
+                method,
                 url,
                 headers=request_headers,
-                timeout=(timeout // 2, timeout),  # (connect timeout, read timeout)
-                allow_redirects=follow_redirects,
-                stream=True,  # Stream to check content size before downloading all
-                verify=verify_ssl,
+                **req_kwargs,
             )
 
             # Check for HTTP errors (4xx, 5xx)
             if response.status_code >= 400:
                 status_code = response.status_code
-                # Retry on server errors (5xx)
-                if status_code >= 500 and attempt < max_retries - 1:
+                # Retry on server errors (5xx) and rate limiting (429)
+                if (status_code >= 500 or status_code == 429) and attempt < max_retries - 1:
                     last_error = requests.exceptions.HTTPError(f"HTTP {status_code}")
                     time.sleep(2 ** (attempt + 1))
                     continue
-                # Client errors (4xx) don't benefit from retry
+                # Try to get error details from response
+                try:
+                    error_content = response.json()
+                    error_msg = error_content.get(
+                        "message", error_content.get("error", str(error_content))
+                    )
+                except (ValueError, KeyError):
+                    error_msg = response.text[:500] if response.text else response.reason
                 return {
                     "success": False,
-                    "error": f"HTTP error {status_code}: {response.reason}",
+                    "error": f"HTTP error {status_code}: {error_msg}",
                     "url": url,
                     "status_code": status_code,
                     "attempts": attempts,
                 }
 
             # Check content size before downloading
-            content_length = response.headers.get("Content-Length")
-            if content_length and int(content_length) > max_content_size:
+            content_length_hdr = response.headers.get("Content-Length")
+            if content_length_hdr and int(content_length_hdr) > max_content_size:
                 return {
                     "success": False,
                     "error": (
                         f"Content too large: "
-                        f"{int(content_length) / 1024 / 1024:.2f}MB "
+                        f"{int(content_length_hdr) / 1024 / 1024:.2f}MB "
                         f"exceeds {max_content_size / 1024 / 1024:.2f}MB limit"
                     ),
                     "url": url,
@@ -338,34 +380,31 @@ def fetch_url(
                     "attempts": attempts,
                 }
 
-            # Check content type
+            # Check content type for HTML-only markdown conversion
             content_type = response.headers.get("Content-Type", "")
-            if content_type and not any(
+            is_html = any(
                 ct in content_type.lower()
-                for ct in ["text/html", "text/plain", "application/xhtml", "text/xml"]
-            ):
-                # For non-HTML content, return raw text with warning
+                for ct in ["text/html", "application/xhtml", "text/xml"]
+            )
+
+            # Only convert to markdown if it's a GET to HTML content
+            if _convert_to_markdown and not is_html and not is_github_api_url:
+                # Non-HTML content — return raw or JSON-formatted
+                raw_text = response.text
                 if "application/json" in content_type.lower():
-                    # JSON content - return as-is
-                    content = response.text
-                    return {
-                        "success": True,
-                        "url": str(response.url),
-                        "markdown_content": f"```json\n{content}\n```",
-                        "status_code": response.status_code,
-                        "content_length": len(content),
-                        "content_type": content_type,
-                        "attempts": attempts,
-                    }
-                # Other binary content
+                    try:
+                        parsed = json.loads(raw_text)
+                        content = f"```json\n{json.dumps(parsed, indent=2)}\n```"
+                    except (json.JSONDecodeError, ImportError):  # type: ignore
+                        content = raw_text
+                else:
+                    content = raw_text
                 return {
-                    "success": False,
-                    "error": (
-                        f"Unsupported content type: {content_type}. "
-                        "This tool is designed for HTML/text content."
-                    ),
-                    "url": url,
+                    "success": True,
+                    "url": str(response.url),
+                    "content": content,
                     "status_code": response.status_code,
+                    "content_length": len(content),
                     "content_type": content_type,
                     "attempts": attempts,
                 }
@@ -397,21 +436,22 @@ def fetch_url(
                 except (UnicodeDecodeError, UnicodeEncodeError):
                     pass  # Keep original content
 
-            # Convert HTML content to markdown
-            markdown_content = markdownify(content)
+            if _convert_to_markdown and is_html:
+                # Convert HTML content to markdown
+                content = markdownify(content)
 
-            # For GitHub API responses, format as JSON code block
-            if is_github_api_url:
+            # For JSON responses, format as JSON code block
+            if "application/json" in content_type.lower() or is_github_api_url:
                 try:
-                    parsed = json.loads(content)
-                    markdown_content = f"```json\n{json.dumps(parsed, indent=2)}\n```"
+                    parsed = json.loads(content) if isinstance(content, str) else content
+                    content = f"```json\n{json.dumps(parsed, indent=2)}\n```"
                 except (json.JSONDecodeError, ImportError):  # type: ignore
                     pass  # Keep original content
 
-            # Apply summarization if requested and content is large
-            if summarize and len(markdown_content) > summarize_max_length:
+            # Apply summarization if requested and content is markdown and large
+            if summarize and len(content) > summarize_max_length:
                 summary_result = _summarize_web_content(
-                    markdown_content,
+                    content,
                     max_length=summarize_max_length,
                     focus_query=focus_query,
                 )
@@ -419,33 +459,22 @@ def fetch_url(
                     return {
                         "success": True,
                         "url": str(response.url),
-                        "final_url": str(response.url),
-                        "original_url": original_url,
-                        "github_url_converted": was_github_url,
-                        "markdown_content": summary_result["summarized_content"],
+                        "content": summary_result["summarized_content"],
                         "status_code": response.status_code,
                         "content_length": summary_result["summarized_length"],
-                        "original_content_length": summary_result["original_length"],
-                        "compression_ratio": summary_result["compression_ratio"],
-                        "content_type": response.headers.get("Content-Type", ""),
+                        "content_type": content_type,
                         "attempts": attempts,
                         "summarized": True,
-                        "sections_analyzed": summary_result["sections_analyzed"],
-                        "sections_included": summary_result["sections_included"],
                     }
 
             return {
                 "success": True,
                 "url": str(response.url),
-                "final_url": str(response.url),
-                "original_url": original_url,
-                "github_url_converted": was_github_url,
-                "markdown_content": markdown_content,
+                "content": content,
                 "status_code": response.status_code,
-                "content_length": len(markdown_content),
-                "content_type": response.headers.get("Content-Type", ""),
+                "content_length": len(content),
+                "content_type": content_type,
                 "attempts": attempts,
-                "summarized": False,
             }
 
         except requests.exceptions.Timeout as e:

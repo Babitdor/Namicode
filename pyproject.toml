@@ -55,15 +55,10 @@ dependencies = [
     # Format conversion and code formatting tools
     "pyyaml>=6.0",
     "tomli-w>=1.0.0",
-    "black>=24.0.0",
     # Web search (no API key required)
     "ddgs>=7.0.0",
     # Image generation (Replicate API)
     "replicate>=0.25.0",
-    # Code quality tools (linting, formatting, type checking)
-    "ruff>=0.8.0",
-    "mypy>=1.13.0",
-    "deepagents",
     "browser-use>=0.1.0",
     "playwright>=1.40.0",
     "graphifyy>=0.4.0",
@@ -172,6 +167,9 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "pytest-timeout>=2.3",
+    "black>=24.0.0",
+    "ruff>=0.8.0",
+    "mypy>=1.13.0",
 ]
 
 [tool.mypy]

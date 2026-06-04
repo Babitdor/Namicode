@@ -561,6 +561,31 @@ def create_agent_with_config(
     agent_dir = settings.get_agent_dir(assistant_id)
     if agent_dir:
         allowed_prefixes.append(str(agent_dir))
+        # Auto-create simple memory structure on first use so the agent has
+        # a memory file to read/write without needing the (now-removed)
+        # create_memory_structure tool.
+        _agent_md = agent_dir / "agent.md"
+        if not _agent_md.exists():
+            agent_dir.mkdir(parents=True, exist_ok=True)
+            _agent_md.write_text(
+                """# Agent Memory
+
+This file stores your preferences and context that persist across sessions.
+
+## Communication Style
+- [Your preferred communication style]
+
+## Coding Preferences
+- [Your coding preferences]
+
+## Project Context
+- [Project-specific notes]
+
+## Workflows
+- [Common workflows you use]
+""",
+                encoding="utf-8",
+            )
 
     # CONDITIONAL SETUP: Local vs Remote Sandbox
     if sandbox is None:

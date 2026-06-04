@@ -844,9 +844,16 @@ def _parse_github_url(url: str) -> tuple[str, str, str, str] | None:
     return owner, repo, branch, path
 
 
-_SUPPORTING_DIRS = {"scripts", "assets", "examples", "references", "prompts", "templates", "data"}
+# Known non-content directories to skip when fetching skill files
+# (hidden dirs starting with . are always skipped regardless)
+_SKIP_DIRS = {".git", ".github", ".vscode", "__pycache__", "node_modules", ".venv", "dist", "build", ".gitlab"}
+# File extensions to skip — binary or archive formats
 _SKIP_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".pdf", ".zip", ".tar", ".gz", ".exe", ".bin"}
-_MAX_SUPPORTING_FILE_SIZE = 100_000  # 100 KB — skip large blobs
+# Max size for supporting files (100 KB)
+_MAX_SUPPORTING_FILE_SIZE = 100_000  # 100 KB
+# Root-level metadata files that belong to the repo, not the skill content
+_ROOT_SKIP_FILES = {"README.md", "LICENSE.md", "CONTRIBUTING.md", "CODE_OF_CONDUCT.md",
+                    "CHANGELOG.md", "SECURITY.md", ".gitignore"}
 
 
 def _fetch_skill_from_github(
@@ -890,8 +897,11 @@ def _fetch_skill_from_github(
     def _fetch_supporting_files(skill_md_path: str, tree_items: list[dict]) -> dict[str, str]:
         """Fetch supporting files from the same directory as SKILL.md.
 
-        Scans for files in known supporting subdirectories (scripts/, assets/, etc.)
-        within the skill's parent directory, then fetches their content.
+        Fetches two categories of files:
+        1. Files sitting *alongside* SKILL.md at the skill's root (e.g.
+           LANGUAGE.md, HTML-REPORT.md, CONTEXT.md, etc.)
+        2. Files inside known supporting subdirectories (scripts/, assets/,
+           references/, examples/, templates/, prompts/, data/)
 
         Args:
             skill_md_path: Path to the found SKILL.md (e.g. "my-skill/SKILL.md")
@@ -925,9 +935,23 @@ def _fetch_skill_from_github(
             if rel_path == "SKILL.md" or rel_path.startswith("."):
                 continue
 
-            # Only include files in known supporting directories
+            # Determine whether to include this file:
+            # - Hidden dirs (.github, .vscode, etc.): skip
+            # - Known build/CI directories: skip
+            # - Root-level metadata files (README.md, LICENSE.md): skip
+            # - Everything else: include
             top_level = rel_path.split("/")[0]
-            if top_level not in _SUPPORTING_DIRS:
+
+            # Skip hidden directories
+            if top_level.startswith("."):
+                continue
+
+            # Skip known non-content directories
+            if top_level in _SKIP_DIRS:
+                continue
+
+            # Root-level path components
+            if "/" not in rel_path and rel_path in _ROOT_SKIP_FILES:
                 continue
 
             # Skip binary/large file extensions

@@ -1,0 +1,834 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Architecture review — Nova-Code CLI</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script type="module">
+    import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+    mermaid.initialize({ startOnLoad: true, theme: "neutral", securityLevel: "loose" });
+  </script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Inter:wght@400;500;600;700&display=swap');
+
+    body { font-family: 'Inter', sans-serif; }
+    h1, h2, h3, .serif { font-family: 'DM Serif Display', serif; }
+
+    .seam { stroke-dasharray: 4 4; }
+    .leak { stroke: #dc2626; stroke-width: 2; }
+    .deep-bg { background: linear-gradient(135deg, #0f172a, #1e293b); }
+
+    .card {
+      border-radius: 16px;
+      border: 1px solid #e2e8f0;
+      transition: box-shadow 0.2s;
+    }
+    .card:hover { box-shadow: 0 8px 30px rgba(0,0,0,0.08); }
+
+    .badge-strong { background: #059669; color: white; }
+    .badge-explore { background: #d97706; color: white; }
+    .badge-speculative { background: #64748b; color: white; }
+
+    .module-box {
+      border: 2px solid #334155;
+      border-radius: 8px;
+      padding: 8px 12px;
+      background: #f8fafc;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-weight: 600;
+    }
+    .module-box.deep {
+      border: 3px solid #0f172a;
+      background: #1e293b;
+      color: #e2e8f0;
+    }
+    .module-box.shallow {
+      border: 1.5px solid #94a3b8;
+      background: #f1f5f9;
+      color: #64748b;
+    }
+
+    .arrow-line {
+      stroke: #94a3b8;
+      stroke-width: 1.5;
+      marker-end: url(#arrowhead);
+    }
+    .arrow-line.leak {
+      stroke: #dc2626;
+      stroke-width: 2;
+      marker-end: url(#arrowhead-red);
+    }
+
+    .diagram-frame {
+      position: relative;
+      height: 320px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .mass-bar { border-radius: 4px; transition: height 0.3s; }
+    .mass-interface { background: #6366f1; }
+    .mass-impl { background: #1e293b; }
+
+    .annotation {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      fill: #64748b;
+    }
+
+    .warning-box {
+      background: #fffbeb;
+      border: 1px solid #fbbf24;
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body class="bg-stone-50 text-slate-900">
+  <main class="max-w-5xl mx-auto px-6 py-12 space-y-16">
+
+    <!-- ═══ HEADER ═══ -->
+    <header class="space-y-4">
+      <div class="flex items-center justify-between">
+        <h1 class="text-4xl serif text-slate-900">Nova-Code CLI · <span class="text-slate-500">Architecture Review</span></h1>
+        <time class="text-sm text-slate-400 font-mono">2026-04-05</time>
+      </div>
+
+      <!-- Legend -->
+      <div class="flex flex-wrap gap-6 text-xs text-slate-500">
+        <span class="flex items-center gap-2">
+          <span class="inline-block w-4 h-4 border-2 border-slate-600 bg-slate-100 rounded"></span> Module
+        </span>
+        <span class="flex items-center gap-2">
+          <span class="inline-block w-6 h-0 border-t-2 border-dashed border-slate-400"></span> Seam
+        </span>
+        <span class="flex items-center gap-2">
+          <svg width="24" height="12" viewBox="0 0 24 12"><line x1="0" y1="6" x2="20" y2="6" stroke="#dc2626" stroke-width="2"/><polygon points="20,2 24,6 20,10" fill="#dc2626"/></svg>
+          Leakage
+        </span>
+        <span class="flex items-center gap-2">
+          <span class="inline-block w-4 h-4 border-2 border-slate-900 bg-slate-800 rounded"></span> Deep module
+        </span>
+        <span class="flex items-center gap-2">
+          <span class="inline-block w-12 h-3 rounded bg-indigo-500"></span> Interface surface
+        </span>
+        <span class="flex items-center gap-2">
+          <span class="inline-block w-12 h-3 rounded bg-slate-800"></span> Implementation
+        </span>
+      </div>
+    </header>
+
+    <!-- ═══ CANDIDATES ═══ -->
+    <section id="candidates" class="space-y-14">
+
+      <!-- ─── CANDIDATE 1: Command Registry ─── -->
+      <article id="candidate-command-registry" class="card bg-white p-8 space-y-6">
+        <div class="flex items-start justify-between gap-4">
+          <h2 class="text-2xl serif">Collapse the command dispatcher</h2>
+          <div class="flex gap-2 shrink-0">
+            <span class="badge-strong text-xs font-semibold px-3 py-1 rounded-full">Strong</span>
+            <span class="text-xs font-mono px-3 py-1 rounded-full border border-slate-200 text-slate-500">in-process</span>
+          </div>
+        </div>
+
+        <!-- Files -->
+        <div class="space-y-1">
+          <p class="text-xs uppercase tracking-wider text-slate-400 font-semibold">Files</p>
+          <p class="font-mono text-sm text-slate-600">
+            <code class="bg-slate-100 px-1.5 py-0.5 rounded">commands/commands.py</code> (1,122 lines) ·
+            <code class="bg-slate-100 px-1.5 py-0.5 rounded">commands/__init__.py</code> (3 lines) ·
+            22 handler files in <code class="bg-slate-100 px-1.5 py-0.5 rounded">commands/</code>
+          </p>
+        </div>
+
+        <!-- Before / After Diagram -->
+        <div class="grid grid-cols-2 gap-6">
+          <!-- BEFORE -->
+          <div>
+            <p class="text-xs uppercase tracking-wider text-slate-400 mb-3 font-semibold">Before — 40 branches, no registry</p>
+            <div class="diagram-frame rounded-lg border border-slate-200 bg-white p-4">
+              <svg viewBox="0 0 240 280" width="240" height="280" class="max-w-full">
+                <defs>
+                  <marker id="arrow-branch" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 Z" fill="#94a3b8"/></marker>
+                  <marker id="arrow-branch-r" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 Z" fill="#dc2626"/></marker>
+                </defs>
+
+                <!-- parse_args box -->
+                <rect x="60" y="0" width="120" height="30" rx="6" fill="#f8fafc" stroke="#334155" stroke-width="1.5"/>
+                <text x="120" y="20" text-anchor="middle" font-size="10" font-weight="600" fill="#334155">parse_args</text>
+
+                <!-- Arrow down to handle_command -->
+                <line x1="120" y1="30" x2="120" y2="55" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow-branch)"/>
+
+                <!-- handle_command big box -->
+                <rect x="10" y="55" width="220" height="80" rx="8" fill="#fff7ed" stroke="#d97706" stroke-width="2"/>
+                <text x="120" y="75" text-anchor="middle" font-size="11" font-weight="700" fill="#d97706">handle_command()</text>
+                <text x="120" y="93" text-anchor="middle" font-size="9" fill="#a16207">if cmd == "help":</text>
+                <text x="120" y="107" text-anchor="middle" font-size="9" fill="#a16207">if cmd == "model":</text>
+                <text x="120" y="121" text-anchor="middle" font-size="9" fill="#a16207">if cmd == "skills":</text>
+                <text x="120" y="133" text-anchor="middle" font-size="8" fill="#a16207">... 37 more branches</text>
+
+                <!-- Branch arms -->
+                <line x1="30" y1="135" x2="15" y2="170" stroke="#dc2626" stroke-width="1.5" class="leak"/>
+                <line x1="120" y1="135" x2="120" y2="170" stroke="#94a3b8" stroke-width="1.5"/>
+                <line x1="210" y1="135" x2="225" y2="170" stroke="#94a3b8" stroke-width="1.5"/>
+
+                <!-- Handler boxes (3 of many) -->
+                <rect x="0" y="170" width="80" height="28" rx="4" fill="#f8fafc" stroke="#94a3b8" stroke-width="1" class="shallow"/>
+                <text x="40" y="188" text-anchor="middle" font-size="8" fill="#64748b">help</text>
+
+                <rect x="100" y="170" width="60" height="28" rx="4" fill="#f8fafc" stroke="#94a3b8" stroke-width="1" class="shallow"/>
+                <text x="130" y="188" text-anchor="middle" font-size="8" fill="#64748b">model</text>
+
+                <rect x="180" y="170" width="55" height="28" rx="4" fill="#f8fafc" stroke="#94a3b8" stroke-width="1" class="shallow"/>
+                <text x="207" y="188" text-anchor="middle" font-size="8" fill="#64748b">skills</text>
+
+                <!-- 9 params callout -->
+                <text x="120" y="245" text-anchor="middle" font-size="9" fill="#dc2626">9 params → poor cohesion</text>
+                <text x="120" y="260" text-anchor="middle" font-size="9" fill="#dc2626">try/except × 40 (duplicated)</text>
+
+                <!-- Leakage annotation -->
+                <line x1="65" y1="160" x2="65" y2="170" stroke="#dc2626" stroke-width="1.5" class="leak"/>
+                <text x="55" y="158" text-anchor="end" font-size="8" fill="#dc2626">leak</text>
+              </svg>
+            </div>
+          </div>
+
+          <!-- AFTER -->
+          <div>
+            <p class="text-xs uppercase tracking-wider text-slate-400 mb-3 font-semibold">After — command registry, one seam</p>
+            <div class="diagram-frame rounded-lg border border-slate-200 bg-white p-4">
+              <svg viewBox="0 0 240 280" width="240" height="280" class="max-w-full">
+                <defs>
+                  <marker id="arrow-a1" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 Z" fill="#94a3b8"/></marker>
+                </defs>
+
+                <!-- parse_args -->
+                <rect x="60" y="0" width="120" height="30" rx="6" fill="#f8fafc" stroke="#334155" stroke-width="1.5"/>
+                <text x="120" y="20" text-anchor="middle" font-size="10" font-weight="600" fill="#334155">parse_args</text>
+
+                <line x1="120" y1="30" x2="120" y2="50" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow-a1)"/>
+
+                <!-- Registry — the deep module -->
+                <rect x="20" y="50" width="200" height="70" rx="10" class="deep-bg"/>
+                <text x="120" y="72" text-anchor="middle" font-size="11" font-weight="700" fill="#e2e8f0">CommandRegistry</text>
+                <text x="120" y="90" text-anchor="middle" font-size="9" fill="#94a3b8">{"help": help_fn, "model": model_fn, ...}</text>
+                <text x="120" y="105" text-anchor="middle" font-size="9" fill="#94a3b8">register() · dispatch() · list()</text>
+
+                <!-- Seam — dashed line -->
+                <line x1="20" y1="120" x2="220" y2="120" stroke="#94a3b8" stroke-width="1.5" class="seam"/>
+
+                <!-- Seam label -->
+                <text x="230" y="117" font-size="8" fill="#64748b">seam</text>
+
+                <!-- Handler boxes behind the seam -->
+                <rect x="0" y="130" width="70" height="25" rx="4" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="1" opacity="0.7"/>
+                <text x="35" y="146" text-anchor="middle" font-size="7" fill="#64748b" opacity="0.7">help</text>
+
+                <rect x="80" y="130" width="60" height="25" rx="4" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="1" opacity="0.7"/>
+                <text x="110" y="146" text-anchor="middle" font-size="7" fill="#64748b" opacity="0.7">model</text>
+
+                <rect x="150" y="130" width="50" height="25" rx="4" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="1" opacity="0.7"/>
+                <text x="175" y="146" text-anchor="middle" font-size="7" fill="#64748b" opacity="0.7">skills</text>
+
+                <rect x="205" y="130" width="30" height="25" rx="4" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="1" opacity="0.7"/>
+                <text x="220" y="146" text-anchor="middle" font-size="7" fill="#64748b" opacity="0.7">...</text>
+
+                <!-- Leverage callout -->
+                <text x="120" y="195" text-anchor="middle" font-size="9" fill="#059669">Register once, dispatch generically</text>
+                <text x="120" y="210" text-anchor="middle" font-size="9" fill="#059669">1 try/except → 1 error boundary</text>
+                <text x="120" y="225" text-anchor="middle" font-size="9" fill="#059669">New cmd = 1 line: register("x", fn)</text>
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        <!-- Problem / Solution / Wins in one row -->
+        <div class="grid grid-cols-3 gap-4 text-sm">
+          <div>
+            <p class="text-xs uppercase tracking-wider text-slate-400 font-semibold mb-1">Problem</p>
+            <p class="text-slate-700">40 ad-hoc <code class="text-xs bg-slate-100 px-1 rounded">if cmd ==</code> branches, each with duplicated try/except; 9 parameters; adding a command touches 3 places.</p>
+          </div>
+          <div>
+            <p class="text-xs uppercase tracking-wider text-slate-400 font-semibold mb-1">Solution</p>
+            <p class="text-slate-700">A <code class="text-xs bg-slate-100 px-1 rounded">CommandRegistry</code> dict mapping command name to handler, registered in <code class="text-xs bg-slate-100 px-1 rounded">commands/__init__.py</code>.</p>
+          </div>
+          <div>
+            <p class="text-xs uppercase tracking-wider text-slate-400 font-semibold mb-1">Wins</p>
+            <ul class="space-y-0.5 text-slate-700 list-disc list-inside">
+              <li>Locality: bugs concentrate in registry</li>
+              <li>Leverage: 1 error boundary, N handlers</li>
+              <li>Interface shrinks: 9 params → 2</li>
+              <li>Seam visible: register() is one call</li>
+              <li>Delete 1,100 lines of dispatcher</li>
+            </ul>
+          </div>
+        </div>
+      </article>
+
+      <!-- ─── CANDIDATE 2: Context Management Consolidation ─── -->
+      <article id="candidate-context" class="card bg-white p-8 space-y-6">
+        <div class="flex items-start justify-between gap-4">
+          <h2 class="text-2xl serif">Consolidate context window management</h2>
+          <div class="flex gap-2 shrink-0">
+            <span class="badge-strong text-xs font-semibold px-3 py-1 rounded-full">Strong</span>
+            <span class="text-xs font-mono px-3 py-1 rounded-full border border-slate-200 text-slate-500">in-process</span>
+          </div>
+        </div>
+
+        <div class="space-y-1">
+          <p class="text-xs uppercase tracking-wider text-slate-400 font-semibold">Files</p>
+          <p class="font-mono text-sm text-slate-600">
+            <code class="bg-slate-100 px-1.5 py-0.5 rounded">context/context_manager.py</code> ·
+            <code class="bg-slate-100 px-1.5 py-0.5 rounded">utils/context_budget.py</code> ·
+            <code class="bg-slate-100 px-1.5 py-0.5 rounded">utils/context_growth_tracker.py</code> ·
+            <code class="bg-slate-100 px-1.5 py-0.5 rounded">utils/context_eviction.py</code> ·
+            <code class="bg-slate-100 px-1.5 py-0.5 rounded">utils/context_tracking.py</code> ·
+            <code class="bg-slate-100 px-1.5 py-0.5 rounded">utils/context_optimization.py</code> ·
+            <code class="bg-slate-100 px-1.5 py-0.5 rounded">utils/conversation_context.py</code> ·
+            <code class="bg-slate-100 px-1.5 py-0.5 rounded">utils/dynamic_context.py</code> ·
+            <code class="bg-slate-100 px-1.5 py-0.5 rounded">utils/model_config.py</code>
+          </p>
+          <p class="text-xs text-slate-400 font-mono">9 files · ~2,794 lines · 2 packages</p>
+        </div>
+
+        <!-- Mass diagram — interface as wide as implementation -->
+        <div class="grid grid-cols-2 gap-6">
+          <!-- BEFORE -->
+          <div>
+            <p class="text-xs uppercase tracking-wider text-slate-400 mb-3 font-semibold">Before — 9 shallow files, no locality</p>
+            <div class="rounded-lg border border-slate-200 bg-white p-4">
+              <svg viewBox="0 0 230 300" width="230" height="300" class="mx-auto">
+                <!-- Each file shown as interface+impl pair -->
+                <g transform="translate(0, 0)">
+                  <rect x="0" y="0" width="200" height="20" rx="2" class="mass-bar mass-interface" opacity="0.6"/>
+                  <rect x="0" y="22" width="200" height="16" rx="2" class="mass-bar mass-impl" opacity="0.3"/>
+                  <text x="100" y="13" text-anchor="middle" font-size="8" fill="white" font-weight="600">context_manager (582)</text>
+                </g>
+                <g transform="translate(0, 45)">
+                  <rect x="0" y="0" width="160" height="18" rx="2" class="mass-bar mass-interface" opacity="0.6"/>
+                  <rect x="0" y="20" width="160" height="14" rx="2" class="mass-bar mass-impl" opacity="0.3"/>
+                  <text x="80" y="12" text-anchor="middle" font-size="7" fill="white" font-weight="600">context_budget (146)</text>
+                </g>
+                <g transform="translate(0, 85)">
+                  <rect x="0" y="0" width="200" height="20" rx="2" class="mass-bar mass-interface" opacity="0.6"/>
+                  <rect x="0" y="22" width="200" height="18" rx="2" class="mass-bar mass-impl" opacity="0.3"/>
+                  <text x="100" y="13" text-anchor="middle" font-size="7" fill="white" font-weight="600">context_growth_tracker (331)</text>
+                </g>
+                <g transform="translate(0, 130)">
+                  <rect x="0" y="0" width="195" height="20" rx="2" class="mass-bar mass-interface" opacity="0.6"/>
+                  <rect x="0" y="22" width="195" height="16" rx="2" class="mass-bar mass-impl" opacity="0.3"/>
+                  <text x="97" y="13" text-anchor="middle" font-size="7" fill="white" font-weight="600">context_eviction (296)</text>
+                </g>
+                <g transform="translate(0, 172)">
+                  <rect x="0" y="0" width="120" height="16" rx="2" class="mass-bar mass-interface" opacity="0.6"/>
+                  <rect x="0" y="18" width="120" height="12" rx="2" class="mass-bar mass-impl" opacity="0.3"/>
+                  <text x="60" y="11" text-anchor="middle" font-size="7" fill="white" font-weight="600">tracking (116)</text>
+                </g>
+                <g transform="translate(0, 210)">
+                  <rect x="0" y="0" width="215" height="22" rx="2" class="mass-bar mass-interface" opacity="0.6"/>
+                  <rect x="0" y="24" width="215" height="16" rx="2" class="mass-bar mass-impl" opacity="0.3"/>
+                  <text x="107" y="14" text-anchor="middle" font-size="7" fill="white" font-weight="600">dynamic_context (371)</text>
+                </g>
+                <g transform="translate(0, 258)">
+                  <rect x="0" y="0" width="195" height="20" rx="2" class="mass-bar mass-interface" opacity="0.6"/>
+                  <rect x="0" y="22" width="195" height="16" rx="2" class="mass-bar mass-impl" opacity="0.3"/>
+                  <text x="97" y="13" text-anchor="middle" font-size="7" fill="white" font-weight="600">model_config (576)</text>
+                </g>
+
+                <text x="110" y="292" text-anchor="middle" font-size="8" fill="#dc2626">Interface ≈ Implementation (shallow)</text>
+              </svg>
+            </div>
+          </div>
+
+          <!-- AFTER -->
+          <div>
+            <p class="text-xs uppercase tracking-wider text-slate-400 mb-3 font-semibold">After — 1 deep module, 1 interface</p>
+            <div class="rounded-lg border border-slate-200 bg-white p-4">
+              <svg viewBox="0 0 230 300" width="230" height="300" class="mx-auto">
+                <!-- Deep module: big implementation, small interface -->
+                <rect x="10" y="0" width="200" height="30" rx="4" class="deep-bg"/>
+                <text x="110" y="19" text-anchor="middle" font-size="12" font-weight="700" fill="#e2e8f0">ContextManager</text>
+
+                <text x="10" y="48" class="annotation">interface</text>
+                <rect x="10" y="53" width="200" height="22" rx="3" fill="#6366f1" opacity="0.8"/>
+                <text x="110" y="68" text-anchor="middle" font-size="8" fill="white">track() · budget() · evict() · model_config()</text>
+
+                <line x1="40" y1="75" x2="40" y2="95" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow-a1)"/>
+
+                <text x="10" y="90" class="annotation">implementation</text>
+                <rect x="10" y="95" width="200" height="180" rx="6" fill="#1e293b" opacity="0.15" stroke="#1e293b" stroke-width="2" stroke-dasharray="4 4"/>
+                <text x="110" y="115" text-anchor="middle" font-size="8" fill="#475569">Token counting</text>
+                <text x="110" y="133" text-anchor="middle" font-size="8" fill="#475569">Growth tracking</text>
+                <text x="110" y="151" text-anchor="middle" font-size="8" fill="#475569">Eviction strategies</text>
+                <text x="110" y="169" text-anchor="middle" font-size="8" fill="#475569">Budget calculation</text>
+                <text x="110" y="187" text-anchor="middle" font-size="8" fill="#475569">Model config lookup</text>
+                <text x="110" y="205" text-anchor="middle" font-size="8" fill="#475569">Dynamic context detection</text>
+                <text x="110" y="223" text-anchor="middle" font-size="8" fill="#475569">Conversation context digest</text>
+                <text x="110" y="245" text-anchor="middle" font-size="8" fill="#475569">Optimisation/integration</text>
+
+                <line x1="10" y1="275" x2="210" y2="275" stroke="#94a3b8" stroke-width="1.5" class="seam"/>
+                <text x="220" y="273" font-size="8" fill="#64748b">seam</text>
+
+                <text x="110" y="293" text-anchor="middle" font-size="8" fill="#059669">Interface small (4 methods) → deep</text>
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-3 gap-4 text-sm">
+          <div>
+            <p class="text-xs uppercase tracking-wider text-slate-400 font-semibold mb-1">Problem</p>
+            <p class="text-slate-700">9 files across 2 packages, 2,794 lines. Understanding "how does context work?" requires reading 5+ files. Cross-package coupling between <code class="text-xs bg-slate-100 px-1 rounded">context/</code> and <code class="text-xs bg-slate-100 px-1 rounded">utils/</code> is arbitrary.</p>
+          </div>
+          <div>
+            <p class="text-xs uppercase tracking-wider text-slate-400 font-semibold mb-1">Solution</p>
+            <p class="text-slate-700">Consolidate into <code class="text-xs bg-slate-100 px-1 rounded">context/</code> package with one public <code class="text-xs bg-slate-100 px-1 rounded">ContextManager</code> class. Internal modules become private to the package.</p>
+          </div>
+          <div>
+            <p class="text-xs uppercase tracking-wider text-slate-400 font-semibold mb-1">Wins</p>
+            <ul class="space-y-0.5 text-slate-700 list-disc list-inside">
+              <li>Locality: all context logic in one package</li>
+              <li>Interface: 4 methods replace 9 import paths</li>
+              <li>Delete ~2,000 lines of cross-package wiring</li>
+              <li>One test surface for context behaviour</li>
+            </ul>
+          </div>
+        </div>
+      </article>
+
+      <!-- ─── CANDIDATE 3: App Orchestrator ─── -->
+      <article id="candidate-app" class="card bg-white p-8 space-y-6">
+        <div class="flex items-start justify-between gap-4">
+          <h2 class="text-2xl serif">Extract an application orchestrator from main.py</h2>
+          <div class="flex gap-2 shrink-0">
+            <span class="badge-explore text-xs font-semibold px-3 py-1 rounded-full">Worth exploring</span>
+            <span class="text-xs font-mono px-3 py-1 rounded-full border border-slate-200 text-slate-500">in-process</span>
+          </div>
+        </div>
+
+        <div class="space-y-1">
+          <p class="text-xs uppercase tracking-wider text-slate-400 font-semibold">Files</p>
+          <p class="font-mono text-sm text-slate-600">
+            <code class="bg-slate-100 px-1.5 py-0.5 rounded">main.py</code> (2,399 lines) ·
+            <code class="bg-slate-100 px-1.5 py-0.5 rounded">cli_session.py</code> (336 lines)
+          </p>
+        </div>
+
+        <!-- Mermaid call-flow diagram -->
+        <div class="grid grid-cols-2 gap-6">
+          <div>
+            <p class="text-xs uppercase tracking-wider text-slate-400 mb-3 font-semibold">Before — main.py as hub</p>
+            <div class="rounded-lg border border-slate-200 bg-white p-4">
+              <pre class="mermaid">
+                flowchart TB
+                  main["main.py / run_cli_session"]
+                  parse["parse_args()"]
+                  agent["core_agent.py"]
+                  input["input.py"]
+                  ui["ui/*"]
+                  commands["commands.py"]
+                  session["session/*"]
+                  tracking["tracking/*"]
+                  integrations["integrations/*"]
+                  mcp["mcp/*"]
+                  skills["skills/*"]
+                  config["config/*"]
+                  tools["tools/*"]
+
+                  parse --> main
+                  main --> agent
+                  main --> input
+                  main --> ui
+                  main --> commands
+                  main --> session
+                  main --> tracking
+                  main --> integrations
+                  main --> mcp
+                  main --> skills
+                  main --> config
+                  main --> tools
+
+                  style main stroke:#dc2626,stroke-width:3px,fill:#fef2f2
+                  style parse stroke:#94a3b8
+              </pre>
+            </div>
+          </div>
+          <div>
+            <p class="text-xs uppercase tracking-wider text-slate-400 mb-3 font-semibold">After — App class as seam</p>
+            <div class="rounded-lg border border-slate-200 bg-white p-4">
+              <pre class="mermaid">
+                flowchart TB
+                  parse["parse_args()"]
+                  app["NovaApp(wire_components)"]
+                  main["main.py (thin entry)"]
+                  agent["core_agent"]
+                  input["input"]
+                  ui["ui"]
+                  commands["Commands → via registry"]
+                  session["session"]
+                  tracking["tracking"]
+                  integrations["integrations"]
+                  mcp["mcp"]
+                  skills["skills"]
+                  tools["tools"]
+
+                  parse --> app
+                  app --> main
+                  main --> app
+                  app --> agent
+                  app --> input
+                  app --> ui
+                  app --> commands
+                  app --> session
+                  app --> tracking
+                  app --> integrations
+                  app --> mcp
+                  app --> skills
+                  app --> tools
+
+                  style main stroke:#059669,stroke-width:2px,fill:#f0fdf4
+                  style app stroke:#0f172a,stroke-width:3px,fill:#1e293b,color:#e2e8f0
+                  style parse stroke:#94a3b8
+              </pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-3 gap-4 text-sm">
+          <div>
+            <p class="text-xs uppercase tracking-wider text-slate-400 font-semibold mb-1">Problem</p>
+            <p class="text-slate-700"><code class="text-xs bg-slate-100 px-1 rounded">main.py</code> imports from ~25 modules, contains argument parsing AND CLI loop AND wiring. Changing any component requires touching this file. No encapsulation — modules can't be tested independently of <code class="text-xs bg-slate-100 px-1 rounded">main.py</code>'s orchestration.</p>
+          </div>
+          <div>
+            <p class="text-xs uppercase tracking-wider text-slate-400 font-semibold mb-1">Solution</p>
+            <p class="text-slate-700">Extract an <code class="text-xs bg-slate-100 px-1 rounded">NovaApp</code> class that owns component wiring. <code class="text-xs bg-slate-100 px-1 rounded">main.py</code> shrinks to argument parsing + <code class="text-xs bg-slate-100 px-1 rounded">NovaApp().run()</code>.</p>
+          </div>
+          <div>
+            <p class="text-xs uppercase tracking-wider text-slate-400 font-semibold mb-1">Wins</p>
+            <ul class="space-y-0.5 text-slate-700 list-disc list-inside">
+              <li>Seam at App boundary</li>
+              <li>Testable in isolation (start with mock components)</li>
+              <li>main.py shrinks from 2,399 to ~100 lines</li>
+              <li>Clean shutdown lifecycle</li>
+              <li>Risky: requires touching every import path</li>
+            </ul>
+          </div>
+        </div>
+      </article>
+
+      <!-- ─── CANDIDATE 4: SessionState split ─── -->
+      <article id="candidate-sessionstate" class="card bg-white p-8 space-y-6">
+        <div class="flex items-start justify-between gap-4">
+          <h2 class="text-2xl serif">Split SessionState into focused state holders</h2>
+          <div class="flex gap-2 shrink-0">
+            <span class="badge-explore text-xs font-semibold px-3 py-1 rounded-full">Worth exploring</span>
+            <span class="text-xs font-mono px-3 py-1 rounded-full border border-slate-200 text-slate-500">in-process</span>
+          </div>
+        </div>
+
+        <div class="space-y-1">
+          <p class="text-xs uppercase tracking-wider text-slate-400 font-semibold">Files</p>
+          <p class="font-mono text-sm text-slate-600">
+            <code class="bg-slate-100 px-1.5 py-0.5 rounded">states/Session.py</code> (299 lines)
+          </p>
+        </div>
+
+        <!-- Cross-section diagram -->
+        <div class="grid grid-cols-2 gap-6">
+          <!-- BEFORE: stacked thin layers -->
+          <div>
+            <p class="text-xs uppercase tracking-wider text-slate-400 mb-3 font-semibold">Before — one dataclass, 25+ fields</p>
+            <div class="rounded-lg border border-slate-200 bg-white p-4">
+              <svg viewBox="0 0 220 320" width="220" height="320" class="mx-auto">
+                <rect x="10" y="0" width="200" height="22" rx="2" fill="#fef2f2" stroke="#dc2626" stroke-width="1"/>
+                <text x="110" y="14" text-anchor="middle" font-size="8" fill="#dc2626" font-weight="600">auto_approve · no_splash</text>
+
+                <rect x="10" y="26" width="200" height="22" rx="2" fill="#fef2f2" stroke="#dc2626" stroke-width="1"/>
+                <text x="110" y="40" text-anchor="middle" font-size="8" fill="#dc2626" font-weight="600">steering_instructions</text>
+
+                <rect x="10" y="52" width="200" height="22" rx="2" fill="#fef2f2" stroke="#dc2626" stroke-width="1"/>
+                <text x="110" y="66" text-anchor="middle" font-size="8" fill="#dc2626" font-weight="600">background_ralph_tasks</text>
+
+                <rect x="10" y="78" width="200" height="22" rx="2" fill="#fef2f2" stroke="#dc2626" stroke-width="1"/>
+                <text x="110" y="92" text-anchor="middle" font-size="8" fill="#dc2626" font-weight="600">trello_server</text>
+
+                <rect x="10" y="104" width="200" height="22" rx="2" fill="#fef2f2" stroke="#dc2626" stroke-width="1"/>
+                <text x="110" y="118" text-anchor="middle" font-size="8" fill="#dc2626" font-weight="600">_remote_message_queue</text>
+
+                <rect x="10" y="130" width="200" height="22" rx="2" fill="#fef2f2" stroke="#dc2626" stroke-width="1"/>
+                <text x="110" y="144" text-anchor="middle" font-size="8" fill="#dc2626" font-weight="600">agent · backend · checkpointer</text>
+
+                <rect x="10" y="156" width="200" height="22" rx="2" fill="#fef2f2" stroke="#dc2626" stroke-width="1"/>
+                <text x="110" y="170" text-anchor="middle" font-size="8" fill="#dc2626" font-weight="600">tracking_id · run_group_id</text>
+
+                <rect x="10" y="182" width="200" height="22" rx="2" fill="#fef2f2" stroke="#dc2626" stroke-width="1"/>
+                <text x="110" y="196" text-anchor="middle" font-size="8" fill="#dc2626" font-weight="600">token_tracker · image_tracker</text>
+
+                <rect x="10" y="208" width="200" height="22" rx="2" fill="#fef2f2" stroke="#dc2626" stroke-width="1"/>
+                <text x="110" y="222" text-anchor="middle" font-size="8" fill="#dc2626" font-weight="600">notifications · seen_message_ids</text>
+
+                <text x="110" y="268" text-anchor="middle" font-size="9" fill="#dc2626">5+ domains, all in one dataclass</text>
+                <text x="110" y="284" text-anchor="middle" font-size="9" fill="#dc2626">Implicit coupling: changing notifications</text>
+                <text x="110" y="300" text-anchor="middle" font-size="9" fill="#dc2626">requires touching the same file as steering</text>
+              </svg>
+            </div>
+          </div>
+
+          <!-- AFTER: focused holders -->
+          <div>
+            <p class="text-xs uppercase tracking-wider text-slate-400 mb-3 font-semibold">After — focused state holders</p>
+            <div class="rounded-lg border border-slate-200 bg-white p-4">
+              <svg viewBox="0 0 220 320" width="220" height="320" class="mx-auto">
+                <rect x="10" y="0" width="200" height="35" rx="4" fill="#1e293b" opacity="0.15" stroke="#1e293b" stroke-width="1.5"/>
+                <text x="110" y="12" text-anchor="middle" font-size="9" font-weight="600" fill="#0f172a">UISettings</text>
+                <text x="110" y="26" text-anchor="middle" font-size="7" fill="#475569">auto_approve · no_splash · verbose</text>
+
+                <rect x="10" y="42" width="200" height="35" rx="4" fill="#1e293b" opacity="0.15" stroke="#1e293b" stroke-width="1.5"/>
+                <text x="110" y="54" text-anchor="middle" font-size="9" font-weight="600" fill="#0f172a">AgentRuntime</text>
+                <text x="110" y="68" text-anchor="middle" font-size="7" fill="#475569">agent · backend · checkpointer · tools</text>
+
+                <rect x="10" y="84" width="200" height="35" rx="4" fill="#1e293b" opacity="0.15" stroke="#1e293b" stroke-width="1.5"/>
+                <text x="110" y="96" text-anchor="middle" font-size="9" font-weight="600" fill="#0f172a">RemoteBridgeState</text>
+                <text x="110" y="110" text-anchor="middle" font-size="7" fill="#475569">message_queue · lock · bridge_running</text>
+
+                <rect x="10" y="126" width="200" height="35" rx="4" fill="#1e293b" opacity="0.15" stroke="#1e293b" stroke-width="1.5"/>
+                <text x="110" y="138" text-anchor="middle" font-size="9" font-weight="600" fill="#0f172a">BackgroundTaskState</text>
+                <text x="110" y="152" text-anchor="middle" font-size="7" fill="#475569">ralph_tasks · notifications</text>
+
+                <rect x="10" y="168" width="200" height="35" rx="4" fill="#1e293b" opacity="0.15" stroke="#1e293b" stroke-width="1.5"/>
+                <text x="110" y="180" text-anchor="middle" font-size="9" font-weight="600" fill="#0f172a">TrackingState</text>
+                <text x="110" y="194" text-anchor="middle" font-size="7" fill="#475569">tracking_id · run_group_id · token_tracker</text>
+
+                <text x="110" y="258" text-anchor="middle" font-size="9" fill="#059669">Each holder has one owner</text>
+                <text x="110" y="274" text-anchor="middle" font-size="9" fill="#059669">Change UISettings → doesn't touch AgentRuntime</text>
+                <text x="110" y="290" text-anchor="middle" font-size="9" fill="#059669">Seam between domains naturally</text>
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-3 gap-4 text-sm">
+          <div>
+            <p class="text-xs uppercase tracking-wider text-slate-400 font-semibold mb-1">Problem</p>
+            <p class="text-slate-700"><code class="text-xs bg-slate-100 px-1 rounded">SessionState</code> holds 25+ fields spanning 5 domains (UI, agent, remote, background tasks, tracking). Every feature adds a field, creating implicit cross-domain coupling.</p>
+          </div>
+          <div>
+            <p class="text-xs uppercase tracking-wider text-slate-400 font-semibold mb-1">Solution</p>
+            <p class="text-slate-700">Split into focused state holders: <code class="text-xs bg-slate-100 px-1 rounded">UISettings</code>, <code class="text-xs bg-slate-100 px-1 rounded">AgentRuntime</code>, <code class="text-xs bg-slate-100 px-1 rounded">RemoteBridgeState</code>, <code class="text-xs bg-slate-100 px-1 rounded">BackgroundTaskState</code>, <code class="text-xs bg-slate-100 px-1 rounded">TrackingState</code>.</p>
+          </div>
+          <div>
+            <p class="text-xs uppercase tracking-wider text-slate-400 font-semibold mb-1">Wins</p>
+            <ul class="space-y-0.5 text-slate-700 list-disc list-inside">
+              <li>Locality: UI changes stay in UISettings</li>
+              <li>Seam: each holder has natural ownership</li>
+              <li>Deletion test: remove one holder → others survive</li>
+              <li>Moderate refactor risk (1:1 field split)</li>
+            </ul>
+          </div>
+        </div>
+      </article>
+
+      <!-- ─── CANDIDATE 5: cli_session.py ─── -->
+      <article id="candidate-clisession" class="card bg-white p-8 space-y-6">
+        <div class="flex items-start justify-between gap-4">
+          <h2 class="text-2xl serif">Split cli_session.py by concern</h2>
+          <div class="flex gap-2 shrink-0">
+            <span class="badge-strong text-xs font-semibold px-3 py-1 rounded-full">Strong</span>
+            <span class="text-xs font-mono px-3 py-1 rounded-full border border-slate-200 text-slate-500">in-process</span>
+          </div>
+        </div>
+
+        <div class="space-y-1">
+          <p class="text-xs uppercase tracking-wider text-slate-400 font-semibold">Files</p>
+          <p class="font-mono text-sm text-slate-600">
+            <code class="bg-slate-100 px-1.5 py-0.5 rounded">cli_session.py</code> (336 lines)
+          </p>
+        </div>
+
+        <!-- Fragmentation visual -->
+        <div class="rounded-lg border border-slate-200 bg-white p-4">
+          <div class="flex flex-wrap gap-2 justify-center">
+            <span class="bg-red-50 border border-red-200 text-red-700 text-xs font-mono px-3 py-2 rounded">SeenMessageIds</span>
+            <span class="bg-amber-50 border border-amber-200 text-amber-700 text-xs font-mono px-3 py-2 rounded">GracefulShutdown</span>
+            <span class="bg-indigo-50 border border-indigo-200 text-indigo-700 text-xs font-mono px-3 py-2 rounded">splash_screen()</span>
+            <span class="bg-indigo-50 border border-indigo-200 text-indigo-700 text-xs font-mono px-3 py-2 rounded">model_info()</span>
+            <span class="bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-mono px-3 py-2 rounded">auto_save_manager()</span>
+            <span class="bg-indigo-50 border border-indigo-200 text-indigo-700 text-xs font-mono px-3 py-2 rounded">memory_status()</span>
+            <span class="bg-indigo-50 border border-indigo-200 text-indigo-700 text-xs font-mono px-3 py-2 rounded">tips_display()</span>
+            <span class="bg-purple-50 border border-purple-200 text-purple-700 text-xs font-mono px-3 py-2 rounded">AUTO_SAVE_INTERVAL</span>
+          </div>
+          <p class="text-xs text-center text-slate-400 mt-3">Extraction was mechanical (file-size reduction), not conceptual</p>
+        </div>
+
+        <div class="grid grid-cols-3 gap-4 text-sm">
+          <div>
+            <p class="text-xs uppercase tracking-wider text-slate-400 font-semibold mb-1">Problem</p>
+            <p class="text-slate-700">Grab-bag of unrelated utilities — signal handlers, message ID tracking, display functions, auto-save management. Extracted from <code class="text-xs bg-slate-100 px-1 rounded">main.py</code> mechanically, not by cohesion.</p>
+          </div>
+          <div>
+            <p class="text-xs uppercase tracking-wider text-slate-400 font-semibold mb-1">Solution</p>
+            <p class="text-slate-700">Split by concern into <code class="text-xs bg-slate-100 px-1 rounded">signal_handlers.py</code>, <code class="text-xs bg-slate-100 px-1 rounded">display_helpers.py</code>, <code class="text-xs bg-slate-100 px-1 rounded">auto_save.py</code>. Move auto-save constants into <code class="text-xs bg-slate-100 px-1 rounded">session/</code> package.</p>
+          </div>
+          <div>
+            <p class="text-xs uppercase tracking-wider text-slate-400 font-semibold mb-1">Wins</p>
+            <ul class="space-y-0.5 text-slate-700 list-disc list-inside">
+              <li>Locality: signal handlers in one file</li>
+              <li>Session constants co-located with session logic</li>
+              <li>Low risk: pure mechanical split</li>
+              <li>Clearer imports in main.py</li>
+            </ul>
+          </div>
+        </div>
+      </article>
+
+      <!-- ─── CANDIDATE 6: Command Handler Protocol ─── -->
+      <article id="candidate-protocol" class="card bg-white p-8 space-y-6">
+        <div class="flex items-start justify-between gap-4">
+          <h2 class="text-2xl serif">Define a CommandHandler protocol</h2>
+          <div class="flex gap-2 shrink-0">
+            <span class="badge-explore text-xs font-semibold px-3 py-1 rounded-full">Worth exploring</span>
+            <span class="text-xs font-mono px-3 py-1 rounded-full border border-slate-200 text-slate-500">in-process</span>
+          </div>
+        </div>
+
+        <div class="space-y-1">
+          <p class="text-xs uppercase tracking-wider text-slate-400 font-semibold">Files</p>
+          <p class="font-mono text-sm text-slate-600">
+            22 handler files in <code class="bg-slate-100 px-1.5 py-0.5 rounded">commands/</code> · <code class="bg-slate-100 px-1.5 py-0.5 rounded">commands/__init__.py</code>
+          </p>
+        </div>
+
+        <div class="rounded-lg border border-slate-200 bg-white p-4">
+          <pre class="text-xs font-mono text-slate-700 leading-relaxed overflow-x-auto">
+            <span class="text-slate-400"># Before: 22 handlers, 22 different signatures</span>
+            <span class="text-slate-500">def handle_model_command(settings, session_state, args): ...</span>
+            <span class="text-slate-500">def handle_skills_command(args, session_state, settings): ...</span>
+            <span class="text-slate-500">def handle_ralph_command(cmd, cmd_args, session_state, settings): ...</span>
+
+            <span class="text-slate-400"># After: 1 protocol</span>
+            <span class="text-emerald-600">class CommandHandler(Protocol):
+                def __call__(self, args: Namespace, state: SessionState) -> None: ...
+
+            # Handler registers itself:
+            register("model", ModelHandler())
+            register("skills", SkillsHandler())</span>
+          </pre>
+        </div>
+
+        <div class="grid grid-cols-3 gap-4 text-sm">
+          <div>
+            <p class="text-xs uppercase tracking-wider text-slate-400 font-semibold mb-1">Problem</p>
+            <p class="text-slate-700">22 handler files with no shared abstraction. Adding <code class="text-xs bg-slate-100 px-1 rounded">--json</code> output support requires touching all 22. Parameter ordering varies between handlers; the current <code class="text-xs bg-slate-100 px-1 rounded">commands.py</code> dispatcher passes them manually.</p>
+          </div>
+          <div>
+            <p class="text-xs uppercase tracking-wider text-slate-400 font-semibold mb-1">Solution</p>
+            <p class="text-slate-700">Define a <code class="text-xs bg-slate-100 px-1 rounded">CommandHandler</code> protocol and wrap each handler as an adapter. The registry dispatches generically instead of passing parameters per-handler.</p>
+          </div>
+          <div>
+            <p class="text-xs uppercase tracking-wider text-slate-400 font-semibold mb-1">Wins</p>
+            <ul class="space-y-0.5 text-slate-700 list-disc list-inside">
+              <li>Leverage: add --json once, all handlers</li>
+              <li>Seam: handlers are just adapters at the seam</li>
+              <li>Testable: handler(args, state) → test input/output</li>
+            </ul>
+          </div>
+        </div>
+      </article>
+
+      <!-- ─── CANDIDATE 7: Session logic ─── -->
+      <article id="candidate-session-logic" class="card bg-white p-8 space-y-6">
+        <div class="flex items-start justify-between gap-4">
+          <h2 class="text-2xl serif">Co-locate session logic</h2>
+          <div class="flex gap-2 shrink-0">
+            <span class="badge-strong text-xs font-semibold px-3 py-1 rounded-full">Strong</span>
+            <span class="text-xs font-mono px-3 py-1 rounded-full border border-slate-200 text-slate-500">in-process</span>
+          </div>
+        </div>
+
+        <div class="space-y-1">
+          <p class="text-xs uppercase tracking-wider text-slate-400 font-semibold">Files</p>
+          <p class="font-mono text-sm text-slate-600">
+            <code class="bg-slate-100 px-1.5 py-0.5 rounded">session/session_persistence.py</code> ·
+            <code class="bg-slate-100 px-1.5 py-0.5 rounded">session/session_restore.py</code> ·
+            <code class="bg-slate-100 px-1.5 py-0.5 rounded">cli_session.py</code> (auto-save constants) ·
+            <code class="bg-slate-100 px-1.5 py-0.5 rounded">commands/session_commands.py</code>
+          </p>
+        </div>
+
+        <!-- Mermaid flow: where session logic lives -->
+        <div class="rounded-lg border border-slate-200 bg-white p-4">
+          <pre class="mermaid">
+            flowchart LR
+              subgraph session_pkg["session/ (4 files)"]
+                sp["session_persistence.py\n770 lines"]
+                sr["session_restore.py\n362 lines"]
+                sb["session_prompt_builder\n190 lines"]
+                ss["session_summarization\n150 lines"]
+              end
+
+              cs["cli_session.py\nAUTO_SAVE_INTERVAL = 300"]
+              scmd["commands/session_commands.py\ncompact, save, sessions"]
+
+              sp --> cs
+              sp --> scmd
+              sr --> sp
+
+              cs -..-|"AUTO_SAVE_INTERVAL should be here"| sp
+              style cs stroke:#d97706,stroke-width:2px
+              style scmd stroke:#94a3b8
+          </pre>
+        </div>
+
+        <div class="grid grid-cols-3 gap-4 text-sm">
+          <div>
+            <p class="text-xs uppercase tracking-wider text-slate-400 font-semibold mb-1">Problem</p>
+            <p class="text-slate-700">Auto-save constants live in <code class="text-xs bg-slate-100 px-1 rounded">cli_session.py</code>, session command handlers in <code class="text-xs bg-slate-100 px-1 rounded">commands/session_commands.py</code>, core save/load in <code class="text-xs bg-slate-100 px-1 rounded">session/</code>. The concept of a "session" is distributed across 3 locations.</p>
+          </div>
+          <div>
+            <p class="text-xs uppercase tracking-wider text-slate-400 font-semibold mb-1">Solution</p>
+            <p class="text-slate-700">Move auto-save constants and manager into <code class="text-xs bg-slate-100 px-1 rounded">session/</code> package. Keep command handlers in <code class="text-xs bg-slate-100 px-1 rounded">commands/</code> (they are UI, not logic).</p>
+          </div>
+          <div>
+            <p class="text-xs uppercase tracking-wider text-slate-400 font-semibold mb-1">Wins</p>
+            <ul class="space-y-0.5 text-slate-700 list-disc list-inside">
+              <li>Locality: all session constants co-located</li>
+              <li>Low risk: pure move of constants</li>
+              <li>Clearer: session package owns session semantics</li>
+            </ul>
+          </div>
+        </div>
+      </article>
+
+    </section>
+
+    <!-- ═══ TOP RECOMMENDATION ═══ -->
+    <section id="top-recommendation" class="card bg-white p-8 border-emerald-200 border-2 space-y-4">
+      <div class="flex items-center gap-3">
+        <span class="text-emerald-600 text-lg">&#9670;</span>
+        <h2 class="text-2xl serif text-emerald-800">Top recommendation</h2>
+      </div>
+      <p class="text-slate-700 text-base">
+        <strong class="text-slate-900">Tackle candidate #1 first — Collapse the command dispatcher.</strong>
+      </p>
+      <p class="text-slate-600 text-sm leading-relaxed">
+        It's the highest-leverage, lowest-risk change. A <code class="text-xs bg-slate-100 px-1 rounded">CommandRegistry</code> replaces 1,122 lines of <code class="text-xs bg-slate-100 px-1 rounded">commands.py</code> with a dict-based registration pattern. The refactor is mechanical (each <code class="text-xs bg-slate-100 px-1 rounded">if cmd == "x"</code> branch becomes <code class="text-xs bg-slate-100 px-1 rounded">registry.register("x", fn)</code>), so it can be done incrementally without breaking anything. It also lays the groundwork for candidates #3 (App orchestrator) and #6 (CommandHandler protocol) — once commands are registered centrally, wrapping them in a protocol or wiring them into an App class is straightforward.
+      </p>
+      <p class="text-slate-600 text-sm">
+        <a href="#candidate-command-registry" class="text-emerald-600 underline hover:text-emerald-800">&#8594; View candidate #1</a>
+      </p>
+    </section>
+
+    <!-- ═══ FOOTER ═══ -->
+    <footer class="text-center text-xs text-slate-400 pt-8 border-t border-slate-200">
+      Generated from <span class="font-mono">improve-codebase-architecture</span> skill &middot; ~33K lines analyzed &middot; 7 candidates identified
+    </footer>
+
+  </main>
+</body>
+</html>

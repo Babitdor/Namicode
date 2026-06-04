@@ -116,6 +116,11 @@ class SteeringMiddleware(AgentMiddleware):
         if not instructions:
             return request
 
+        # Debug: log that we're injecting steering
+        import sys
+        labels = [si.label for si in instructions]
+        print(f"\n[STEER DEBUG] Injecting {len(instructions)} instruction(s): {labels} (list id={id(instructions)})\n", file=sys.stderr, flush=True)
+
         # Format the steering section
         lines: list[str] = []
         for si in instructions:
@@ -139,6 +144,8 @@ class SteeringMiddleware(AgentMiddleware):
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> ModelResponse:
         """Inject steering into the system prompt (sync)."""
+        import sys
+        print(f"\n[STEER DEBUG] wrap_model_call called, instructions={len(self._instructions)}, enabled={self._enabled}\n", file=sys.stderr, flush=True)
         return handler(self._inject(request))
 
     async def awrap_model_call(
@@ -147,6 +154,8 @@ class SteeringMiddleware(AgentMiddleware):
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         """Inject steering into the system prompt (async)."""
+        import sys
+        print(f"\n[STEER DEBUG] awrap_model_call called, instructions={len(self._instructions)}, enabled={self._enabled}\n", file=sys.stderr, flush=True)
         return await handler(self._inject(request))
 
 

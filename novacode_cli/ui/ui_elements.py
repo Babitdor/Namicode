@@ -147,24 +147,23 @@ def format_tool_display(tool_name: str, tool_args: dict) -> str:
             pattern = truncate_value(pattern, 80)
             return f'{tool_name}("{pattern}")'
 
-    elif tool_name == "http_request":
-        # HTTP: show method and URL
+    elif tool_name == "fetch_url":
+        # Fetch URL / HTTP: show method, URL, data, auth
         parts = []
-        if "method" in tool_args:
+        if "method" in tool_args and str(tool_args["method"]).upper() != "GET":
             parts.append(str(tool_args["method"]).upper())
         if "url" in tool_args:
             url = str(tool_args["url"])
             url = truncate_value(url, 80)
             parts.append(url)
+        if "data" in tool_args and tool_args["data"]:
+            data = str(tool_args["data"])
+            data = truncate_value(data, 60)
+            parts.append(f"data={data}")
+        if "auth" in tool_args:
+            parts.append("(auth)")
         if parts:
-            return f"{tool_name}({' '.join(parts)})"
-
-    elif tool_name == "fetch_url":
-        # Fetch URL: show the URL being fetched
-        if "url" in tool_args:
-            url = str(tool_args["url"])
-            url = truncate_value(url, 80)
-            return f'{tool_name}("{url}")'
+            return f'{tool_name}({" ".join(parts)})'
 
     elif tool_name == "task":
         # Task: "[Agent Name] description" — agent name is title-cased, no icon
@@ -451,7 +450,7 @@ def format_tool_result_preview(
         lines = [l for l in content_str.splitlines() if l.strip()]
         return f"{len(lines)} results{duration}"
 
-    if tool_name in ("fetch_url", "http_request"):
+    if tool_name in ("fetch_url",):
         size = len(content_str.encode("utf-8"))
         size_str = f"{size // 1024}KB" if size >= 1024 else f"{size}B"
         return f"{size_str}{duration}"

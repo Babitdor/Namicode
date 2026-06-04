@@ -17,6 +17,7 @@ from prompt_toolkit.completion import (
 )
 from prompt_toolkit.document import Document
 from prompt_toolkit.enums import EditingMode
+from prompt_toolkit.selection import PasteMode
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.output.vt100 import Vt100_Output
@@ -116,6 +117,115 @@ class ImageTracker:
     def images(self) -> list[ImageData]:
         """Get all tracked images (backward compatibility)."""
         return list(self._images.values())
+
+
+class PasteTracker:
+    """Track large text pastes in the current conversation with ID-based access.
+
+    When the user pastes a large block of text, it's stored here and replaced
+    with a short placeholder like [paste 1 +127 lines] in the input buffer.
+    The placeholder is resolved back to the full text before submission.
+    """
+
+    def __init__(self) -> None:
+        self._pastes: dict[str, str] = {}  # id -> full text
+        self.next_id = 1
+
+    def add_paste(self, text: str) -> str:
+        """Add a large paste and return its placeholder ID.
+
+        Args:
+            text: The pasted text content
+
+        Returns:
+            Paste ID like "paste-1"
+        """
+        paste_id = f"paste-{self.next_id}"
+        self._pastes[paste_id] = text
+        self.next_id += 1
+        return paste_id
+
+    def get_paste(self, paste_id: str) -> str | None:
+        """Get the full paste text by ID.
+
+        Args:
+            paste_id: The paste ID (e.g., "paste-1")
+
+        Returns:
+            Full text if found, None otherwise
+        """
+        return self._pastes.get(paste_id)
+
+    def remove_paste(self, paste_id: str) -> bool:
+        """Remove a paste by ID.
+
+        Args:
+            paste_id: The paste ID to remove
+
+        Returns:
+            True if removed, False if not found
+        """
+        return self._pastes.pop(paste_id, None) is not None
+
+    def clear(self) -> None:
+        """Clear all tracked pastes and reset counter."""
+        self._pastes.clear()
+        self.next_id = 1
+
+    @property
+    def count(self) -> int:
+        """Get number of tracked pastes."""
+        return len(self._pastes)
+
+    @property
+    def pastes(self) -> dict[str, str]:
+        """Get all tracked pastes as dict."""
+        return self._pastes.copy()
+
+
+# Minimum character threshold to trigger paste summarization
+PASTE_MIN_CHARS = 200
+# Minimum newline threshold (whichever is reached first)
+PASTE_MIN_NEWLINES = 5
+
+
+def format_paste_placeholder(paste_id: str, text: str) -> str:
+    """Create a compact placeholder for a large paste.
+
+    Args:
+        paste_id: The paste ID (e.g., "paste-1")
+        text: The full pasted text
+
+    Returns:
+        A placeholder string like "[paste 1 +127 lines]"
+    """
+    num = paste_id.split("-")[1]
+    line_count = text.count("\n")
+    return f"[paste #{num} +{line_count} lines]"
+
+
+_PASTE_PLACEHOLDER_RE = re.compile(r"\[paste #(\d+) \+\d+ lines\]")
+
+
+def resolve_paste_placeholders(text: str, paste_tracker: PasteTracker) -> str:
+    """Replace paste placeholders with the original full text.
+
+    Args:
+        text: The input text possibly containing paste placeholders
+        paste_tracker: The PasteTracker instance holding the original texts
+
+    Returns:
+        The text with all paste placeholders resolved to their full content
+    """
+    def _replacer(m: re.Match) -> str:
+        paste_id = f"paste-{m.group(1)}"
+        original = paste_tracker.get_paste(paste_id)
+        if original is not None:
+            paste_tracker.remove_paste(paste_id)
+            return original
+        return m.group(0)  # fallback: keep placeholder if paste not found
+
+    return _PASTE_PLACEHOLDER_RE.sub(_replacer, text)
 
 
 class FilePathCompleter(Completer):
@@ -525,7 +635,10 @@ def get_bottom_toolbar(
 
 
 def create_prompt_session(
-    _assistant_id, session_state: SessionState, image_tracker: ImageTracker | None = None
+    _assistant_id,
+    session_state: SessionState,
+    image_tracker: ImageTracker | None = None,
+    paste_tracker: PasteTracker | None = None,
 ) -> PromptSession:
     """Create a configured PromptSession with all features."""
     # Set default editor if not already set
@@ -576,7 +689,7 @@ def create_prompt_session(
     # Bind Ctrl+V to paste clipboard image (if available)
     @kb.add("c-v")
     def _(event) -> None:
-        """Check for clipboard image and add to tracker, otherwise do normal paste."""
+        """Check for clipboard image, otherwise do normal paste (large text handled by wrapper)."""
         if image_tracker:
             try:
                 clipboard_image = get_clipboard_image()
@@ -591,7 +704,8 @@ def create_prompt_session(
                     return
             except Exception:
                 pass  # Fall through to normal paste
-        # No image in clipboard - do normal paste from system clipboard
+        # Normal text paste (paste summarisation is handled by the
+        # paste_clipboard_data wrapper on the buffer, not here)
         event.current_buffer.paste_clipboard_data(event.app.clipboard.get_data())
 
     # Bind Ctrl+T to toggle auto-approve
@@ -712,5 +826,54 @@ def create_prompt_session(
 
     # Store session reference for toolbar to access
     session_ref["session"] = session
+
+    # ── Monkey-patch paste_clipboard_data to intercept large text pastes ──
+    # This catches ALL paste paths (Ctrl+V keybinding, bracketed paste mode,
+    # middle-click paste, programmatic paste) regardless of terminal.
+    if paste_tracker:
+        _original_paste_clipboard = session.default_buffer.paste_clipboard_data
+        _original_insert_text = session.default_buffer.insert_text
+
+        def _should_summarize(text):
+            return (
+                len(text) >= PASTE_MIN_CHARS
+                or text.count("\n") >= PASTE_MIN_NEWLINES
+            )
+
+        def _intercept_paste(text, insert_fn, *insert_args, **insert_kw):
+            """Check if text is a large paste; if so, store & insert placeholder."""
+            if text and _should_summarize(text):
+                paste_id = paste_tracker.add_paste(text)
+                placeholder = format_paste_placeholder(paste_id, text)
+                insert_fn(placeholder, *insert_args, **insert_kw)
+                console.print(
+                    f"[dim]{placeholder} ({len(text):,} chars)[/dim]"
+                )
+                return True
+            return False
+
+        def _wrapped_paste_clipboard(data, paste_mode=None, count=1):
+            """Intercept large pastes from Ctrl+V / paste_clipboard_data path."""
+            if data and data.text:
+                text = data.text.replace("\r\n", "\n").replace("\r", "\n")
+                # Insert placeholder via insert_text so it appears at cursor
+                if _intercept_paste(text, _original_insert_text):
+                    return
+            # Small paste — proceed as normal
+            _original_paste_clipboard(data, paste_mode or PasteMode.EMACS, count)
+
+        def _wrapped_insert_text(data, overwrite=False, fire_event=True):
+            """Intercept large pastes from bracketed paste / insert_text path.
+
+            Bracketed paste mode wraps pasted text in \\x1b[200~ ... \\x1b[201~
+            and prompt_toolkit inserts it via insert_text(data) in one chunk.
+            This wrapper catches those and converts them to placeholders.
+            """
+            if _intercept_paste(data, _original_insert_text, overwrite, fire_event=fire_event):
+                return
+            _original_insert_text(data, overwrite, fire_event=fire_event)
+
+        session.default_buffer.paste_clipboard_data = _wrapped_paste_clipboard
+        session.default_buffer.insert_text = _wrapped_insert_text
 
     return session

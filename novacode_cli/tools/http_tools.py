@@ -8,21 +8,18 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from langchain.tools import tool
+import requests
 
 from novacode_cli.tools._shared import (
     _BROWSER_USER_AGENTS,
     _get_http_session,
     _secure_random,
 )
-from novacode_cli.tools._types import (
-    _HTTP_CLIENT_ERROR,
-    _HTTP_SERVER_ERROR,
-    _HTTP_TOO_MANY_REQUESTS,
-)
 
 
-@tool
+# NOTE: http_request has been merged into fetch_url (fetch_tools.py).
+# This function is kept for backward-compatibility imports but is no
+# longer registered as an agent tool. Use fetch_url() instead.
 def http_request(
     url: str,
     method: str = "GET",
@@ -150,11 +147,11 @@ def http_request(
             response = session.request(**kwargs)
 
             # Check for HTTP errors (4xx, 5xx)
-            if response.status_code >= _HTTP_CLIENT_ERROR:
+            if response.status_code >= 400:
                 status_code = response.status_code
                 # Retry on server errors (5xx) and rate limiting (429)
                 if (
-                    status_code >= _HTTP_SERVER_ERROR or status_code == _HTTP_TOO_MANY_REQUESTS
+                    status_code >= 500 or status_code == 429
                 ) and attempt < max_retries - 1:
                     last_error = Exception(f"HTTP {status_code}")
                     time.sleep(2 ** (attempt + 1))  # Exponential backoff

@@ -32,18 +32,15 @@ _BROWSER_USER_AGENTS = [
     ),
 ]
 
-# Session for http_request (separate from fetch_url to avoid conflicts)
-_http_request_session: requests.Session | None = None
-
-# Session-level connection pool for fetch_url
-_fetch_url_session: requests.Session | None = None
+# Shared session-level connection pool for all HTTP requests
+_http_session: requests.Session | None = None
 
 
 def _get_http_session() -> requests.Session:
-    """Get or create a reusable requests session for http_request with connection pooling."""
-    global _http_request_session
-    if _http_request_session is None:
-        _http_request_session = requests.Session()
+    """Get or create a reusable requests session with connection pooling."""
+    global _http_session
+    if _http_session is None:
+        _http_session = requests.Session()
         # Configure retry strategy for transient failures
         retry_strategy = Retry(
             total=3,
@@ -60,24 +57,11 @@ def _get_http_session() -> requests.Session:
             ],
         )
         adapter = HTTPAdapter(max_retries=retry_strategy)
-        _http_request_session.mount("http://", adapter)
-        _http_request_session.mount("https://", adapter)
-    return _http_request_session
+        _http_session.mount("http://", adapter)
+        _http_session.mount("https://", adapter)
+    return _http_session
 
 
 def _get_fetch_session() -> requests.Session:
-    """Get or create a reusable requests session with connection pooling."""
-    global _fetch_url_session
-    if _fetch_url_session is None:
-        _fetch_url_session = requests.Session()
-        # Configure retry strategy for transient failures
-        retry_strategy = Retry(
-            total=3,
-            backoff_factor=1,
-            status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["GET", "HEAD"],
-        )
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-        _fetch_url_session.mount("http://", adapter)
-        _fetch_url_session.mount("https://", adapter)
-    return _fetch_url_session
+    """Alias for _get_http_session — unified connection pool."""
+    return _get_http_session()

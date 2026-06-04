@@ -33,8 +33,7 @@ TOOL_ICONS: dict[str, str] = {
     # Web - Network themed
     "web_search": "🔍",
     "duckduckgo_search": "🦆",
-    "fetch_url": "🔗",
-    "http_request": "🌐",
+    "fetch_url": "🌐",
     # Task - Agent themed
     "task": "🤖",
     # Todos - Planning themed
@@ -115,7 +114,6 @@ TOOL_CATEGORIES: dict[str, str] = {
     "docs_search": "search",
     # Web
     "fetch_url": "web",
-    "http_request": "web",
     # Recovery
     "list_trash": "recovery",
     "restore_file": "recovery",

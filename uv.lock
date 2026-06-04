@@ -2816,11 +2816,11 @@ version = "0.0.19"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
-    { name = "black" },
     { name = "browser-use" },
     { name = "daytona" },
     { name = "ddgs" },
     { name = "deepagents" },
+    { name = "discord-py" },
     { name = "docker" },
     { name = "e2b-code-interpreter" },
     { name = "graphifyy" },
@@ -2838,18 +2838,18 @@ dependencies = [
     { name = "markdownify" },
     { name = "mcp" },
     { name = "modal" },
-    { name = "mypy" },
     { name = "nest-asyncio" },
     { name = "pillow" },
     { name = "playwright" },
     { name = "prompt-toolkit" },
     { name = "python-dotenv" },
+    { name = "python-telegram-bot" },
     { name = "pyyaml" },
     { name = "replicate" },
     { name = "requests" },
     { name = "rich" },
-    { name = "ruff" },
     { name = "runloop-api-client" },
+    { name = "semble" },
     { name = "tavily-python" },
     { name = "textual" },
     { name = "tomli-w" },
@@ -2872,19 +2872,22 @@ voice = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "black" },
+    { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
+    { name = "ruff" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.19.0" },
-    { name = "black", specifier = ">=24.0.0" },
     { name = "browser-use", specifier = ">=0.1.0" },
     { name = "daytona", specifier = ">=0.113.0" },
     { name = "ddgs", specifier = ">=7.0.0" },
     { name = "deepagents" },
+    { name = "discord-py", specifier = ">=2.3.0" },
     { name = "discord-py", marker = "extra == 'remote-discord'", specifier = ">=2.3.0" },
     { name = "docker", specifier = ">=7.0.0" },
     { name = "e2b-code-interpreter", specifier = ">=1.0.0" },
@@ -2904,18 +2907,18 @@ requires-dist = [
     { name = "markdownify", specifier = ">=0.13.0" },
     { name = "mcp", specifier = ">=1.0.0" },
     { name = "modal", specifier = ">=0.65.0" },
-    { name = "mypy", specifier = ">=1.13.0" },
     { name = "nest-asyncio", specifier = ">=1.6.0" },
     { name = "pillow" },
     { name = "playwright", specifier = ">=1.40.0" },
     { name = "prompt-toolkit", specifier = ">=3.0.52" },
     { name = "python-dotenv" },
+    { name = "python-telegram-bot", specifier = ">=21.0.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "replicate", specifier = ">=0.25.0" },
     { name = "requests" },
     { name = "rich", specifier = ">=13.0.0" },
-    { name = "ruff", specifier = ">=0.8.0" },
     { name = "runloop-api-client", specifier = ">=0.69.0" },
+    { name = "semble", specifier = ">=0.1.8" },
     { name = "semble", marker = "extra == 'code-search'", specifier = ">=0.1.8" },
     { name = "tavily-python" },
     { name = "textual", specifier = ">=1.0.0" },
@@ -2927,9 +2930,12 @@ provides-extras = ["graphify", "code-search", "remote-discord", "voice"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "black", specifier = ">=24.0.0" },
+    { name = "mypy", specifier = ">=1.13.0" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-asyncio", specifier = ">=0.24" },
     { name = "pytest-timeout", specifier = ">=2.3" },
+    { name = "ruff", specifier = ">=0.8.0" },
 ]
 
 [[package]]
@@ -6874,6 +6880,19 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/8a/45/e23b5dc14ddb9918ae4a625379506b17b6f8fc56ca1d82db62462f59aea6/python_multipart-0.0.24.tar.gz", hash = "sha256:9574c97e1c026e00bc30340ef7c7d76739512ab4dfd428fec8c330fa6a5cc3c8", size = 37695, upload-time = "2026-04-05T20:49:13.829Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a3/73/89930efabd4da63cea44a3f438aeb753d600123570e6d6264e763617a9ce/python_multipart-0.0.24-py3-none-any.whl", hash = "sha256:9b110a98db707df01a53c194f0af075e736a770dc5058089650d70b4a182f950", size = 24420, upload-time = "2026-04-05T20:49:12.555Z" },
+]
+
+[[package]]
+name = "python-telegram-bot"
+version = "22.7"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpcore", marker = "python_full_version >= '3.14'" },
+    { name = "httpx" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e4/25/2258161b1069e66d6c39c0a602dbe57461d4767dc0012539970ea40bc9d6/python_telegram_bot-22.7.tar.gz", hash = "sha256:784b59ea3852fe4616ad63b4a0264c755637f5d725e87755ecdee28300febf61", size = 1516454, upload-time = "2026-03-16T09:36:03.174Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/94/f7/0e2f89dd62f45d46d4ea0d8aec5893ce5b37389638db010c117f46f11450/python_telegram_bot-22.7-py3-none-any.whl", hash = "sha256:d72eed532cf763758cd9331b57a6d790aff0bb4d37d8f4e92149436fe21c6475", size = 745365, upload-time = "2026-03-16T09:36:01.498Z" },
 ]
 
 [[package]]

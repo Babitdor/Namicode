@@ -2310,6 +2310,9 @@ class NovaApp(App):
         si = SteeringInstruction(label="steer", instruction=text)
         self.session_state.steering_instructions.append(si)
         self._live_steers.append(si)
+        # Debug: confirm append to shared list
+        import sys
+        print(f"\n[STEER DEBUG] _add_live_steer appended, list now has {len(self.session_state.steering_instructions)} item(s), list id={id(self.session_state.steering_instructions)}\n", file=sys.stderr, flush=True)
         self._log(
             Text(f"↗ Steering (applies on the next step): {text}", style="italic #7aa2f7")
         )

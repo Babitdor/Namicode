@@ -290,7 +290,7 @@ TOOL_ICONS = {
     "glob": "🔍",
     "grep": "🔎",
     "web_search": "🌐",
-    "http_request": "📡",
+    "fetch_url": "📡",
     "fetch_url": "🌍",
     "task": "🤖",
     "write_todos": "📋",
