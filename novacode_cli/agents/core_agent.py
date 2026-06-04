@@ -459,6 +459,57 @@ def get_system_prompt(assistant_id: str, sandbox_type: str | None = None) -> str
     )
 
 
+def _harden_subagent_specs(specs: list) -> list:
+    """Return resilient, unattended copies of the subagent specs.
+
+    Returns a NEW list of NEW spec dicts — it must NOT mutate the inputs, because
+    ``build_named_subagents``/``retrieve_core_subagents`` hand back **cached**
+    spec dicts that are reused across every ``create_agent_with_config`` call
+    (the session agent, then /init's dedicated agent, …). Mutating them in place
+    accumulated a fresh ``ModelRetryMiddleware`` per call, so the 2nd build saw
+    two retry middleware with the same ``.name`` and langchain aborted with
+    "Please remove duplicate middleware instances" (this is what made /init fall
+    back to the shared agent).
+
+    For each dict spec that isn't a compiled/remote subagent (``runnable``/``url``):
+
+    - **Clear ``interrupt_on``** — a HITL interrupt raised inside a subagent
+      bubbles out of the ``task`` tool as an unresolvable ``GraphInterrupt`` and
+      crashes the turn (see the comment in :func:`create_agent_with_config`). The
+      main agent stays the sole HITL boundary; dispatched subagents never prompt.
+    - **Prepend a fresh ``ModelRetryMiddleware``** — deepagents gives subagents
+      only ``[TodoList, Filesystem, Summarization, PatchToolCalls] + skills +
+      spec["middleware"]``, i.e. **no retry**, while the main agent has one. So a
+      transient provider 5xx/429/timeout during a subagent's model call would
+      otherwise kill it (this is what broke /init's semantic-extraction
+      subagents — the chunk fragment never got written). A fresh instance per
+      build; skipped if the spec already carries a retry middleware.
+    """
+    from langchain.agents.middleware import ModelRetryMiddleware
+
+    out: list = []
+    for spec in specs:
+        if not isinstance(spec, dict) or "runnable" in spec or "url" in spec:
+            out.append(spec)  # compiled/remote subagents own their own config
+            continue
+        existing = list(spec.get("middleware") or [])
+        new_spec = dict(spec)  # copy — never mutate the (possibly cached) original
+        new_spec["interrupt_on"] = {}
+        has_retry = any(type(m).__name__ == "ModelRetryMiddleware" for m in existing)
+        new_spec["middleware"] = (
+            existing
+            if has_retry
+            else [
+                ModelRetryMiddleware(
+                    max_retries=3, backoff_factor=2.0, initial_delay=1.0
+                ),
+                *existing,
+            ]
+        )
+        out.append(new_spec)
+    return out
+
+
 def create_agent_with_config(
     model: str | BaseChatModel,
     assistant_id: str,
@@ -531,6 +582,8 @@ def create_agent_with_config(
 
     # Skills directory - global (shared across all agents at ~/.nova/skills/)
     skills_dir = settings.ensure_user_skills_dir()
+    # Global Claude Code skills directory (~/.claude/skills/)
+    claude_skills_dir = settings.get_global_claude_skills_dir()
     # Project-level skills directories (if in a project)
     # Supports both .claude/skills/ and .nova/skills/
     project_skills_dirs = settings.get_project_skills_dirs()
@@ -539,6 +592,8 @@ def create_agent_with_config(
     # This ensures SkillsMiddleware.ls("/skills/") routes to the FilesystemBackend
     # instead of the default backend (which may fail outside graph context).
     skill_sources.append("/skills/")
+    if claude_skills_dir.exists():
+        skill_sources.append("/claude-skills/")
     for i, _p in enumerate(project_skills_dirs):
         skill_sources.append(f"/project-skills-{i}/")
 
@@ -552,6 +607,10 @@ def create_agent_with_config(
     # Add user skills directory (~/.nova/skills/)
     if skills_dir:
         allowed_prefixes.append(str(skills_dir))
+
+    # Add global Claude Code skills directory (~/.claude/skills/)
+    if claude_skills_dir.exists():
+        allowed_prefixes.append(str(claude_skills_dir))
 
     # Add project skills directories
     for skills_path in project_skills_dirs:
@@ -647,6 +706,14 @@ This file stores your preferences and context that persist across sessions.
     _routes: dict[str, BackendProtocol] = {  # type: ignore[name-defined]
         "/skills/": _skills_backend,
     }
+
+    # Add global Claude Code skills route (~/.claude/skills/)
+    if claude_skills_dir.exists():
+        _claude_skills_backend = FilesystemBackend(
+            root_dir=str(claude_skills_dir),
+            virtual_mode=True,
+        )
+        _routes["/claude-skills/"] = _claude_skills_backend
 
     # Add project-level skills routes (each gets its own FilesystemBackend)
     for i, proj_skills_dir in enumerate(project_skills_dirs):
@@ -778,6 +845,23 @@ This file stores your preferences and context that persist across sessions.
     Nova_SubAgent.extend(retrieve_core_subagents(tools=tools, skill_sources=skill_sources))  # type: ignore
     Nova_SubAgent.extend(build_named_subagents(assistant_id=assistant_id, tools=tools))  # type: ignore
 
+    # Own the general-purpose subagent instead of letting create_deep_agent
+    # auto-inject it. The auto-injected one inherits the main `interrupt_on` and
+    # gets NO retry middleware, so it (a) can crash the turn on a nested HITL
+    # interrupt and (b) dies on a transient provider 5xx. /init delegates its
+    # semantic-extraction chunks to general-purpose, so this is exactly the
+    # subagent that was failing. Providing our own spec (the documented override)
+    # routes it through _harden_subagent_specs below — retry + no nested HITL —
+    # while deepagents still builds its base middleware stack. The stock
+    # GENERAL_PURPOSE_SUBAGENT system prompt is used (we forgo the harness-profile
+    # prompt overlay, which is an acceptable trade for resilience).
+    from deepagents.middleware.subagents import GENERAL_PURPOSE_SUBAGENT
+
+    if not any(
+        isinstance(s, dict) and s.get("name") == "general-purpose" for s in Nova_SubAgent
+    ):
+        Nova_SubAgent.append({**GENERAL_PURPOSE_SUBAGENT, "tools": tools})  # type: ignore
+
     # Load async subagents (run on remote LangGraph servers in background)
     async_subagents = retrieve_async_subagents()
 
@@ -809,9 +893,12 @@ This file stores your preferences and context that persist across sessions.
     # subagent. The main agent still gates its own destructive tools; subagents
     # it dispatches do not independently prompt. Compiled/remote subagents own
     # their own approval config and are left untouched.
-    for _spec in Nova_SubAgent:
-        if isinstance(_spec, dict) and "runnable" not in _spec and "url" not in _spec:
-            _spec["interrupt_on"] = {}
+    #
+    # The same pass also gives each subagent a ModelRetryMiddleware (which they
+    # otherwise lack entirely) so a transient provider 5xx/429 no longer kills a
+    # subagent mid-run — see _harden_subagent_specs. Returns fresh copies (never
+    # mutates the cached specs, which would accumulate middleware across builds).
+    Nova_SubAgent = _harden_subagent_specs(Nova_SubAgent)
 
     # Pass named_subagents directly to create_deep_agent
     # It will create the SubAgentMiddleware internally

@@ -12,11 +12,28 @@ Examples:
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from novacode_cli.config.config import COLORS, Settings, console
+from novacode_cli.config.config import Settings
 from novacode_cli.skills.load import list_skills
+
+
+@dataclass
+class SkillInvocation:
+    """A resolved skill ready to run — presentation-agnostic.
+
+    ``prompt`` is fed to the agent; the rest is metadata each UI renders its own
+    way (legacy REPL via rich console, TUI via native widgets).
+    """
+
+    prompt: str
+    name: str
+    source: str  # "project" | "global"
+    description: str
+    args: str | None = None
+    supporting_files: list[str] = field(default_factory=list)
 
 # File extensions to skip when scanning for supporting files
 _SKIP_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".pdf", ".zip",
@@ -34,13 +51,14 @@ async def _try_skill_invocation(
     cmd_args: str | None,
     session_state: Any,
     assistant_id: str,
-) -> str | None:
-    """Try to invoke a skill by name.
+) -> SkillInvocation | None:
+    """Try to resolve a skill by name (presentation-free).
 
     Checks if ``cmd`` matches a known skill name (from user-skills or
-    project-skills directories).  If found, reads the SKILL.md and
-    returns a formatted prompt string that the agent will process.
-    If not found, returns ``None`` so the caller can show "unknown command".
+    project-skills directories). If found, reads the SKILL.md and returns a
+    :class:`SkillInvocation` (the agent prompt plus the metadata each UI renders
+    itself). Returns ``None`` if no skill matches (or its SKILL.md is empty) so
+    the caller can fall back to "unknown command".
 
     Args:
         cmd: The command name (without the leading ``/``).
@@ -49,7 +67,7 @@ async def _try_skill_invocation(
         assistant_id: Agent identifier (for user skills directory).
 
     Returns:
-        A prompt string if the skill was found, or ``None`` if not.
+        A :class:`SkillInvocation` if the skill was found, or ``None``.
     """
     settings = Settings.from_environment()
     in_project = settings.project_root is not None
@@ -57,9 +75,11 @@ async def _try_skill_invocation(
     # Collect skills from all sources
     user_skills_dir = settings.ensure_user_skills_dir(assistant_id)
     project_skills_dir = settings.get_project_skills_dir() if in_project else None
+    claude_skills_dir = Settings.get_global_claude_skills_dir()
 
     skills = list_skills(
         user_skills_dir=user_skills_dir,
+        claude_skills_dir=claude_skills_dir if claude_skills_dir.exists() else None,
         project_skills_dir=project_skills_dir,
     )
 
@@ -86,27 +106,16 @@ async def _try_skill_invocation(
     skill_name = matched_skill.get("name", cmd)
 
     # The skill's SKILL.md content
-    skill_content = _read_skill_content(matched_skill, user_skills_dir, project_skills_dir)
+    skill_content = _read_skill_content(matched_skill, user_skills_dir, project_skills_dir, claude_skills_dir)
     if not skill_content:
-        console.print(f"[yellow]Skill '{skill_name}' found but SKILL.md is empty[/yellow]")
-        console.print()
+        # Found but empty — treat as no match so the caller falls back.
         return None
 
-    # Show feedback to the user
+    # Resolve display metadata (rendered by the caller, not here).
     source = matched_skill.get("source", "unknown")
     source_label = "project" if source == "project" else "global"
     description = matched_skill.get("description", "")
     description_short = description[:80] + "..." if len(description) > 80 else description
-
-    console.print()
-    console.print(
-        f"[bold {COLORS['primary']}]⚡ Invoking skill: {skill_name}[/bold {COLORS['primary']}]"
-    )
-    console.print(f"   [dim]{description_short}[/dim]")
-    console.print(f"   [dim]Source: {source_label}[/dim]")
-    if cmd_args:
-        console.print(f"   [dim]Arguments: {cmd_args}[/dim]")
-    console.print()
 
     # Build the prompt that the agent will process
     extra_context = ""
@@ -114,7 +123,7 @@ async def _try_skill_invocation(
         extra_context = f"\n\nUser provided additional context: {cmd_args}"
 
     # Discover supporting files in the skill directory
-    skill_dir = _find_skill_dir(matched_skill, user_skills_dir, project_skills_dir)
+    skill_dir = _find_skill_dir(matched_skill, user_skills_dir, project_skills_dir, claude_skills_dir)
     supporting_files = _get_supporting_files(skill_dir) if skill_dir else {}
 
     prompt_parts = [
@@ -143,23 +152,25 @@ async def _try_skill_invocation(
 
     prompt = "".join(prompt_parts)
 
-    # Show supporting file status to the user
-    if supporting_files:
-        file_list = ", ".join(sorted(supporting_files.keys()))
-        console.print(f"   [dim]Supporting files: {file_list}[/dim]")
-        console.print()
-
-    return prompt
+    return SkillInvocation(
+        prompt=prompt,
+        name=skill_name,
+        source=source_label,
+        description=description_short,
+        args=cmd_args,
+        supporting_files=sorted(supporting_files.keys()),
+    )
 
 
 def _find_skill_dir(
     skill: dict[str, Any],
     user_skills_dir: Path | None,
     project_skills_dir: Path | None,
+    claude_skills_dir: Path | None = None,
 ) -> Path | None:
     """Find the skill's directory on disk.
 
-    Tries path attribute, user skills dir, then project skills dir.
+    Tries path attribute, user skills dir, claude skills dir, then project skills dir.
     Returns None if the directory cannot be determined or doesn't exist.
     """
     skill_name = skill.get("name", "")
@@ -177,6 +188,12 @@ def _find_skill_dir(
     # Try user skills directory
     if user_skills_dir and user_skills_dir.exists():
         candidate = user_skills_dir / skill_name
+        if candidate.is_dir():
+            return candidate
+
+    # Try claude skills directory
+    if claude_skills_dir and claude_skills_dir.exists():
+        candidate = claude_skills_dir / skill_name
         if candidate.is_dir():
             return candidate
 
@@ -247,16 +264,18 @@ def _read_skill_content(
     skill: dict[str, Any],
     user_skills_dir: Path | None,
     project_skills_dir: Path | None,
+    claude_skills_dir: Path | None = None,
 ) -> str | None:
     """Read a skill's SKILL.md content from disk.
 
     Tries multiple locations: the skill's path attribute, user skills
-    directory, then project skills directory.
+    directory, claude skills directory, then project skills directory.
 
     Args:
         skill: Skill metadata dict (must have 'name' key).
         user_skills_dir: Path to user-level skills directory.
         project_skills_dir: Path to project-level skills directory.
+        claude_skills_dir: Path to global Claude Code skills directory.
 
     Returns:
         SKILL.md content as string, or None if not found.
@@ -284,6 +303,15 @@ def _read_skill_content(
     # Try user skills directory
     if user_skills_dir and user_skills_dir.exists():
         md_path = user_skills_dir / skill_name / "SKILL.md"
+        if md_path.is_file():
+            try:
+                return md_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                pass
+
+    # Try claude skills directory
+    if claude_skills_dir and claude_skills_dir.exists():
+        md_path = claude_skills_dir / skill_name / "SKILL.md"
         if md_path.is_file():
             try:
                 return md_path.read_text(encoding="utf-8")

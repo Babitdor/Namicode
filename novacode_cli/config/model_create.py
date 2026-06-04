@@ -59,7 +59,7 @@ def create_model() -> BaseChatModel:
                     "[yellow]Warning: OPENAI_API_KEY not set, falling back to Ollama[/yellow]"
                 )
             else:
-                return ChatOpenAI(model=model_name)
+                return ChatOpenAI(model=model_name, max_retries=5)
 
         elif provider == "anthropic":
             from langchain_anthropic import ChatAnthropic
@@ -82,6 +82,7 @@ def create_model() -> BaseChatModel:
                 return ChatAnthropic(
                     model_name=model_name,
                     max_tokens=20_000,  # type: ignore[arg-type]
+                    max_retries=5,
                     **thinking_kwargs,
                 )
 
@@ -98,6 +99,7 @@ def create_model() -> BaseChatModel:
                     model=model_name,
                     temperature=0,
                     max_tokens=None,
+                    max_retries=5,
                 )
 
         elif provider == "openrouter":
@@ -116,6 +118,7 @@ def create_model() -> BaseChatModel:
                     model=model_name,
                     base_url=OPENROUTER_BASE_URL,
                     api_key=os.environ.get("OPENROUTER_API_KEY"),  # type: ignore[arg-type]
+                    max_retries=5,
                 )
 
     # No saved config - fall back to environment variables and .env file
@@ -127,6 +130,7 @@ def create_model() -> BaseChatModel:
         console.print(f"[dim]Using OpenAI model: {model_name}[/dim]")
         return ChatOpenAI(
             model=model_name,
+            max_retries=5,
         )
     if settings.has_anthropic:
         from langchain_anthropic import ChatAnthropic
@@ -148,6 +152,7 @@ def create_model() -> BaseChatModel:
             # The attribute exists, but it has a Pydantic alias which
             # causes issues in IDEs/type checkers.
             max_tokens=20_000,  # type: ignore[arg-type]
+            max_retries=5,
             **thinking_kwargs,
         )
     if settings.has_google:
@@ -159,6 +164,7 @@ def create_model() -> BaseChatModel:
             model=model_name,
             temperature=0,
             max_tokens=None,
+            max_retries=5,
         )
     if settings.has_openrouter:
         from langchain_openai import ChatOpenAI
@@ -171,6 +177,7 @@ def create_model() -> BaseChatModel:
             model=model_name,
             base_url=OPENROUTER_BASE_URL,
             api_key=os.environ.get("OPENROUTER_API_KEY"),  # type: ignore[arg-type]
+            max_retries=5,
         )
 
     # Default to Ollama if no API keys are configured

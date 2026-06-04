@@ -85,11 +85,27 @@ async def handle_command(
             console.print()
             return True
         try:
-            skill_prompt = await _try_skill_invocation(
+            skill = await _try_skill_invocation(
                 _skill_name, _skill_args, session_state, assistant_id
             )
-            if skill_prompt is not None:
-                return skill_prompt
+            if skill is not None:
+                # Render the invocation feedback (the resolver is presentation-free).
+                console.print()
+                console.print(
+                    f"[bold {COLORS['primary']}]⚡ Invoking skill: {skill.name}"
+                    f"[/bold {COLORS['primary']}]"
+                )
+                console.print(f"   [dim]{skill.description}[/dim]")
+                console.print(f"   [dim]Source: {skill.source}[/dim]")
+                if skill.args:
+                    console.print(f"   [dim]Arguments: {skill.args}[/dim]")
+                if skill.supporting_files:
+                    console.print(
+                        f"   [dim]Supporting files: "
+                        f"{', '.join(skill.supporting_files)}[/dim]"
+                    )
+                console.print()
+                return skill.prompt
         except Exception as e:
             console.print(f"[red]Error running /skill:{_skill_name}: {e}[/red]")
             return True

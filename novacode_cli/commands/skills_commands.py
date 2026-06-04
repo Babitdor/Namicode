@@ -119,16 +119,26 @@ async def _skills_list_interactive(ps, settings: Settings, assistant_id: str) ->
     # Get skills based on scope
     user_skills_dir = settings.ensure_user_skills_dir(assistant_id)
     project_skills_dir = settings.get_project_skills_dir() if in_project else None
+    claude_skills_dir = Settings.get_global_claude_skills_dir()
+    claude_skills_dir_arg = claude_skills_dir if claude_skills_dir.exists() else None
 
     if scope == "global":
-        skills = list_skills(user_skills_dir=user_skills_dir, project_skills_dir=None)
+        skills = list_skills(
+            user_skills_dir=user_skills_dir,
+            claude_skills_dir=claude_skills_dir_arg,
+            project_skills_dir=None,
+        )
     elif scope == "project":
         skills = list_skills(
-            user_skills_dir=None, project_skills_dir=project_skills_dir
+            user_skills_dir=None,
+            claude_skills_dir=None,
+            project_skills_dir=project_skills_dir,
         )
     else:
         skills = list_skills(
-            user_skills_dir=user_skills_dir, project_skills_dir=project_skills_dir
+            user_skills_dir=user_skills_dir,
+            claude_skills_dir=claude_skills_dir_arg,
+            project_skills_dir=project_skills_dir,
         )
 
     if not skills:
@@ -140,12 +150,20 @@ async def _skills_list_interactive(ps, settings: Settings, assistant_id: str) ->
         return True
 
     # Group by source
-    global_skills = [s for s in skills if s["source"] == "user"]
+    nova_skills = [s for s in skills if s["source"] == "user"]
+    claude_skills = [s for s in skills if s["source"] == "claude"]
     project_skills = [s for s in skills if s["source"] == "project"]
 
-    if global_skills and scope in ("global", "both"):
-        console.print("[bold cyan]Global Skills:[/bold cyan]")
-        for skill in global_skills:
+    if nova_skills and scope in ("global", "both"):
+        console.print("[bold cyan]Nova Global Skills:[/bold cyan]")
+        for skill in nova_skills:
+            console.print(f"  • [bold]{skill['name']}[/bold]")
+            console.print(f"    [dim]{skill['description']}[/dim]")
+        console.print()
+
+    if claude_skills and scope in ("global", "both"):
+        console.print("[bold yellow]Claude Global Skills:[/bold yellow]")
+        for skill in claude_skills:
             console.print(f"  • [bold]{skill['name']}[/bold]")
             console.print(f"    [dim]{skill['description']}[/dim]")
         console.print()
@@ -157,7 +175,7 @@ async def _skills_list_interactive(ps, settings: Settings, assistant_id: str) ->
             console.print(f"    [dim]{skill['description']}[/dim]")
         console.print()
 
-    total = len(global_skills) + len(project_skills)
+    total = len(nova_skills) + len(claude_skills) + len(project_skills)
     console.print(f"[dim]Total: {total} skill(s)[/dim]")
     console.print()
     return True

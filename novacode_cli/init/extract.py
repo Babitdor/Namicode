@@ -490,6 +490,36 @@ async def semantic_extract_via_agent(
     return _read_and_merge_fragments(frag_dir, console)
 
 
+def normalize_source_paths(extraction: dict[str, Any]) -> dict[str, Any]:
+    """Rewrite Windows backslash paths in ``source_file`` fields to forward slashes.
+
+    graphify emits OS-native paths on Windows (e.g. ``novacode_cli\\ui\\x.py``).
+    Those leak into NOVA.md prose, the graph JSON, and ``query_project_graph``
+    output — and the ``\\u``/``\\t`` escape sequences make a later ``edit_file``
+    match fail ("String not found"), which sends the authoring agent into a retry
+    loop. Forward slashes (which the prompts already mandate) avoid all of that.
+
+    Only path fields are touched: node ``id``s are already slash-free, so edge
+    references stay valid; node ``label``s are left alone (their backslashes are
+    code content like ``\\n``, not paths). Mutates and returns ``extraction``.
+    """
+    def _fix(v: Any) -> Any:
+        return v.replace("\\", "/") if isinstance(v, str) else v
+
+    for n in extraction.get("nodes") or []:
+        if isinstance(n, dict) and isinstance(n.get("source_file"), str):
+            n["source_file"] = _fix(n["source_file"])
+    for e in extraction.get("edges") or []:
+        if not isinstance(e, dict):
+            continue
+        if isinstance(e.get("source_file"), str):
+            e["source_file"] = _fix(e["source_file"])
+        sf = e.get("source_files")
+        if isinstance(sf, list):
+            e["source_files"] = [_fix(x) for x in sf]
+    return extraction
+
+
 def merge_ast_semantic(ast: dict[str, Any], semantic: dict[str, Any]) -> dict[str, Any]:
     """Merge the AST and semantic extraction results into one extraction dict.
 

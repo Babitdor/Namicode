@@ -45,6 +45,38 @@ from novacode_cli.ui.ui_elements import TokenTracker
 _TOTAL_STEPS = 5
 
 
+class InitRenderer:
+    """Protocol that a renderer must satisfy to work with InitOrchestrator.
+
+    Each entry point (legacy REPL, Textual TUI) provides its own implementation
+    so the orchestrator stays renderer-agnostic.
+    """
+
+    def emit(self, event) -> None:
+        """Forward a pipeline progress event (StepStarted / StepDetail / Notice)."""
+        ...
+
+    def result(self, result, flags) -> None:
+        """Render the final pipeline outcome."""
+        ...
+
+    def graphify_unavailable(self) -> None:
+        """Notify the user that graphify is not installed (optional)."""
+        ...
+
+    async def run_fallback(
+        self,
+        project_root: Path,
+        nova_md_path: Path,
+        agent,
+        session_state,
+        assistant_id: str,
+        token_tracker: TokenTracker,
+    ) -> None:
+        """Run the prompt-based fallback when graphify is not available."""
+        ...
+
+
 class InitFlags:
     """Parsed flags for the /init command."""
 
@@ -81,6 +113,93 @@ class InitFlags:
         if self.no_llm:
             out.append("--no-llm")
         return out
+
+
+class InitOrchestrator:
+    """Encapsulates the shared /init orchestration for both REPL and TUI paths.
+
+    Owns the graphify-availability check, agent-building, pipeline dispatch, and
+    fallback routing so both entry points share one authoritative sequence.
+    """
+
+    def __init__(
+        self,
+        *,
+        project_root: Path,
+        nova_dir: Path,
+        nova_md_path: Path,
+        agents_md_path: Path,
+        flags: InitFlags,
+        renderer: InitRenderer,
+        agent,
+        session_state,
+        assistant_id: str,
+        token_tracker: TokenTracker,
+        session_id: str = "",
+        progress_console=None,
+        execute_fn=None,
+    ) -> None:
+        self._project_root = project_root
+        self._nova_dir = nova_dir
+        self._nova_md_path = nova_md_path
+        self._agents_md_path = agents_md_path
+        self._flags = flags
+        self._renderer = renderer
+        self._agent = agent
+        self._session_state = session_state
+        self._assistant_id = assistant_id
+        self._token_tracker = token_tracker
+        self._session_id = session_id
+        self._progress_console = progress_console
+        self._execute_fn = execute_fn
+
+    async def run(self) -> InitResult:
+        """Run the /init pipeline (graphify) or fall back to agent exploration."""
+        from novacode_cli.init.detect import is_graphify_available
+
+        if is_graphify_available():
+            if self._execute_fn is None:
+                self._execute_fn = build_init_execute_fn(
+                    self._agent,
+                    self._session_state,
+                    self._assistant_id,
+                    self._token_tracker,
+                    self._flags,
+                )
+            result = await _run_graphify_pipeline(
+                project_root=self._project_root,
+                nova_dir=self._nova_dir,
+                nova_md_path=self._nova_md_path,
+                agents_md_path=self._agents_md_path,
+                flags=self._flags,
+                emit=self._renderer.emit,
+                progress_console=self._progress_console,
+                agent=self._agent,
+                execute_fn=self._execute_fn,
+                session_id=self._session_id,
+            )
+            self._renderer.result(result, self._flags)
+            return result
+        else:
+            self._renderer.graphify_unavailable()
+            await self._renderer.run_fallback(
+                project_root=self._project_root,
+                nova_md_path=self._nova_md_path,
+                agent=self._agent,
+                session_state=self._session_state,
+                assistant_id=self._assistant_id,
+                token_tracker=self._token_tracker,
+            )
+            return _make_empty_result(self._nova_dir, self._nova_md_path)
+
+
+def _make_empty_result(nova_dir: Path, nova_md_path: Path) -> InitResult:
+    """Return an InitResult for the fallback path (graphify not available)."""
+    return InitResult(
+        ok=nova_md_path.exists(),
+        nova_dir=nova_dir,
+        nova_md_path=nova_md_path,
+    )
 
 
 def build_init_execute_fn(
@@ -163,10 +282,9 @@ async def handle_init_command(
 ) -> None:
     """Handle the /init command (legacy REPL entry point).
 
-    Parses flags, then wires the **legacy Rich renderer**
-    (:mod:`novacode_cli.commands.init_renderer`) to the pure pipeline. The TUI
-    has its own entry point (``NovaApp._run_init``) that drives the same pipeline
-    with a native renderer.
+    Thin wrapper that delegates orchestration to :class:`InitOrchestrator`.
+    The **legacy Rich renderer** (:mod:`novacode_cli.commands.init_renderer`)
+    provides progress display and fallback execution.
 
     Args:
         agent: The LangGraph agent.
@@ -188,39 +306,24 @@ async def handle_init_command(
 
     nova_dir = project_root / ".nova"
     nova_md_path = nova_dir / "NOVA.md"
-    agents_md_path = nova_dir / "AGENTS.md"
 
     renderer.intro(project_root, flags, nova_md_path)
 
-    from novacode_cli.init.detect import is_graphify_available
-
-    if is_graphify_available():
-        execute_fn = build_init_execute_fn(
-            agent, session_state, assistant_id, token_tracker, flags
-        )
-        result = await _run_graphify_pipeline(
-            project_root=project_root,
-            nova_dir=nova_dir,
-            nova_md_path=nova_md_path,
-            agents_md_path=agents_md_path,
-            flags=flags,
-            emit=renderer.emit,
-            progress_console=renderer.console,
-            agent=agent,
-            execute_fn=execute_fn,
-            session_id=getattr(session_state, "session_id", ""),
-        )
-        renderer.result(result, flags)
-    else:
-        renderer.graphify_unavailable()
-        await renderer.run_fallback(
-            project_root=project_root,
-            nova_md_path=nova_md_path,
-            agent=agent,
-            session_state=session_state,
-            assistant_id=assistant_id,
-            token_tracker=token_tracker,
-        )
+    orchestrator = InitOrchestrator(
+        project_root=project_root,
+        nova_dir=nova_dir,
+        nova_md_path=nova_md_path,
+        agents_md_path=nova_dir / "AGENTS.md",
+        flags=flags,
+        renderer=renderer,
+        agent=agent,
+        session_state=session_state,
+        assistant_id=assistant_id,
+        token_tracker=token_tracker,
+        session_id=getattr(session_state, "session_id", ""),
+        progress_console=renderer.console,
+    )
+    await orchestrator.run()
 
 
 async def _run_graphify_pipeline(
@@ -283,6 +386,7 @@ async def _run_graphify_pipeline(
         extract_project,
         extract_project_incremental,
         load_extraction_cache,
+        normalize_source_paths,
         save_extraction_cache,
     )
     from novacode_cli.init.graph import (
@@ -298,10 +402,13 @@ async def _run_graphify_pipeline(
 
     # ── Step 1: Detect ──────────────────────────────────────────
     emit(StepStarted(1, _TOTAL_STEPS, "Detecting project files"))
-    # graphify.detect scans the filesystem — fast (IO-bound), run in thread
+    # graphify.detect scans the filesystem — fast (IO-bound), run in thread.
+    # NOTE: detect_project_incremental's 2nd positional is `manifest_path`, so the
+    # console MUST be passed by keyword (passing it positionally silently routed
+    # all output to the global console — the TUI's incremental-detection leak).
     if flags.update:
         detection = await asyncio.to_thread(
-            detect_project_incremental, project_root, pc
+            detect_project_incremental, project_root, console=pc
         )
         # If no changes, use full detection as fallback
         if not detection:
@@ -316,6 +423,23 @@ async def _run_graphify_pipeline(
             nova_dir=nova_dir,
             nova_md_path=nova_md_path,
             message="Detection failed — no files found",
+        )
+
+    # Surface detection stats natively (the graphify panel is suppressed in TUI).
+    if "new_files" in detection:
+        _nf = detection.get("new_files", {})
+        _uf = detection.get("unchanged_files", {})
+        _new = sum(len(v) for v in _nf.values()) if isinstance(_nf, dict) else len(_nf)
+        _unchanged = (
+            sum(len(v) for v in _uf.values()) if isinstance(_uf, dict) else len(_uf)
+        )
+        emit(StepDetail(f"{_new} new · {_unchanged} unchanged files"))
+    else:
+        emit(
+            StepDetail(
+                f"{detection.get('total_files', 0)} files · "
+                f"{detection.get('total_words', 0):,} words"
+            )
         )
 
     # ── Step 2: Extract ────────────────────────────────────────────
@@ -350,6 +474,13 @@ async def _run_graphify_pipeline(
             message="No entities extracted",
             fell_back=True,
         )
+
+    emit(
+        StepDetail(
+            f"{len(extraction.get('nodes', []))} entities · "
+            f"{len(extraction.get('edges', []))} relations (AST)"
+        )
+    )
 
     # ── Step 2b: Semantic extraction ────────────────────────────────
     # AST only captures code structure. The semantic stage adds document
@@ -389,6 +520,12 @@ async def _run_graphify_pipeline(
                 )
             )
 
+    # Normalize OS-native (Windows backslash) source paths to forward slashes so
+    # they don't leak into NOVA.md / the graph JSON and break later edit_file
+    # matches (the agent loops on "String not found"). Done once here so the
+    # graph, cache, facts, and docs all inherit slash paths.
+    extraction = normalize_source_paths(extraction)
+
     # Save extraction cache for future incremental updates
     await asyncio.to_thread(save_extraction_cache, project_root, extraction)
 
@@ -406,11 +543,26 @@ async def _run_graphify_pipeline(
         )
 
     communities = await asyncio.to_thread(cluster_project_graph, G, pc)
+    try:
+        emit(
+            StepDetail(
+                f"{G.number_of_nodes()} nodes · {G.number_of_edges()} edges · "
+                f"{len(communities or {})} communities"
+            )
+        )
+    except Exception:  # noqa: BLE001
+        pass
 
     # ── Step 4: Analyze ─────────────────────────────────────────
     emit(StepStarted(4, _TOTAL_STEPS, "Analyzing project structure"))
     # graphify.analyze — includes betweenness centrality, O(V*E) worst case
     analysis = await asyncio.to_thread(analyze_project_graph, G, communities, pc)
+    emit(
+        StepDetail(
+            f"{len(analysis.get('god_nodes', []))} hubs · "
+            f"{len(analysis.get('surprising_connections', []))} surprising links"
+        )
+    )
 
     # ── Step 5: Export graph + author docs ───────────────────────────
     emit(StepStarted(5, _TOTAL_STEPS, "Generating documentation"))
@@ -427,6 +579,12 @@ async def _run_graphify_pipeline(
         output_dir=nova_dir,
         console=pc,
         include_html=not flags.no_viz,
+    )
+    emit(
+        StepDetail(
+            "Exported project-graph.json"
+            + ("" if flags.no_viz else " + project-graph.html")
+        )
     )
 
     # Author NOVA.md. Preferred: the Nova AGENT writes a rich, grounded doc using

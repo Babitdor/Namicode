@@ -19,6 +19,55 @@ logger = logging.getLogger(__name__)
 
 _patched = False
 _fs_host_path_patched = False
+_write_file_content_patched = False
+
+
+def apply_write_file_dict_content_patch() -> None:
+    """Tolerate a dict/list ``content`` passed to the ``write_file`` tool.
+
+    Models (especially weaker ones, and any time the content *is* JSON) often
+    emit the ``content`` argument as a structured object rather than a string —
+    e.g. /init's semantic-extraction subagents write a graph fragment and pass
+    ``content={"nodes": [...], "edges": [...]}``. deepagents' ``WriteFileSchema``
+    types ``content: str``, so langchain's ``_parse_input`` rejects the call at
+    pydantic validation *before* the tool body runs:
+
+        1 validation error for WriteFileSchema / content
+        Input should be a valid string ... input_type=dict
+
+    The file is never written and the chunk is lost (LangSmith shows no tool
+    error because it fails at arg validation). This wraps the schema's
+    ``model_validate`` so a dict/list ``content`` is JSON-serialized to a string
+    first — the deliverable file then contains exactly the intended JSON.
+    Idempotent and best-effort.
+    """
+    global _write_file_content_patched
+    if _write_file_content_patched:
+        return
+
+    try:
+        import deepagents.middleware.filesystem as _fsmod
+    except ImportError:
+        return
+
+    schema = getattr(_fsmod, "WriteFileSchema", None)
+    if schema is None:
+        return
+
+    import json
+
+    _orig_model_validate = schema.model_validate.__func__  # unwrap classmethod
+
+    def _patched_model_validate(cls, obj, *args, **kwargs):
+        if isinstance(obj, dict):
+            content = obj.get("content")
+            if isinstance(content, (dict, list)):
+                obj = {**obj, "content": json.dumps(content, ensure_ascii=False)}
+        return _orig_model_validate(cls, obj, *args, **kwargs)
+
+    schema.model_validate = classmethod(_patched_model_validate)
+    _write_file_content_patched = True
+    logger.debug("Applied write_file dict-content coercion patch")
 
 
 def apply_filesystem_host_path_patch() -> None:

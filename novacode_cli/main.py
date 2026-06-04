@@ -109,11 +109,16 @@ from deepagents.backends.protocol import SandboxBackendProtocol
 from novacode_cli.utils.backend_patches import (
     apply_filesystem_host_path_patch,
     apply_ollama_content_block_patch,
+    apply_write_file_dict_content_patch,
 )
+
 apply_ollama_content_block_patch()
 # Let the agent pass real host paths inside the project to file tools without
 # tripping deepagents' "Windows absolute paths are not supported" rejection.
 apply_filesystem_host_path_patch()
+# Tolerate a dict/list `content` to write_file (models pass JSON as an object) —
+# serialize it to a string so the write succeeds (e.g. /init graph fragments).
+apply_write_file_dict_content_patch()
 
 from novacode_cli.agents.core_agent import (
     create_agent_with_config,
@@ -149,7 +154,12 @@ from novacode_cli.config.config import (
     get_responsive_ascii,
 )
 from novacode_cli.config.model_create import create_model
-from novacode_cli.input import ImageTracker, PasteTracker, create_prompt_session, resolve_paste_placeholders
+from novacode_cli.input import (
+    ImageTracker,
+    PasteTracker,
+    create_prompt_session,
+    resolve_paste_placeholders,
+)
 from novacode_cli.tracking.tracing import auto_configure as _auto_configure_tracing
 
 # Initialize LangSmith tracing from environment variables (no-op when not configured)
@@ -503,14 +513,17 @@ async def simple_cli(
     console.clear()
 
     # Fire session.start hook
-    dispatch_hook_fire_and_forget(HookEvent.SESSION_START, {
-        "session_id": session_state.session_id,
-        "thread_id": session_state.thread_id,
-        "assistant_id": assistant_id,
-        "model": model_name,
-        "sandbox": sandbox_type,
-        "continued": bool(restored_session_data),
-    })
+    dispatch_hook_fire_and_forget(
+        HookEvent.SESSION_START,
+        {
+            "session_id": session_state.session_id,
+            "thread_id": session_state.thread_id,
+            "assistant_id": assistant_id,
+            "model": model_name,
+            "sandbox": sandbox_type,
+            "continued": bool(restored_session_data),
+        },
+    )
 
     # Check path approval before proceeding
     if not await check_path_approval():
@@ -569,10 +582,13 @@ async def simple_cli(
             Nova_md_loaded=Nova_md_loaded,
         )
         # Fire session.continue hook
-        dispatch_hook_fire_and_forget(HookEvent.SESSION_CONTINUE, {
-            "session_id": session_state.session_id,
-            "thread_id": session_state.thread_id,
-        })
+        dispatch_hook_fire_and_forget(
+            HookEvent.SESSION_CONTINUE,
+            {
+                "session_id": session_state.session_id,
+                "thread_id": session_state.thread_id,
+            },
+        )
 
     # Display auto-approve status if enabled
     display_auto_approve_status(console, session_state.auto_approve)
@@ -586,7 +602,9 @@ async def simple_cli(
     token_tracker = TokenTracker()
     image_tracker = ImageTracker()
     paste_tracker = PasteTracker()
-    session = create_prompt_session(assistant_id, session_state, image_tracker, paste_tracker)
+    session = create_prompt_session(
+        assistant_id, session_state, image_tracker, paste_tracker
+    )
     token_tracker.set_baseline(baseline_tokens)
     if model_name:
         token_tracker.set_model(model_name)
@@ -683,12 +701,15 @@ async def simple_cli(
                 if not silent:
                     console.print(f"[dim]Session saved to {session_dir}[/dim]")
                 # Fire session.save hook
-                dispatch_hook_fire_and_forget(HookEvent.SESSION_SAVE, {
-                    "session_id": session_state.session_id,
-                    "thread_id": session_state.thread_id,
-                    "session_dir": str(session_dir),
-                    "message_count": len(messages),
-                })
+                dispatch_hook_fire_and_forget(
+                    HookEvent.SESSION_SAVE,
+                    {
+                        "session_id": session_state.session_id,
+                        "thread_id": session_state.thread_id,
+                        "session_dir": str(session_dir),
+                        "message_count": len(messages),
+                    },
+                )
                 return True
         except Exception as e:
             error_msg = f"[red]Error saving session: {type(e).__name__}: {e}[/red]"
@@ -701,11 +722,14 @@ async def simple_cli(
     async def _cleanup_and_save_session() -> None:
         """Clean up managed processes and save session state when user exits."""
         # Fire session.end hook
-        dispatch_hook_fire_and_forget(HookEvent.SESSION_END, {
-            "session_id": session_state.session_id,
-            "thread_id": session_state.thread_id,
-            "assistant_id": assistant_id,
-        })
+        dispatch_hook_fire_and_forget(
+            HookEvent.SESSION_END,
+            {
+                "session_id": session_state.session_id,
+                "thread_id": session_state.thread_id,
+                "assistant_id": assistant_id,
+            },
+        )
 
         # Stop Vixie WebSocket server
         try:
@@ -743,10 +767,11 @@ async def simple_cli(
 
         # Cancel remote message processor task
         try:
-            if _remote_processor_task and not _remote_processor_task.done():
-                _remote_processor_task.cancel()
+            _rpt = getattr(session_state, "_remote_processor_task", None)
+            if _rpt and not _rpt.done():
+                _rpt.cancel()
                 try:
-                    await _remote_processor_task
+                    await _rpt
                 except asyncio.CancelledError:
                     pass
         except Exception:
@@ -941,11 +966,14 @@ async def simple_cli(
 
         # Fire user.message hook
         if user_input:
-            dispatch_hook_fire_and_forget(HookEvent.USER_MESSAGE, {
-                "session_id": session_state.session_id,
-                "thread_id": session_state.thread_id,
-                "message": user_input[:500],  # truncate for safety
-            })
+            dispatch_hook_fire_and_forget(
+                HookEvent.USER_MESSAGE,
+                {
+                    "session_id": session_state.session_id,
+                    "thread_id": session_state.thread_id,
+                    "message": user_input[:500],  # truncate for safety
+                },
+            )
 
         # Wrap the rest of the loop body so that KeyboardInterrupt
         # during execute_task or between task/prompt doesn't crash the
@@ -986,7 +1014,7 @@ async def simple_cli(
                     # in agent-browser SKILL.md)
                     if isinstance(result, str):
                         # Process the prompt through the agent
-                        _exec_task = asyncio.ensure_future(
+                        _exec_task = asyncio.create_task(
                             execute_task(
                                 result,
                                 agent,
@@ -1032,7 +1060,7 @@ async def simple_cli(
                 task_input = (
                     f"Call the '{agent_name}' subagent to do the following:\n\n{query}"
                 )
-                _exec_task = asyncio.ensure_future(
+                _exec_task = asyncio.create_task(
                     execute_task(
                         task_input,
                         agent,
@@ -1076,6 +1104,7 @@ async def simple_cli(
                         decompose_prompt,
                         format_decomposition_message,
                     )
+
                     decomp = decompose_prompt(user_input)
                     if decomp.decomposed:
                         msg = format_decomposition_message(decomp)
@@ -1084,16 +1113,19 @@ async def simple_cli(
                             console.print(msg)
                             console.print()
                         # Fire prompt.decompose hook
-                        dispatch_hook_fire_and_forget(HookEvent.PROMPT_DECOMPOSE, {
-                            "original_prompt": user_input[:300],
-                            "sub_prompt_count": len(decomp.sub_prompts),
-                            "session_id": session_state.session_id,
-                        })
+                        dispatch_hook_fire_and_forget(
+                            HookEvent.PROMPT_DECOMPOSE,
+                            {
+                                "original_prompt": user_input[:300],
+                                "sub_prompt_count": len(decomp.sub_prompts),
+                                "session_id": session_state.session_id,
+                            },
+                        )
                     sub_prompts = decomp.sub_prompts
 
                 # Execute sub-prompts sequentially
                 for sub_prompt in sub_prompts:
-                    _exec_task = asyncio.ensure_future(
+                    _exec_task = asyncio.create_task(
                         execute_task(
                             sub_prompt,
                             active_agent,
@@ -1116,16 +1148,13 @@ async def simple_cli(
                 # After plan approval, inject approved plan into Nova agent
                 approved_plan = session_state.consume_approved_plan()
                 if approved_plan:
-                    console.print()
-                    console.print("[cyan]Executing approved plan with Nova Agent...[/cyan]")
-                    console.print()
                     # Inject plan content as a message to Nova agent
                     plan_prompt = (
                         "The user has approved the following plan. "
                         "Execute it step by step, marking each step as complete as you go:\n\n"
                         f"{approved_plan}"
                     )
-                    _exec_task = asyncio.ensure_future(
+                    _exec_task = asyncio.create_task(
                         execute_task(
                             plan_prompt,
                             agent,  # Use main Nova agent, not plan agent
@@ -1157,11 +1186,14 @@ async def simple_cli(
                     console.print(
                         f"[dim red]  Use /context to see detailed breakdown.[/dim red]"
                     )
-                    dispatch_hook_fire_and_forget(HookEvent.CONTEXT_WARNING, {
-                        "level": "critical",
-                        "usage_percentage": pct,
-                        "session_id": session_state.session_id,
-                    })
+                    dispatch_hook_fire_and_forget(
+                        HookEvent.CONTEXT_WARNING,
+                        {
+                            "level": "critical",
+                            "usage_percentage": pct,
+                            "session_id": session_state.session_id,
+                        },
+                    )
                 elif breakdown.is_warning:
                     console.print(
                         f"[yellow]⚠ Context usage high: {pct:.0f}%[/yellow] "
@@ -1170,11 +1202,14 @@ async def simple_cli(
                     console.print(
                         f"[dim]  Use /context to see detailed breakdown.[/dim]"
                     )
-                    dispatch_hook_fire_and_forget(HookEvent.CONTEXT_WARNING, {
-                        "level": "warning",
-                        "usage_percentage": pct,
-                        "session_id": session_state.session_id,
-                    })
+                    dispatch_hook_fire_and_forget(
+                        HookEvent.CONTEXT_WARNING,
+                        {
+                            "level": "warning",
+                            "usage_percentage": pct,
+                            "session_id": session_state.session_id,
+                        },
+                    )
 
             # Track message for auto-save and check if we should save
             auto_save_manager.increment_messages()
@@ -1195,7 +1230,9 @@ async def simple_cli(
             if _exit_code.code == 2:
                 _exec_task = None
                 # Rate-limit/API messages were already printed by the handler above
-                console.print("[dim]Press Enter to continue or type 'exit' to quit.[/dim]")
+                console.print(
+                    "[dim]Press Enter to continue or type 'exit' to quit.[/dim]"
+                )
                 console.print()
                 continue
             # sys.exit(1) = fatal error — let it propagate
@@ -1209,13 +1246,17 @@ async def simple_cli(
                 console.print()
                 console.print("[bold yellow]Warning: Rate Limit Reached[/bold yellow]")
                 console.print("The model provider is rate-limiting requests.")
-                console.print("[dim]Wait a moment and try again, or check your API usage/plan limits.[/dim]")
+                console.print(
+                    "[dim]Wait a moment and try again, or check your API usage/plan limits.[/dim]"
+                )
                 console.print()
                 continue
             if _is_api_error(_api_err):
                 console.print()
                 console.print(f"[bold red]API Error[/bold red]: {str(_api_err)[:300]}")
-                console.print("[dim]The request failed. Try again or use a different model.[/dim]")
+                console.print(
+                    "[dim]The request failed. Try again or use a different model.[/dim]"
+                )
                 console.print()
                 continue
             # Unknown error — re-raise for the top-level crash handler
@@ -1225,17 +1266,25 @@ async def simple_cli(
 def _is_rate_limit_error(e: Exception) -> bool:
     """Check if an exception is a rate limit or API quota error."""
     msg = str(e).lower()
-    if any(kw in msg for kw in ("429", "rate limit", "usage limit", "quota", "too many requests")):
+    if any(
+        kw in msg
+        for kw in ("429", "rate limit", "usage limit", "quota", "too many requests")
+    ):
         return True
     try:
         from openai import RateLimitError, APIStatusError
+
         if isinstance(e, (RateLimitError, APIStatusError)):
             return True
     except ImportError:
         pass
     try:
         from httpx import HTTPStatusError
-        if isinstance(e, HTTPStatusError) and getattr(e.response, "status_code", 0) == 429:
+
+        if (
+            isinstance(e, HTTPStatusError)
+            and getattr(e.response, "status_code", 0) == 429
+        ):
             return True
     except ImportError:
         pass
@@ -1246,18 +1295,22 @@ def _is_api_error(e: Exception) -> bool:
     """Check if an exception is an API/model error that shouldn't crash the CLI."""
     try:
         from openai import APIStatusError, APIConnectionError
+
         if isinstance(e, (APIStatusError, APIConnectionError)):
             return True
     except ImportError:
         pass
     try:
         from httpx import HTTPStatusError
-        if isinstance(e, HTTPStatusError) and getattr(e.response, "status_code", 0) >= 400:
+
+        if (
+            isinstance(e, HTTPStatusError)
+            and getattr(e.response, "status_code", 0) >= 400
+        ):
             return True
     except ImportError:
         pass
     return False
-
 
 
 async def _shutdown_background_services(session_state) -> None:
@@ -1268,6 +1321,7 @@ async def _shutdown_background_services(session_state) -> None:
     background tasks don't dangle and throw during event-loop teardown (which
     can leave the terminal in a broken state).
     """
+
     async def _guard(coro, timeout: float = 4.0) -> None:
         """Await a teardown step but never let it hang or raise on quit."""
         try:
@@ -1438,8 +1492,11 @@ async def _run_agent_session(
     # NOTE: This must be set up BEFORE the processor task starts, otherwise
     # the processor gets a None reference and silently crashes
     session_state._remote_message_queue: asyncio.Queue = asyncio.Queue()
-    session_state._remote_message_lock = asyncio.Lock()  # serialize remote+local agent calls
+    session_state._remote_message_lock = (
+        asyncio.Lock()
+    )  # serialize remote+local agent calls
     from novacode_cli.remote.bridge import RemoteBridgeManager
+
     session_state._remote_bridge_manager = RemoteBridgeManager(
         session_state._remote_message_queue
     )
@@ -1487,8 +1544,12 @@ async def _run_agent_session(
             except asyncio.CancelledError:
                 _proc_logger.info("Remote message processor cancelled")
             except Exception as e:
-                _proc_logger.error(f"Remote message processor crashed: {e}", exc_info=True)
-                _session_state._console.print(f"\n  [red]\u274c Remote message processor crashed: {e}[/red]\n")
+                _proc_logger.error(
+                    f"Remote message processor crashed: {e}", exc_info=True
+                )
+                _session_state._console.print(
+                    f"\n  [red]\u274c Remote message processor crashed: {e}[/red]\n"
+                )
 
         # Add a done-callback to surface any crashes
         def _on_processor_done(task: asyncio.Task) -> None:
@@ -1497,7 +1558,9 @@ async def _run_agent_session(
             except asyncio.CancelledError:
                 return
             if exc:
-                console.print(f"\n  [red]\u274c Remote processor task died: {exc}[/red]\n")
+                console.print(
+                    f"\n  [red]\u274c Remote processor task died: {exc}[/red]\n"
+                )
 
         # In TUI mode the Textual app runs its own remote consumer that renders
         # remote prompts through the event stream; skip the legacy console
@@ -1513,11 +1576,14 @@ async def _run_agent_session(
             session_state._remote_processor_task = _remote_processor_task
     except Exception as _remote_proc_exc:
         import logging as _logging
+
         _logging.getLogger("novacode_cli.remote").error(
             f"Failed to start remote message processor: {_remote_proc_exc}",
-            exc_info=True
+            exc_info=True,
         )
-        console.print(f"  [red]\u274c Failed to start remote message processor: {_remote_proc_exc}[/red]")
+        console.print(
+            f"  [red]\u274c Failed to start remote message processor: {_remote_proc_exc}[/red]"
+        )
 
     # Inject initial messages if continuing a session
     if initial_messages:
@@ -1871,13 +1937,17 @@ async def main(
                 console.print()
                 console.print("[bold yellow]Warning: Rate Limit Reached[/bold yellow]")
                 console.print("The model provider is rate-limiting requests.")
-                console.print("[dim]Wait a moment and try again, or check your API usage/plan limits.[/dim]")
+                console.print(
+                    "[dim]Wait a moment and try again, or check your API usage/plan limits.[/dim]"
+                )
                 console.print()
                 sys.exit(2)  # Distinct exit code - caller can retry
             if _is_api_error(e):
                 console.print()
                 console.print(f"[bold red]API Error[/bold red]: {str(e)[:300]}")
-                console.print("[dim]The request failed. Try again or use a different model.[/dim]")
+                console.print(
+                    "[dim]The request failed. Try again or use a different model.[/dim]"
+                )
                 console.print()
                 sys.exit(2)
             console.print("[bold red]Fatal error:[/bold red]", str(e))
@@ -1885,13 +1955,18 @@ async def main(
             logging.getLogger("novacode_cli").error(
                 "Fatal error during session: %s", e, exc_info=True
             )
-            dispatch_hook_fire_and_forget(HookEvent.ERROR, {
-                "error": str(e)[:500],
-                "type": type(e).__name__,
-                "session_id": session_state.session_id,
-            })
+            dispatch_hook_fire_and_forget(
+                HookEvent.ERROR,
+                {
+                    "error": str(e)[:500],
+                    "type": type(e).__name__,
+                    "session_id": session_state.session_id,
+                },
+            )
             if session_state.session_id:
-                console.print(f"[dim]Session may have been saved -- resume with:[/dim]\n  nova --continue {session_state.session_id}")
+                console.print(
+                    f"[dim]Session may have been saved -- resume with:[/dim]\n  nova --continue {session_state.session_id}"
+                )
             sys.exit(1)
 
     # Branch 1: User wants a sandbox
@@ -1956,9 +2031,7 @@ async def main(
             if not explicit_sandbox:
                 # We defaulted to Docker but it isn't available — fall back to
                 # local mode instead of blocking the user.
-                console.print(
-                    f"[yellow]⚠ Docker sandbox unavailable ({e}).[/yellow]"
-                )
+                console.print(f"[yellow]⚠ Docker sandbox unavailable ({e}).[/yellow]")
                 console.print(
                     "[dim]Falling back to local execution. "
                     "Start Docker for isolation, or use --no-sandbox to silence this.[/dim]"
@@ -1979,13 +2052,17 @@ async def main(
                 console.print()
                 console.print("[bold yellow]Warning: Rate Limit Reached[/bold yellow]")
                 console.print("The model provider is rate-limiting requests.")
-                console.print("[dim]Wait a moment and try again, or check your API usage/plan limits.[/dim]")
+                console.print(
+                    "[dim]Wait a moment and try again, or check your API usage/plan limits.[/dim]"
+                )
                 console.print()
                 sys.exit(2)  # Distinct exit code - caller can retry
             if _is_api_error(e):
                 console.print()
                 console.print(f"[bold red]API Error[/bold red]: {str(e)[:300]}")
-                console.print("[dim]The request failed. Try again or use a different model.[/dim]")
+                console.print(
+                    "[dim]The request failed. Try again or use a different model.[/dim]"
+                )
                 console.print()
                 sys.exit(2)
             console.print("[bold red]Fatal error:[/bold red]", str(e))
@@ -1993,13 +2070,18 @@ async def main(
             logging.getLogger("novacode_cli").error(
                 "Fatal error during session: %s", e, exc_info=True
             )
-            dispatch_hook_fire_and_forget(HookEvent.ERROR, {
-                "error": str(e)[:500],
-                "type": type(e).__name__,
-                "session_id": session_state.session_id,
-            })
+            dispatch_hook_fire_and_forget(
+                HookEvent.ERROR,
+                {
+                    "error": str(e)[:500],
+                    "type": type(e).__name__,
+                    "session_id": session_state.session_id,
+                },
+            )
             if session_state.session_id:
-                console.print(f"[dim]Session may have been saved -- resume with:[/dim]\n  nova --continue {session_state.session_id}")
+                console.print(
+                    f"[dim]Session may have been saved -- resume with:[/dim]\n  nova --continue {session_state.session_id}"
+                )
             sys.exit(1)
 
     # Branch 2: User wants local mode (none or default)
@@ -2354,7 +2436,9 @@ def cli_main() -> None:
             # explicit choice (or --no-sandbox) is honored without fallback.
             if args.no_sandbox:
                 if args.sandbox and args.sandbox != "none":
-                    console.print("[red]Error: --no-sandbox conflicts with --sandbox.[/red]")
+                    console.print(
+                        "[red]Error: --no-sandbox conflicts with --sandbox.[/red]"
+                    )
                     sys.exit(1)
                 sandbox_type = "none"
                 explicit_sandbox = True
@@ -2369,8 +2453,12 @@ def cli_main() -> None:
 
             # --resume and --continue are mutually exclusive
             if args.resume and args.continue_session:
-                console.print("[red]Error: --resume and --continue are mutually exclusive.[/red]")
-                console.print("[dim]Use --resume to pick a session interactively, or --continue <id> to resume a specific session.[/dim]")
+                console.print(
+                    "[red]Error: --resume and --continue are mutually exclusive.[/red]"
+                )
+                console.print(
+                    "[dim]Use --resume to pick a session interactively, or --continue <id> to resume a specific session.[/dim]"
+                )
                 sys.exit(1)
 
             # API key validation happens in create_model()

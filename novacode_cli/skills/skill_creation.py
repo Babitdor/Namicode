@@ -585,12 +585,22 @@ def _list(
         skills = list_skills(user_skills_dir=None, project_skills_dir=project_skills_dir)
         console.print("\n[bold]Project Skills:[/bold]\n", style=COLORS["primary"])
     elif show_scope == "global":
-        # Load only global skills
-        skills = list_skills(user_skills_dir=user_skills_dir, project_skills_dir=None)
+        # Load only global (nova + claude) skills
+        claude_skills_dir = Settings.get_global_claude_skills_dir()
+        skills = list_skills(
+            user_skills_dir=user_skills_dir,
+            claude_skills_dir=claude_skills_dir if claude_skills_dir.exists() else None,
+            project_skills_dir=None,
+        )
         console.print("\n[bold]Global Skills:[/bold]\n", style=COLORS["primary"])
     else:
-        # Load both user and project skills
-        skills = list_skills(user_skills_dir=user_skills_dir, project_skills_dir=project_skills_dir)
+        # Load all skills (nova + claude + project)
+        claude_skills_dir = Settings.get_global_claude_skills_dir()
+        skills = list_skills(
+            user_skills_dir=user_skills_dir,
+            claude_skills_dir=claude_skills_dir if claude_skills_dir.exists() else None,
+            project_skills_dir=project_skills_dir,
+        )
 
         if not skills:
             console.print("[yellow]No skills found.[/yellow]")
@@ -696,9 +706,19 @@ def _info(
             return
         skills = list_skills(user_skills_dir=None, project_skills_dir=project_skills_dir)
     elif search_scope == "global":
-        skills = list_skills(user_skills_dir=user_skills_dir, project_skills_dir=None)
+        claude_skills_dir = Settings.get_global_claude_skills_dir()
+        skills = list_skills(
+            user_skills_dir=user_skills_dir,
+            claude_skills_dir=claude_skills_dir if claude_skills_dir.exists() else None,
+            project_skills_dir=None,
+        )
     else:
-        skills = list_skills(user_skills_dir=user_skills_dir, project_skills_dir=project_skills_dir)
+        claude_skills_dir = Settings.get_global_claude_skills_dir()
+        skills = list_skills(
+            user_skills_dir=user_skills_dir,
+            claude_skills_dir=claude_skills_dir if claude_skills_dir.exists() else None,
+            project_skills_dir=project_skills_dir,
+        )
 
     # Find the skill
     skill = next((s for s in skills if s["name"] == skill_name), None)

@@ -4,6 +4,7 @@ import asyncio
 
 from novacode_cli.commands.notifications_handler import handle_notifications_command
 from novacode_cli.states.Session import Notification, SessionState
+from novacode_cli.states.slices.notifications import NotificationState
 
 
 def test_add_notification():
@@ -69,3 +70,38 @@ def test_handler_list_dismiss_clear():
     # clear
     assert asyncio.run(handle_notifications_command(s, "clear")) is True
     assert len(s.notifications) == 0
+
+
+# -- direct NotificationState slice tests (independent of SessionState) --
+
+
+def test_notification_state_add():
+    """NotificationState slice can be tested without SessionState."""
+    ns = NotificationState()
+    nid = ns.add("info", "slice test", "direct", "unit")
+    assert ns.unread_count() == 1
+    assert ns.notifications[0].id == nid
+    assert ns.notifications[0].level == "info"
+
+
+def test_notification_state_dismiss():
+    ns = NotificationState()
+    nid = ns.add("warning", "dismiss me", "", "unit")
+    assert ns.dismiss(nid) is True
+    assert ns.unread_count() == 0
+    assert ns.dismiss("nope") is False
+
+
+def test_notification_state_clear():
+    ns = NotificationState()
+    for i in range(5):
+        ns.add("info", str(i), "", "unit")
+    assert ns.clear() == 5
+    assert ns.unread_count() == 0
+
+
+def test_notification_state_bounded():
+    ns = NotificationState()
+    for i in range(110):
+        ns.add("info", str(i), "", "unit")
+    assert len(ns.notifications) == 100

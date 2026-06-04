@@ -1,10 +1,17 @@
-import asyncio
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
+
+from novacode_cli.states.slices import (
+    AgentRuntimeState,
+    BackgroundTaskState,
+    NotificationState,
+    RemoteBridgeState,
+    UISettings,
+)
 
 
 @dataclass
@@ -44,65 +51,378 @@ class BackgroundRalphTask:
 
 
 class SessionState:
-    """Holds mutable session state (auto-approve mode, etc)."""
+    """Holds mutable session state across all domains.
+
+    SessionState is a composite container that holds 5 focused state slices:
+
+        UISettings         — auto-approve, plan mode, verbose, hints, splash
+        AgentRuntimeState  — agent graph, backend, model, plan agent
+        RemoteBridgeState  — Discord/Telegram bridge queue, lock, manager
+        BackgroundTaskState — Ralph tasks, Trello server
+        NotificationState  — in-terminal notification deque
+
+    Properties on this class delegate to the appropriate slice, so **zero
+    callers need to change**. Dynamically-assigned fields (e.g.
+    ``browser_use_tasks``, ``current_task``) continue to work via
+    __getattr__ / __setattr__.
+    """
 
     def __init__(self, auto_approve: bool = False, no_splash: bool = False) -> None:
-        self.auto_approve = auto_approve
-        self.no_splash = no_splash
-        self.exit_hint_until: float | None = None
-        self.exit_hint_handle = None
+        # -- focused state slices ---------------------------------------------
+        self._ui_settings = UISettings(auto_approve=auto_approve, no_splash=no_splash)
+        self._agent_runtime = AgentRuntimeState()
+        self._remote_bridge = RemoteBridgeState()
+        self._bg_tasks = BackgroundTaskState()
+        self._ntf = NotificationState()
+
+        # -- cross-cutting session identity fields ----------------------------
         self.thread_id = str(uuid.uuid4())
-        # Session persistence fields
-        # Generate unique session_id on startup; will be overridden if continuing an existing session
         self.session_id = str(uuid.uuid4())
         self.is_continued: bool = False
         self.todos: list[dict] | None = None
-        # Plan mode fields
-        self.plan_mode_enabled: bool = False
-        # Verbose mode: show internal agent context instead of collapsing it
-        self.verbose: bool = False
-        # Prompt decomposition: split multi-intent prompts into sequential sub-prompts
-        self.prompt_decomposition_enabled: bool = True
-        # Steering instructions: persistent user guidance injected into every model call
-        # List of SteeringInstruction(label, instruction) tuples
+
+        # Steering instructions: persistent user guidance injected into
+        # every model call.  List of SteeringInstruction(label, instruction).
         from novacode_cli.bootstrap.steering import SteeringInstruction
         self.steering_instructions: list[SteeringInstruction] = []
-        # Ralph background tasks: task_id -> BackgroundRalphTask
-        self.background_ralph_tasks: dict[str, BackgroundRalphTask] = {}
 
-        # Trello task board server
-        self.trello_server: Any = None  # TrelloServer instance
+        # Dynamic fields (browser_use_tasks, current_task, etc.) stored here
+        self._dynamic: dict[str, Any] = {}
 
-        # In-terminal notifications (bounded queue, newest first)
-        self.notifications: deque[Notification] = deque(maxlen=100)
+    # ══════════════════════════════════════════════════════════════════════
+    # Backward-compatible properties — delegate to UI settings slice
+    # ══════════════════════════════════════════════════════════════════════
 
-        # Remote bridge (Discord/Telegram) support
-        self._remote_message_queue: asyncio.Queue | None = None
-        self._remote_message_lock: asyncio.Lock | None = None
-        self._remote_bridge_manager: Any = None  # RemoteBridgeManager
-        # Track auto-approve state before remote bridge so we can restore on /remote stop
-        self._pre_remote_auto_approve: bool | None = None
+    @property
+    def auto_approve(self) -> bool:
+        return self._ui_settings.auto_approve
 
-        # Agent components for dynamic model switching
-        self._agent: Any = None  # The compiled agent graph
-        self._backend: Any = None  # Composite backend
-        self._checkpointer: Any = None  # Checkpointer for state preservation
-        self._store: Any = None  # Store for memory
-        self._tools: list = []  # List of tools
-        self._assistant_id: str | None = None  # Agent ID
-        self._model: Any = None  # Current model instance
-        self._sandbox_type: str | None = None  # Sandbox type
-        self.token_tracker: Any = None  # TokenTracker for toolbar context display
-        self._image_tracker: Any = None  # ImageTracker for remote message processor
-        self._seen_message_ids: set = set()  # Message IDs seen by remote bridge
-        self._console: Any = None  # Rich Console reference
-        self._composite_backend: Any = None  # Composite backend for remote bridge
-        
-        # Plan agent components (for plan mode)
-        self.plan_agent: Any = None  # Plan agent for planning phase
-        self.plan_backend: Any = None  # Plan backend
-        self.plan_content: str | None = None  # Current plan content (from plan agent)
-        self.approved_plan_content: str | None = None  # Approved plan content to pass to Nova agent
+    @auto_approve.setter
+    def auto_approve(self, value: bool) -> None:
+        self._ui_settings.auto_approve = value
+
+    @property
+    def no_splash(self) -> bool:
+        return self._ui_settings.no_splash
+
+    @no_splash.setter
+    def no_splash(self, value: bool) -> None:
+        self._ui_settings.no_splash = value
+
+    @property
+    def plan_mode_enabled(self) -> bool:
+        return self._ui_settings.plan_mode_enabled
+
+    @plan_mode_enabled.setter
+    def plan_mode_enabled(self, value: bool) -> None:
+        self._ui_settings.plan_mode_enabled = value
+
+    @property
+    def verbose(self) -> bool:
+        return self._ui_settings.verbose
+
+    @verbose.setter
+    def verbose(self, value: bool) -> None:
+        self._ui_settings.verbose = value
+
+    @property
+    def prompt_decomposition_enabled(self) -> bool:
+        return self._ui_settings.prompt_decomposition_enabled
+
+    @prompt_decomposition_enabled.setter
+    def prompt_decomposition_enabled(self, value: bool) -> None:
+        self._ui_settings.prompt_decomposition_enabled = value
+
+    @property
+    def exit_hint_until(self) -> float | None:
+        return self._ui_settings.exit_hint_until
+
+    @exit_hint_until.setter
+    def exit_hint_until(self, value: float | None) -> None:
+        self._ui_settings.exit_hint_until = value
+
+    @property
+    def exit_hint_handle(self) -> Any:
+        return self._ui_settings.exit_hint_handle
+
+    @exit_hint_handle.setter
+    def exit_hint_handle(self, value: Any) -> None:
+        self._ui_settings.exit_hint_handle = value
+
+    # ══════════════════════════════════════════════════════════════════════
+    # Backward-compatible properties — delegate to agent runtime slice
+    # ══════════════════════════════════════════════════════════════════════
+
+    @property
+    def token_tracker(self) -> Any:
+        return self._agent_runtime.token_tracker
+
+    @token_tracker.setter
+    def token_tracker(self, value: Any) -> None:
+        self._agent_runtime.token_tracker = value
+
+    @property
+    def _agent(self) -> Any:
+        return self._agent_runtime._agent  # type: ignore[attr-defined]
+
+    @_agent.setter
+    def _agent(self, value: Any) -> None:
+        self._agent_runtime._agent = value  # type: ignore[attr-defined]
+
+    @property
+    def _backend(self) -> Any:
+        return self._agent_runtime._backend  # type: ignore[attr-defined]
+
+    @_backend.setter
+    def _backend(self, value: Any) -> None:
+        self._agent_runtime._backend = value  # type: ignore[attr-defined]
+
+    @property
+    def _checkpointer(self) -> Any:
+        return self._agent_runtime._checkpointer  # type: ignore[attr-defined]
+
+    @_checkpointer.setter
+    def _checkpointer(self, value: Any) -> None:
+        self._agent_runtime._checkpointer = value  # type: ignore[attr-defined]
+
+    @property
+    def _store(self) -> Any:
+        return self._agent_runtime._store  # type: ignore[attr-defined]
+
+    @_store.setter
+    def _store(self, value: Any) -> None:
+        self._agent_runtime._store = value  # type: ignore[attr-defined]
+
+    @property
+    def _tools(self) -> list:
+        return self._agent_runtime._tools  # type: ignore[attr-defined]
+
+    @_tools.setter
+    def _tools(self, value: list) -> None:
+        self._agent_runtime._tools = value  # type: ignore[attr-defined]
+
+    @property
+    def _assistant_id(self) -> str | None:
+        return self._agent_runtime._assistant_id  # type: ignore[attr-defined]
+
+    @_assistant_id.setter
+    def _assistant_id(self, value: str | None) -> None:
+        self._agent_runtime._assistant_id = value  # type: ignore[attr-defined]
+
+    @property
+    def _model(self) -> Any:
+        return self._agent_runtime._model  # type: ignore[attr-defined]
+
+    @_model.setter
+    def _model(self, value: Any) -> None:
+        self._agent_runtime._model = value  # type: ignore[attr-defined]
+
+    @property
+    def _sandbox_type(self) -> str | None:
+        return self._agent_runtime._sandbox_type  # type: ignore[attr-defined]
+
+    @_sandbox_type.setter
+    def _sandbox_type(self, value: str | None) -> None:
+        self._agent_runtime._sandbox_type = value  # type: ignore[attr-defined]
+
+    @property
+    def plan_agent(self) -> Any:
+        return self._agent_runtime.plan_agent
+
+    @plan_agent.setter
+    def plan_agent(self, value: Any) -> None:
+        self._agent_runtime.plan_agent = value
+
+    @property
+    def plan_backend(self) -> Any:
+        return self._agent_runtime.plan_backend
+
+    @plan_backend.setter
+    def plan_backend(self, value: Any) -> None:
+        self._agent_runtime.plan_backend = value
+
+    @property
+    def plan_content(self) -> str | None:
+        return self._agent_runtime.plan_content
+
+    @plan_content.setter
+    def plan_content(self, value: str | None) -> None:
+        self._agent_runtime.plan_content = value
+
+    @property
+    def approved_plan_content(self) -> str | None:
+        return self._agent_runtime.approved_plan_content
+
+    @approved_plan_content.setter
+    def approved_plan_content(self, value: str | None) -> None:
+        self._agent_runtime.approved_plan_content = value
+
+    # ══════════════════════════════════════════════════════════════════════
+    # Backward-compatible properties — delegate to remote bridge slice
+    # ══════════════════════════════════════════════════════════════════════
+
+    @property
+    def _remote_message_queue(self) -> Any:
+        return self._remote_bridge._remote_message_queue
+
+    @_remote_message_queue.setter
+    def _remote_message_queue(self, value: Any) -> None:
+        self._remote_bridge._remote_message_queue = value
+
+    @property
+    def _remote_message_lock(self) -> Any:
+        return self._remote_bridge._remote_message_lock
+
+    @_remote_message_lock.setter
+    def _remote_message_lock(self, value: Any) -> None:
+        self._remote_bridge._remote_message_lock = value
+
+    @property
+    def _remote_bridge_manager(self) -> Any:
+        return self._remote_bridge._remote_bridge_manager
+
+    @_remote_bridge_manager.setter
+    def _remote_bridge_manager(self, value: Any) -> None:
+        self._remote_bridge._remote_bridge_manager = value
+
+    @property
+    def _pre_remote_auto_approve(self) -> bool | None:
+        return self._remote_bridge._pre_remote_auto_approve
+
+    @_pre_remote_auto_approve.setter
+    def _pre_remote_auto_approve(self, value: bool | None) -> None:
+        self._remote_bridge._pre_remote_auto_approve = value
+
+    @property
+    def _image_tracker(self) -> Any:
+        return self._remote_bridge._image_tracker
+
+    @_image_tracker.setter
+    def _image_tracker(self, value: Any) -> None:
+        self._remote_bridge._image_tracker = value
+
+    @property
+    def _seen_message_ids(self) -> set:
+        return self._remote_bridge._seen_message_ids
+
+    @_seen_message_ids.setter
+    def _seen_message_ids(self, value: set) -> None:
+        self._remote_bridge._seen_message_ids = value
+
+    @property
+    def _composite_backend(self) -> Any:
+        return self._remote_bridge._composite_backend
+
+    @_composite_backend.setter
+    def _composite_backend(self, value: Any) -> None:
+        self._remote_bridge._composite_backend = value
+
+    @property
+    def _console(self) -> Any:
+        return self._remote_bridge._console
+
+    @_console.setter
+    def _console(self, value: Any) -> None:
+        self._remote_bridge._console = value
+
+    # ══════════════════════════════════════════════════════════════════════
+    # Backward-compatible properties — delegate to background tasks slice
+    # ══════════════════════════════════════════════════════════════════════
+
+    @property
+    def background_ralph_tasks(self) -> dict:
+        return self._bg_tasks.background_ralph_tasks
+
+    @background_ralph_tasks.setter
+    def background_ralph_tasks(self, value: dict) -> None:
+        self._bg_tasks.background_ralph_tasks = value
+
+    @property
+    def trello_server(self) -> Any:
+        return self._bg_tasks.trello_server
+
+    @trello_server.setter
+    def trello_server(self, value: Any) -> None:
+        self._bg_tasks.trello_server = value
+
+    # ══════════════════════════════════════════════════════════════════════
+    # Backward-compatible properties — delegate to notification slice
+    # ══════════════════════════════════════════════════════════════════════
+
+    @property
+    def notifications(self) -> deque:
+        return self._ntf.notifications
+
+    @notifications.setter
+    def notifications(self, value: deque) -> None:
+        self._ntf.notifications = value
+
+    # ══════════════════════════════════════════════════════════════════════
+    # Dynamic-field fallback
+    # ══════════════════════════════════════════════════════════════════════
+    # Callers dynamically assign fields like browser_use_tasks,
+    # _background_threads, _remote_processor_task, _paste_tracker,
+    # pending_plan_mode_sync, current_task, task_status, workspace_root,
+    # use_tui, _remote_tool_notify.
+
+    def __getattr__(self, name: str) -> Any:
+        # First, check if the name is a private agent field on the runtime slice
+        agent_private = {"_backend", "_checkpointer", "_store", "_tools",
+                         "_assistant_id", "_model", "_sandbox_type"}
+        if name in agent_private:
+            return getattr(self._agent_runtime, name, None)
+        # Then check dynamic fields
+        try:
+            return object.__getattribute__(self, "_dynamic")[name]
+        except KeyError:
+            raise AttributeError(
+                f"'{type(self).__name__}' object has no attribute '{name}'"
+            )
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        # Bypass for known instance attributes (set normally)
+        if name in {
+            "thread_id", "session_id", "is_continued", "todos",
+            "steering_instructions",
+            "_ui_settings", "_agent_runtime", "_remote_bridge", "_bg_tasks", "_ntf",
+            "_dynamic",
+        }:
+            object.__setattr__(self, name, value)
+            return
+        # Private agent fields go to the agent runtime slice
+        agent_private = {"_backend", "_checkpointer", "_store", "_tools",
+                         "_assistant_id", "_model", "_sandbox_type",
+                         "_agent"}  # _agent (compiled graph) goes to runtime slice
+        if name in agent_private:
+            setattr(self._agent_runtime, name, value)
+            return
+        # Property-backed fields — use object.__setattr__ which triggers the
+        # property descriptor (data descriptors always win).
+        if name in {
+            "auto_approve", "no_splash", "plan_mode_enabled", "verbose",
+            "prompt_decomposition_enabled", "exit_hint_until", "exit_hint_handle",
+            "token_tracker", "plan_agent", "plan_backend", "plan_content",
+            "approved_plan_content",
+            "_remote_message_queue", "_remote_message_lock",
+            "_remote_bridge_manager", "_pre_remote_auto_approve",
+            "_image_tracker", "_seen_message_ids", "_composite_backend",
+            "_console",
+            "background_ralph_tasks", "trello_server",
+            "notifications",
+        }:
+            object.__setattr__(self, name, value)
+            return
+        # Everything else -> dynamic storage
+        try:
+            dyn = object.__getattribute__(self, "_dynamic")
+        except AttributeError:
+            dyn = {}
+            object.__setattr__(self, "_dynamic", dyn)
+        dyn[name] = value
+
+    # ══════════════════════════════════════════════════════════════════════
+    # Delegating methods
+    # ══════════════════════════════════════════════════════════════════════
 
     def set_agent_context(
         self,
@@ -115,155 +435,71 @@ class SessionState:
         model: Any,
         sandbox_type: str | None = None,
     ) -> None:
-        """Set the agent context for dynamic model switching.
-        
-        Args:
-            agent: The compiled agent graph
-            backend: Composite backend
-            checkpointer: Checkpointer for state preservation
-            store: Store for memory
-            tools: List of tools
-            assistant_id: Agent ID
-            model: Current model instance
-            sandbox_type: Sandbox type (optional)
-        """
-        self._agent = agent
-        self._backend = backend
-        self._checkpointer = checkpointer
-        self._store = store
-        self._tools = tools
-        self._assistant_id = assistant_id
-        self._model = model
-        self._sandbox_type = sandbox_type
+        """Set the agent context for dynamic model switching."""
+        self._agent_runtime.set_agent_context(
+            agent, backend, checkpointer, store, tools,
+            assistant_id, model, sandbox_type,
+        )
 
     async def switch_model(self, new_model: Any) -> tuple[Any, Any]:
-        """Switch to a new model dynamically by recreating the agent.
-        
-        This preserves conversation state via the checkpointer and store.
-        
-        Args:
-            new_model: The new model instance to use
-            
-        Returns:
-            Tuple of (new_agent, new_backend)
-            
-        Raises:
-            RuntimeError: If agent context is not set
+        """Switch to a new model dynamically.
+
+        Delegates to AgentRuntimeState.switch_model() and passes
+        steering_instructions and session_id for hook dispatch.
         """
-        if not all([self._agent, self._checkpointer, self._store, self._assistant_id]):
-            raise RuntimeError("Agent context not set. Cannot switch model.")
-        
-        from novacode_cli.agents.core_agent import create_agent_with_config
-        
-        # Recreate agent with new model, preserving state
-        new_agent, new_backend = create_agent_with_config(
-            model=new_model,
-            assistant_id=self._assistant_id,
-            tools=self._tools,
-            sandbox=self._backend if hasattr(self._backend, 'default') else None,
-            sandbox_type=self._sandbox_type,
-            store=self._store,
-            checkpointer=self._checkpointer,
-            is_continuation=True,  # Mark as continuation to preserve state
+        return await self._agent_runtime.switch_model(
+            new_model,
             steering_instructions=self.steering_instructions,
+            session_id=self.session_id,
         )
-        
-        # Update stored references
-        self._agent = new_agent
-        self._backend = new_backend
-        self._model = new_model
-
-        # Fire model.switch hook
-        try:
-            from novacode_cli.hooks import dispatch_hook_fire_and_forget, HookEvent
-            model_name = getattr(new_model, "model_name", None) or getattr(new_model, "model", "unknown")
-            dispatch_hook_fire_and_forget(HookEvent.MODEL_SWITCH, {
-                "new_model": str(model_name),
-                "session_id": self.session_id,
-            })
-        except Exception:
-            pass
-
-        return new_agent, new_backend
 
     def toggle_auto_approve(self) -> bool:
         """Toggle auto-approve and return new state."""
-        self.auto_approve = not self.auto_approve
-        return self.auto_approve
+        return self._ui_settings.toggle_auto_approve()
 
     def toggle_plan_mode(self) -> bool:
         """Toggle plan mode and return new state."""
-        self.plan_mode_enabled = not self.plan_mode_enabled
-        return self.plan_mode_enabled
+        return self._ui_settings.toggle_plan_mode()
 
     def toggle_verbose(self) -> bool:
         """Toggle verbose mode and return new state."""
-        self.verbose = not self.verbose
-        return self.verbose
+        return self._ui_settings.toggle_verbose()
 
     def get_active_agent(self) -> tuple[Any, Any]:
-        """Get the active agent based on plan mode.
-        
-        Returns:
-            Tuple of (agent, backend) - either plan agent or main agent
-        """
-        if self.plan_mode_enabled and self.plan_agent is not None:
-            return self.plan_agent, self.plan_backend
-        return self._agent, self._backend
+        """Get the active agent based on plan mode."""
+        return self._agent_runtime.get_active_agent(
+            plan_mode_enabled=self._ui_settings.plan_mode_enabled,
+        )
 
     def clear_plan_agent(self) -> None:
         """Clear the plan agent after plan approval."""
-        self.plan_agent = None
-        self.plan_backend = None
-        self.plan_mode_enabled = False
-        self.plan_content = None  # Clear plan content when exiting plan mode
+        self._agent_runtime.clear_plan_agent()
+        self._ui_settings.plan_mode_enabled = False
 
     def set_plan_content(self, plan_content: str) -> None:
-        """Store current plan content from plan agent.
-        
-        Args:
-            plan_content: The plan markdown content
-        """
-        self.plan_content = plan_content
+        """Store current plan content from plan agent."""
+        self._agent_runtime.set_plan_content(plan_content)
 
     def set_approved_plan(self, plan_content: str) -> None:
-        """Store approved plan content for Nova agent execution.
-        
-        Args:
-            plan_content: The approved plan markdown content
-        """
-        self.approved_plan_content = plan_content
+        """Store approved plan content for Nova agent execution."""
+        self._agent_runtime.set_approved_plan(plan_content)
 
     def consume_approved_plan(self) -> str | None:
-        """Get and clear the approved plan content.
+        """Get and clear the approved plan content."""
+        return self._agent_runtime.consume_approved_plan()
 
-        Returns:
-            The approved plan content, or None if not set
-        """
-        content = self.approved_plan_content
-        self.approved_plan_content = None
-        return content
+    # -- notifications delegated with hook dispatch -----------------------
 
-    # -- notifications --------------------------------------------------------
     def add_notification(
         self, level: str, title: str, message: str, source: str
     ) -> str:
-        """Create and store a notification, fire the notification hook, return id.
-
-        Safe to call from any thread: the deque append is atomic and the hook
-        dispatch silently no-ops when there is no running event loop.
-        """
-        n = Notification(
-            id=uuid.uuid4().hex[:8],
-            level=level,
-            title=title,
-            message=message,
-            source=source,
-        )
-        self.notifications.appendleft(n)
+        """Create and store a notification, fire the notification hook, return id."""
+        nid = self._ntf.add(level, title, message, source)
+        # Fire hook with session_id (cross-domain coordination in SessionState)
         try:
             from novacode_cli.hooks import HookEvent, dispatch_hook_fire_and_forget
 
+            n = self._ntf.notifications[0]
             dispatch_hook_fire_and_forget(
                 HookEvent.NOTIFICATION,
                 {
@@ -278,22 +514,16 @@ class SessionState:
             )
         except Exception:  # noqa: BLE001 — notifications must never break callers
             pass
-        return n.id
+        return nid
 
     def dismiss_notification(self, notification_id: str) -> bool:
         """Mark a notification as dismissed. Returns True if found."""
-        for n in self.notifications:
-            if n.id == notification_id:
-                n.dismissed = True
-                return True
-        return False
+        return self._ntf.dismiss(notification_id)
 
     def clear_notifications(self) -> int:
         """Drop all notifications. Returns how many were removed."""
-        count = len(self.notifications)
-        self.notifications.clear()
-        return count
+        return self._ntf.clear()
 
     def unread_notification_count(self) -> int:
         """Number of non-dismissed notifications."""
-        return sum(1 for n in self.notifications if not n.dismissed)
+        return self._ntf.unread_count()

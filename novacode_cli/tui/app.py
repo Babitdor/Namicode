@@ -178,40 +178,6 @@ def _capture(fn, *args, **kwargs) -> Text:
     return Text.from_ansi(cap.get())
 
 
-class _TuiSink:
-    """File-like sink that streams a rich Console's output into the TUI live.
-
-    Used so long-running pipelines (e.g. ``/init``) that print progress via a
-    rich ``Console`` render line-by-line in the transcript. Safe to call from
-    worker threads (uses ``call_from_thread``); falls back to a direct call when
-    already on the app thread."""
-
-    def __init__(self, app: Any) -> None:
-        self._app = app
-        self._buf = ""
-
-    def write(self, s: str) -> int:
-        self._buf += s
-        while "\n" in self._buf:
-            line, self._buf = self._buf.split("\n", 1)
-            self._emit(line)
-        return len(s)
-
-    def flush(self) -> None:
-        if self._buf:
-            self._emit(self._buf)
-            self._buf = ""
-
-    def _emit(self, line: str) -> None:
-        try:
-            self._app.call_from_thread(self._app._init_emit, line)
-        except Exception:  # noqa: BLE001 — already on the app thread, emit directly
-            try:
-                self._app._init_emit(line)
-            except Exception:  # noqa: BLE001, S110
-                pass
-
-
 def _approval_details(action_requests: list[dict]) -> Text:
     """Detailed, multi-line view of the actions awaiting approval."""
     from novacode_cli.ui.ui_elements import format_tool_display
@@ -1309,6 +1275,58 @@ class PromptInput(Input):
         super()._on_paste(event)
 
 
+class TuiInitRenderer:
+    """Adapter implementing ``InitRenderer`` for the Textual TUI path.
+
+    Wires the pipeline's emit events into ``NovaApp._init_on_event`` (the
+    native step-tracker widget), renders the final result, and streams the
+    fallback exploration prompt through the TUI.
+    """
+
+    def __init__(self, app: NovaApp) -> None:
+        self._app = app
+
+    def emit(self, event) -> None:
+        """Forward a pipeline event to the TUI's step-tracker."""
+        self._app._init_on_event(event)
+
+    def result(self, result, flags) -> None:
+        """Finalise the step tracker and log the outcome."""
+        self._app._init_finish()
+        if not result.ok and result.message:
+            self._app._log(Text(result.message, style="yellow"))
+
+    def graphify_unavailable(self) -> None:
+        """Log a notice that graphify is not installed."""
+        self._app._log(
+            Text("graphify not installed — using fallback exploration", style="yellow")
+        )
+
+    async def run_fallback(
+        self,
+        project_root: Path,
+        nova_md_path: Path,
+        agent,
+        session_state,
+        assistant_id: str,
+        token_tracker,  # noqa: ARG002
+    ) -> None:
+        """Stream the exploration prompt through the TUI."""
+        from novacode_cli.prompts import render_template
+
+        prompt = render_template(
+            "init_exploration.jinja",
+            project_root=str(project_root),
+            Nova_md_path=str(nova_md_path),
+        )
+        prev = session_state.auto_approve
+        session_state.auto_approve = True
+        try:
+            await self._app._stream_prompt(prompt)
+        finally:
+            session_state.auto_approve = prev
+
+
 class NovaApp(App):
     """Phase-1 Nova chat TUI."""
 
@@ -1699,46 +1717,13 @@ class NovaApp(App):
                 st["status"] = "done"
         self._init_render_steps()
 
-    def _init_emit(self, line: str) -> None:
-        """Parse a pipeline progress line into the native step tracker."""
-        if self._init_widget is None:
-            return
-        import re
-
-        plain = Text.from_ansi(line).plain.strip()
-        if not plain:
-            return
-        m = re.match(r"Step\s+(\d+)\s*/\s*\d+\s*:?\s*(.*)", plain)
-        if m:
-            n = int(m.group(1))
-            title = m.group(2).strip().rstrip(".")
-            for i, st in enumerate(self._init_steps):
-                if i < n - 1:
-                    st["status"] = "done"
-                elif i == n - 1:
-                    st["status"] = "active"
-                    if title:
-                        st["label"] = title
-                    st["detail"] = ""
-            self._init_render_steps()
-            return
-        # Non-step line: attach as detail of the active step (or flag a failure).
-        active = next((s for s in self._init_steps if s["status"] == "active"), None)
-        if active is not None:
-            if any(x in plain for x in ("❌", "✗")) or "failed" in plain.lower():
-                active["status"] = "fail"
-            active["detail"] = plain[:80]
-            self._init_render_steps()
-
     def _init_on_event(self, event: Any) -> None:
         """Drive the native step tracker from a structured pipeline event.
 
         The /init pipeline (``_run_graphify_pipeline``) reports progress through
-        UI-agnostic :mod:`novacode_cli.init.events`. Unlike :meth:`_init_emit`
-        (which parses graphify's internal console output), this keeps the
-        concise pre-set step labels and treats the events as authoritative.
-        Called on the app thread from the pipeline coroutine, so it may mutate
-        widgets directly.
+        UI-agnostic :mod:`novacode_cli.init.events`; this keeps the concise
+        pre-set step labels and treats the events as authoritative. Called on the
+        app thread from the pipeline coroutine, so it may mutate widgets directly.
         """
         if self._init_widget is None:
             return
@@ -2736,8 +2721,8 @@ class NovaApp(App):
         """Handle the TUI-native slash command subset."""
         cmd = text[1:].split(maxsplit=1)[0].lower() if len(text) > 1 else ""
         if cmd.startswith("skill:"):
-            # /skill:<name> — invoke via the legacy handler (returns a prompt).
-            await self._passthrough_command(text)
+            # /skill:<name> — resolve + render natively, then stream the prompt.
+            await self._run_skill(text)
         elif cmd in ("help", "?"):
             self._log(self._help_text())
         elif cmd == "model":
@@ -2823,6 +2808,10 @@ class NovaApp(App):
             await self._run_trello(text)
         elif cmd in _PASSTHROUGH_SLASH:
             await self._passthrough_command(text)
+        # A bare /<name> may be a skill (e.g. /graphify) — resolve it natively
+        # before reporting the command as unavailable.
+        elif await self._run_skill(text):
+            pass
         else:
             self._log(
                 Text(
@@ -2831,6 +2820,52 @@ class NovaApp(App):
                     style="yellow",
                 )
             )
+
+    async def _run_skill(self, text: str) -> bool:
+        """Resolve a ``/skill:<name>`` (or bare ``/<name>``) and run it natively.
+
+        Renders the "⚡ Invoking skill" block as native widgets (the resolver is
+        presentation-free) and streams the skill prompt. Returns ``True`` when a
+        skill matched, ``False`` otherwise so the caller can fall back to the
+        "command unavailable" notice.
+        """
+        raw = text[1:]
+        if raw.lower().startswith("skill:"):
+            raw = raw[len("skill:"):]
+        parts = raw.split(maxsplit=1)
+        name = parts[0] if parts else ""
+        args = parts[1] if len(parts) > 1 else None
+        if not name:
+            self._log(Text("Usage: /skill:<name> [args]", style="yellow"))
+            return True
+
+        from novacode_cli.commands.skill_invoke import _try_skill_invocation
+
+        try:
+            skill = await _try_skill_invocation(
+                name, args, self.session_state, self.assistant_id
+            )
+        except Exception as ex:  # noqa: BLE001
+            self._log(Text(f"/skill:{name} failed: {ex}", style="red"))
+            return True
+        if skill is None:
+            return False
+
+        t = Text()
+        t.append(f"⚡ Invoking skill: {skill.name}", style="bold #7aa2f7")
+        if skill.description:
+            t.append(f"\n  {skill.description}", style="dim")
+        t.append(f"\n  Source: {skill.source}", style="dim")
+        if skill.args:
+            t.append(f"\n  Arguments: {skill.args}", style="dim")
+        if skill.supporting_files:
+            t.append(
+                f"\n  Supporting files: {', '.join(skill.supporting_files)}",
+                style="dim",
+            )
+        self._log(t)
+        await self._stream_prompt(skill.prompt)
+        return True
 
     async def _passthrough_command(self, text: str) -> None:
         """Run a print/toggle-only legacy slash command and show its output.
@@ -2985,10 +3020,15 @@ class NovaApp(App):
         )
 
     async def _run_init(self, text: str) -> None:
-        """Generate NOVA.md natively: graphify pipeline (captured) or stream the
-        fallback exploration through the TUI."""
+        """Generate NOVA.md: delegates orchestration to :class:`InitOrchestrator`.
+
+        TUI-specific setup (step tracker widget, agent-building, quiet console,
+        turn status) stays here; the pipeline dispatch and fallback routing
+        live in the orchestrator.
+        """
         from pathlib import Path
 
+        from novacode_cli.commands.init_handler import InitFlags, InitOrchestrator
         from novacode_cli.config.config import settings
 
         cmd_args = text.split(maxsplit=1)[1] if len(text.split(maxsplit=1)) > 1 else None
@@ -3004,110 +3044,77 @@ class NovaApp(App):
             Text(f"🔍 Initializing NOVA.md for {Path(project_root).name}…", style="bold")
         )
 
-        from novacode_cli.init.detect import is_graphify_available
-
-        if is_graphify_available():
-            from rich.console import Console as _Console
-
-            from novacode_cli.commands.init_handler import (
-                InitFlags,
-                _run_graphify_pipeline,
+        # ── TUI-native step tracker setup (renderer concern) ──────────
+        self._init_steps = [
+            {"label": name, "status": "pending", "detail": ""}
+            for name in (
+                "Detect files",
+                "Extract entities",
+                "Build & cluster graph",
+                "Analyze structure",
+                "Generate docs",
             )
+        ]
+        self._init_widget = Static("", classes="initlog")
+        await self._mount(self._init_widget)
+        self._init_render_steps()
 
-            # Drive the multi-step pipeline into a NATIVE step tracker. A quiet
-            # console feeds progress lines to _init_emit, which advances the
-            # step list (Detect → Extract → Build → Analyze → Generate).
-            self._init_steps = [
-                {"label": name, "status": "pending", "detail": ""}
-                for name in (
-                    "Detect files",
-                    "Extract entities",
-                    "Build & cluster graph",
-                    "Analyze structure",
-                    "Generate docs",
-                )
-            ]
-            self._init_widget = Static("", classes="initlog")
-            await self._mount(self._init_widget)
-            self._init_render_steps()
-            # Non-interactive console: the pipeline's plain console.print lines
-            # still flow to the sink (→ native step tracker), but Rich live
-            # widgets (Progress spinners) DON'T animate. With force_terminal=True
-            # they ran as a live auto-refresh, streaming spinner frames into the
-            # transcript — a stray "Rich component" (most visible on --update's
-            # re-extract Progress). _init_emit strips ANSI, so we lose nothing.
-            tui_console = _Console(
-                file=_TuiSink(self),
-                force_terminal=False,
-                force_interactive=False,
-                width=100,
-            )
-            self._turn_active = True
-            self._turn_start = time.monotonic()
-            self._set_status("indexing codebase…")
-            # The agent-driven stages (semantic extraction, NOVA.md authoring)
-            # run unattended through _tui_execute_fn → must auto-approve their
-            # read/write tool calls for the pipeline's duration.
-            _prev_auto = self.session_state.auto_approve
-            self.session_state.auto_approve = True
-            # Build a dedicated no-HITL agent for /init: with interrupt_on={} the
-            # main agent AND every subagent (incl. the auto-injected
-            # general-purpose one) run tools without prompting. This is required
-            # because /init dispatches `task` subagents, and a subagent's HITL
-            # interrupt can't be auto-resolved (it bubbles out of ainvoke as a
-            # GraphInterrupt). _active_agent prefers self._init_agent while set.
-            init_agent = init_backend = None
-            try:
-                init_agent, init_backend = self._build_init_agent()
-            except Exception as ex:  # noqa: BLE001
-                # Fall back to the shared agent (its own tool calls still
-                # auto-approve via the stream; only subagents are at risk).
-                self._log(
-                    Text(f"(/init: using shared agent — {ex})", style="dim")
-                )
-            self._init_agent = init_agent
-            self._init_backend = init_backend
-            try:
-                result = await _run_graphify_pipeline(
-                    project_root=Path(project_root),
-                    nova_dir=nova_dir,
-                    nova_md_path=nova_md_path,
-                    agents_md_path=nova_dir / "AGENTS.md",
-                    flags=InitFlags(cmd_args),
-                    emit=self._init_on_event,
-                    progress_console=tui_console,
-                    agent=init_agent or self.agent,
-                    execute_fn=self._tui_execute_fn,
-                    session_id=getattr(self.session_state, "session_id", ""),
-                )
-                self._init_finish()
-                if not result.ok and result.message:
-                    self._log(Text(result.message, style="yellow"))
-            except Exception as ex:  # noqa: BLE001
-                self._log(Text(f"/init failed: {ex}", style="red"))
-            finally:
-                self._init_agent = None
-                self._init_backend = None
-                self.session_state.auto_approve = _prev_auto
-                self._turn_active = False
-                self._set_status("ready")
-                self._init_widget = None
-                self._init_steps = []
-        else:
-            # Fallback: stream the agent's codebase exploration through the TUI.
-            from novacode_cli.prompts import render_template
+        # Quiet sink for graphify's internal Rich output (detection/extraction
+        # panels, tree-sitter Progress). We surface the real stats as native
+        # step detail via the pipeline's emit events instead.
+        import io as _io
+        from rich.console import Console as _Console
 
-            prompt = render_template(
-                "init_exploration.jinja",
-                project_root=str(project_root),
-                Nova_md_path=str(nova_md_path),
+        quiet_console = _Console(
+            file=_io.StringIO(),
+            force_terminal=False,
+            force_interactive=False,
+            width=100,
+        )
+
+        self._turn_active = True
+        self._turn_start = time.monotonic()
+        self._set_status("indexing codebase…")
+        _prev_auto = self.session_state.auto_approve
+        self.session_state.auto_approve = True
+
+        # Build a dedicated no-HITL agent for /init subagents.
+        init_agent = init_backend = None
+        try:
+            init_agent, init_backend = self._build_init_agent()
+        except Exception as ex:  # noqa: BLE001
+            self._log(Text(f"(/init: using shared agent — {ex})", style="dim"))
+        self._init_agent = init_agent
+        self._init_backend = init_backend
+
+        try:
+            renderer = TuiInitRenderer(self)
+            orchestrator = InitOrchestrator(
+                project_root=Path(project_root),
+                nova_dir=nova_dir,
+                nova_md_path=nova_md_path,
+                agents_md_path=nova_dir / "AGENTS.md",
+                flags=InitFlags(cmd_args),
+                renderer=renderer,
+                agent=init_agent or self.agent,
+                session_state=self.session_state,
+                assistant_id=self.assistant_id,
+                token_tracker=self.token_tracker,
+                session_id=getattr(self.session_state, "session_id", ""),
+                progress_console=quiet_console,
+                execute_fn=self._tui_execute_fn,
             )
-            prev = self.session_state.auto_approve
-            self.session_state.auto_approve = True
-            try:
-                await self._stream_prompt(prompt)
-            finally:
-                self.session_state.auto_approve = prev
+            await orchestrator.run()
+        except Exception as ex:  # noqa: BLE001
+            self._log(Text(f"/init failed: {ex}", style="red"))
+        finally:
+            self._init_agent = None
+            self._init_backend = None
+            self.session_state.auto_approve = _prev_auto
+            self._turn_active = False
+            self._set_status("ready")
+            self._init_widget = None
+            self._init_steps = []
 
         if nova_md_path.exists():
             self._log(Text(f"✓ NOVA.md ready → {nova_md_path}", style="green"))
@@ -4450,11 +4457,17 @@ class NovaApp(App):
     def _collect_skill_names(self) -> list[str]:
         from pathlib import Path
 
-        from novacode_cli.config.config import settings
+        from novacode_cli.config.config import Settings, settings
 
         dirs: list = []
         try:
             dirs.append(settings.ensure_user_skills_dir())
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            claude_skills_dir = Settings.get_global_claude_skills_dir()
+            if claude_skills_dir.exists():
+                dirs.append(claude_skills_dir)
         except Exception:  # noqa: BLE001
             pass
         try:

@@ -323,6 +323,7 @@ class SkillCompleter(Completer):
 
             settings = Settings.from_environment()
             user_skills_dir = settings.ensure_user_skills_dir()
+            claude_skills_dir = Settings.get_global_claude_skills_dir()
             project_skills_dir = (
                 settings.get_project_skills_dir()
                 if settings.project_root
@@ -330,6 +331,7 @@ class SkillCompleter(Completer):
             )
             skills = list_skills(
                 user_skills_dir=user_skills_dir,
+                claude_skills_dir=claude_skills_dir if claude_skills_dir.exists() else None,
                 project_skills_dir=project_skills_dir,
             )
             for skill in skills:

@@ -40,24 +40,35 @@ __all__ = ["SkillMetadata", "list_skills"]
 
 
 def list_skills(
-    *, user_skills_dir: Path | None = None, project_skills_dir: Path | None = None
+    *,
+    user_skills_dir: Path | None = None,
+    project_skills_dir: Path | None = None,
+    claude_skills_dir: Path | None = None,
 ) -> list[SkillMetadata]:
-    """List skills from user and/or project directories.
+    """List skills from user, project, and/or global Claude directories.
 
     This is a CLI-specific wrapper around the prebuilt middleware's skill loading
     functionality. It uses FilesystemBackend to load skills from local directories.
 
-    When both directories are provided, project skills with the same name as
-    user skills will override them (project skills take precedence).
+    Sources are loaded in this order (later overrides earlier):
+    1. User skills (~/.nova/skills/) — foundation
+    2. Global Claude skills (~/.claude/skills/) — shared Claude Code skills
+    3. Project skills (.nova/skills/ or .claude/skills/) — highest priority
+
+    When multiple sources have skills with the same name, the later source's
+    skill takes precedence. Each skill includes a 'source' field indicating
+    its origin ('user', 'claude', or 'project').
 
     Args:
         user_skills_dir: Path to the user-level skills directory.
         project_skills_dir: Path to the project-level skills directory.
+        claude_skills_dir: Path to the global Claude Code skills directory
+            (~/.claude/skills/).
 
     Returns:
-        Merged list of skill metadata from both sources, with project skills
-        taking precedence over user skills when names conflict. Each skill
-        includes a 'source' field indicating its origin ('user' or 'project').
+        Merged list of skill metadata from all sources, with later sources
+        taking precedence over earlier ones when names conflict. Each skill
+        includes a 'source' field indicating its origin.
     """
     all_skills: dict[str, SkillMetadata] = {}
 
@@ -71,7 +82,17 @@ def list_skills(
             skill["source"] = "user"  # type: ignore[typeddict-unknown-key]
             all_skills[skill["name"]] = skill
 
-    # Load project skills second (override/augment)
+    # Load global Claude Code skills second (override/supplement user skills)
+    if claude_skills_dir and claude_skills_dir.exists():
+        claude_backend = FilesystemBackend(root_dir=str(claude_skills_dir), virtual_mode=True)
+        claude_skills = list_skills_from_backend(
+            backend=claude_backend, source_path="."
+        )
+        for skill in claude_skills:
+            skill["source"] = "claude"  # type: ignore[typeddict-unknown-key]
+            all_skills[skill["name"]] = skill
+
+    # Load project skills last (override/augment)
     if project_skills_dir and project_skills_dir.exists():
         project_backend = FilesystemBackend(root_dir=str(project_skills_dir), virtual_mode=True)
         project_skills = list_skills_from_backend(

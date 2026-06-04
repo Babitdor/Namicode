@@ -25,8 +25,10 @@ _DEFAULT_SANDBOX_IMAGE = "python:3.11-slim"
 # Baseline toolchain installed into a freshly-created sandbox so the agent can
 # actually run version control, linting, tests, and builds. Without these,
 # execute/test/validate commands fail almost immediately (git/ruff "not found").
-_PROVISION_APT_PACKAGES = ("git", "ca-certificates", "curl", "build-essential")
-_PROVISION_PIP_PACKAGES = ("ruff", "pytest")
+# jq / tree are lightweight CLI utilities that agents commonly pipe through.
+# uv is a fast Rust-based pip/venv/workflow replacement.
+_PROVISION_APT_PACKAGES = ("git", "ca-certificates", "curl", "build-essential", "jq", "tree")
+_PROVISION_PIP_PACKAGES = ("ruff", "pytest", "uv", "networkx")
 
 
 def _sandbox_image() -> str:
@@ -53,7 +55,7 @@ def _build_provision_script() -> str:
 
     - System packages (git + build tools) go through apt, but only when ``git``
       is missing — apt update/install is the slow part, and git is the canary.
-    - Python tools (ruff, pytest) go through pip in one satisfiable call.
+    - Python tools (ruff, pytest, uv, networkx) go through pip in one satisfiable call.
     - Each step is best-effort: a failure prints a marker and continues rather
       than aborting the whole session. A final summary line lets the run log show
       exactly which tools ended up available.
@@ -81,7 +83,7 @@ fi
 if command -v pip >/dev/null 2>&1; then
   pip install --quiet --no-input --root-user-action=ignore {pip_list} || echo "nova-provision: pip install failed (continuing)"
 fi
-echo "nova-provision-summary: git=$(command -v git || echo MISSING) ruff=$(command -v ruff || echo MISSING) pytest=$(command -v pytest || echo MISSING)"
+echo "nova-provision-summary: git=$(command -v git || echo MISSING) ruff=$(command -v ruff || echo MISSING) pytest=$(command -v pytest || echo MISSING) uv=$(command -v uv || echo MISSING) networkx=$(python3 -c 'import networkx; print(networkx.__version__)' 2>/dev/null || echo MISSING)"
 """
 
 
@@ -92,7 +94,7 @@ def _provision_sandbox_tools(backend: SandboxBackendProtocol) -> None:
     be installed, so the user knows execute/test commands may be degraded and
     can point NOVA_SANDBOX_IMAGE at a richer image instead.
     """
-    console.print("[dim]Provisioning sandbox toolchain (git, ruff, pytest)...[/dim]")
+    console.print("[dim]Provisioning sandbox toolchain (git, ruff, pytest, uv, networkx, jq, tree)...[/dim]")
     try:
         # execute() already runs the command under `bash -c`; pass the script raw.
         result = backend.execute(_build_provision_script(), timeout=600)
@@ -112,10 +114,11 @@ def _provision_sandbox_tools(backend: SandboxBackendProtocol) -> None:
         )
         console.print(
             "[dim]  Some tools may be unavailable. Set NOVA_SANDBOX_IMAGE to a "
-            "pre-baked image, or add deps via a setup script.[/dim]"
+            "pre-baked image, or set NOVA_SANDBOX_EXTRA_APT/NOVA_SANDBOX_EXTRA_PIP "
+            "for additional packages.[/dim]"
         )
     else:
-        console.print("[green]✓ Sandbox toolchain ready (git, ruff, pytest)[/green]")
+        console.print("[green]✓ Sandbox toolchain ready (git, ruff, pytest, uv, networkx, jq, tree)[/green]")
 
 
 def _run_sandbox_setup(backend: SandboxBackendProtocol, setup_script_path: str) -> None:

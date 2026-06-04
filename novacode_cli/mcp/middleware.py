@@ -106,31 +106,29 @@ class MCPMiddleware(AgentMiddleware):
             self._tools_discovered = True
 
     def _discover_tools_sync(self) -> None:
-        """Discover tools synchronously - kept for backwards compatibility.
+        """Discover tools synchronously by running async discovery in a dedicated thread.
 
-        DEPRECATED: Use _ensure_tools_discovered() instead for lazy loading.
-        This method is kept for any code that still needs synchronous discovery.
+        Uses ``concurrent.futures.ThreadPoolExecutor`` to run ``asyncio.run()`` in a
+        *separate* thread with its own event loop, avoiding the need for
+        ``nest_asyncio`` and preventing blocking the main event loop.
+
+        This is safe to call from:
+        - A sync CLI command handler (no running loop)
+        - A Textual worker thread (``@work(thread=True)``)
+        - Any context where a loop *is* running (the dedicated thread handles it)
         """
         servers = self.mcp_config.list_servers()
 
         if not servers:
             return
 
-        # Use nest_asyncio to allow nested event loops
-        # This avoids ThreadPoolExecutor issues with Docker stdio on Windows
-        import nest_asyncio
+        import concurrent.futures
 
-        nest_asyncio.apply()
-
-        # Run async discovery
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-        loop.run_until_complete(self._discover_tools_async())
-        self._tools_discovered = True
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(asyncio.run, self._discover_tools_async())
+            # 30-second blanket timeout — discovery involves network I/O to
+            # potentially multiple MCP servers.
+            future.result(timeout=30)
 
     async def _discover_tools_async(self) -> None:
         """Async implementation of tool discovery using MultiServerMCPClient.
@@ -139,6 +137,10 @@ class MCPMiddleware(AgentMiddleware):
         - Creates fresh sessions for each tool invocation
         - Uses load_mcp_tools with server_name for proper attribution
         - Handles errors gracefully with proper logging
+
+        Discovery is parallelised across servers with a concurrency cap
+        (``asyncio.Semaphore``) so that N servers are discovered concurrently
+        instead of sequentially.
         """
         from langchain_mcp_adapters.tools import load_mcp_tools
 
@@ -158,56 +160,70 @@ class MCPMiddleware(AgentMiddleware):
         # Create the combined client
         self._client = MultiServerMCPClient(config_dict)
 
+        # Cap concurrent discovery to avoid overwhelming the host
+        _discovery_semaphore = asyncio.Semaphore(3)
+
+        async def _discover_one(
+            server_name: str, connection: dict[str, Any]
+        ) -> list[BaseTool]:
+            """Discover tools for a single MCP server."""
+            async with _discovery_semaphore:
+                try:
+                    server_tools = await load_mcp_tools(
+                        session=None,  # Stateless - creates fresh session per invocation
+                        connection=connection,
+                        server_name=server_name,
+                    )
+
+                    if server_tools:
+                        # Build metadata cache with correct server attribution
+                        for tool in server_tools:
+                            input_schema = {}
+                            if hasattr(tool, "args_schema") and tool.args_schema:
+                                try:
+                                    schema = tool.args_schema.model_json_schema()  # type: ignore
+                                    input_schema = schema.get("properties", {})
+                                except Exception:
+                                    pass
+
+                            self._tools_cache.append(
+                                {
+                                    "name": tool.name,
+                                    "description": tool.description or "",
+                                    "server": server_name,
+                                    "input_schema": input_schema,
+                                }
+                            )
+
+                    return server_tools
+
+                except Exception as e:
+                    # Log the error but continue with other servers
+                    error_msg = str(e)
+                    if "TaskGroup" in error_msg or "unhandled errors" in error_msg:
+                        error_msg = "Connection timeout or initialization error"
+                    console.print(
+                        f"[yellow]Warning: Failed to connect to "
+                        f"MCP server '{server_name}': {error_msg}[/yellow]"
+                    )
+                    return []
+
+        # Discover all servers in parallel with concurrency cap
+        tasks = [
+            _discover_one(name, conn)
+            for name, conn in config_dict.items()
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Flatten results — each _discover_one returns a list or an exception
         all_tools: list[BaseTool] = []
-
-        # Load tools from each server with proper attribution
-        # Use load_mcp_tools with server_name parameter for proper tool attribution
-        for server_name, connection in config_dict.items():
-            try:
-                # Load tools with server name for proper attribution
-                # This follows the langchain-mcp-adapters best practices
-                server_tools = await load_mcp_tools(
-                    session=None,  # Stateless - creates fresh session per invocation
-                    connection=connection,
-                    server_name=server_name,
-                )
-
-                if server_tools:
-                    all_tools.extend(server_tools)
-
-                    # Build metadata cache with correct server attribution
-                    for tool in server_tools:
-                        # Extract input schema for better parameter documentation
-                        input_schema = {}
-                        if hasattr(tool, "args_schema") and tool.args_schema:
-                            try:
-                                schema = tool.args_schema.model_json_schema()  # type: ignore
-                                input_schema = schema.get("properties", {})
-                            except Exception:
-                                pass
-
-                        self._tools_cache.append(
-                            {
-                                "name": tool.name,
-                                "description": tool.description or "",
-                                "server": server_name,
-                                "input_schema": input_schema,
-                            }
-                        )
-
-            except Exception as e:
-                # Log the error but continue with other servers
-                error_msg = str(e)
-                if "TaskGroup" in error_msg or "unhandled errors" in error_msg:
-                    error_msg = "Connection timeout or initialization error"
-                console.print(
-                    f"[yellow]Warning: Failed to connect to "
-                    f"MCP server '{server_name}': {error_msg}[/yellow]"
-                )
+        for r in results:
+            if isinstance(r, list):
+                all_tools.extend(r)
 
         # Store all tools for the agent
         self.tools = all_tools  # type: ignore
-        
+
         # Mark discovery as complete to avoid re-discovering on every message
         self._tools_discovered = True
 

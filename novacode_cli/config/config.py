@@ -888,6 +888,15 @@ class Settings:
         skills_dir.mkdir(parents=True, exist_ok=True)
         return skills_dir
 
+    @staticmethod
+    def get_global_claude_skills_dir() -> Path:
+        """Get the global Claude Code skills directory path.
+
+        Returns:
+            Path to ~/.claude/skills/ (global Claude Code skills directory)
+        """
+        return Path.home() / ".claude" / "skills"
+
     def get_project_skills_dir(self) -> Path | None:
         """Get project-level skills directory path (legacy .nova/skills/).
 

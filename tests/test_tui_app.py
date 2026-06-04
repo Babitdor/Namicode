@@ -1156,12 +1156,12 @@ def test_tui_native_todos():
 
 
 async def _drive_init_live_stream():
-    """The /init pipeline feeds a NATIVE step tracker (parsed from console lines,
-    works across threads via the sink)."""
-    from rich.console import Console
+    """The /init pipeline drives a NATIVE step tracker via structured events
+    (StepStarted/StepDetail → _init_on_event), not captured console text."""
     from textual.widgets import Static
 
-    from novacode_cli.tui.app import NovaApp, _TuiSink
+    from novacode_cli.init import events as iev
+    from novacode_cli.tui.app import NovaApp
     from novacode_cli.ui.ui_elements import TokenTracker
 
     app = NovaApp(
@@ -1176,22 +1176,26 @@ async def _drive_init_live_stream():
     async with app.run_test() as pilot:
         app._init_steps = [
             {"label": n, "status": "pending", "detail": ""}
-            for n in ("Detect", "Extract", "Build", "Analyze", "Generate")
+            for n in (
+                "Detect files",
+                "Extract entities",
+                "Build & cluster graph",
+                "Analyze structure",
+                "Generate docs",
+            )
         ]
         app._init_widget = Static("", classes="initlog")
         await app.query_one("#transcript").mount(app._init_widget)
         app._init_render_steps()
-        con = Console(
-            file=_TuiSink(app), force_terminal=True, color_system="standard", width=80
-        )
-        con.print("Step 1/5: Detecting project files...")
-        con.print("  scanned 34 files")
-        await asyncio.to_thread(lambda: con.print("Step 3/5: Building graph..."))
+        app._init_on_event(iev.StepStarted(1, 5, "Detecting project files"))
+        app._init_on_event(iev.StepDetail("34 files · 1,000 words"))
+        app._init_on_event(iev.StepStarted(3, 5, "Building knowledge graph"))
         app._init_finish()
         await pilot.pause()
         rendered = str(app._init_widget.render())
-        # native tracker: parsed step labels + completion glyphs, not verbatim "Step N/5"
-        assert "Detecting project files" in rendered, rendered
+        # native tracker keeps the concise pre-set labels; the emitted detail and
+        # completion glyphs are shown (no verbatim "Step N/5" parsing).
+        assert "Detect files" in rendered, rendered
         assert "34 files" in rendered and "✓" in rendered, rendered
 
 
