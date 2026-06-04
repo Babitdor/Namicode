@@ -26,16 +26,39 @@ model and where ``execute`` actually runs.
 
 The rebase is idempotent: a path already under the workdir is returned
 unchanged, so internal re-entrant calls never double-prefix.
+
+## Async patterns
+
+All async file operations use ``_run_async`` which applies:
+
+- **Timeout** (default 120s) — remote sandbox file ops can hang on
+  unresponsive backends; the timeout prevents a stuck operation from
+  blocking the caller indefinitely.
+- **Cancellation handling** — ``asyncio.CancelledError`` is caught,
+  logged, and re-raised so the caller can respond gracefully.
+- **Consistent error wrapping** — transient failures (connection
+  resets, timeouts) are surfaced as exceptions rather than silent
+  failures.
 """
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import posixpath
 from typing import TYPE_CHECKING, Any
 
 from deepagents.backends.sandbox import BaseSandbox
 
+logger = logging.getLogger(__name__)
+
+# Default timeout for remote sandbox file operations. Operations that
+# exceed this are cancelled to prevent hangs on unresponsive backends.
+_DEFAULT_ASYNC_TIMEOUT: float = 120.0
+
 if TYPE_CHECKING:
+    from collections.abc import Awaitable
+
     from deepagents.backends.protocol import (
         EditResult,
         ExecuteResponse,
@@ -103,7 +126,9 @@ class WorkdirSandboxBackend(BaseSandbox):
         return self._inner.download_files([self._rebase(p) for p in paths])
 
     async def adownload_files(self, paths: list[str]) -> list[FileDownloadResponse]:
-        return await self._inner.adownload_files([self._rebase(p) for p in paths])
+        return await self._run_async(
+            self._inner.adownload_files([self._rebase(p) for p in paths])
+        )
 
     def upload_files(
         self, files: list[tuple[str, bytes]]
@@ -113,7 +138,42 @@ class WorkdirSandboxBackend(BaseSandbox):
     async def aupload_files(
         self, files: list[tuple[str, bytes]]
     ) -> list[FileUploadResponse]:
-        return await self._inner.aupload_files([(self._rebase(p), b) for p, b in files])
+        return await self._run_async(
+            self._inner.aupload_files([(self._rebase(p), b) for p, b in files])
+        )
+
+    # ── async executor helper ──────────────────────────────────────────
+    async def _run_async(self, coro: Awaitable[Any]) -> Any:
+        """Run an async backend operation with timeout and cancellation handling.
+
+        Wraps every async file operation so that hangs on unresponsive remote
+        backends are surfaced as ``TimeoutError``, and task cancellation
+        is caught, logged, and re-raised cleanly.
+
+        Applies: :ref:`async-python-patterns` Patterns 4 (error handling),
+        5 (timeout), and 3 (task management with cancellation).
+
+        Args:
+            coro: The awaitable to run (e.g. ``super().aread(rebased, o, l)``).
+
+        Returns:
+            The result of the wrapped callable.
+
+        Raises:
+            TimeoutError: If the operation exceeds the default timeout.
+            CancelledError: Propagated from the caller.
+        """
+        try:
+            return await asyncio.wait_for(coro, timeout=_DEFAULT_ASYNC_TIMEOUT)
+        except TimeoutError:
+            logger.warning(
+                "Async sandbox op timed out after %ss",
+                _DEFAULT_ASYNC_TIMEOUT,
+            )
+            raise
+        except asyncio.CancelledError:
+            logger.info("Async sandbox op cancelled")
+            raise
 
     # ── file ops → rebase the path, then run the inherited implementation ──
     # super().<m>() builds the script with the rebased path and calls
@@ -122,13 +182,13 @@ class WorkdirSandboxBackend(BaseSandbox):
         return super().ls(self._rebase(path))
 
     async def als(self, path: str) -> LsResult:
-        return await super().als(self._rebase(path))
+        return await self._run_async(super().als(self._rebase(path)))
 
     def ls_info(self, path: str) -> list[Any]:
         return super().ls_info(self._rebase(path))
 
     async def als_info(self, path: str) -> list[Any]:
-        return await super().als_info(self._rebase(path))
+        return await self._run_async(super().als_info(self._rebase(path)))
 
     def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
         return super().read(self._rebase(file_path), offset, limit)
@@ -136,13 +196,15 @@ class WorkdirSandboxBackend(BaseSandbox):
     async def aread(
         self, file_path: str, offset: int = 0, limit: int = 2000
     ) -> ReadResult:
-        return await super().aread(self._rebase(file_path), offset, limit)
+        return await self._run_async(
+            super().aread(self._rebase(file_path), offset, limit)
+        )
 
     def write(self, file_path: str, content: str) -> WriteResult:
         return super().write(self._rebase(file_path), content)
 
     async def awrite(self, file_path: str, content: str) -> WriteResult:
-        return await super().awrite(self._rebase(file_path), content)
+        return await self._run_async(super().awrite(self._rebase(file_path), content))
 
     def edit(
         self, file_path: str, old_string: str, new_string: str, replace_all: bool = False
@@ -152,8 +214,8 @@ class WorkdirSandboxBackend(BaseSandbox):
     async def aedit(
         self, file_path: str, old_string: str, new_string: str, replace_all: bool = False
     ) -> EditResult:
-        return await super().aedit(
-            self._rebase(file_path), old_string, new_string, replace_all
+        return await self._run_async(
+            super().aedit(self._rebase(file_path), old_string, new_string, replace_all)
         )
 
     def grep(
@@ -164,7 +226,7 @@ class WorkdirSandboxBackend(BaseSandbox):
     async def agrep(
         self, pattern: str, path: str | None = None, glob: str | None = None
     ) -> GrepResult:
-        return await super().agrep(pattern, self._rebase_opt(path), glob)
+        return await self._run_async(super().agrep(pattern, self._rebase_opt(path), glob))
 
     def grep_raw(
         self, pattern: str, path: str | None = None, glob: str | None = None
@@ -174,19 +236,21 @@ class WorkdirSandboxBackend(BaseSandbox):
     async def agrep_raw(
         self, pattern: str, path: str | None = None, glob: str | None = None
     ) -> list[Any] | str:
-        return await super().agrep_raw(pattern, self._rebase_opt(path), glob)
+        return await self._run_async(
+            super().agrep_raw(pattern, self._rebase_opt(path), glob)
+        )
 
     def glob(self, pattern: str, path: str = "/") -> GlobResult:
         return super().glob(pattern, self._rebase(path))
 
     async def aglob(self, pattern: str, path: str = "/") -> GlobResult:
-        return await super().aglob(pattern, self._rebase(path))
+        return await self._run_async(super().aglob(pattern, self._rebase(path)))
 
     def glob_info(self, pattern: str, path: str = "/") -> list[Any]:
         return super().glob_info(pattern, self._rebase(path))
 
     async def aglob_info(self, pattern: str, path: str = "/") -> list[Any]:
-        return await super().aglob_info(pattern, self._rebase(path))
+        return await self._run_async(super().aglob_info(pattern, self._rebase(path)))
 
 
 __all__ = ["WorkdirSandboxBackend"]

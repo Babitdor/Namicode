@@ -677,7 +677,10 @@ async def simple_cli(
                         from novacode_cli.config.model_create import create_model
 
                         summary_model = create_model()
-                        memory_content = summarize_messages_to_memory(
+                        # Run the synchronous LLM call in a thread executor so it
+                        # doesn't block the event loop and stall exit.
+                        memory_content = await asyncio.to_thread(
+                            summarize_messages_to_memory,
                             messages=messages,
                             model=summary_model,
                             current_task=current_task,
@@ -724,8 +727,14 @@ async def simple_cli(
 
     # Helper to clean up and save session on exit
     async def _cleanup_and_save_session() -> None:
-        """Clean up managed processes and save session state when user exits."""
-        # Fire session.end hook
+        """Clean up managed processes and save session state when user exits.
+
+        All cleanup steps that don't depend on each other run CONCURRENTLY
+        with a shared 20s deadline, followed by compaction + save (sequential)
+        with a 60s deadline.  This prevents any single hanging operation from
+        blocking exit indefinitely.
+        """
+        # Fire session.end hook (fire-and-forget, doesn't await)
         dispatch_hook_fire_and_forget(
             HookEvent.SESSION_END,
             {
@@ -735,57 +744,96 @@ async def simple_cli(
             },
         )
 
-        # Stop Vixie WebSocket server
-        try:
-            await stop_vixie_server()
-        except Exception as e:
-            console.print(f"[dim]Could not stop Vixie server: {e}[/dim]")
+        # ═══════════════════════════════════════════════════════════════
+        # Parallel cleanup — independent tasks run concurrently so the
+        # slowest (not the sum) determines the wall-clock time.
+        # Each sub-step also carries its own per-step timeout.
+        # ═══════════════════════════════════════════════════════════════
 
-        # Stop all managed dev servers/processes
-        try:
-            manager = ProcessManager.get_instance()
-            stopped_count = await manager.stop_all()
-            if stopped_count > 0:
-                console.print(
-                    f"[dim]Stopped {stopped_count} managed process(es).[/dim]"
+        async def _stop_vixie():
+            try:
+                await asyncio.wait_for(stop_vixie_server(), timeout=5.0)
+            except Exception as e:
+                console.print(f"[dim]Could not stop Vixie server: {e}[/dim]")
+
+        async def _stop_processes():
+            try:
+                manager = ProcessManager.get_instance()
+                stopped_count = await asyncio.wait_for(
+                    manager.stop_all(), timeout=15.0
                 )
-        except Exception as e:
-            console.print(f"[dim]Could not stop processes: {e}[/dim]")
+                if stopped_count > 0:
+                    console.print(
+                        f"[dim]Stopped {stopped_count} managed process(es).[/dim]"
+                    )
+            except Exception as e:
+                console.print(f"[dim]Could not stop processes: {e}[/dim]")
 
-        # Stop remote bridges (Discord/Telegram)
+        async def _stop_remote_bridges():
+            try:
+                bridge_mgr = getattr(session_state, "_remote_bridge_manager", None)
+                if bridge_mgr:
+                    await asyncio.wait_for(bridge_mgr.stop_all(), timeout=5.0)
+            except Exception as e:
+                console.print(f"[dim]Could not stop remote bridges: {e}[/dim]")
+
+        async def _stop_trello():
+            try:
+                trello_server = getattr(session_state, "trello_server", None)
+                if trello_server and trello_server.is_running:
+                    trello_server.stop()
+                    session_state.trello_server = None
+            except Exception as e:
+                console.print(f"[dim]Could not stop Trello server: {e}[/dim]")
+
+        async def _cancel_remote_processor():
+            """Cancel remote message processor with brief await."""
+            try:
+                _rpt = getattr(session_state, "_remote_processor_task", None)
+                if _rpt and not _rpt.done():
+                    _rpt.cancel()
+                    # Give it a brief moment to finish cleanup, but
+                    # don't block exit if it's slow to respond.
+                    try:
+                        await asyncio.wait_for(_rpt, timeout=2.0)
+                    except (asyncio.CancelledError, asyncio.TimeoutError):
+                        pass
+            except Exception:
+                pass
+
+        # Run all cleanup concurrently with a shared 20s deadline.
+        # Individual steps have their own per-step timeouts as well.
         try:
-            bridge_mgr = getattr(session_state, "_remote_bridge_manager", None)
-            if bridge_mgr:
-                await bridge_mgr.stop_all()
-        except Exception as e:
-            console.print(f"[dim]Could not stop remote bridges: {e}[/dim]")
+            await asyncio.wait_for(
+                asyncio.gather(
+                    _stop_vixie(),
+                    _stop_processes(),
+                    _stop_remote_bridges(),
+                    _stop_trello(),
+                    _cancel_remote_processor(),
+                ),
+                timeout=20.0,
+            )
+        except (asyncio.TimeoutError, Exception):
+            console.print("[dim]Some cleanup tasks timed out, continuing exit...[/dim]")
 
-        # Stop Trello task board server
+        # ═══════════════════════════════════════════════════════════════
+        # Sequential post-cleanup: compaction check + save.
+        # Protected by a 60s deadline so LLM calls can't hang exit.
+        # ═══════════════════════════════════════════════════════════════
         try:
-            trello_server = getattr(session_state, "trello_server", None)
-            if trello_server and trello_server.is_running:
-                trello_server.stop()
-                session_state.trello_server = None
-        except Exception as e:
-            console.print(f"[dim]Could not stop Trello server: {e}[/dim]")
+            await asyncio.wait_for(
+                _maybe_compact_on_exit(), timeout=30.0,
+            )
+        except asyncio.TimeoutError:
+            console.print("[dim]Compaction timed out, skipping...[/dim]")
 
-        # Cancel remote message processor task
         try:
-            _rpt = getattr(session_state, "_remote_processor_task", None)
-            if _rpt and not _rpt.done():
-                _rpt.cancel()
-                try:
-                    await _rpt
-                except asyncio.CancelledError:
-                    pass
-        except Exception:
-            pass
-
-        # Check if compaction is needed before saving
-        await _maybe_compact_on_exit()
-
-        # Save session
-        await _save_session(silent=False)
+            await asyncio.wait_for(
+                _save_session(silent=False), timeout=30.0,
+            )
+        except asyncio.TimeoutError:
+            console.print("[dim]Session save timed out; exiting anyway.[/dim]")
 
     async def _maybe_compact_on_exit() -> None:
         """Check context usage and perform compaction if needed on exit.
@@ -878,15 +926,19 @@ async def simple_cli(
                     f"[dim]Estimated savings: ~{recommendation.estimated_tokens_saved:,} tokens[/dim]"
                 )
 
-            # Perform compaction
+            # Perform compaction with a per-step timeout so the LLM
+            # summarization call can't stall exit indefinitely.
             model = create_model()
             with console.status(
                 "[bold]Compacting conversation...[/bold]", spinner="dots"
             ):
-                result = await compact_conversation(
-                    agent=agent,
-                    model=model,
-                    thread_id=session_state.thread_id,
+                result = await asyncio.wait_for(
+                    compact_conversation(
+                        agent=agent,
+                        model=model,
+                        thread_id=session_state.thread_id,
+                    ),
+                    timeout=25.0,
                 )
 
             if result.success:
@@ -1645,6 +1697,11 @@ async def _run_agent_session(
                 _restored_msgs = getattr(restored_session_data[0], "messages", None)
             except Exception:  # noqa: BLE001
                 _restored_msgs = None
+        # Extract sandbox_id from backend for TUI's session save
+        _tui_sandbox_id: str | None = None
+        if sandbox_backend:
+            _tui_sandbox_id = getattr(sandbox_backend, "id", None)
+
         try:
             await run_tui(
                 agent=agent,
@@ -1656,6 +1713,8 @@ async def _run_agent_session(
                 model_name=model_name,
                 session_manager=session_manager,
                 restored_messages=_restored_msgs,
+                sandbox_id=_tui_sandbox_id,
+                sandbox_type=sandbox_type,
             )
         finally:
             # Always tear down background services so quitting can't crash on

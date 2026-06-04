@@ -97,9 +97,7 @@ class DockerBackend(BaseSandbox):
         """Unique identifier for the sandbox backend."""
         return self._container.id[:12]  # Use short container ID
 
-    def execute(
-        self, command: str, *, timeout: int | None = None
-    ) -> ExecuteResponse:
+    def execute(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
         """Execute a command in the Docker container and return ExecuteResponse.
 
         Args:

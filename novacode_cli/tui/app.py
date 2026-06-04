@@ -1517,6 +1517,8 @@ class NovaApp(App):
         model_name,
         session_manager=None,
         restored_messages=None,
+        sandbox_id: str | None = None,
+        sandbox_type: str | None = None,
     ) -> None:
         super().__init__()
         self.agent = agent
@@ -1530,6 +1532,9 @@ class NovaApp(App):
         self.paste_tracker = PasteTracker()
         self.model_name = model_name or "unknown"
         self.session_manager = session_manager
+        # Sandbox identity for session persistence (so --continue can reconnect).
+        self._sandbox_id = sandbox_id
+        self._sandbox_type = sandbox_type
         # Prior conversation turns to replay into the transcript on resume.
         self._restored_messages = list(restored_messages or [])
         self._seen: set[str] = set()
@@ -2602,6 +2607,8 @@ class NovaApp(App):
                 todos=todos,
                 model_name=self.model_name,
                 project_root=Path.cwd(),
+                sandbox_id=self._sandbox_id,
+                sandbox_type=self._sandbox_type,
             )
         except Exception:  # noqa: BLE001
             pass  # never block exit on a save failure
@@ -5178,6 +5185,8 @@ async def run_tui(
     model_name,
     session_manager=None,
     restored_messages=None,
+    sandbox_id: str | None = None,
+    sandbox_type: str | None = None,
 ) -> None:
     """Launch the Textual chat app and run until the user exits."""
     app = NovaApp(
@@ -5190,5 +5199,7 @@ async def run_tui(
         model_name=model_name,
         session_manager=session_manager,
         restored_messages=restored_messages,
+        sandbox_id=sandbox_id,
+        sandbox_type=sandbox_type,
     )
     await app.run_async()
