@@ -42,7 +42,7 @@ from rich.markup import escape
 from rich.panel import Panel
 from rich.text import Text
 
-from novacode_cli.context.context_manager import ContextBreakdown
+from novacode_cli.context import ContextBreakdown
 
 from ..config.config import COLORS, COMMANDS, MAX_ARG_LENGTH, NOVA_CODE_ASCII, console
 from ..file_ops import FileOperationRecord
@@ -518,10 +518,10 @@ class TokenTracker:
         Args:
             model_name: The name of the model being used
         """
-        from novacode_cli.context.context_manager import get_context_window_size
+        from novacode_cli.context import ContextManager
 
         self.model_name = model_name
-        self.context_window_size = get_context_window_size(model_name)
+        self.context_window_size = ContextManager(model_name).window_size()
 
     def set_baseline(self, tokens: int) -> None:
         """Set the baseline context token count.
@@ -602,7 +602,7 @@ class TokenTracker:
         Returns:
             ContextBreakdown with current usage statistics
         """
-        from novacode_cli.context.context_manager import ContextBreakdown
+        from novacode_cli.context import ContextBreakdown
 
         if hasattr(self, "_last_breakdown") and self._last_breakdown is not None:
             bd = self._last_breakdown
@@ -630,7 +630,7 @@ class TokenTracker:
 
     def display_session(self) -> None:
         """Display current context size with color-coded percentage."""
-        from novacode_cli.context.context_manager import (
+        from novacode_cli.context import (
             CONTEXT_CRITICAL_THRESHOLD,
             CONTEXT_WARNING_THRESHOLD,
         )
@@ -686,7 +686,7 @@ class TokenTracker:
         from rich import box
         from rich.table import Table
 
-        from novacode_cli.context.context_manager import (
+        from novacode_cli.context import (
             CONTEXT_CRITICAL_THRESHOLD,
             CONTEXT_WARNING_THRESHOLD,
         )

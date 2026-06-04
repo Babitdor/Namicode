@@ -149,11 +149,9 @@ async def handle_research_command(
     # proceed from what was already discussed with the core agent.
     conversation_context = ""
     try:
-        from novacode_cli.utils.conversation_context import (
-            get_recent_conversation_digest,
-        )
+        from novacode_cli.context import ContextManager
 
-        conversation_context = await get_recent_conversation_digest(
+        conversation_context = await ContextManager().digest(
             agent, session_state.thread_id
         )
     except Exception:  # noqa: BLE001
@@ -185,3 +183,20 @@ async def handle_research_command(
         token_tracker,
         backend=backend,
     )
+
+
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
+
+def register_commands(registry) -> None:
+    from novacode_cli.commands import CommandContext
+
+    async def _handle(ctx: CommandContext) -> bool:
+        await handle_research_command(
+            agent=ctx.agent, session_state=ctx.session_state,
+            token_tracker=ctx.token_tracker, cmd_args=ctx.cmd_args,
+        )
+        return True
+
+    registry.register("research", _handle)

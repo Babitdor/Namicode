@@ -19,7 +19,7 @@ from typing import Any
 from rich.markdown import Markdown
 from rich.markup import escape as _esc
 from rich.text import Text
-from textual import work
+from textual import events, work
 from textual.app import App, ComposeResult
 from textual.color import Color
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -96,6 +96,13 @@ from novacode_cli import ui_events as ev
 from novacode_cli.agent_stream import run_agent_stream
 from novacode_cli.config.config import console as _rich_console
 from novacode_cli.config.config import get_responsive_ascii
+from novacode_cli.input import (
+    PASTE_MIN_CHARS,
+    PASTE_MIN_NEWLINES,
+    PasteTracker,
+    format_paste_placeholder,
+    resolve_paste_placeholders,
+)
 
 # Nova's default palette, registered as a real Textual theme so /theme can swap
 # it for any other theme. Previously these colors were hardcoded as CSS
@@ -1261,6 +1268,47 @@ class RemoteScreen(ModalScreen[None]):
         self.dismiss(None)
 
 
+class PromptInput(Input):
+    """Main prompt input that collapses large pastes into a compact placeholder.
+
+    Textual's single-line ``Input`` keeps only the *first line* of a paste, so a
+    multi-line paste would silently lose everything after the first newline.
+    Instead, a large paste (>= ``PASTE_MIN_CHARS`` chars or ``PASTE_MIN_NEWLINES``
+    newlines) is stored in the app's :class:`PasteTracker` and shown inline as
+    ``[paste #N +M lines]``; the placeholder is resolved back to the full text on
+    submit (see :meth:`NovaApp.on_input_submitted`). Small pastes fall through to
+    Textual's default behaviour.
+
+    Reuses the same tracker/threshold/format helpers as the legacy prompt_toolkit
+    input (:mod:`novacode_cli.input`) so both UIs behave identically.
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        self._paste_tracker: PasteTracker | None = kwargs.pop("paste_tracker", None)
+        self._on_large_paste = kwargs.pop("on_large_paste", None)
+        super().__init__(*args, **kwargs)
+
+    def _on_paste(self, event: events.Paste) -> None:
+        text = event.text
+        if (
+            text
+            and self._paste_tracker is not None
+            and (
+                len(text) >= PASTE_MIN_CHARS
+                or text.count("\n") >= PASTE_MIN_NEWLINES
+            )
+        ):
+            normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+            paste_id = self._paste_tracker.add_paste(normalized)
+            placeholder = format_paste_placeholder(paste_id, normalized)
+            self.insert_text_at_cursor(placeholder + " ")
+            if self._on_large_paste is not None:
+                self._on_large_paste(placeholder, len(normalized))
+            event.stop()
+            return
+        super()._on_paste(event)
+
+
 class NovaApp(App):
     """Phase-1 Nova chat TUI."""
 
@@ -1395,6 +1443,9 @@ class NovaApp(App):
         self.backend = backend
         self.token_tracker = token_tracker
         self.image_tracker = image_tracker
+        # Collapses large pastes into [paste #N +M lines] placeholders; resolved
+        # back to full text on submit. Shared helpers with the legacy input.
+        self.paste_tracker = PasteTracker()
         self.model_name = model_name or "unknown"
         self.session_manager = session_manager
         # Prior conversation turns to replay into the transcript on resume.
@@ -1448,9 +1499,11 @@ class NovaApp(App):
         yield VerticalScroll(id="transcript")
         yield Static("", id="status")
         yield Static("", id="mode-badge")
-        yield Input(
+        yield PromptInput(
             placeholder="Ask Nova…  (/help · !cmd · @agent · /quit to exit)",
             id="prompt",
+            paste_tracker=self.paste_tracker,
+            on_large_paste=self._on_large_paste,
         )
         yield OptionList(id="cmdpalette")
 
@@ -1676,6 +1729,49 @@ class NovaApp(App):
                 active["status"] = "fail"
             active["detail"] = plain[:80]
             self._init_render_steps()
+
+    def _init_on_event(self, event: Any) -> None:
+        """Drive the native step tracker from a structured pipeline event.
+
+        The /init pipeline (``_run_graphify_pipeline``) reports progress through
+        UI-agnostic :mod:`novacode_cli.init.events`. Unlike :meth:`_init_emit`
+        (which parses graphify's internal console output), this keeps the
+        concise pre-set step labels and treats the events as authoritative.
+        Called on the app thread from the pipeline coroutine, so it may mutate
+        widgets directly.
+        """
+        if self._init_widget is None:
+            return
+        from novacode_cli.init import events as ev
+
+        if isinstance(event, ev.StepStarted):
+            for i, st in enumerate(self._init_steps):
+                if i < event.index - 1:
+                    if st["status"] != "fail":
+                        st["status"] = "done"
+                elif i == event.index - 1:
+                    st["status"] = "active"
+                    st["detail"] = ""
+            self._init_render_steps()
+        elif isinstance(event, ev.StepDetail):
+            active = next(
+                (s for s in self._init_steps if s["status"] == "active"), None
+            )
+            if active is not None:
+                active["detail"] = event.text[:80]
+                self._init_render_steps()
+        elif isinstance(event, ev.Notice):
+            if event.level == "error":
+                active = next(
+                    (s for s in self._init_steps if s["status"] == "active"), None
+                )
+                if active is not None:
+                    active["status"] = "fail"
+                    active["detail"] = event.text[:80]
+                    self._init_render_steps()
+                self._log(Text(event.text, style="red"))
+            elif event.level == "warn":
+                self._log(Text(event.text, style="yellow"))
 
     async def _add_message(self, label: Text, role_class: str, body: Any) -> ChatMessage:
         msg = ChatMessage(label, role_class)
@@ -2268,6 +2364,10 @@ class NovaApp(App):
         if event.option_list.id == "cmdpalette":
             self._accept_palette(str(event.option.prompt))
 
+    def _on_large_paste(self, placeholder: str, char_count: int) -> None:
+        """Notify the transcript that a large paste was collapsed."""
+        self._log(Text(f"{placeholder} ({char_count:,} chars)", style="dim"))
+
     def on_input_submitted(self, event: Input.Submitted) -> None:
         # Only react to the main prompt (modals have their own inputs).
         if event.input.id != "prompt":
@@ -2282,7 +2382,11 @@ class NovaApp(App):
             opt = palette.get_option_at_index(palette.highlighted)
             self._accept_palette(str(opt.prompt))
             return
-        text = event.value.strip()
+        # The input box holds compact [paste #N +M lines] placeholders for large
+        # pastes (so the box stays readable while composing). On submit we expand
+        # them back to the full text, which is what both the agent receives AND
+        # what the chat shows — the sent message is displayed in full.
+        text = resolve_paste_placeholders(event.value, self.paste_tracker).strip()
         if not text:
             return
         event.input.value = ""
@@ -2310,11 +2414,11 @@ class NovaApp(App):
         si = SteeringInstruction(label="steer", instruction=text)
         self.session_state.steering_instructions.append(si)
         self._live_steers.append(si)
-        # Debug: confirm append to shared list
-        import sys
-        print(f"\n[STEER DEBUG] _add_live_steer appended, list now has {len(self.session_state.steering_instructions)} item(s), list id={id(self.session_state.steering_instructions)}\n", file=sys.stderr, flush=True)
         self._log(
-            Text(f"↗ Steering (applies on the next step): {text}", style="italic #7aa2f7")
+            Text(
+                f"↗ Steering (applies on the next step): {text}",
+                style="italic #7aa2f7",
+            )
         )
 
     def action_cancel_turn(self) -> None:
@@ -2964,17 +3068,21 @@ class NovaApp(App):
             self._init_agent = init_agent
             self._init_backend = init_backend
             try:
-                await _run_graphify_pipeline(
+                result = await _run_graphify_pipeline(
                     project_root=Path(project_root),
                     nova_dir=nova_dir,
                     nova_md_path=nova_md_path,
                     agents_md_path=nova_dir / "AGENTS.md",
                     flags=InitFlags(cmd_args),
-                    console=tui_console,
+                    emit=self._init_on_event,
+                    progress_console=tui_console,
                     agent=init_agent or self.agent,
                     execute_fn=self._tui_execute_fn,
+                    session_id=getattr(self.session_state, "session_id", ""),
                 )
                 self._init_finish()
+                if not result.ok and result.message:
+                    self._log(Text(result.message, style="yellow"))
             except Exception as ex:  # noqa: BLE001
                 self._log(Text(f"/init failed: {ex}", style="red"))
             finally:

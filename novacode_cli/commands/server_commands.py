@@ -359,3 +359,24 @@ async def handle_kill_command(session_state, cmd_args: str | None = None) -> boo
 
     console.print()
     return True
+
+
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
+
+def register_commands(registry) -> None:
+    from novacode_cli.commands import CommandContext
+
+    async def _handle_servers(ctx: CommandContext) -> bool:
+        return await handle_servers_command(ctx.session_state)
+
+    async def _handle_tests(ctx: CommandContext) -> bool:
+        return await handle_tests_command(ctx.session_state, cmd_args=ctx.cmd_args)
+
+    async def _handle_kill(ctx: CommandContext) -> bool:
+        return await handle_kill_command(ctx.session_state, cmd_args=ctx.cmd_args)
+
+    registry.register("servers", _handle_servers)
+    registry.register("tests", _handle_tests)
+    registry.register("kill", _handle_kill)

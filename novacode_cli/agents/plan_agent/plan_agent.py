@@ -17,6 +17,7 @@ from langchain.agents.middleware import ModelRetryMiddleware
 
 from novacode_cli.agents.plan_agent.plan_mode_middleware import PlanModeMiddleware
 from novacode_cli.bootstrap.steering import SteeringMiddleware
+from novacode_cli.config.plan_mode import BLOCKED_TOOLS_DISPLAY, RESTRICTED_WRITE_TOOLS_DISPLAY
 from novacode_cli.hitl.interrupts import get_interrupt_configs
 from novacode_cli.config.config import settings
 from novacode_cli.prompts import render_template
@@ -58,6 +59,8 @@ def get_plan_agent_system_prompt(
     return render_template(
         "plan_agent.jinja",
         working_dir=working_dir,
+        blocked_tools=BLOCKED_TOOLS_DISPLAY,
+        restricted_write_tools=RESTRICTED_WRITE_TOOLS_DISPLAY,
     )
 
 

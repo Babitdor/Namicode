@@ -81,9 +81,9 @@ new_code
 
 <constraints>
 These tools are blocked during planning and will return errors:
-`shell` `execute_bash` `execute` `start_dev_server` `stop_server` `run_tests` `git_branch` `git_stash` `write_todos`
+{{ blocked_tools }}
 
-`write_file` and `edit_file` are only allowed when the target is inside `.nova/plans/`.
+{{ restricted_write_tools }} are only allowed when the target is inside `.nova/plans/`.
 </constraints>
 
 <quality_bar>

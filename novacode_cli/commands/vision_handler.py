@@ -200,3 +200,16 @@ async def handle_vision_command(
         console.print(f"[red]Error analyzing image: {e}[/red]")
         console.print()
         return True
+
+
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
+
+def register_commands(registry) -> None:
+    from novacode_cli.commands import CommandContext
+
+    async def _handle(ctx: CommandContext) -> bool:
+        return await handle_vision_command(ctx.cmd_args, ctx.image_tracker)
+
+    registry.register("vision", _handle)

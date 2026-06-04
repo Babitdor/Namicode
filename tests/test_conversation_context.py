@@ -5,7 +5,7 @@ import asyncio
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from novacode_cli.prompts import render_template
-from novacode_cli.utils.conversation_context import get_recent_conversation_digest
+from novacode_cli.context import ContextManager
 
 
 class _State:
@@ -28,7 +28,7 @@ def test_digest_extracts_user_and_assistant_skips_tools():
         ToolMessage(content="tool noise", tool_call_id="x"),
         HumanMessage(content="now add tests"),
     ]
-    d = asyncio.run(get_recent_conversation_digest(_Agent(msgs), "t1"))
+    d = asyncio.run(ContextManager().digest(_Agent(msgs), "t1"))
     assert "build a parser for CSV" in d
     assert "now add tests" in d
     assert "tool noise" not in d
@@ -36,7 +36,7 @@ def test_digest_extracts_user_and_assistant_skips_tools():
 
 
 def test_digest_empty_when_no_history():
-    assert asyncio.run(get_recent_conversation_digest(_Agent([]), "t1")) == ""
+    assert asyncio.run(ContextManager().digest(_Agent([]), "t1")) == ""
 
 
 def test_digest_handles_unreadable_state():
@@ -44,7 +44,7 @@ def test_digest_handles_unreadable_state():
         async def aget_state(self, config):
             raise RuntimeError("no state")
 
-    assert asyncio.run(get_recent_conversation_digest(_BadAgent(), "t1")) == ""
+    assert asyncio.run(ContextManager().digest(_BadAgent(), "t1")) == ""
 
 
 def test_research_template_includes_context_when_present():

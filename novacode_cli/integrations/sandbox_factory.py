@@ -16,6 +16,107 @@ from novacode_cli.config.config import console
 # Prevents accidental leakage of API keys and secrets.
 _ALLOWED_SETUP_VARS = {"HOME", "USER", "PATH", "SHELL", "LANG", "LC_ALL", "TERM"}
 
+# Default base image for the Docker sandbox. Overridable via NOVA_SANDBOX_IMAGE.
+# python:*-slim is intentionally minimal — it ships WITHOUT git, build tools, or
+# linters — so a freshly-created container is provisioned with the baseline
+# toolchain below before the agent runs (see _provision_sandbox_tools).
+_DEFAULT_SANDBOX_IMAGE = "python:3.11-slim"
+
+# Baseline toolchain installed into a freshly-created sandbox so the agent can
+# actually run version control, linting, tests, and builds. Without these,
+# execute/test/validate commands fail almost immediately (git/ruff "not found").
+_PROVISION_APT_PACKAGES = ("git", "ca-certificates", "curl", "build-essential")
+_PROVISION_PIP_PACKAGES = ("ruff", "pytest")
+
+
+def _sandbox_image() -> str:
+    """The Docker image to use, honoring the NOVA_SANDBOX_IMAGE override."""
+    return os.environ.get("NOVA_SANDBOX_IMAGE", "").strip() or _DEFAULT_SANDBOX_IMAGE
+
+
+def _skip_provision() -> bool:
+    """Whether to skip baseline toolchain provisioning (NOVA_SANDBOX_SKIP_PROVISION).
+
+    Set this when using a pre-baked image that already has git/ruff/etc., to
+    avoid the apt/pip install on first container start.
+    """
+    return os.environ.get("NOVA_SANDBOX_SKIP_PROVISION", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def _build_provision_script() -> str:
+    """Build the idempotent bash script that installs the baseline toolchain.
+
+    - System packages (git + build tools) go through apt, but only when ``git``
+      is missing — apt update/install is the slow part, and git is the canary.
+    - Python tools (ruff, pytest) go through pip in one satisfiable call.
+    - Each step is best-effort: a failure prints a marker and continues rather
+      than aborting the whole session. A final summary line lets the run log show
+      exactly which tools ended up available.
+
+    Extra packages can be appended via NOVA_SANDBOX_EXTRA_APT / NOVA_SANDBOX_EXTRA_PIP
+    (space-separated).
+    """
+    apt_pkgs = list(_PROVISION_APT_PACKAGES) + shlex.split(
+        os.environ.get("NOVA_SANDBOX_EXTRA_APT", "")
+    )
+    pip_pkgs = list(_PROVISION_PIP_PACKAGES) + shlex.split(
+        os.environ.get("NOVA_SANDBOX_EXTRA_PIP", "")
+    )
+    apt_list = " ".join(shlex.quote(p) for p in apt_pkgs)
+    pip_list = " ".join(shlex.quote(p) for p in pip_pkgs)
+
+    return f"""set -u
+export DEBIAN_FRONTEND=noninteractive
+if ! command -v git >/dev/null 2>&1; then
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update -qq && apt-get install -y -qq --no-install-recommends {apt_list} || echo "nova-provision: apt install failed (continuing)"
+    rm -rf /var/lib/apt/lists/* 2>/dev/null || true
+  fi
+fi
+if command -v pip >/dev/null 2>&1; then
+  pip install --quiet --no-input --root-user-action=ignore {pip_list} || echo "nova-provision: pip install failed (continuing)"
+fi
+echo "nova-provision-summary: git=$(command -v git || echo MISSING) ruff=$(command -v ruff || echo MISSING) pytest=$(command -v pytest || echo MISSING)"
+"""
+
+
+def _provision_sandbox_tools(backend: SandboxBackendProtocol) -> None:
+    """Install the baseline toolchain into a freshly-created sandbox.
+
+    Best-effort: warns (but does not abort the session) if some tools couldn't
+    be installed, so the user knows execute/test commands may be degraded and
+    can point NOVA_SANDBOX_IMAGE at a richer image instead.
+    """
+    console.print("[dim]Provisioning sandbox toolchain (git, ruff, pytest)...[/dim]")
+    try:
+        # execute() already runs the command under `bash -c`; pass the script raw.
+        result = backend.execute(_build_provision_script(), timeout=600)
+    except Exception as e:  # noqa: BLE001
+        console.print(f"[yellow]⚠ Sandbox provisioning failed: {e}[/yellow]")
+        return
+
+    out = (result.output or "").strip()
+    summary = next(
+        (ln for ln in out.splitlines() if ln.startswith("nova-provision-summary:")),
+        "",
+    )
+    if result.exit_code != 0 or "MISSING" in summary:
+        console.print(
+            "[yellow]⚠ Sandbox toolchain incomplete[/yellow] "
+            f"[dim]{summary or out[-300:]}[/dim]"
+        )
+        console.print(
+            "[dim]  Some tools may be unavailable. Set NOVA_SANDBOX_IMAGE to a "
+            "pre-baked image, or add deps via a setup script.[/dim]"
+        )
+    else:
+        console.print("[green]✓ Sandbox toolchain ready (git, ruff, pytest)[/green]")
+
 
 def _run_sandbox_setup(backend: SandboxBackendProtocol, setup_script_path: str) -> None:
     """Run users setup script in sandbox with env var expansion.
@@ -391,8 +492,9 @@ def create_docker_sandbox(
         """Create and start a fresh container; returns the container."""
         console.print("[dim]Creating new container...[/dim]")
 
-        # Default image: Python with common tools
-        image = "python:3.11-slim"
+        # Base image (NOVA_SANDBOX_IMAGE override). Minimal by default; the
+        # baseline toolchain (git/ruff/pytest) is provisioned after start.
+        image = _sandbox_image()
 
         # Pull image if not present
         try:
@@ -497,6 +599,14 @@ def create_docker_sandbox(
                 console.print(
                     f"[dim]Port forwarding: localhost:{host_port} -> container:{container_port}[/dim]"
                 )
+
+        # Provision the baseline toolchain (git, ruff, pytest, build tools) into
+        # freshly-created containers so the agent can run version control,
+        # linting, tests, and builds. The default python:*-slim image lacks
+        # these, which made execute/test/validate commands fail. A reconnected
+        # container already has them, so this runs only on fresh create.
+        if created_new and not _skip_provision():
+            _provision_sandbox_tools(backend)
 
         # Run setup script only for freshly-created containers — a reconnected
         # container already has its dependencies installed.

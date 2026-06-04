@@ -9,7 +9,7 @@ from typing import Any
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, RemoveMessage, ToolMessage
 
-from novacode_cli.context.context_manager import CompactionResult
+from novacode_cli.context import CompactionResult
 from novacode_cli.prompts import render_template
 
 # Summarization prompt template (loaded from Jinja)

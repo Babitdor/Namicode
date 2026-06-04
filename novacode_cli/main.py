@@ -106,8 +106,14 @@ from deepagents.backends.protocol import SandboxBackendProtocol
 
 # Apply safety patches for backends that don't handle all content block types
 # (e.g., Ollama crashes on "file" type blocks from PDF reads)
-from novacode_cli.utils.backend_patches import apply_ollama_content_block_patch
+from novacode_cli.utils.backend_patches import (
+    apply_filesystem_host_path_patch,
+    apply_ollama_content_block_patch,
+)
 apply_ollama_content_block_patch()
+# Let the agent pass real host paths inside the project to file tools without
+# tripping deepagents' "Windows absolute paths are not supported" rejection.
+apply_filesystem_host_path_patch()
 
 from novacode_cli.agents.core_agent import (
     create_agent_with_config,
@@ -176,12 +182,6 @@ from novacode_cli.ui.execution import execute_task
 from novacode_cli.vixie.server import start_vixie_server, stop_vixie_server
 
 from novacode_cli.process_manager import ProcessManager
-from novacode_cli.server_runner.dev_server import (
-    list_servers_tool,
-    start_dev_server_tool,
-    stop_server_tool,
-)
-from novacode_cli.server_runner.test_runner import run_tests_tool
 from novacode_cli.ui.ui_elements import TokenTracker, show_help
 from novacode_cli.hooks import dispatch_hook_fire_and_forget, HookEvent
 
@@ -768,7 +768,7 @@ async def simple_cli(
         """
         from novacode_cli.compaction import compact_conversation
         from novacode_cli.config.model_create import create_model
-        from novacode_cli.context.context_manager import get_compaction_recommendation
+        from novacode_cli.context import ContextManager
 
         try:
             # Get current conversation state
@@ -792,7 +792,7 @@ async def simple_cli(
                 tokens_avail = max(0, window - api_tokens)
                 total_messages = len(messages)
 
-                from novacode_cli.context.context_manager import (
+                from novacode_cli.context import (
                     CONTEXT_CRITICAL_THRESHOLD,
                     CONTEXT_WARNING_THRESHOLD,
                     CompactionRecommendation,
@@ -822,9 +822,8 @@ async def simple_cli(
                 )
             else:
                 # No API data yet — fall back to char/4 estimation from messages
-                recommendation = get_compaction_recommendation(
-                    messages=messages,
-                    model_name=model_name,  # type: ignore
+                recommendation = ContextManager(model_name).recommend_compaction(
+                    messages,
                     baseline_tokens=baseline_tokens,
                 )
 
@@ -1360,13 +1359,12 @@ async def _run_agent_session(
     # agent lean — code execution (execute_in_e2b), browser automation
     # (browser_automate / capture_browser_console), git tools, and the code-quality
     # tools (lint_code / format_code_file / check_types). LSP tools are likewise
-    # not registered. The agent does these via the shell (`execute`) when needed.
+    # not registered. Test running and dev-server management are likewise done via
+    # the shell (`execute`) tool, which runs correctly in both local and sandbox
+    # modes — so the (previously stubbed) run_tests / *_server tools are not
+    # registered either. The agent does all of these via the shell when needed.
     tools = [
         fetch_url,
-        run_tests_tool,
-        start_dev_server_tool,
-        stop_server_tool,
-        list_servers_tool,
         # Utility tools
         package_info,
         think,

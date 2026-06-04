@@ -1,8 +1,9 @@
-"""Shared helper to extract a recent-conversation digest from agent state.
+"""Recent-conversation digest from agent state.
 
-Used by long-running commands (/research, /ralph) so the task they kick off is
-grounded in what was already discussed with the core agent — including for the
-subagents they spawn, which otherwise run on fresh threads with no history.
+Private to the ``context`` package. Used by long-running commands (/research,
+/ralph) so the task they kick off is grounded in what was already discussed with
+the core agent — including for the subagents they spawn, which otherwise run on
+fresh threads with no history. Surfaced through ``ContextManager.digest``.
 """
 
 from __future__ import annotations

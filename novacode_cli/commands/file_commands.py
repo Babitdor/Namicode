@@ -360,3 +360,24 @@ def _do_restore(mgr, session_id: str, entry) -> None:
             "[dim]The snapshot file may have been deleted from the trash.[/dim]"
         )
     console.print()
+
+
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
+
+def register_commands(registry) -> None:
+    from novacode_cli.commands import CommandContext
+
+    async def _handle_files(ctx: CommandContext) -> bool:
+        return await handle_files_command()
+
+    async def _handle_images(ctx: CommandContext) -> bool:
+        return await handle_images_command(ctx.cmd_args, ctx.image_tracker)
+
+    async def _handle_restore(ctx: CommandContext) -> bool:
+        return await handle_restore_command(ctx.cmd_args)
+
+    registry.register("files", _handle_files)
+    registry.register("images", _handle_images)
+    registry.register("restore", _handle_restore)

@@ -583,3 +583,16 @@ def _save_hooks(hooks: list[dict]) -> bool:
 
 
 __all__ = ["handle_hooks_command"]
+
+
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
+
+def register_commands(registry) -> None:
+    from novacode_cli.commands import CommandContext
+
+    async def _handle(ctx: CommandContext) -> bool:
+        return await handle_hooks_command(cmd_args=ctx.cmd_args)
+
+    registry.register("hooks", _handle)

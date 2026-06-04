@@ -563,3 +563,16 @@ async def _generate_agent_system_prompt(
     except Exception as e:
         console.print(f"[red]Error generating prompt: {e}[/red]")
         return None
+
+
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
+
+def register_commands(registry) -> None:
+    from novacode_cli.commands import CommandContext
+
+    async def _handle(ctx: CommandContext) -> bool:
+        return await handle_agents_command(cmd_args=ctx.cmd_args, assistant_id=ctx.assistant_id)
+
+    registry.register("agents", _handle)

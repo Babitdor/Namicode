@@ -91,3 +91,16 @@ async def handle_notifications_command(
     )
     console.print()
     return True
+
+
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
+
+def register_commands(registry) -> None:
+    from novacode_cli.commands import CommandContext
+
+    async def _handle(ctx: CommandContext) -> bool:
+        return await handle_notifications_command(ctx.session_state, args=ctx.cmd_args)
+
+    registry.register("notifications", _handle)

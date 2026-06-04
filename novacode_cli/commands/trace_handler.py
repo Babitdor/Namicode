@@ -235,3 +235,17 @@ async def handle_trace_command(cmd_args: list[str]) -> bool:
 
     console.print()
     return True
+
+
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
+
+def register_commands(registry) -> None:
+    from novacode_cli.commands import CommandContext
+
+    async def _handle(ctx: CommandContext) -> bool:
+        args_list = ctx.cmd_args.split() if ctx.cmd_args else []
+        return await handle_trace_command(args_list)
+
+    registry.register("trace", _handle)

@@ -297,3 +297,16 @@ async def handle_model_command(session_state: Any | None = None) -> bool:
 
     console.print()
     return True
+
+
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
+
+def register_commands(registry) -> None:
+    from novacode_cli.commands import CommandContext
+
+    async def _handle(ctx: CommandContext) -> bool:
+        return await handle_model_command(session_state=ctx.session_state)
+
+    registry.register("model", _handle)

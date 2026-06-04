@@ -344,8 +344,8 @@ class MCPMiddleware(AgentMiddleware):
 
             # Track context usage
             try:
-                from novacode_cli.utils.context_budget import get_context_budget
-                budget = get_context_budget()
+                from novacode_cli.context import ContextManager
+                budget = ContextManager().budget()
                 tokens_added = budget.track_middleware("MCPMiddleware", mcp_section)
                 logger.debug(
                     f"MCPMiddleware added {tokens_added} tokens to context "

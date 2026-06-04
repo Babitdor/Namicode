@@ -480,11 +480,9 @@ async def _execute_all_ralph_iterations_background(
     # Ground the loop in the prior conversation (read once before iterating).
     conversation_context = ""
     try:
-        from novacode_cli.utils.conversation_context import (
-            get_recent_conversation_digest,
-        )
+        from novacode_cli.context import ContextManager
 
-        conversation_context = await get_recent_conversation_digest(
+        conversation_context = await ContextManager().digest(
             agent, session_state.thread_id
         )
     except Exception:  # noqa: BLE001
@@ -877,11 +875,9 @@ async def handle_ralph_command(
     # Ground the loop in the prior conversation (read once before iterating).
     conversation_context = ""
     try:
-        from novacode_cli.utils.conversation_context import (
-            get_recent_conversation_digest,
-        )
+        from novacode_cli.context import ContextManager
 
-        conversation_context = await get_recent_conversation_digest(
+        conversation_context = await ContextManager().digest(
             agent, session_state.thread_id
         )
     except Exception:  # noqa: BLE001
@@ -1103,3 +1099,20 @@ async def handle_ralph_command(
     console.print()
 
     return True
+
+
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
+
+
+def register_commands(registry) -> None:
+    from novacode_cli.commands import CommandContext
+
+    async def _handle(ctx: CommandContext) -> bool:
+        return await handle_ralph_command(
+            ctx.agent, ctx.session_state, ctx.assistant_id,
+            ctx.token_tracker, ctx.cmd_args,
+        )
+
+    registry.register("ralph", _handle)

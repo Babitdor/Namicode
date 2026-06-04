@@ -12,10 +12,7 @@ from typing import Any, Awaitable, Callable
 from langchain_core.messages import ToolMessage
 from langchain.agents.middleware.types import AgentMiddleware
 
-_BLOCKED_TOOLS = frozenset(
-    {"execute", "shell", "execute_bash", "start_dev_server", "run_tests", "write_todos"}
-)
-_RESTRICTED_WRITE_TOOLS = frozenset({"write_file", "edit_file"})
+from novacode_cli.config.plan_mode import BLOCKED_TOOLS, RESTRICTED_WRITE_TOOLS
 
 
 class PlanModeMiddleware(AgentMiddleware):
@@ -37,7 +34,7 @@ class PlanModeMiddleware(AgentMiddleware):
     ) -> ToolMessage | Any:
         tool_name: str = request.tool_call.get("name", "")
 
-        if tool_name in _BLOCKED_TOOLS:
+        if tool_name in BLOCKED_TOOLS:
             return ToolMessage(
                 content=(
                     f"[Plan Mode] `{tool_name}` is blocked during planning. "
@@ -47,7 +44,7 @@ class PlanModeMiddleware(AgentMiddleware):
                 status="error",
             )
 
-        if tool_name in _RESTRICTED_WRITE_TOOLS:
+        if tool_name in RESTRICTED_WRITE_TOOLS:
             args = request.tool_call.get("args", {})
             path = str(args.get("path") or args.get("file_path") or "")
 

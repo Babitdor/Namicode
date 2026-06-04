@@ -307,3 +307,16 @@ async def handle_mcp_command() -> bool:
 
     console.print()
     return True
+
+
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
+
+def register_commands(registry) -> None:
+    from novacode_cli.commands import CommandContext
+
+    async def _handle(ctx: CommandContext) -> bool:
+        return await handle_mcp_command()
+
+    registry.register("mcp", _handle)

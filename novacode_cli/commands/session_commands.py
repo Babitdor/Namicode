@@ -285,3 +285,30 @@ async def handle_compact_command(
         console.print()
 
     return True
+
+
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
+
+def register_commands(registry) -> None:
+    from novacode_cli.commands import CommandContext
+
+    async def _handle_sessions(ctx: CommandContext) -> bool:
+        return await handle_sessions_command(ctx.session_state)
+
+    async def _handle_save(ctx: CommandContext) -> bool:
+        return await handle_save_command(
+            ctx.agent, ctx.session_state, ctx.assistant_id,
+            ctx.session_manager, ctx.model_name,
+        )
+
+    async def _handle_compact(ctx: CommandContext) -> bool:
+        return await handle_compact_command(
+            ctx.agent, ctx.session_state, ctx.token_tracker,
+            focus_instructions=ctx.cmd_args,
+        )
+
+    registry.register("sessions", _handle_sessions)
+    registry.register("save", _handle_save)
+    registry.register("compact", _handle_compact)

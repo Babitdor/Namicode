@@ -413,3 +413,19 @@ async def _handle_browser_use_status(session_state: "SessionState") -> bool:
 
     return True
 
+
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
+
+def register_commands(registry) -> None:
+    from novacode_cli.commands import CommandContext
+
+    async def _handle(ctx: CommandContext) -> bool:
+        return await handle_browser_use_command(
+            ctx.agent, ctx.session_state, ctx.assistant_id,
+            ctx.token_tracker, ctx.cmd_args,
+        )
+
+    registry.register("browser-use", _handle)
+

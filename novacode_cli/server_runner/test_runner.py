@@ -12,7 +12,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any
 
 from novacode_cli.process_manager import stream_subprocess_output
 
@@ -436,50 +435,3 @@ async def run_tests(
     )
 
 
-def run_tests_tool(
-    command: str = "",
-    working_dir: str = ".",
-    timeout: int = 300,
-) -> dict[str, Any]:
-    """Run tests with real-time output streaming.
-
-    Executes test commands safely with output streamed to the UI.
-    Supports: pytest, npm test, go test, cargo test, jest, vitest.
-
-    Args:
-        command: Test command to run. If empty, auto-detects based on project files.
-                 Examples: "pytest tests/", "npm test", "go test ./..."
-        working_dir: Directory to run tests in (default: current directory)
-        timeout: Maximum execution time in seconds (default: 300 = 5 minutes)
-
-    Returns:
-        Dictionary containing:
-        - success: Whether all tests passed
-        - exit_code: Process exit code
-        - output: Captured test output (may be truncated if large)
-        - framework: Detected test framework
-        - tests_run: Number of tests executed
-        - tests_passed: Number of passing tests
-        - tests_failed: Number of failing tests
-        - duration_seconds: Total execution time
-
-    Safety:
-        - Only allows known test commands (pytest, npm test, go test, cargo test)
-        - Blocks dangerous patterns (sudo, rm -rf, pipes to shell)
-        - Enforces timeout to prevent runaway processes
-        - Runs in specified working directory only
-
-    Examples:
-        run_tests()  # Auto-detect and run
-        run_tests(command="pytest tests/ -v")
-        run_tests(command="npm test", working_dir="frontend")
-    """
-    # This is a sync wrapper - the actual tool will be async
-    # For now, return a placeholder that will be replaced with actual tool registration
-    return {
-        "success": False,
-        "error": "Tool must be called through agent framework",
-        "command": command,
-        "working_dir": working_dir,
-        "timeout": timeout,
-    }

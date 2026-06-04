@@ -347,3 +347,17 @@ async def handle_log_command(cmd_args: str | None, workspace_root: str | None = 
         console.print()
 
     return True
+
+
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
+
+def register_commands(registry) -> None:
+    from novacode_cli.commands import CommandContext
+
+    async def _handle(ctx: CommandContext) -> bool:
+        workspace_root = str(getattr(ctx.session_state, "workspace_root", None) or "")
+        return await handle_log_command(ctx.cmd_args, workspace_root or None)
+
+    registry.register("log", _handle)

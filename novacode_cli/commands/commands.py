@@ -1,7 +1,7 @@
 """Command handlers for slash commands and bash execution.
 
 This module provides the main handle_command function that routes
-slash commands to their respective handlers.
+slash commands via ``CommandRegistry`` to their respective handlers.
 """
 
 import argparse
@@ -15,45 +15,26 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
+from novacode_cli.commands import (
+    CommandContext,
+    CommandRegistry,
+    build_command_registry,
+)
 from novacode_cli.config.config import COLORS, NOVA_CODE_ASCII, console
 from novacode_cli.states.Session import RalphTaskStatus
 from novacode_cli.ui.ui_elements import TokenTracker, show_interactive_help
-
-# Import command handlers from component modules
-from novacode_cli.commands.init_handler import handle_init_command
-from novacode_cli.commands.mcp_handler import handle_mcp_command
-from novacode_cli.commands.model_handler import handle_model_command
-from novacode_cli.commands.hooks_handler import handle_hooks_command
-from novacode_cli.commands.session_commands import (
-    handle_compact_command,
-    handle_save_command,
-    handle_sessions_command,
-)
-from novacode_cli.commands.server_commands import (
-    handle_kill_command,
-    handle_servers_command,
-    handle_tests_command,
-)
-from novacode_cli.commands.skills_commands import handle_skills_command
 from novacode_cli.commands.skill_invoke import _try_skill_invocation
-from novacode_cli.commands.agents_commands import handle_agents_command
-from novacode_cli.commands.file_commands import (
-    handle_files_command,
-    handle_images_command,
-    handle_restore_command,
-)
-from novacode_cli.commands.vision_handler import handle_vision_command
-from novacode_cli.commands.plan_handler import handle_plan_command
-from novacode_cli.commands.trace_handler import handle_trace_command
-from novacode_cli.commands.ralph_handler import (
-    handle_ralph_command,
-    _stop_and_save_all_ralph_tasks,
-)
-from novacode_cli.commands.browser_use_handler import handle_browser_use_command
-from novacode_cli.commands.dream_handler import handle_dream_command
-from novacode_cli.commands.research_handler import handle_research_command
-from novacode_cli.commands.trello_handler import handle_trello_command
-from novacode_cli.commands.log_commands import handle_log_command
+from novacode_cli.commands.ralph_handler import _stop_and_save_all_ralph_tasks
+
+# Module-level registry, lazily populated on first use
+_registry = None
+
+
+def _get_registry() -> CommandRegistry:
+    global _registry
+    if _registry is None:
+        _registry = build_command_registry()
+    return _registry
 
 
 @contextmanager
@@ -94,8 +75,6 @@ async def handle_command(
     cmd_args = cmd_parts[1] if len(cmd_parts) > 1 else None
 
     # /skill:<name> syntax — extract skill name and route to skill invocation
-    # e.g. /skill:api-testing  → cmd="skill:api-testing", we split to
-    # skill_name="api-testing", cmd_args=None
     if cmd.startswith("skill:"):
         _skill_name = cmd[len("skill:"):]
         _skill_args = cmd_args
@@ -201,6 +180,7 @@ async def handle_command(
 
         return "exit"
 
+    # ── Local commands (handled here, not in registry) ─────────────────
     if cmd == "clear":
         session_state.thread_id = str(uuid.uuid4())
         token_tracker.reset()
@@ -227,127 +207,6 @@ async def handle_command(
             token_tracker.display_context()
         except Exception as e:
             console.print(f"[red]Error running /context command: {e}[/red]")
-        return True
-
-    if cmd == "compact":
-        try:
-            return await handle_compact_command(
-                agent, session_state, token_tracker, focus_instructions=cmd_args
-            )
-        except Exception as e:
-            console.print(f"[red]Error running /compact command: {e}[/red]")
-        return True
-
-    if cmd == "init":
-        try:
-            await handle_init_command(agent, session_state, assistant_id, token_tracker, cmd_args=cmd_args)
-        except Exception as e:
-            console.print(f"[red]Error running /init command: {e}[/red]")
-        return True
-
-    if cmd == "mcp":
-        try:
-            return await handle_mcp_command()
-        except Exception as e:
-            console.print(f"[red]Error running /mcp command: {e}[/red]")
-        return True
-
-    if cmd == "model":
-        try:
-            return await handle_model_command(session_state=session_state)
-        except Exception as e:
-            console.print(f"[red]Error running /model command: {e}[/red]")
-        return True
-
-    if cmd == "hooks":
-        try:
-            return await handle_hooks_command(cmd_args=cmd_args)
-        except Exception as e:
-            console.print(f"[red]Error running /hooks command: {e}[/red]")
-        return True
-
-    if cmd == "notifications":
-        try:
-            from novacode_cli.commands.notifications_handler import (
-                handle_notifications_command,
-            )
-
-            return await handle_notifications_command(session_state, cmd_args)
-        except Exception as e:
-            console.print(f"[red]Error running /notifications command: {e}[/red]")
-        return True
-
-    if cmd == "sessions":
-        try:
-            return await handle_sessions_command(session_state)
-        except Exception as e:
-            console.print(f"[red]Error running /sessions command: {e}[/red]")
-        return True
-
-    if cmd == "save":
-        try:
-            return await handle_save_command(
-                agent, session_state, assistant_id, session_manager, model_name
-            )
-        except Exception as e:
-            console.print(f"[red]Error running /save command: {e}[/red]")
-        return True
-
-    if cmd == "servers":
-        try:
-            return await handle_servers_command(session_state)
-        except Exception as e:
-            console.print(f"[red]Error running /servers command: {e}[/red]")
-        return True
-
-    if cmd == "tests":
-        try:
-            return await handle_tests_command(session_state, cmd_args)
-        except Exception as e:
-            console.print(f"[red]Error running /tests command: {e}[/red]")
-        return True
-
-    if cmd == "kill":
-        try:
-            return await handle_kill_command(session_state, cmd_args)
-        except Exception as e:
-            console.print(f"[red]Error running /kill command: {e}[/red]")
-        return True
-
-    if cmd == "skills":
-        try:
-            return await handle_skills_command(cmd_args, assistant_id)
-        except Exception as e:
-            console.print(f"[red]Error running /skills command: {e}[/red]")
-        return True
-
-    if cmd == "agents":
-        try:
-            return await handle_agents_command(cmd_args, assistant_id)
-        except Exception as e:
-            console.print(f"[red]Error running /agents command: {e}[/red]")
-        return True
-
-    if cmd == "trace":
-        try:
-            args_list = cmd_args.split() if cmd_args else []
-            return await handle_trace_command(args_list)
-        except Exception as e:
-            console.print(f"[red]Error running /trace command: {e}[/red]")
-        return True
-
-    if cmd == "files":
-        try:
-            return await handle_files_command()
-        except Exception as e:
-            console.print(f"[red]Error running /files command: {e}[/red]")
-        return True
-
-    if cmd == "plan":
-        try:
-            return await handle_plan_command(agent, session_state, cmd_args)
-        except Exception as e:
-            console.print(f"[red]Error running /plan command: {e}[/red]")
         return True
 
     if cmd == "verbose":
@@ -404,88 +263,6 @@ async def handle_command(
             traceback.print_exc()
         return True
 
-    if cmd == "images":
-        try:
-            return await handle_images_command(cmd_args, image_tracker)
-        except Exception as e:
-            console.print(f"[red]Error running /images command: {e}[/red]")
-        return True
-
-    if cmd == "vision":
-        try:
-            return await handle_vision_command(cmd_args, image_tracker)
-        except Exception as e:
-            console.print(f"[red]Error running /vision command: {e}[/red]")
-        return True
-
-    if cmd == "restore":
-        try:
-            return await handle_restore_command(cmd_args)
-        except Exception as e:
-            console.print(f"[red]Error running /restore command: {e}[/red]")
-        return True
-
-    if cmd == "ralph":
-        try:
-            return await handle_ralph_command(
-                agent, session_state, assistant_id, token_tracker, cmd_args
-            )
-        except Exception as e:
-            console.print(f"[red]Error running /ralph command: {e}[/red]")
-        return True
-
-    if cmd == "browser-use":
-        try:
-            return await handle_browser_use_command(
-                agent, session_state, assistant_id, token_tracker, cmd_args
-            )
-        except Exception as e:
-            console.print(f"[red]Error running /browser-use command: {e}[/red]")
-        return True
-
-    if cmd == "dream":
-        try:
-            result = await handle_dream_command(session_state)
-            # If result is a string (prompt), return it for agent processing
-            # If result is True, command was handled
-            return result
-        except Exception as e:
-            console.print(f"[red]Error running /dream command: {e}[/red]")
-        return True
-
-    if cmd == "research":
-        try:
-            await handle_research_command(
-                agent=agent,
-                session_state=session_state,
-                token_tracker=token_tracker,
-                cmd_args=cmd_args,
-            )
-        except Exception as e:
-            console.print(f"[red]Error running /research command: {e}[/red]")
-        return True
-
-    if cmd == "trello":
-        try:
-            return await handle_trello_command(
-                agent=agent,
-                session_state=session_state,
-                assistant_id=assistant_id,
-                token_tracker=token_tracker,
-                cmd_args=cmd_args,
-            )
-        except Exception as e:
-            console.print(f"[red]Error running /trello command: {e}[/red]")
-        return True
-
-    if cmd == "log":
-        try:
-            workspace_root = str(getattr(session_state, "workspace_root", None) or "")
-            return await handle_log_command(cmd_args, workspace_root or None)
-        except Exception as e:
-            console.print(f"[red]Error running /log command: {e}[/red]")
-        return True
-
     if cmd == "reindex":
         try:
             from novacode_cli.tools.code_search_tools import (
@@ -525,6 +302,31 @@ async def handle_command(
             console.print(f"[red]Error running /reindex command: {e}[/red]")
         return True
 
+    # ── Dispatch through registry ──────────────────────────────────────
+    # Build a CommandContext once and route to the registered handler.
+    # Special-cased commands (exit, skill) are handled above; everything
+    # else goes through the registry with a single try/except block.
+    ctx = CommandContext(
+        cmd=cmd,
+        cmd_args=cmd_args,
+        agent=agent,
+        token_tracker=token_tracker,
+        session_state=session_state,
+        assistant_id=assistant_id,
+        session_manager=session_manager,
+        model_name=model_name,
+        image_tracker=image_tracker,
+    )
+
+    handler = _get_registry().get(cmd)
+    if handler is not None:
+        try:
+            return await handler(ctx)
+        except Exception as e:
+            console.print(f"[red]Error running /{cmd} command: {e}[/red]")
+            return True
+
+    # Unknown command
     console.print()
     console.print(f"[yellow]Unknown command: /{cmd}[/yellow]")
     console.print("[dim]Type /help for available commands.[/dim]")

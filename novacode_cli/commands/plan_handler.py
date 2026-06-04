@@ -314,3 +314,16 @@ __all__ = [
     "PLAN_AGENT_TOOLS",
     "EXECUTION_AGENT_TOOLS",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
+
+def register_commands(registry) -> None:
+    from novacode_cli.commands import CommandContext
+
+    async def _handle(ctx: CommandContext) -> bool:
+        return await handle_plan_command(ctx.agent, ctx.session_state, ctx.cmd_args)
+
+    registry.register("plan", _handle)

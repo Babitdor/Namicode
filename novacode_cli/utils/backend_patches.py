@@ -18,6 +18,68 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 _patched = False
+_fs_host_path_patched = False
+
+
+def apply_filesystem_host_path_patch() -> None:
+    """Make deepagents' ``validate_path`` tolerate host paths inside the project.
+
+    The model frequently passes a real host absolute path (e.g.
+    ``B:/…/novacode_cli/prompts/plan_agent.jinja``) to a file tool because it
+    sees such paths everywhere (IDE context, ``@mentions``, traces).
+    ``FilesystemMiddleware`` validates the path *before* the backend via
+    ``validate_path``, which rejects any drive-letter path outright:
+
+        "Windows absolute paths are not supported: B:/… Please use virtual
+         paths starting with / (e.g., /workspace/file.txt)"
+
+    This wraps ``validate_path`` so any host path at/under the current project
+    root is first rewritten to its ``/``-rooted virtual form (see
+    :func:`novacode_cli.integrations.host_path.host_path_to_virtual`). Paths that
+    are already virtual, relative, or outside the project are passed through
+    unchanged, so genuinely-invalid paths still raise the original helpful error.
+
+    Idempotent and best-effort: a missing/renamed symbol just leaves the stock
+    behavior in place.
+    """
+    global _fs_host_path_patched
+    if _fs_host_path_patched:
+        return
+
+    try:
+        import deepagents.middleware.filesystem as _fsmod
+    except ImportError:
+        return
+
+    _original = getattr(_fsmod, "validate_path", None)
+    if _original is None:
+        return
+
+    from novacode_cli.integrations.host_path import host_path_to_virtual
+
+    def _current_workspace_root() -> str | None:
+        try:
+            from pathlib import Path
+
+            from novacode_cli.config.config import settings
+
+            return str(settings.project_root or Path.cwd())
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _patched_validate_path(path: Any, *, allowed_prefixes: Any = None) -> str:
+        try:
+            if isinstance(path, str):
+                root = _current_workspace_root()
+                if root:
+                    path = host_path_to_virtual(path, root)
+        except Exception:  # noqa: BLE001
+            pass  # Never let normalization break validation; fall through.
+        return _original(path, allowed_prefixes=allowed_prefixes)
+
+    _fsmod.validate_path = _patched_validate_path
+    _fs_host_path_patched = True
+    logger.debug("Applied filesystem host-path normalization patch")
 
 
 def apply_ollama_content_block_patch() -> None:

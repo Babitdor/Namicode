@@ -13,7 +13,7 @@ import asyncio
 import types
 
 import novacode_cli.ui_events as ev
-from novacode_cli.agent_stream import run_agent_stream
+from novacode_cli.core.agent_loop import iterate_agent_events
 
 
 class _Chunk:
@@ -40,11 +40,13 @@ class _SessionState:
 
 
 def _collect(agent, user_input="hi", on_interrupt=None):
-    """Drive run_agent_stream to completion, resolving interrupts via on_interrupt."""
+    """Drive iterate_agent_events to completion, resolving interrupts via on_interrupt."""
 
     async def _run():
         out = []
-        async for e in run_agent_stream(user_input, agent, "nova-agent", _SessionState()):
+        async for e in iterate_agent_events(
+            user_input, agent, "nova-agent", _SessionState()
+        ):
             out.append(e)
             if isinstance(e, ev.InterruptRequest):
                 resp = on_interrupt(e) if on_interrupt else None

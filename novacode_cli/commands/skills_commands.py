@@ -278,3 +278,16 @@ async def _skills_create_interactive(
     console.print()
 
     return True
+
+
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
+
+def register_commands(registry) -> None:
+    from novacode_cli.commands import CommandContext
+
+    async def _handle(ctx: CommandContext) -> bool:
+        return await handle_skills_command(cmd_args=ctx.cmd_args, assistant_id=ctx.assistant_id)
+
+    registry.register("skills", _handle)

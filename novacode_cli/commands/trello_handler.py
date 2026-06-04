@@ -174,3 +174,20 @@ def _handle_status(session_state: Any) -> bool:
         )
     console.print()
     return True
+
+
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
+
+def register_commands(registry) -> None:
+    from novacode_cli.commands import CommandContext
+
+    async def _handle(ctx: CommandContext) -> bool:
+        return await handle_trello_command(
+            agent=ctx.agent, session_state=ctx.session_state,
+            assistant_id=ctx.assistant_id, token_tracker=ctx.token_tracker,
+            cmd_args=ctx.cmd_args,
+        )
+
+    registry.register("trello", _handle)

@@ -167,3 +167,16 @@ def get_dream_prompt(
         index_max_lines=index_max_lines,
         transcripts_dir=str(transcripts_dir) if transcripts_dir else None,
     )
+
+
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
+
+def register_commands(registry) -> None:
+    from novacode_cli.commands import CommandContext
+
+    async def _handle(ctx: CommandContext) -> bool:
+        return await handle_dream_command(ctx.session_state)
+
+    registry.register("dream", _handle)

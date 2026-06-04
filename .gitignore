@@ -121,4 +121,11 @@ yarn-error.log*
 package-lock.json
 yarn.lock
 
+# Graphify
+graphify_out/
+
+# Runtime data (never commit)
+conversation_history/
+novacode_cli/cli_session/
+
 # Project directories (external projects)

@@ -5,27 +5,8 @@ that require user confirmation, including plan mode blocking.
 """
 
 from novacode_cli.config.config import console
+from novacode_cli.config.plan_mode import BLOCKED_TOOLS, RESTRICTED_WRITE_TOOLS
 from novacode_cli.file_ops import get_session_file_op_tracker
-
-# Plan mode blocking - tools that are blocked during planning phase
-# These tools modify state and should not be used until plan is approved
-BLOCKED_TOOLS_IN_PLAN_MODE = {
-    # Shell execution
-    "shell",
-    "execute_bash",
-    "execute",
-    # Server management
-    "start_dev_server",
-    "stop_server",
-    # Test execution
-    "run_tests",
-    # Git operations (modifies repo)
-    "git_branch",
-    "git_stash",
-}
-
-# Tools allowed in plan mode but restricted to plan files only
-PLAN_FILE_ONLY_TOOLS = {"write_file", "edit_file"}
 
 
 def _is_plan_file_path(file_path: str) -> bool:
@@ -65,15 +46,16 @@ def check_plan_mode_blocked(
     blocked_actions = []
     for action_request in hitl_request.get("action_requests", []):
         tool_name = action_request.get("name", "")
-        if tool_name in BLOCKED_TOOLS_IN_PLAN_MODE:
-            # Allow write_file/edit_file only for plan files
-            if tool_name in ("write_file", "edit_file"):
-                file_path = str(
-                    action_request.get("args", {}).get("file_path", "")
-                )
-                if _is_plan_file_path(file_path):
-                    continue  # Allowed
+        if tool_name in BLOCKED_TOOLS:
+            # Completely blocked during planning
             blocked_actions.append(action_request)
+        elif tool_name in RESTRICTED_WRITE_TOOLS:
+            # Allow only when targeting a plan file
+            file_path = str(
+                action_request.get("args", {}).get("file_path", "")
+            )
+            if not _is_plan_file_path(file_path):
+                blocked_actions.append(action_request)
 
     if blocked_actions:
         # Reject ALL actions in this interrupt silently
