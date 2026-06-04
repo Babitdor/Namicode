@@ -472,7 +472,17 @@ def _is_likely_file_mention(match_str: str) -> bool:
     if not has_slash:
         # Bare @word with no path separator
         if not has_dot:
-            # No extension, no slash — not a file path
+            # No extension, no slash — check if the file actually exists on disk.
+            # This handles files like @Makefile, @Dockerfile, @LICENSE, @README.
+            try:
+                bare_path = Path(match_str).expanduser()
+                if not bare_path.is_absolute():
+                    bare_path = Path.cwd() / bare_path
+                if bare_path.exists() and bare_path.is_file():
+                    return True
+            except Exception:
+                pass
+            # Not a real file, not a path — skip
             # (e.g. @keyframes, @decorator, @cache_read_tokens, @e1)
             return False
         else:
@@ -483,7 +493,16 @@ def _is_likely_file_mention(match_str: str) -> bool:
             # email@domain.com pattern (no slash, domain-like suffix)
             if re.match(r"^[a-zA-Z0-9._%+-]+\.[a-zA-Z]{2,}$", cleaned):
                 return False
-            # Unknown extension, no slash — be conservative
+            # Unknown extension, no slash — check if the file actually exists on disk.
+            # Handles dotfiles like .env.template, .gitignore, .python-version.
+            try:
+                bare_path = Path(match_str).expanduser()
+                if not bare_path.is_absolute():
+                    bare_path = Path.cwd() / bare_path
+                if bare_path.exists() and bare_path.is_file():
+                    return True
+            except Exception:
+                pass
             return False
 
     # Has a slash — likely a path like @src/utils.ts or @app/components/Header.tsx

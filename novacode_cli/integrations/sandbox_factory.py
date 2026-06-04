@@ -25,9 +25,37 @@ _DEFAULT_SANDBOX_IMAGE = "python:3.11-slim"
 # Baseline toolchain installed into a freshly-created sandbox so the agent can
 # actually run version control, linting, tests, and builds. Without these,
 # execute/test/validate commands fail almost immediately (git/ruff "not found").
-# jq / tree are lightweight CLI utilities that agents commonly pipe through.
+#
+#   - git / openssh-client: version control, incl. cloning over ssh.
+#   - ca-certificates / curl / wget: fetch dependencies and remote resources.
+#   - build-essential: compile native extensions (many pip wheels need a toolchain).
+#   - nodejs / npm: the execute tool's own description advertises npm/npx
+#     scaffolding (create-next-app, vite, etc.) — without these those commands
+#     fail immediately. Debian's nodejs is older but sufficient for scaffolding;
+#     point NOVA_SANDBOX_IMAGE at a prebaked image for a specific Node version.
+#   - ripgrep: fast code search (rg) the agent reaches for constantly.
+#   - jq / tree / unzip / less: lightweight utilities agents commonly pipe through.
+#
+# This is intentionally a "batteries-included" default so the sandbox can handle
+# whatever task it's given out of the box. The cost is a slower first-container
+# start; use a prebaked NOVA_SANDBOX_IMAGE + NOVA_SANDBOX_SKIP_PROVISION=1 to skip
+# it, or NOVA_SANDBOX_EXTRA_APT/PIP to add more.
+_PROVISION_APT_PACKAGES = (
+    "git",
+    "openssh-client",
+    "ca-certificates",
+    "curl",
+    "wget",
+    "build-essential",
+    "nodejs",
+    "npm",
+    "ripgrep",
+    "jq",
+    "tree",
+    "unzip",
+    "less",
+)
 # uv is a fast Rust-based pip/venv/workflow replacement.
-_PROVISION_APT_PACKAGES = ("git", "ca-certificates", "curl", "build-essential", "jq", "tree")
 _PROVISION_PIP_PACKAGES = ("ruff", "pytest", "uv", "networkx")
 
 
@@ -83,7 +111,7 @@ fi
 if command -v pip >/dev/null 2>&1; then
   pip install --quiet --no-input --root-user-action=ignore {pip_list} || echo "nova-provision: pip install failed (continuing)"
 fi
-echo "nova-provision-summary: git=$(command -v git || echo MISSING) ruff=$(command -v ruff || echo MISSING) pytest=$(command -v pytest || echo MISSING) uv=$(command -v uv || echo MISSING) networkx=$(python3 -c 'import networkx; print(networkx.__version__)' 2>/dev/null || echo MISSING)"
+echo "nova-provision-summary: git=$(command -v git || echo MISSING) node=$(command -v node || echo MISSING) npm=$(command -v npm || echo MISSING) rg=$(command -v rg || echo MISSING) ruff=$(command -v ruff || echo MISSING) pytest=$(command -v pytest || echo MISSING) uv=$(command -v uv || echo MISSING) networkx=$(python3 -c 'import networkx; print(networkx.__version__)' 2>/dev/null || echo MISSING)"
 """
 
 
@@ -94,7 +122,10 @@ def _provision_sandbox_tools(backend: SandboxBackendProtocol) -> None:
     be installed, so the user knows execute/test commands may be degraded and
     can point NOVA_SANDBOX_IMAGE at a richer image instead.
     """
-    console.print("[dim]Provisioning sandbox toolchain (git, ruff, pytest, uv, networkx, jq, tree)...[/dim]")
+    console.print(
+        "[dim]Provisioning sandbox toolchain "
+        "(git, node, npm, rg, ruff, pytest, uv, networkx, build tools)...[/dim]"
+    )
     try:
         # execute() already runs the command under `bash -c`; pass the script raw.
         result = backend.execute(_build_provision_script(), timeout=600)
@@ -118,7 +149,10 @@ def _provision_sandbox_tools(backend: SandboxBackendProtocol) -> None:
             "for additional packages.[/dim]"
         )
     else:
-        console.print("[green]✓ Sandbox toolchain ready (git, ruff, pytest, uv, networkx, jq, tree)[/green]")
+        console.print(
+            "[green]✓ Sandbox toolchain ready "
+            "(git, node, npm, rg, ruff, pytest, uv, networkx, build tools)[/green]"
+        )
 
 
 def _run_sandbox_setup(backend: SandboxBackendProtocol, setup_script_path: str) -> None:

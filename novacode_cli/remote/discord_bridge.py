@@ -27,7 +27,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from typing import Any, Callable, Awaitable, Callable, Awaitable
+from typing import Any, Callable, Awaitable
 
 from novacode_cli.remote.bridge import (
     BridgeConfig,
@@ -35,6 +35,7 @@ from novacode_cli.remote.bridge import (
     RemotePlatform,
     chunk_message,
 )
+from novacode_cli.remote.processor import _debug_log
 
 logger = logging.getLogger(__name__)
 
@@ -208,9 +209,7 @@ class DiscordBridge:
                 )
 
             await self._queue.put(remote_msg)
-            import os as _os2
-            with open(_os2.path.expanduser("~/.nova/remote_debug.log"), "a") as _df:
-                _df.write("BRIDGE PUT queue=" + str(id(self._queue)) + " text=" + content[:80] + chr(10))
+            await _debug_log(f"BRIDGE PUT queue={id(self._queue)} text={content[:80]}")
             logger.info(f"Message queued (size: {self._queue.qsize()})")
 
         @client.event

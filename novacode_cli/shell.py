@@ -1177,6 +1177,26 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
             if process.returncode != 0:
                 status = "error"
 
+        except asyncio.CancelledError:
+            # Task was cancelled — terminate the subprocess and re-raise
+            output_lines.append("\n[yellow]Task cancelled[/yellow]")
+            status = "error"
+            try:
+                process.terminate()
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=2.0)
+                except TimeoutError:
+                    process.kill()
+                    await process.wait()
+            except OSError:
+                pass
+            finally:
+                try:
+                    if process.stdin:
+                        process.stdin.close()
+                except Exception:
+                    pass
+            raise
         except OSError as e:
             output_lines.append(f"\nError during execution: {e}")
             status = "error"
@@ -1485,6 +1505,25 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
                 except TimeoutError:
                     pass
 
+        except asyncio.CancelledError:
+            output_lines.append("\n[yellow]Background task cancelled[/yellow]")
+            status = "error"
+            try:
+                process.terminate()
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=2.0)
+                except TimeoutError:
+                    process.kill()
+                    await process.wait()
+            except OSError:
+                pass
+            finally:
+                try:
+                    if process.stdin:
+                        process.stdin.close()
+                except Exception:
+                    pass
+            raise
         except OSError as e:
             output_lines.append(f"\nError during startup: {e}")
             status = "error"

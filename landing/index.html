@@ -1,0 +1,957 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nova Code CLI — AI coding partner in your terminal</title>
+  <meta name="description" content="Nova is an agentic coding CLI with sandboxed execution, MCP tool integration, and deep agent workflows." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="preconnect" href="https://api.fontshare.com" />
+  <link href="https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@700,800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    /* === DESIGN SYSTEM === */
+    :root {
+      --bg: #0a0a0f;
+      --surface: #12121a;
+      --surface-hover: #1a1a26;
+      --border: #1e1e2e;
+      --text: #ffffff;
+      --text-secondary: #a0a0b8;
+      --text-muted: #6c6c80;
+      --accent-start: #00e5ff;
+      --accent-end: #00b894;
+      --accent: #00e5ff;
+      --code-bg: #0d0d14;
+      --code-text: #a6e22e;
+      --font-display: 'Cabinet Grotesk', sans-serif;
+      --font-body: 'Inter', -apple-system, sans-serif;
+      --font-code: 'JetBrains Mono', monospace;
+      --radius: 12px;
+      --radius-sm: 6px;
+      --max-width: 1200px;
+      --nav-height: 64px;
+    }
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: var(--font-body);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+    a { color: var(--accent); text-decoration: none; transition: opacity .2s; }
+    a:hover { opacity: .8; }
+    img, svg { display: block; max-width: 100%; }
+    .container { max-width: var(--max-width); margin: 0 auto; padding: 0 24px; }
+    section { padding: 100px 0; }
+    .section-label {
+      font-family: var(--font-display);
+      font-size: clamp(2rem, 5vw, 3.2rem);
+      font-weight: 800;
+      text-align: center;
+      margin-bottom: 60px;
+    }
+    /* === NAVBAR === */
+    nav {
+      position: fixed; top: 0; left: 0; right: 0;
+      height: var(--nav-height);
+      background: rgba(10,10,15,.8);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      z-index: 100;
+      display: flex; align-items: center;
+    }
+    nav .container {
+      width: 100%; display: flex; align-items: center; justify-content: space-between;
+    }
+    .nav-logo {
+      display: flex; align-items: center; gap: 10px;
+      font-family: var(--font-display); font-size: 1.2rem; font-weight: 800;
+      color: var(--text);
+    }
+    .nav-logo svg { width: 24px; height: 24px; }
+    .nav-links { display: flex; align-items: center; gap: 32px; list-style: none; }
+    .nav-links a { font-size: .9rem; font-weight: 500; color: var(--text-secondary); }
+    .nav-links .nav-cta {
+      background: linear-gradient(135deg, var(--accent-start), var(--accent-end));
+      color: #000; font-weight: 600;
+      padding: 8px 20px; border-radius: var(--radius-sm);
+      font-size: .85rem;
+    }
+    /* Scroll indicator for hero */
+    .scroll-indicator {
+      position: absolute; bottom: 40px; left: 50%; transform: translateX(-50%);
+      display: flex; flex-direction: column; align-items: center; gap: 8px;
+      color: var(--text-muted); font-size: .75rem; letter-spacing: .1em;
+      animation: bounce 2s infinite;
+      pointer-events: none;
+    }
+    .scroll-indicator .arrow { width: 20px; height: 20px; border-right: 2px solid var(--text-muted); border-bottom: 2px solid var(--text-muted); transform: rotate(45deg); }
+    @keyframes bounce { 0%,100% { transform: translateX(-50%) translateY(0); } 50% { transform: translateX(-50%) translateY(8px); } }
+  /* === HERO === */
+    #hero {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      overflow: hidden;
+      padding-top: var(--nav-height);
+      padding-bottom: 80px;
+    }
+    .hero-grid {
+      position: absolute; inset: 0; z-index: 0;
+      background-image:
+        linear-gradient(rgba(255,255,255,.02) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.02) 1px, transparent 1px);
+      background-size: 60px 60px;
+      animation: grid-drift 20s linear infinite;
+      will-change: transform;
+    }
+    @keyframes grid-drift {
+      0% { transform: translate(0, 0); }
+      100% { transform: translate(60px, 60px); }
+    }
+    .hero-glow {
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 0;
+      width: 800px; height: 800px;
+      background: radial-gradient(circle, rgba(0,229,255,.08) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .hero-content {
+      position: relative; z-index: 1;
+      text-align: center;
+      max-width: 800px;
+      padding: 0 24px;
+    }
+    .hero-content h1 {
+      font-family: var(--font-display);
+      font-size: clamp(2.5rem, 6vw, 4.2rem);
+      font-weight: 800;
+      line-height: 1.1;
+      margin-bottom: 20px;
+    }
+    .hero-content h1 .accent-word {
+      background: linear-gradient(135deg, var(--accent-start), var(--accent-end));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .hero-sub {
+      font-size: 1.1rem;
+      color: var(--text-secondary);
+      max-width: 600px;
+      margin: 0 auto 48px;
+      line-height: 1.7;
+    }
+    .terminal {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow-x: auto;
+      margin-bottom: 40px;
+      text-align: left;
+      box-shadow: 0 0 60px rgba(0,229,255,.06), 0 0 120px rgba(0,184,148,.04);
+      transition: box-shadow .4s;
+    }
+    .terminal:hover {
+      box-shadow: 0 0 80px rgba(0,229,255,.1), 0 0 160px rgba(0,184,148,.06);
+    }
+    .terminal-bar {
+      display: flex; align-items: center;
+      padding: 12px 16px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      gap: 8px;
+    }
+    .terminal-dot { width: 10px; height: 10px; border-radius: 50%; }
+    .terminal-dot.red { background: #ff5f57; }
+    .terminal-dot.yellow { background: #ffbd2e; }
+    .terminal-dot.green { background: #28c840; }
+    .terminal-title {
+      font-family: var(--font-code);
+      font-size: .8rem;
+      color: var(--text-muted);
+      margin-left: 12px;
+    }
+    .terminal-body {
+      padding: 24px;
+      font-family: var(--font-code);
+      font-size: .85rem;
+      line-height: 1.7;
+      color: var(--code-text);
+      min-height: 300px;
+    }
+    .terminal-line {
+      opacity: 0;
+      animation: type-in .3s ease forwards;
+    }
+    .terminal-line:nth-child(1) { animation-delay: .3s; }
+    .terminal-line:nth-child(2) { animation-delay: .8s; }
+    .terminal-line:nth-child(3) { animation-delay: 1.3s; }
+    .terminal-line:nth-child(4) { animation-delay: 1.8s; }
+    .terminal-line:nth-child(5) { animation-delay: 2.3s; }
+    .terminal-line:nth-child(6) { animation-delay: 2.8s; }
+    .terminal-line:nth-child(7) { animation-delay: 3.3s; }
+    .terminal-line:nth-child(8) { animation-delay: 3.8s; }
+    .terminal-line:nth-child(9) { animation-delay: 4.3s; }
+    .terminal-line:nth-child(10) { animation-delay: 4.8s; }
+    .terminal-line:nth-child(11) { animation-delay: 5.3s; }
+    .terminal-line:nth-child(12) { animation-delay: 5.8s; }
+    .terminal-line:nth-child(13) { animation-delay: 6.3s; }
+    @keyframes type-in {
+      to { opacity: 1; }
+    }
+    .terminal-prompt { color: var(--accent); }
+    .terminal-dim { color: var(--text-muted); }
+    .terminal-thinking { color: #e2b714; }
+    .hero-cta {
+      display: inline-block;
+      background: linear-gradient(135deg, var(--accent-start), var(--accent-end));
+      color: #000;
+      font-weight: 600;
+      font-size: 1rem;
+      padding: 14px 36px;
+      border-radius: var(--radius);
+      transition: transform .2s, box-shadow .2s;
+    }
+    .hero-cta:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 30px rgba(0,229,255,.2);
+      opacity: 1;
+    }
+    @media (max-width: 600px) {
+      .terminal-body { font-size: .7rem; padding: 16px; }
+      #hero { padding-bottom: 60px; }
+      .nav-links { gap: 16px; }
+      .nav-links a { font-size: .8rem; }
+      .nav-links .nav-cta { padding: 6px 14px; font-size: .8rem; }
+    }
+    /* === TERMINAL DEMO === */
+    #terminal-demo {
+      background: var(--surface);
+    }
+    .tabs {
+      display: flex;
+      justify-content: center;
+      gap: 4px;
+      margin-bottom: 40px;
+      background: var(--code-bg);
+      padding: 4px;
+      border-radius: var(--radius);
+      max-width: 480px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    .tab-btn {
+      font-family: var(--font-body);
+      font-size: .85rem;
+      font-weight: 500;
+      padding: 10px 20px;
+      border: none;
+      border-radius: var(--radius-sm);
+      background: transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all .25s;
+    }
+    .tab-btn:hover { color: var(--text-secondary); }
+    .tab-btn.active {
+      background: var(--surface-hover);
+      color: var(--accent);
+    }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+    .tab-terminal {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow-x: auto;
+      max-width: 680px;
+      margin: 0 auto;
+    }
+    .tab-terminal .terminal-bar { border-radius: var(--radius) var(--radius) 0 0; }
+    .tab-terminal .terminal-body {
+      min-height: 220px;
+      font-size: .8rem;
+      padding: 20px 24px;
+    }
+    .tab-terminal .terminal-line {
+      opacity: 0;
+      animation: type-in .25s ease forwards;
+    }
+    .tab-terminal .terminal-line:nth-child(1) { animation-delay: .1s; }
+    .tab-terminal .terminal-line:nth-child(2) { animation-delay: .2s; }
+    .tab-terminal .terminal-line:nth-child(3) { animation-delay: .3s; }
+    .tab-terminal .terminal-line:nth-child(4) { animation-delay: .4s; }
+    .tab-terminal .terminal-line:nth-child(5) { animation-delay: .5s; }
+    .tab-terminal .terminal-line:nth-child(6) { animation-delay: .6s; }
+    .tab-terminal .terminal-line:nth-child(7) { animation-delay: .7s; }
+    .tab-terminal .terminal-line:nth-child(8) { animation-delay: .8s; }
+  /* === FEATURES === */
+    #features {
+      background: var(--bg);
+    }
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 24px;
+    }
+    .feature-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 36px 28px;
+      transition: transform .25s, border-color .25s, box-shadow .25s;
+    }
+    .feature-card:hover {
+      transform: translateY(-4px);
+      border-color: rgba(0,229,255,.3);
+      box-shadow: 0 12px 40px rgba(0,0,0,.3);
+    }
+    .feature-icon {
+      width: 40px; height: 40px;
+      display: flex; align-items: center; justify-content: center;
+      border-radius: var(--radius-sm);
+      background: rgba(0,229,255,.08);
+      color: var(--accent);
+      margin-bottom: 20px;
+    }
+    .feature-card h3 {
+      font-family: var(--font-display);
+      font-size: 1.15rem;
+      font-weight: 700;
+      margin-bottom: 10px;
+    }
+    .feature-card p {
+      color: var(--text-secondary);
+      font-size: .9rem;
+      line-height: 1.7;
+    }
+    /* === ARCHITECTURE / HOW IT WORKS === */
+    #how-it-works {
+      background: var(--surface);
+    }
+    .pipeline {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0;
+      max-width: 960px;
+      margin: 0 auto 60px;
+      flex-wrap: wrap;
+    }
+    .pipeline-node {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      padding: 20px 16px;
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      min-width: 130px;
+      cursor: pointer;
+      transition: all .25s;
+      position: relative;
+      font-family: inherit;
+      color: inherit;
+    }
+    .pipeline-node:hover {
+      border-color: var(--accent);
+      box-shadow: 0 0 20px rgba(0,229,255,.1);
+    }
+    .pipeline-arrow {
+      color: var(--text-muted);
+      font-size: 1.2rem;
+      padding: 0 8px;
+      flex-shrink: 0;
+    }
+    .pipeline-node-icon {
+      font-size: 1.5rem;
+    }
+    .pipeline-node-label {
+      font-family: var(--font-display);
+      font-size: .8rem;
+      font-weight: 700;
+      color: var(--text);
+    }
+    .pipeline-detail {
+      display: none;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 32px;
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+    }
+    .pipeline-detail.open {
+      display: block;
+    }
+    .pipeline-detail h4 {
+      font-family: var(--font-display);
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: var(--accent);
+      margin-bottom: 12px;
+    }
+    .pipeline-detail p {
+      color: var(--text-secondary);
+      font-size: .9rem;
+      line-height: 1.7;
+      margin-bottom: 16px;
+    }
+    .pipeline-detail-code {
+      background: rgba(0,0,0,.3);
+      border-radius: var(--radius-sm);
+      padding: 12px 16px;
+      font-family: var(--font-code);
+      font-size: .8rem;
+      color: var(--code-text);
+      overflow-x: auto;
+    }
+    @media (max-width: 768px) {
+      .features-grid { grid-template-columns: 1fr; }
+      .pipeline { flex-direction: column; }
+      .pipeline-arrow { transform: rotate(90deg); }
+    }
+    /* === TRUST / STATS === */
+    #trust {
+      background: var(--bg);
+    }
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 32px;
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    .stat-item {
+      text-align: center;
+    }
+    .stat-number {
+      font-family: var(--font-display);
+      font-size: clamp(2rem, 4vw, 2.8rem);
+      font-weight: 800;
+      background: linear-gradient(135deg, var(--accent-start), var(--accent-end));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      line-height: 1.2;
+    }
+    .stat-label {
+      color: var(--text-secondary);
+      font-size: .85rem;
+      margin-top: 6px;
+    }
+    .tech-strip {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 40px;
+      flex-wrap: wrap;
+      margin-top: 60px;
+      padding: 32px 0;
+      border-top: 1px solid var(--border);
+    }
+    .tech-item {
+      font-family: var(--font-code);
+      font-size: .8rem;
+      color: var(--text-muted);
+      letter-spacing: .05em;
+    }
+    /* === CTA === */
+    #get-started {
+      background: var(--surface);
+      text-align: center;
+    }
+    .cta-card {
+      background: linear-gradient(135deg, rgba(0,229,255,.06), rgba(0,184,148,.04));
+      border: 1px solid rgba(0,229,255,.15);
+      border-radius: var(--radius);
+      padding: 60px 40px;
+      max-width: 700px;
+      margin: 0 auto;
+    }
+    .cta-card h2 {
+      font-family: var(--font-display);
+      font-size: clamp(1.8rem, 4vw, 2.5rem);
+      font-weight: 800;
+      margin-bottom: 16px;
+    }
+    .cta-card p {
+      color: var(--text-secondary);
+      margin-bottom: 32px;
+      font-size: 1rem;
+    }
+    .install-code {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 14px 20px;
+      margin-bottom: 20px;
+      max-width: 400px;
+      margin-left: auto;
+      margin-right: auto;
+      font-family: var(--font-code);
+      font-size: .9rem;
+      color: var(--code-text);
+    }
+    .install-code .copy-btn {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: .8rem;
+      font-family: var(--font-body);
+      transition: all .2s;
+    }
+    .install-code .copy-btn:hover {
+      color: var(--accent);
+      background: rgba(0,229,255,.08);
+    }
+    .install-code .copy-btn.copied {
+      color: #28c840;
+    }
+    .cta-sub {
+      color: var(--text-muted);
+      font-size: .85rem;
+    }
+    .cta-sub a {
+      color: var(--text-secondary);
+      border-bottom: 1px dotted var(--border);
+    }
+    .cta-sub a:hover {
+      color: var(--accent);
+    }
+    /* === FOOTER === */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 40px 0;
+    }
+    .footer-grid {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 24px;
+    }
+    .footer-brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-family: var(--font-display);
+      font-size: 1rem;
+      font-weight: 800;
+      color: var(--text);
+    }
+    .footer-brand svg {
+      width: 18px; height: 18px;
+    }
+    .footer-copy {
+      color: var(--text-muted);
+      font-size: .85rem;
+    }
+    .footer-links {
+      display: flex;
+      gap: 24px;
+      list-style: none;
+    }
+    .footer-links a {
+      color: var(--text-muted);
+      font-size: .85rem;
+    }
+    .footer-links a:hover {
+      color: var(--text-secondary);
+    }
+  </style>
+</head>
+<body>
+  <nav>
+    <div class="container">
+      <a href="#" class="nav-logo">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false">
+          <polyline points="4 17 10 11 4 5"></polyline>
+          <line x1="12" y1="19" x2="20" y2="19"></line>
+        </svg>
+        Nova
+      </a>
+      <ul class="nav-links">
+        <li><a href="#features">Features</a></li>
+        <li><a href="#how-it-works">How It Works</a></li>
+        <li><a href="https://github.com/babitdor/nova-code-cli" target="_blank" rel="noopener noreferrer" aria-label="View on GitHub (opens in new tab)">GitHub</a></li>
+        <li><a href="#get-started" class="nav-cta">Get Started</a></li>
+      </ul>
+    </div>
+  </nav>
+  <main>
+    <section id="hero">
+      <div class="hero-grid"></div>
+      <div class="hero-glow"></div>
+      <div class="hero-content">
+        <h1>Code with AI that <span class="accent-word">actually works</span> in your terminal</h1>
+        <p class="hero-sub">Nova is an agentic coding CLI with sandboxed execution, MCP tool integration, and deep agent workflows. Run it where your code lives — no web dashboards, no context switching.</p>
+        <div class="terminal" role="img" aria-label="Terminal showing a Nova CLI session with scan results output">
+          <div class="terminal-bar">
+            <span class="terminal-dot red" aria-hidden="true"></span>
+            <span class="terminal-dot yellow" aria-hidden="true"></span>
+            <span class="terminal-dot green" aria-hidden="true"></span>
+            <span class="terminal-title">bash — nova</span>
+          </div>
+          <div class="terminal-body">
+            <div class="terminal-line"><span class="terminal-prompt">$</span> nova</div>
+            <div class="terminal-line"><span class="terminal-dim">╭─ Nova Code CLI ─────────────────────────────────╮</span></div>
+            <div class="terminal-line"><span class="terminal-dim">│  AI coding partner in your terminal              │</span></div>
+            <div class="terminal-line" aria-hidden="true"></div>
+            <div class="terminal-line"><span class="terminal-dim">│  [ℹ] Sandbox ready — workspace is isolated       │</span></div>
+            <div class="terminal-line"><span class="terminal-dim">│  [ℹ] 3 agents loaded                             │</span></div>
+            <div class="terminal-line" aria-hidden="true"></div>
+            <div class="terminal-line"><span class="terminal-dim">│  You: scan this codebase                         │</span></div>
+            <div class="terminal-line"><span class="terminal-thinking">● Thinking...</span></div>
+            <div class="terminal-line"><span class="terminal-dim">│  🔧 12 tool calls · read_file×4, grep×3, shell   │</span></div>
+            <div class="terminal-line" aria-hidden="true"></div>
+            <div class="terminal-line"><span class="terminal-dim">│  Nova: Project scan complete. 209 files found.   │</span></div>
+            <div class="terminal-line"><span class="terminal-dim">╰───────────────────────────────────────────────────╯</span></div>
+          </div>
+        </div>
+        <a href="#get-started" class="hero-cta">Get Started</a>
+      </div>
+      <div class="scroll-indicator" aria-hidden="true">
+        SCROLL
+        <div class="arrow"></div>
+      </div>
+    </section>
+  <section id="terminal-demo">
+      <div class="container">
+        <h2 class="section-label">See it in action</h2>
+        <div class="tabs">
+          <button class="tab-btn active" data-tab="scan">Project Scan</button>
+          <button class="tab-btn" data-tab="generate">Code Generation</button>
+          <button class="tab-btn" data-tab="agents">Agent Workflow</button>
+        </div>
+
+        <!-- Tab 1: Project Scan -->
+        <div class="tab-content active" id="tab-scan">
+          <div class="tab-terminal">
+            <div class="terminal-bar">
+              <span class="terminal-dot red" aria-hidden="true"></span>
+              <span class="terminal-dot yellow" aria-hidden="true"></span>
+              <span class="terminal-dot green" aria-hidden="true"></span>
+              <span class="terminal-title">nova — project scan</span>
+            </div>
+            <div class="terminal-body">
+              <div class="terminal-line"><span class="terminal-prompt">$</span> nova</div>
+              <div class="terminal-line"><span class="terminal-dim">╭─ Nova Code CLI ─────────────────────────────────╮</span></div>
+              <div class="terminal-line"><span class="terminal-dim">│  You: scan this codebase                         │</span></div>
+              <div class="terminal-line"><span class="terminal-thinking">● Thinking...</span></div>
+              <div class="terminal-line"><span class="terminal-dim">│  209 Python files, 58,283 total lines           │</span></div>
+              <div class="terminal-line"><span class="terminal-dim">│  59 module communities identified               │</span></div>
+              <div class="terminal-line"><span class="terminal-dim">│  6 central hubs found (Settings, MCPConfig...)   │</span></div>
+              <div class="terminal-line"><span class="terminal-dim">╰───────────────────────────────────────────────────╯</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 2: Code Generation -->
+        <div class="tab-content" id="tab-generate">
+          <div class="tab-terminal">
+            <div class="terminal-bar">
+              <span class="terminal-dot red" aria-hidden="true"></span>
+              <span class="terminal-dot yellow" aria-hidden="true"></span>
+              <span class="terminal-dot green" aria-hidden="true"></span>
+              <span class="terminal-title">nova — code gen</span>
+            </div>
+            <div class="terminal-body">
+              <div class="terminal-line"><span class="terminal-prompt">$</span> create a REST endpoint for user auth</div>
+              <div class="terminal-line"><span class="terminal-thinking">● Thinking...</span></div>
+              <div class="terminal-line"><span class="terminal-dim">🔧 8 tool calls · read_file×2, write_file×2, shell</span></div>
+              <div class="terminal-line" aria-hidden="true"></div>
+              <div class="terminal-line"><span class="terminal-dim">│  Created: routes/auth.py                         │</span></div>
+              <div class="terminal-line"><span class="terminal-dim">│  Created: tests/test_auth.py                     │</span></div>
+              <div class="terminal-line"><span class="terminal-dim">│  Created: middleware/jwt.py                      │</span></div>
+              <div class="terminal-line"><span class="terminal-dim">│  Tests: 5/5 passing                              │</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 3: Agent Workflow -->
+        <div class="tab-content" id="tab-agents">
+          <div class="tab-terminal">
+            <div class="terminal-bar">
+              <span class="terminal-dot red" aria-hidden="true"></span>
+              <span class="terminal-dot yellow" aria-hidden="true"></span>
+              <span class="terminal-dot green" aria-hidden="true"></span>
+              <span class="terminal-title">nova — agent workflow</span>
+            </div>
+            <div class="terminal-body">
+              <div class="terminal-line"><span class="terminal-prompt">$</span> /init --update</div>
+              <div class="terminal-line"><span class="terminal-thinking">● Researching codebase...</span></div>
+              <div class="terminal-line"><span class="terminal-dim">│  [ℹ] Spawning 3 subagents for analysis          │</span></div>
+              <div class="terminal-line"><span class="terminal-dim">│  [ℹ] Subagent 1: extracting module structure     │</span></div>
+              <div class="terminal-line"><span class="terminal-dim">│  [ℹ] Subagent 2: mapping dependencies            │</span></div>
+              <div class="terminal-line"><span class="terminal-dim">│  [ℹ] Subagent 3: generating project graph        │</span></div>
+              <div class="terminal-line"><span class="terminal-dim">│  Done. Graph updated — 3,725 nodes, 9,360 edges  │</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- === FEATURES === -->
+    <section id="features">
+      <div class="container">
+        <h2 class="section-label">What makes Nova different</h2>
+        <div class="features-grid">
+          <div class="feature-card">
+            <div class="feature-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+            </div>
+            <h3>Sandboxed &amp; Safe</h3>
+            <p>Every AI action runs in an isolated Docker or E2B sandbox. Your system stays protected — no accidental file deletion, no rogue processes.</p>
+          </div>
+          <div class="feature-card">
+            <div class="feature-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+            </div>
+            <h3>Connect Anywhere</h3>
+            <p>Run Nova from Discord or Telegram. Start a session on your desktop, pick it up from your phone — the remote bridge keeps you in control.</p>
+          </div>
+          <div class="feature-card">
+            <div class="feature-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+            </div>
+            <h3>Deep Agent Architecture</h3>
+            <p>Built on LangGraph and deepagents. Nova spawns subagents for complex tasks — research, coding, testing — each with isolated context.</p>
+          </div>
+          <div class="feature-card">
+            <div class="feature-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"></path></svg>
+            </div>
+            <h3>MCP Tool Integration</h3>
+            <p>Connect any MCP-compatible server — databases, APIs, file systems. Nova discovers and wires them automatically at startup.</p>
+          </div>
+          <div class="feature-card">
+            <div class="feature-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2L2 7l10 5 10-5-10-5z"></path><path d="M2 17l10 5 10-5"></path><path d="M2 12l10 5 10-5"></path></svg>
+            </div>
+            <h3>Session Persistence</h3>
+            <p>Save and restore full conversations with LangGraph checkpoints. Switch models mid-session, resume exactly where you left off.</p>
+          </div>
+          <div class="feature-card">
+            <div class="feature-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
+            </div>
+            <h3>Open Source</h3>
+            <p>MIT-licensed and built in the open. No vendor lock-in, no proprietary agents — just Python, LangChain, and your terminal.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- === HOW IT WORKS === -->
+    <section id="how-it-works">
+      <div class="container">
+        <h2 class="section-label">How it works</h2>
+        <div class="pipeline">
+          <button class="pipeline-node" data-detail="input">
+            <span class="pipeline-node-icon" aria-hidden="true">⌨️</span>
+            <span class="pipeline-node-label">Input</span>
+          </button>
+          <span class="pipeline-arrow">→</span>
+          <button class="pipeline-node" data-detail="agent">
+            <span class="pipeline-node-icon" aria-hidden="true">🤖</span>
+            <span class="pipeline-node-label">Agent</span>
+          </button>
+          <span class="pipeline-arrow">→</span>
+          <button class="pipeline-node" data-detail="tools">
+            <span class="pipeline-node-icon" aria-hidden="true">🔧</span>
+            <span class="pipeline-node-label">Tools</span>
+          </button>
+          <span class="pipeline-arrow">→</span>
+          <button class="pipeline-node" data-detail="sandbox">
+            <span class="pipeline-node-icon" aria-hidden="true">📦</span>
+            <span class="pipeline-node-label">Sandbox</span>
+          </button>
+          <span class="pipeline-arrow">→</span>
+          <button class="pipeline-node" data-detail="output">
+            <span class="pipeline-node-icon" aria-hidden="true">📤</span>
+            <span class="pipeline-node-label">Output</span>
+          </button>
+        </div>
+
+        <div class="pipeline-detail open" id="detail-input">
+          <h4>Input</h4>
+          <p>You type a command, ask a question, or give a task — just like a regular terminal. Nova parses it through a LangGraph agent graph that understands intent, extracts context from your project, and plans the execution.</p>
+          <div class="pipeline-detail-code">$ nova → "scan this codebase"<br>ℹ Processing via LangGraph agent graph...</div>
+        </div>
+        <div class="pipeline-detail" id="detail-agent">
+          <h4>Agent</h4>
+          <p>The core agent orchestrates the work. It can spawn subagents for research, coding, testing — each with isolated context. Built on the deepagents framework, it manages planning, tool selection, and multi-step reasoning automatically.</p>
+          <div class="pipeline-detail-code">Agent: planning task "scan codebase"<br>  → spawning research subagent<br>  → spawning analysis subagent</div>
+        </div>
+        <div class="pipeline-detail" id="detail-tools">
+          <h4>Tools</h4>
+          <p>Nova connects to MCP servers for databases, APIs, file systems, and web search. It also uses built-in tools for code editing, file operations, sandbox commands, and project graph queries — all routed through the agent.</p>
+          <div class="pipeline-detail-code">🔧 12 tool calls · read_file×4, grep×3, shell×2, task</div>
+        </div>
+        <div class="pipeline-detail" id="detail-sandbox">
+          <h4>Sandbox</h4>
+          <p>Every code execution, file operation, and shell command runs in an isolated sandbox — Docker, E2B, or remote. Your project files are mounted read-only; the sandbox gets its own workspace. No accidental damage to your system.</p>
+          <div class="pipeline-detail-code">[ℹ] Sandbox ready — workspace: /tmp/nova-sandbox-abc123<br>[ℹ] Project mounted at /workspace (read-only)</div>
+        </div>
+        <div class="pipeline-detail" id="detail-output">
+          <h4>Output</h4>
+          <p>Results stream back to your terminal in real-time — code diffs, scan reports, test results. Nova can also push output to Discord or Telegram via the remote bridge, so you never miss a result.</p>
+          <div class="pipeline-detail-code">Nova: Project scan complete. 209 files found.<br>  → 59 communities, 6 central hubs identified.</div>
+        </div>
+
+        <p style="text-align:center;color:var(--text-muted);font-size:.85rem;margin-top:20px;">Click any pipeline stage above to learn more</p>
+      </div>
+    </section>
+
+    <!-- === TRUST / STATS === -->
+    <section id="trust">
+      <div class="container">
+        <h2 class="section-label">Built for production</h2>
+        <div class="stats-grid">
+          <div class="stat-item">
+            <div class="stat-number">58K+</div>
+            <div class="stat-label">Lines of Python</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-number">209</div>
+            <div class="stat-label">Source Files</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-number">59</div>
+            <div class="stat-label">Module Communities</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-number">20+</div>
+            <div class="stat-label">Built-in Tools</div>
+          </div>
+        </div>
+        <div class="tech-strip">
+          <span class="tech-item">LangChain</span>
+          <span class="tech-item">LangGraph</span>
+          <span class="tech-item">MCP</span>
+          <span class="tech-item">Docker</span>
+          <span class="tech-item">Discord</span>
+          <span class="tech-item">Telegram</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- === CTA === -->
+    <section id="get-started">
+      <div class="container">
+        <div class="cta-card">
+          <h2>Get started in <span class="accent-word">2 commands</span></h2>
+          <p>Install Nova and start coding with AI in your terminal in under a minute.</p>
+          <div class="install-code">
+            <span>pip install nova-code-cli</span>
+            <button class="copy-btn" data-copy="pip install nova-code-cli">Copy</button>
+          </div>
+          <div class="install-code">
+            <span>nova</span>
+            <button class="copy-btn" data-copy="nova">Copy</button>
+          </div>
+          <p class="cta-sub">Or explore the <a href="https://github.com/babitdor/nova-code-cli" target="_blank" rel="noopener noreferrer" aria-label="View source on GitHub (opens in new tab)">source on GitHub</a></p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- === FOOTER === -->
+  <footer>
+    <div class="container">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false">
+            <polyline points="4 17 10 11 4 5"></polyline>
+            <line x1="12" y1="19" x2="20" y2="19"></line>
+          </svg>
+          Nova
+          <span class="footer-copy">© 2025 Babitdor Kayang Khonglah</span>
+        </div>
+        <ul class="footer-links">
+          <li><a href="https://github.com/babitdor/nova-code-cli" target="_blank" rel="noopener noreferrer" aria-label="View on GitHub (opens in new tab)">GitHub</a></li>
+          <li><a href="#features">Features</a></li>
+          <li><a href="#get-started">Get Started</a></li>
+        </ul>
+      </div>
+    </div>
+  </footer>
+  
+  <script>
+    // Tab switching for terminal demo
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const tab = btn.dataset.tab;
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+        btn.classList.add('active');
+        document.getElementById('tab-' + tab).classList.add('active');
+      });
+    });
+
+    // Pipeline expandable detail for "How it works"
+    document.querySelectorAll('.pipeline-node').forEach(node => {
+      node.addEventListener('click', () => {
+        const detailId = node.dataset.detail;
+        document.querySelectorAll('.pipeline-detail').forEach(d => d.classList.remove('open'));
+        document.getElementById('detail-' + detailId).classList.add('open');
+      });
+    });
+
+    // Copy-to-clipboard for CTA section
+    document.querySelectorAll('.copy-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const text = btn.dataset.copy;
+        const orig = btn.textContent;
+        try {
+          await navigator.clipboard.writeText(text);
+          btn.textContent = 'Copied!';
+          btn.classList.add('copied');
+          setTimeout(() => {
+            btn.textContent = orig;
+            btn.classList.remove('copied');
+          }, 2000);
+        } catch {
+          // Fallback for non-HTTPS / restricted contexts
+          const textarea = document.createElement('textarea');
+          textarea.value = text;
+          textarea.style.position = 'fixed';
+          textarea.style.opacity = '0';
+          document.body.appendChild(textarea);
+          textarea.select();
+          try {
+            document.execCommand('copy');
+            btn.textContent = 'Copied!';
+            btn.classList.add('copied');
+            setTimeout(() => {
+              btn.textContent = orig;
+              btn.classList.remove('copied');
+            }, 2000);
+          } catch {
+            btn.textContent = 'Select & Copy';
+            setTimeout(() => btn.textContent = orig, 2000);
+          }
+          document.body.removeChild(textarea);
+        }
+      });
+    });
+  </script>
+</body>
+</html>

@@ -78,6 +78,60 @@ def run_doctor() -> int:
                     response = requests.get(f"{ollama_host}/api/tags", timeout=5)
                     if response.status_code == 200:  # noqa: PLR2004
                         results.append(("✓", "Ollama connection successful", ollama_host))
+
+                        # Runtime check: actual allocated context + GPU/CPU split
+                        # for the currently-loaded model (via `ollama ps`).
+                        import os as _os
+
+                        from novacode_cli.context._dynamic import (
+                            check_ollama_offloading,
+                            get_ollama_context_length,
+                            get_ollama_num_ctx,
+                            get_ollama_runtime_info,
+                            is_ollama_cloud_model,
+                        )
+
+                        _model = config.get("model") or _os.environ.get(
+                            "OLLAMA_MODEL", "qwen3-coder:480b-cloud"
+                        )
+                        if is_ollama_cloud_model(_model):
+                            # Cloud model: runs on Ollama's servers, not local
+                            # VRAM. `ollama ps` won't list it; `ollama show`
+                            # reports its (maximum) context length.
+                            _max = get_ollama_context_length(_model)
+                            _detail = f"{_max:,} tokens (max)" if _max else "via ollama show"
+                            results.append(
+                                ("ℹ", f"Cloud model '{_model}' — runs remotely", _detail)
+                            )
+                            _rt = None
+                        else:
+                            _rt = get_ollama_runtime_info(_model)
+                        if _rt is None and not is_ollama_cloud_model(_model):
+                            results.append(
+                                (
+                                    "ℹ",
+                                    f"Ollama model '{_model}' not loaded yet "
+                                    f"(requesting num_ctx={get_ollama_num_ctx():,})",
+                                    "loads on first message",
+                                )
+                            )
+                        elif _rt is not None:
+                            ctx = _rt.get("context")
+                            if ctx:
+                                results.append(
+                                    (
+                                        "✓",
+                                        f"Allocated context: {ctx:,} tokens",
+                                        f"requested {get_ollama_num_ctx():,}",
+                                    )
+                                )
+                            _offload = check_ollama_offloading(_model)
+                            if _offload:
+                                results.append(("⚠", _offload, ""))
+                            elif _rt.get("processor"):
+                                results.append(
+                                    ("✓", f"Model on GPU ({_rt['processor']})", "")
+                                )
                     else:
                         results.append(
                             (

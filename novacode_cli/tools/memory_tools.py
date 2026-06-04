@@ -90,6 +90,16 @@ def write_memory(
     Use this tool when the user explicitly asks to remember something or when
     you identify information that should be persisted for future sessions.
 
+    For discrete, look-up-by-key facts shared across subagents, prefer the
+    ``remember`` / ``recall`` tools (durable LangGraph store). Use this tool for
+    prose memory that should be injected into the system prompt each session.
+
+    Note: this writes to the **local** filesystem (~/.nova for user memory,
+    <project>/.nova for project memory). In a bind-mounted Docker sandbox those
+    files are visible inside the container, but in a remote/cloud sandbox the
+    agent reads project memory from the sandbox — so a project-memory write here
+    may not be reflected in the sandbox view within the same run.
+
     Args:
         content: Memory content to write (Markdown format recommended)
         memory_type: "user" for user preferences (applies to all projects),
@@ -135,12 +145,21 @@ def write_memory(
     # Create parent directory if needed
     memory_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Read existing content if appending
+    # Read existing content if appending. Mirror read_memory's encoding
+    # fallback (UTF-8 → cp1252 → UTF-8 w/ replacement) so a memory file that
+    # was written with a Windows-default encoding doesn't make append crash.
     existing_content = ""
     if append and memory_path.exists():
         try:
             existing_content = memory_path.read_text(encoding="utf-8")
-        except Exception as e:  # noqa: BLE001
+        except UnicodeDecodeError:
+            try:
+                existing_content = memory_path.read_text(encoding="cp1252")
+            except (UnicodeDecodeError, OSError):
+                existing_content = memory_path.read_text(
+                    encoding="utf-8", errors="replace"
+                )
+        except OSError as e:
             return {
                 "success": False,
                 "error": (f"Failed to read existing memory: {e!s}"),

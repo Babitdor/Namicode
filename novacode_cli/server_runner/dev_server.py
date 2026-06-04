@@ -174,6 +174,9 @@ async def wait_for_server(
 ) -> bool:
     """Wait for a server to become available.
 
+    Uses ``httpx.AsyncClient`` (already a project dependency) instead of sync
+    ``urllib.request`` so the event loop is never blocked during polling.
+
     Args:
         url: URL to poll
         timeout: Maximum time to wait
@@ -182,23 +185,21 @@ async def wait_for_server(
     Returns:
         True if server became available, False if timeout
     """
+    import httpx
     import time
 
     start_time = time.time()
 
-    while time.time() - start_time < timeout:
-        try:
-            # Try to connect to the server
-            import urllib.request
-
-            req = urllib.request.Request(url, method="HEAD")
-            with urllib.request.urlopen(req, timeout=2) as response:
-                if response.status < 500:
+    async with httpx.AsyncClient() as client:
+        while time.time() - start_time < timeout:
+            try:
+                resp = await client.head(url, timeout=2)
+                if resp.status_code < 500:
                     return True
-        except Exception:
-            pass
+            except Exception:
+                pass
 
-        await asyncio.sleep(poll_interval)
+            await asyncio.sleep(poll_interval)
 
     return False
 
@@ -209,6 +210,9 @@ async def wait_for_port(
     poll_interval: float = 0.5,
 ) -> bool:
     """Wait for a port to become available (in use by server).
+
+    Uses ``asyncio.open_connection()`` instead of sync ``socket`` so the
+    event loop is never blocked during polling.
 
     Args:
         port: Port to check
@@ -223,8 +227,14 @@ async def wait_for_port(
     start_time = time.time()
 
     while time.time() - start_time < timeout:
-        if is_port_in_use(port):
+        try:
+            _, writer = await asyncio.open_connection("localhost", port)
+            writer.close()
+            await writer.wait_closed()
             return True
+        except (ConnectionRefusedError, OSError):
+            pass
+
         await asyncio.sleep(poll_interval)
 
     return False

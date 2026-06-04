@@ -42,12 +42,14 @@ def create_model() -> BaseChatModel:
         if provider == "ollama":
             from langchain_ollama import ChatOllama
 
+            from novacode_cli.context._dynamic import get_ollama_num_ctx
+
             return ChatOllama(
                 model=model_name,
                 temperature=0,
                 disable_streaming=True,
                 keep_alive=600,
-                num_ctx=200000,
+                num_ctx=get_ollama_num_ctx(),
             )
 
         if provider == "openai":
@@ -185,12 +187,15 @@ def create_model() -> BaseChatModel:
 
     model_name = os.environ.get("OLLAMA_MODEL", "qwen3-coder:480b-cloud")
     console.print(f"[dim]No API keys configured. Defaulting to Ollama model: {model_name}[/dim]")
+
+    from novacode_cli.context._dynamic import get_ollama_num_ctx
+
     return ChatOllama(
         model=model_name,
         temperature=0,
         disable_streaming=True,
         keep_alive=600,
-        num_ctx=200000,
+        num_ctx=get_ollama_num_ctx(),
     )
 
 

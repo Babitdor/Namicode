@@ -152,7 +152,10 @@ class SecretManager:
             self.keyring = keyring
             # Test if keyring is actually available (not null backend)
             backend = keyring.get_keyring()
-            if backend.__class__.__name__ != "fail.Keyring":
+            # Check by module path: type(backend).__name__ returns "Keyring" (not "fail.Keyring"),
+            # so we must check the full module-qualified name
+            backend_fq_name = f"{type(backend).__module__}.{type(backend).__name__}"
+            if backend_fq_name != "keyring.backends.fail.Keyring":
                 self.use_keyring = True
         except (ImportError, RuntimeError):
             pass
@@ -251,6 +254,9 @@ class SecretManager:
             return None
         except json.JSONDecodeError as e:
             logger.warning("Corrupted secrets file when reading %s: %s", key, e)
+            return None
+        except Exception as e:
+            logger.warning("Unexpected error reading secret %s: %s", key, e)
             return None
 
     def delete_secret(self, key: str) -> bool:

@@ -23,14 +23,16 @@ from rich.text import Text
 
 from novacode_cli import ui_events as ev
 from novacode_cli.config.config import COLORS, console, get_agent_color
-from novacode_cli.core.agent_loop import iterate_agent_events
+from novacode_cli.core.agent_loop import (
+    default_interrupt_response,
+    iterate_agent_events,
+)
 from novacode_cli.file_ops import get_session_file_op_tracker
 from novacode_cli.input import ImageTracker
 from novacode_cli.ui.hitl_approval import process_hitl_approval
 from novacode_cli.ui.input_preparation import (
     build_agent_config,
     get_agent_display_name,
-    prepare_input_content,
 )
 from novacode_cli.ui.interrupt_handlers import (
     handle_plan_approval_interrupt,
@@ -69,10 +71,9 @@ async def execute_task(  # type: ignore
         set_working as vixie_set_working,
     )
 
-    message_content = await prepare_input_content(
-        user_input, image_tracker, skip_file_mentions=skip_file_mentions
-    )
-
+    # NB: input content (file mentions + images) is prepared inside
+    # iterate_agent_events; preparing it here too would read mentioned files
+    # off disk a second time.
     thread_id = str(uuid.uuid4()) if is_subagent else session_state.thread_id
     config = build_agent_config(thread_id, assistant_id)
 
@@ -361,62 +362,71 @@ async def execute_task(  # type: ignore
                             )
 
             elif isinstance(event, ev.InterruptRequest):
-                if event.kind == "tool":
-                    _dbg(
-                        "HITL-TOOL",
-                        f"auto_approve={session_state.auto_approve}",
-                    )
-                    decisions, any_rejected, spinner_active = (
-                        await process_hitl_approval(
-                            hitl_request=event.payload,
-                            session_state=session_state,
-                            assistant_id=assistant_id,
-                            backend=backend,
+                # Resolve in a finally so a handler that raises before
+                # set_result fails closed (reject) instead of leaving the agent
+                # loop awaiting the future forever.
+                try:
+                    if event.kind == "tool":
+                        _dbg(
+                            "HITL-TOOL",
+                            f"auto_approve={session_state.auto_approve}",
+                        )
+                        decisions, any_rejected, spinner_active = (
+                            await process_hitl_approval(
+                                hitl_request=event.payload,
+                                session_state=session_state,
+                                assistant_id=assistant_id,
+                                backend=backend,
+                                spinner_active=spinner_active,
+                                status=status,
+                                dbg_func=_dbg,
+                            )
+                        )
+                        event.future.set_result(
+                            {"decisions": decisions, "any_rejected": any_rejected}
+                        )
+
+                    elif event.kind == "question":
+                        _dbg(
+                            "HITL-QUESTION",
+                            f"auto_approve={session_state.auto_approve}",
+                        )
+                        response, spinner_active = await handle_question_interrupt(
+                            question_request=event.payload,
+                            auto_approve=session_state.auto_approve,
                             spinner_active=spinner_active,
                             status=status,
-                            dbg_func=_dbg,
                         )
-                    )
-                    event.future.set_result(
-                        {"decisions": decisions, "any_rejected": any_rejected}
-                    )
+                        event.future.set_result(response)
+                        if not spinner_active:
+                            status.start()
+                            spinner_active = True
 
-                elif event.kind == "question":
-                    _dbg(
-                        "HITL-QUESTION",
-                        f"auto_approve={session_state.auto_approve}",
-                    )
-                    response, spinner_active = await handle_question_interrupt(
-                        question_request=event.payload,
-                        auto_approve=session_state.auto_approve,
-                        spinner_active=spinner_active,
-                        status=status,
-                    )
-                    event.future.set_result(response)
-                    if not spinner_active:
-                        status.start()
-                        spinner_active = True
-
-                elif event.kind == "plan":
-                    _dbg(
-                        "HITL-PLAN",
-                        f"plan_mode={getattr(session_state, 'plan_mode_enabled', '?')}",
-                    )
-                    response, occurred, spinner_active, cmd_state_update = (
-                        await handle_plan_approval_interrupt(
-                            current_todos=current_todos,
-                            session_state=session_state,
-                            spinner_active=spinner_active,
-                            status=status,
-                            dbg_func=_dbg,
+                    elif event.kind == "plan":
+                        _dbg(
+                            "HITL-PLAN",
+                            f"plan_mode={getattr(session_state, 'plan_mode_enabled', '?')}",
                         )
-                    )
-                    event.future.set_result(
-                        {
-                            "response": response,
-                            "state_update": cmd_state_update,
-                        }
-                    )
+                        response, occurred, spinner_active, cmd_state_update = (
+                            await handle_plan_approval_interrupt(
+                                current_todos=current_todos,
+                                session_state=session_state,
+                                spinner_active=spinner_active,
+                                status=status,
+                                dbg_func=_dbg,
+                            )
+                        )
+                        event.future.set_result(
+                            {
+                                "response": response,
+                                "state_update": cmd_state_update,
+                            }
+                        )
+                finally:
+                    if not event.future.done():
+                        event.future.set_result(
+                            default_interrupt_response(event.kind)
+                        )
 
             elif isinstance(event, ev.ErrorOutput):
                 if spinner_active:

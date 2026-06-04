@@ -19,10 +19,15 @@ Format::
 Only the last-used configuration for each platform is stored.
 Tokens are stored in plaintext — the file is created with restrictive
 permissions (0600 on Unix) to limit access.
+
+All public functions have an ``async_`` variant that offloads synchronous
+file I/O to a thread pool via :func:`asyncio.to_thread`, so callers in
+async contexts never block the event loop.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -34,6 +39,9 @@ logger = logging.getLogger(__name__)
 
 _CONFIG_DIR = Path.home() / ".nova"
 _CONFIG_FILE = _CONFIG_DIR / "remote.json"
+
+
+# ── Sync helpers (for internal and sync-context use) ────────────────────────
 
 
 def _ensure_config_dir() -> None:
@@ -73,27 +81,71 @@ def save_remote_config(config: dict[str, Any], *, merge: bool = True) -> None:
     _ensure_config_dir()
 
     if merge and config:
-        # Merge with existing config (only update specified platforms)
         existing = load_remote_config()
         existing.update(config)
         data_to_write = existing
     else:
-        # Empty dict or merge=False: write as-is (can clear config)
         data_to_write = config
 
     try:
         with open(_CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(data_to_write, f, indent=2)
 
-        # Restrict file permissions (owner read/write only)
         try:
             os.chmod(_CONFIG_FILE, stat.S_IRUSR | stat.S_IWUSR)
         except OSError:
-            pass  # Windows doesn't support Unix permissions
+            pass
 
         logger.info(f"Remote config saved to {_CONFIG_FILE}")
     except OSError as e:
         logger.error(f"Could not save remote config: {e}")
+
+
+# ── Async wrappers (for async call paths — do not block the event loop) ─────
+
+
+async def async_load_remote_config() -> dict[str, Any]:
+    """Async version of :func:`load_remote_config`.
+
+    Offloads file I/O to a thread pool so the event loop is never blocked.
+    """
+    return await asyncio.to_thread(load_remote_config)
+
+
+async def async_save_remote_config(config: dict[str, Any], *, merge: bool = True) -> None:
+    """Async version of :func:`save_remote_config`.
+
+    Offloads file I/O to a thread pool so the event loop is never blocked.
+    """
+    return await asyncio.to_thread(save_remote_config, config, merge=merge)
+
+
+async def async_get_discord_config() -> dict[str, str] | None:
+    """Async version of :func:`get_discord_config`."""
+    config = await async_load_remote_config()
+    discord_cfg = config.get("discord")
+    if discord_cfg and "token" in discord_cfg:
+        return discord_cfg
+    return None
+
+
+async def async_get_telegram_config() -> dict[str, str] | None:
+    """Async version of :func:`get_telegram_config`."""
+    config = await async_load_remote_config()
+    telegram_cfg = config.get("telegram")
+    if telegram_cfg and "token" in telegram_cfg:
+        return telegram_cfg
+    return None
+
+
+async def async_save_discord_config(token: str, channel_id: str) -> None:
+    """Async version of :func:`save_discord_config`."""
+    await async_save_remote_config({"discord": {"token": token, "channel_id": str(channel_id)}})
+
+
+async def async_save_telegram_config(token: str, chat_id: str | int) -> None:
+    """Async version of :func:`save_telegram_config`."""
+    await async_save_remote_config({"telegram": {"token": token, "chat_id": str(chat_id)}})
 
 
 def get_discord_config() -> dict[str, str] | None:

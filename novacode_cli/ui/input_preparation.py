@@ -6,6 +6,7 @@ This module handles:
 - Preparing messages for the agent
 """
 
+import asyncio
 from pathlib import Path
 
 from novacode_cli.config.config import console
@@ -13,7 +14,6 @@ from novacode_cli.config.model_create import get_current_model_name
 from novacode_cli.errors.handlers import ErrorHandler
 from novacode_cli.image_utils import create_multimodal_content
 from novacode_cli.input import ImageTracker, parse_file_mentions
-from novacode_cli.vision import model_supports_vision, suggest_vision_model
 
 
 async def prepare_input_content(
@@ -46,7 +46,7 @@ async def prepare_input_content(
         context_parts = [prompt_text, "\n\n## Referenced Files\n"]
         for file_path in mentioned_files:
             try:
-                content = file_path.read_text()
+                content = await asyncio.to_thread(file_path.read_text)
                 if len(content) > 50000:
                     content = content[:50000] + "\n... (file truncated)"
                 context_parts.append(
@@ -68,20 +68,6 @@ async def prepare_input_content(
     images_to_send = []
     if image_tracker:
         images_to_send = image_tracker.get_images()
-
-    if images_to_send:
-        current_model = get_current_model_name()
-        if not model_supports_vision(current_model):
-            suggested = suggest_vision_model(current_model)
-            console.print()
-            console.print(
-                f"[yellow]Warning: Current model '{current_model}' may not support images.[/yellow]"
-            )
-            if suggested:
-                console.print(f"[dim]Consider using a vision model like '{suggested}'[/dim]")
-                console.print("[dim]Use /model to change models.[/dim]")
-            console.print()
-        return create_multimodal_content(final_input, images_to_send)
 
     return final_input
 

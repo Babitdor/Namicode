@@ -26,10 +26,15 @@ MODEL_CONTEXT_WINDOWS: dict[str, int] = {
     "gpt-4-turbo-preview": 128_000,
     "gpt-4o": 128_000,
     "gpt-4o-mini": 128_000,
+    "gpt-5": 128_000,
     "gpt-5-mini": 128_000,
     "gpt-3.5-turbo": 16_000,
     "gpt-3.5-turbo-16k": 16_000,
     # Anthropic models — Claude 4.x
+    "claude-opus-4-8": 200_000,
+    "claude-sonnet-4-8": 200_000,
+    "claude-opus-4-7": 200_000,
+    "claude-sonnet-4-7": 200_000,
     "claude-opus-4-6": 200_000,
     "claude-sonnet-4-6": 200_000,
     "claude-haiku-4-5-20251001": 200_000,
@@ -211,41 +216,14 @@ class CompactionResult:
     error: str | None = None
 
 
-def get_context_window_size(model_name: str, use_dyNovac: bool = True) -> int:
-    """Get the context window size for a given model.
+def _lookup_hardcoded_window(model_name: str) -> int:
+    """Resolve a model's architecture context window from the static table.
 
-    Uses dynamic detection from Ollama when available, with fallback to
-    hardcoded configurations.
-
-    Args:
-        model_name: The name of the model (e.g., "gpt-4", "claude-3-opus", "glm-5:cloud").
-        use_dyNovac: Whether to use dynamic detection from Ollama (default: True).
-
-    Returns:
-        The context window size in tokens. Falls back to default (128K) if the
-        model is not recognized.
+    Tries exact, case-insensitive, substring, then model-family matches, and
+    falls back to the 128K default. This is the model's *trained* window; for
+    Ollama-served models it is bounded by ``num_ctx`` in
+    :func:`get_context_window_size`.
     """
-    # Try dynamic detection first (Ollama models only — skip for cloud API models)
-    cloud_api_prefixes = ("claude-", "gpt-", "gemini-", "o1", "o3", "o4")
-    is_cloud_api_model = any(
-        model_name.lower().startswith(p) for p in cloud_api_prefixes
-    )
-    if use_dyNovac and not is_cloud_api_model:
-        try:
-            from novacode_cli.context._dynamic import get_ollama_context_length
-
-            context_length = get_ollama_context_length(model_name)
-            if context_length:
-                logger.debug(
-                    f"Dynamic context for {model_name}: {context_length:,} tokens"
-                )
-                return context_length
-        except Exception as e:  # noqa: BLE001
-            logger.debug(
-                f"Dynamic context detection failed for {model_name}: {e}, "
-                f"falling back to hardcoded"
-            )
-
     # Direct match in hardcoded configs
     if model_name in MODEL_CONTEXT_WINDOWS:
         return MODEL_CONTEXT_WINDOWS[model_name]
@@ -278,6 +256,94 @@ def get_context_window_size(model_name: str, use_dyNovac: bool = True) -> int:
     return MODEL_CONTEXT_WINDOWS["default"]
 
 
+def get_context_window_size(model_name: str, use_dyNovac: bool = True) -> int:
+    """Get the *effective* context window size for a given model.
+
+    For cloud API models (Claude/GPT/Gemini/o-series) this is the model's
+    published window. For Ollama-served models the effective window is
+    ``min(architecture_window, num_ctx)``: Nova loads Ollama models with a fixed
+    ``num_ctx`` (see :func:`~novacode_cli.context._dynamic.get_ollama_num_ctx`),
+    which is the real truncation limit. Reporting the raw architecture window
+    (e.g. 262K from ``ollama show``) overstated capacity when ``num_ctx`` was
+    smaller, and understated usage% — silently risking truncation. Conversely,
+    when ``num_ctx`` exceeds the model's trained window, the trained window is
+    the quality ceiling, so the smaller of the two is the honest number.
+
+    Args:
+        model_name: The name of the model (e.g., "gpt-4", "claude-3-opus", "glm-5:cloud").
+        use_dyNovac: Whether to use dynamic detection from Ollama (default: True).
+
+    Returns:
+        The effective context window size in tokens (falls back to 128K default).
+    """
+    from novacode_cli.context._dynamic import is_ollama_cloud_model
+
+    cloud_api_prefixes = ("claude-", "gpt-", "gemini-", "o1", "o3", "o4")
+    is_cloud_api_model = any(
+        model_name.lower().startswith(p) for p in cloud_api_prefixes
+    )
+    # Ollama cloud models (`:cloud`) run on Ollama's servers — not loaded into
+    # local VRAM, so `ollama ps` won't list them and the local `num_ctx` cap
+    # doesn't apply. Their window is the model maximum from `ollama show`.
+    is_ollama_cloud = is_ollama_cloud_model(model_name)
+    # "Local model" == a model whose context is allocated in *our* VRAM.
+    is_local_ollama = not is_cloud_api_model and not is_ollama_cloud
+
+    if use_dyNovac and is_local_ollama:
+        # Best source for a local model: the context Ollama ACTUALLY allocated
+        # for the loaded model (`ollama ps`). It may be clamped below the
+        # requested num_ctx to fit VRAM, so it's authoritative when present.
+        try:
+            from novacode_cli.context._dynamic import get_ollama_running_context
+
+            running = get_ollama_running_context(model_name)
+            if running:
+                logger.debug(
+                    f"Allocated context for {model_name}: {running:,} (ollama ps)"
+                )
+                return running
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"ollama ps probe failed for {model_name}: {e}")
+
+    # Architecture / max window: dynamic `ollama show` probe (works for both
+    # local AND cloud Ollama models), else the static table.
+    arch_window: int | None = None
+    if use_dyNovac and not is_cloud_api_model:
+        try:
+            from novacode_cli.context._dynamic import get_ollama_context_length
+
+            detected = get_ollama_context_length(model_name)
+            if detected:
+                arch_window = detected
+                logger.debug(
+                    f"Dynamic context for {model_name}: {detected:,} tokens (max)"
+                )
+        except Exception as e:  # noqa: BLE001
+            logger.debug(
+                f"Dynamic context detection failed for {model_name}: {e}, "
+                f"falling back to hardcoded"
+            )
+    if arch_window is None:
+        arch_window = _lookup_hardcoded_window(model_name)
+
+    # Cloud (API or Ollama-cloud): the window is the model maximum, NOT capped
+    # by the local num_ctx (no local VRAM allocation involved).
+    if not is_local_ollama:
+        return arch_window
+
+    # Local Ollama model not currently loaded: predict the effective window as
+    # min(architecture max, configured num_ctx) — the smaller is what truncates.
+    from novacode_cli.context._dynamic import get_ollama_num_ctx
+
+    effective = min(arch_window, get_ollama_num_ctx())
+    if effective != arch_window:
+        logger.debug(
+            f"Capping {model_name} window {arch_window:,} → {effective:,} "
+            f"(num_ctx)"
+        )
+    return effective
+
+
 def format_token_count(tokens: int) -> str:
     """Format a token count for display with thousands separators."""
     return f"{tokens:,}"
@@ -289,19 +355,71 @@ def _estimate_tokens(text: str) -> int:
 
 
 def _message_text(msg: BaseMessage) -> str:
-    """Extract text content from a message."""
+    """Extract text content from a message.
+
+    Handles both plain-string content and the provider block formats:
+    ``{"type": "text", "text": ...}`` plus tool-result blocks that carry their
+    payload under ``content`` (Anthropic ``tool_result``) so large tool outputs
+    aren't counted as zero.
+    """
     content = msg.content
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        parts = []
+        parts: list[str] = []
         for block in content:
             if isinstance(block, dict):
-                parts.append(block.get("text", ""))
+                # Common: {"type": "text", "text": "..."}. Fall back to a
+                # nested "content" payload (tool_result blocks) so the tokens
+                # in tool output are not silently dropped.
+                txt = block.get("text")
+                if txt:
+                    parts.append(str(txt))
+                else:
+                    inner = block.get("content")
+                    if isinstance(inner, str):
+                        parts.append(inner)
+                    elif isinstance(inner, list):
+                        for ib in inner:
+                            if isinstance(ib, dict):
+                                parts.append(str(ib.get("text", "")))
+                            elif isinstance(ib, str):
+                                parts.append(ib)
             elif isinstance(block, str):
                 parts.append(block)
         return " ".join(parts)
     return str(content)
+
+
+def _tool_call_text(msg: BaseMessage) -> str:
+    """Serialize an AIMessage's tool calls (name + arguments) for token counting.
+
+    Tool-call arguments (e.g. a ``write_file`` body or a large ``edit`` payload)
+    re-enter the context on every subsequent turn but live in ``msg.tool_calls``,
+    not in ``msg.content`` — so they must be counted explicitly or context usage
+    is badly under-reported.
+    """
+    import json
+
+    tool_calls = getattr(msg, "tool_calls", None) or []
+    parts: list[str] = []
+    for tc in tool_calls:
+        if isinstance(tc, dict):
+            name = tc.get("name", "")
+            args = tc.get("args", "")
+        else:
+            name = getattr(tc, "name", "")
+            args = getattr(tc, "args", "")
+        if name:
+            parts.append(str(name))
+        if isinstance(args, (dict, list)):
+            try:
+                parts.append(json.dumps(args, ensure_ascii=False))
+            except (TypeError, ValueError):
+                parts.append(str(args))
+        elif args:
+            parts.append(str(args))
+    return " ".join(parts)
 
 
 def build_context_breakdown(
@@ -351,8 +469,11 @@ def build_context_breakdown(
         elif isinstance(msg, AIMessage):
             assistant_tokens += tokens
             assistant_count += 1
-            if hasattr(msg, "tool_calls") and msg.tool_calls:
+            if getattr(msg, "tool_calls", None):
                 tool_count += len(msg.tool_calls)
+                # Tool-call arguments are part of the assistant turn and often
+                # dominate context (file contents, diffs) — count them.
+                assistant_tokens += _estimate_tokens(_tool_call_text(msg))
         elif isinstance(msg, ToolMessage):
             tool_tokens += tokens
 

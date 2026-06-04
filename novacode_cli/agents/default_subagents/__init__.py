@@ -7,15 +7,24 @@ from .async_subagents import (
 )
 from .subagents import retrieve_core_subagents
 from .prompt import (
-    BUG_FIX_AGENT,
+    BACKEND_AGENT,
     BROWSER_AUTOMATION_AGENT,
+    BUG_FIX_AGENT,
     CODE_DOC_AGENT,
+    CODE_EXPLORER,
     CODE_SIMPLIFIER,
+    DOCKER_AGENT,
+    FINANCIAL_ANALYST,
+    FRONTEND_AGENT,
+    LITERATURE_REVIEWER,
+    MARKET_ANALYST,
     REFACTORING_SPECIALIST_AGENT,
     REVIEWER_AGENT,
     SECURITY_AUDITOR_AGENT,
-    TEST_WRITER_AGENT,
+    TECHNICAL_RESEARCHER,
     TESTING_AGENT,
+    TEST_WRITER_AGENT,
+    WEB_RESEARCHER,
 )
 
 __all__ = [
@@ -26,13 +35,22 @@ __all__ = [
     # Sync subagents
     "retrieve_core_subagents",
     # Subagent prompts
-    "BUG_FIX_AGENT",
+    "BACKEND_AGENT",
     "BROWSER_AUTOMATION_AGENT",
+    "BUG_FIX_AGENT",
     "CODE_DOC_AGENT",
+    "CODE_EXPLORER",
     "CODE_SIMPLIFIER",
+    "DOCKER_AGENT",
+    "FINANCIAL_ANALYST",
+    "FRONTEND_AGENT",
+    "LITERATURE_REVIEWER",
+    "MARKET_ANALYST",
     "REFACTORING_SPECIALIST_AGENT",
     "REVIEWER_AGENT",
     "SECURITY_AUDITOR_AGENT",
-    "TEST_WRITER_AGENT",
+    "TECHNICAL_RESEARCHER",
     "TESTING_AGENT",
+    "TEST_WRITER_AGENT",
+    "WEB_RESEARCHER",
 ]

@@ -7,16 +7,23 @@ from langchain.tools import BaseTool
 from deepagents.middleware.subagents import SubAgent
 
 from .prompt import (
-    BUG_FIX_AGENT,
-    BROWSER_AUTOMATION_AGENT,
     CODE_DOC_AGENT,
-    # CODE_EXPLORER,
+    CODE_EXPLORER,
     CODE_SIMPLIFIER,
     REFACTORING_SPECIALIST_AGENT,
     REVIEWER_AGENT,
     SECURITY_AUDITOR_AGENT,
+    # Bug fix agent
+    BUG_FIX_AGENT,
+    # Test agents
     TEST_WRITER_AGENT,
     TESTING_AGENT,
+    # Browser automation agent
+    BROWSER_AUTOMATION_AGENT,
+    # Domain-specific engineering agents
+    FRONTEND_AGENT,
+    BACKEND_AGENT,
+    DOCKER_AGENT,
     # Research swarm agents
     WEB_RESEARCHER,
     FACT_CHECKER,
@@ -26,7 +33,6 @@ from .prompt import (
     FINANCIAL_ANALYST,
     TECHNICAL_RESEARCHER,
 )
-
 
 AnyTool = BaseTool | Callable[..., Any]
 
@@ -46,22 +52,29 @@ def _filter_tools(tools: list[AnyTool], names: list[str]) -> list[AnyTool]:
 
 def retrieve_core_subagents(
     tools: list[AnyTool] | None = None,
-    skill_sources: list[str] | None = None,
 ) -> list[SubAgent]:
     all_tools: list[AnyTool] = tools or []
 
     # Define subagent configurations
     subagent_configs = [
-        # ("code-explorer-agent", CODE_EXPLORER),
+        # Code quality agents
         ("code-doc-Agent", CODE_DOC_AGENT),
         ("code-simplifier-agent", CODE_SIMPLIFIER),
-        # ("bug-fix-agent", BUG_FIX_AGENT),
-        ("test-writer-agent", TEST_WRITER_AGENT),
-        ("testing-agent", TESTING_AGENT),
+        ("code-explorer", CODE_EXPLORER),
         ("reviewer-agent", REVIEWER_AGENT),
         ("security-auditor-agent", SECURITY_AUDITOR_AGENT),
-        # ("refactoring-specialist-agent", REFACTORING_SPECIALIST_AGENT),
+        ("refactoring-specialist-agent", REFACTORING_SPECIALIST_AGENT),
+        # Bug fix agent
+        ("bug-fix-agent", BUG_FIX_AGENT),
+        # Test agents
+        ("test-writer-agent", TEST_WRITER_AGENT),
+        ("testing-agent", TESTING_AGENT),
+        # Browser automation agent
         ("browser-automation-agent", BROWSER_AUTOMATION_AGENT),
+        # Domain-specific engineering agents
+        ("frontend-agent", FRONTEND_AGENT),
+        ("backend-agent", BACKEND_AGENT),
+        ("docker-agent", DOCKER_AGENT),
         # Research swarm agents
         ("web-researcher", WEB_RESEARCHER),
         ("fact-checker", FACT_CHECKER),
@@ -82,9 +95,89 @@ def retrieve_core_subagents(
         for name, config in subagent_configs
     ]
 
-    # Give core subagents access to the same skills as the main agent
-    if skill_sources:
-        for sa in subagents:
-            sa["skills"] = skill_sources
+    # Selectively assign 1-2 targeted skills per subagent.
+    # SkillsMiddleware is instantiated per-subagent only when `skills` is set,
+    # so skipping agents that don't need skills saves middleware overhead and
+    # avoids polluting their system prompt with irrelevant skill content.
+    # The general-purpose subagent auto-inherits the main agent's skills from
+    # create_deep_agent's top-level `skills` parameter — no need to list it here.
+    subagent_skills: dict[str, list[str]] = {
+        # Code quality agents
+        "code-doc-Agent": [
+            "/skills/code-documentation/",
+        ],
+        "code-simplifier-agent": [
+            "/skills/code-review-expert/",
+        ],
+        "code-explorer": [
+            "/skills/codebase-explorer/",
+            "/skills/graphify/",
+        ],
+        "reviewer-agent": [
+            "/skills/code-review-expert/",
+        ],
+        "security-auditor-agent": [
+            "/skills/web-research/",
+        ],
+        "refactoring-specialist-agent": [
+            "/skills/improve-codebase-architecture/",
+        ],
+        # Bug fix agent
+        "bug-fix-agent": [
+            "/skills/systematic-debugging/",
+        ],
+        # Test agents
+        "test-writer-agent": [
+            "/skills/test-driven-development/",
+        ],
+        "testing-agent": [
+            "/skills/testing-skills/",
+            "/skills/webapp-testing/",
+        ],
+        # Browser automation agent
+        "browser-automation-agent": [
+            "/skills/agent-browser/",
+            "/skills/browser-use/",
+        ],
+        # Domain-specific engineering agents
+        "frontend-agent": [
+            "/skills/frontend-design/",
+            "/skills/expert-css-skills/",
+        ],
+        "backend-agent": [
+            "/skills/backend-dev-guidelines/",
+            "/skills/async-python-patterns/",
+        ],
+        "docker-agent": [
+            "/skills/docker-deploy/",
+        ],
+        # Research swarm agents
+        "web-researcher": [
+            "/skills/web-research/",
+            "/skills/arxiv-search/",
+        ],
+        "fact-checker": [
+            "/skills/web-research/",
+        ],
+        "technical-researcher": [
+            "/skills/web-research/",
+            "/skills/codebase-explorer/",
+        ],
+        "literature-reviewer": [
+            "/skills/arxiv-search/",
+            "/skills/web-research/",
+        ],
+        "market-analyst": [
+            "/skills/web-research/",
+        ],
+        "financial-analyst": [
+            "/skills/web-research/",
+            "/skills/xlsx/",
+        ],
+    }
+    for sa in subagents:
+        skills = subagent_skills.get(sa["name"])
+        if skills:
+            sa["skills"] = skills
 
     return subagents

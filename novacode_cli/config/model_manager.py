@@ -249,12 +249,14 @@ class ModelManager:
         if provider == "ollama":
             from langchain_ollama import ChatOllama
 
+            from novacode_cli.context._dynamic import get_ollama_num_ctx
+
             return ChatOllama(
                 model=model_name,  # type: ignore
                 temperature=0,
                 disable_streaming=True,
                 keep_alive=600,
-                num_ctx=200000,
+                num_ctx=get_ollama_num_ctx(),
             )
 
         if provider == "google":

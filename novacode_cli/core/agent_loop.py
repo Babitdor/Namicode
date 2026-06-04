@@ -56,6 +56,25 @@ from novacode_cli import ui_events as ev
 _HITL_REQUEST_ADAPTER = TypeAdapter(HITLRequest)
 
 
+def default_interrupt_response(kind: str) -> Any:
+    """Safe fallback for an unresolved :class:`~novacode_cli.ui_events.InterruptRequest`.
+
+    Consumers resolve the request's future in their own coroutines; if that
+    handler raises before calling ``set_result``, the agent loop would await the
+    future forever. Consumers should resolve with this value in a ``finally`` so
+    the turn fails closed (reject) instead of hanging.
+    """
+    if kind == "tool":
+        return {"decisions": [], "any_rejected": True}
+    if kind == "plan":
+        return {
+            "response": {"approved": False, "action": "reject", "feedback": ""},
+            "state_update": {},
+        }
+    # "question" and anything else: an empty response is benign.
+    return {}
+
+
 async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
     user_input: str,
     agent,
@@ -73,7 +92,7 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
     :class:`~novacode_cli.ui_events.Done`, :class:`~novacode_cli.ui_events.Cancelled`,
     or :class:`~novacode_cli.ui_events.Error` event.
     """
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     message_content = await prepare_input_content(
         user_input, image_tracker, skip_file_mentions=skip_file_mentions
@@ -492,6 +511,15 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
         return
 
     except Exception as e:  # noqa: BLE001
+        # Promptly release the underlying LangGraph stream rather than leaving it
+        # for GC-time finalization.
+        _gen = _current_stream_gen
+        _current_stream_gen = None
+        if _gen is not None:
+            try:
+                await asyncio.wait_for(asyncio.shield(_gen.aclose()), timeout=2.0)
+            except Exception:  # noqa: BLE001
+                pass
         # A GraphInterrupt that reaches here came from a NESTED graph (a `task`
         # subagent hitting a HITL-gated tool like shell/execute/write_file).
         # The parent stream only auto-resolves interrupts surfaced as the

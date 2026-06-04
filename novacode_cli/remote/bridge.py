@@ -148,6 +148,47 @@ def chunk_message(text: str, platform: RemotePlatform) -> list[str]:
     return result or [text[:limit]]
 
 
+def format_tool_digest(tool_names: list[str], *, max_shown: int = 8) -> str:
+    """Condense a turn's tool activity into a single chat-friendly line.
+
+    Remote chats were being flooded with one message per tool call. Instead,
+    callers accumulate the tool names used during a turn and send the result of
+    this function ONCE, e.g.::
+
+        🔧 12 tool calls · `read_file×4, grep×3, shell×2, write_file×2, task`
+
+    The tool list is wrapped in backticks so Telegram's ``parse_mode=Markdown``
+    treats underscores in names like ``read_file`` literally instead of as
+    italics (which would otherwise mangle or reject the message).
+
+    Args:
+        tool_names: Tool names in call order (duplicates expected; they're counted).
+        max_shown: Cap on distinct names listed before collapsing to "+N more".
+
+    Returns:
+        A single-line summary, or "" if no tools were used.
+    """
+    names = [n for n in tool_names if n]
+    if not names:
+        return ""
+
+    counts: dict[str, int] = {}
+    for n in names:
+        counts[n] = counts.get(n, 0) + 1  # insertion order = first-seen order
+
+    distinct = list(counts.items())
+    shown = distinct[:max_shown]
+    parts = [f"{name}×{c}" if c > 1 else name for name, c in shown]
+    body = ", ".join(parts)
+    extra = len(distinct) - len(shown)
+    if extra > 0:
+        body += f", +{extra} more"
+
+    total = len(names)
+    plural = "s" if total != 1 else ""
+    return f"🔧 {total} tool call{plural} · `{body}`"
+
+
 def _split_by_sentences(text: str, limit: int) -> list[str]:
     """Split text into chunks on sentence boundaries."""
     sentences = re.split(r"(?<=[.!?])\s+", text)

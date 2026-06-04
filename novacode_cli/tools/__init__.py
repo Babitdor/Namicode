@@ -13,10 +13,18 @@ This package provides various tools for the CLI agent, organized into submodules
 # URL fetching tools (covers all HTTP methods — http_request merged into fetch_url)
 from novacode_cli.tools.fetch_tools import fetch_url
 
-# Memory tools
+# Memory tools (markdown files injected into the prompt)
 from novacode_cli.tools.memory_tools import (
     read_memory,
     write_memory,
+)
+
+# Structured, durable, cross-session memory (key/value via the LangGraph store)
+from novacode_cli.tools.store_memory_tools import (
+    forget,
+    list_memories,
+    recall,
+    remember,
 )
 
 # Package information tools
@@ -57,6 +65,11 @@ __all__ = [
     # Project graph query tool
     "query_project_graph",
     "read_memory",
+    # Structured durable memory (LangGraph store)
+    "remember",
+    "recall",
+    "list_memories",
+    "forget",
     # Reflection tools
     "think",
     # Web search tools

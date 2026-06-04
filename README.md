@@ -26,7 +26,7 @@ An open-source terminal-based AI coding assistant that runs in your terminal, si
 - **Remote Bridges**: Discord and Telegram integration for remote agent interaction
 - **Onboarding System**: Interactive first-run setup with API key management and model selection
 - **Doctor Command**: System diagnostics to verify your environment
-- **Default Subagents**: Built-in specialized agents for code exploration, documentation, and simplification
+- **Default Subagents**: 20+ built-in specialized agents with skill-aware prompts — each subagent auto-loads relevant skills for its domain
 - **Security-First**: Automatic .gitignore enforcement, command injection detection, and input validation
 - **File Recovery**: Automatic snapshots before destructive operations — restore deleted or overwritten files via `/restore` or agent tools
 
@@ -263,6 +263,8 @@ nova doctor
 | `git_status` / `git_log` / `git_diff` / `git_blame` | Git repository introspection tools |
 | `create_memory_structure` | Initialize persistent memory storage |
 | `read_memory` / `write_memory` | Read and write agent memories |
+| `remember` / `recall` | Store and fetch durable cross-session facts by key |
+| `list_memories` / `forget` | List and delete stored durable memory facts |
 | `execute_in_e2b` | Run code in E2B cloud sandbox |
 | `start_dev_server` / `stop_server` / `list_servers` | Manage local development servers |
 | `run_tests` | Execute test suites |
@@ -535,15 +537,54 @@ This installs the `livekit-agents` skill along with its scripts, examples, and a
 
 ### Default Subagents
 
-NOVA includes built-in specialized subagents for common tasks:
+NOVA includes 20+ built-in specialized subagents, each loaded with domain-relevant skills via `SkillsMiddleware`:
 
-| Subagent | Description |
-|----------|-------------|
-| `code-explorer-agent` | Deep code research and exploration |
-| `code-doc-agent` | Documentation generation from code |
-| `code-simplifier-agent` | Code simplification and refactoring |
+#### Code Quality Agents
 
-These subagents are automatically available and can be invoked via the `task` tool for parallel, focused work on specific aspects of your codebase.
+| Subagent | Description | Auto-loaded Skills |
+|----------|-------------|-------------------|
+| `code-explorer` | Navigate, understand, and query large codebases efficiently | `codebase-explorer/`, `graphify/` |
+| `code-doc-Agent` | Generate README, API docs, and docstrings from structured inputs | `code-documentation/` |
+| `code-simplifier-agent` | Simplify and refine code for clarity and maintainability | `code-review-expert/` |
+| `reviewer-agent` | Code review for correctness, security, performance, and SOLID violations | `code-review-expert/` |
+| `security-auditor-agent` | OWASP Top 10 audit, secrets detection, dependency vuln scanning | `web-research/` |
+| `refactoring-specialist-agent` | Identify code smells, prioritize technical debt, apply design patterns | `improve-codebase-architecture/` |
+| `bug-fix-agent` | Systematic bug reproduction, root-cause analysis, minimal fix + regression tests | `systematic-debugging/` |
+
+#### Test Agents
+
+| Subagent | Description | Auto-loaded Skills |
+|----------|-------------|-------------------|
+| `test-writer-agent` | Create comprehensive tests (happy-path, edge-case, error-case) | `test-driven-development/` |
+| `testing-agent` | Execute tests in isolated sandboxes, detect frameworks, report failures | `testing-skills/`, `webapp-testing/` |
+
+#### Browser Automation Agent
+
+| Subagent | Description | Auto-loaded Skills |
+|----------|-------------|-------------------|
+| `browser-automation-agent` | Web testing, form filling, screenshots, data extraction, console capture | `agent-browser/`, `browser-use/` |
+
+#### Domain-Specific Engineering Agents
+
+| Subagent | Description | Auto-loaded Skills |
+|----------|-------------|-------------------|
+| `frontend-agent` | React, HTML/CSS, design systems, animations, production-grade UI | `frontend-design/`, `expert-css-skills/` |
+| `backend-agent` | API design, databases, auth, async patterns, server-side systems | `backend-dev-guidelines/`, `async-python-patterns/` |
+| `docker-agent` | Containerization, optimized Dockerfiles, multi-service Compose stacks | `docker-deploy/` |
+
+#### Research Swarm Agents
+
+| Subagent | Description | Auto-loaded Skills |
+|----------|-------------|-------------------|
+| `web-researcher` | General web research — search, fetch, synthesize | `web-research/`, `arxiv-search/` |
+| `fact-checker` | Verify critical claims using web search snippets | `web-research/` |
+| `research-synthesizer` | Synthesize findings + QA report into final coherent report | — (inline only) |
+| `literature-reviewer` | Academic search (arXiv, Google Scholar, Semantic Scholar, PubMed) | `arxiv-search/`, `web-research/` |
+| `market-analyst` | Market sizing, growth rates, competitive landscape research | `web-research/` |
+| `financial-analyst` | Financial statements, earnings data, SEC filings, risk analysis | `web-research/`, `xlsx/` |
+| `technical-researcher` | Official docs, GitHub repos, RFCs, version-accurate technical research | `web-research/`, `codebase-explorer/` |
+
+Subagents are invoked via the `task` tool for parallel, focused work. Skills are loaded on-demand when the subagent is instantiated — agents without skill assignments skip `SkillsMiddleware` overhead entirely.
 
 ### Hooks System
 
@@ -856,7 +897,7 @@ The CLI implements a "Deep Agent" architecture with four key components:
 
 **Agent:**
 - `agents/core_agent.py` - Agent creation, configuration, and middleware wiring
-- `agents/default_subagents/` - Built-in specialized subagents (code explorer, docs, simplifier)
+- `agents/default_subagents/` - 20+ built-in specialized subagents with skill-aware prompts (code explorer, docs, simplifier, reviewer, security, refactoring, bug fix, test writer, testing, browser automation, frontend, backend, docker, research swarm, changelogger)
 - `agents/plan_agent/` - Plan mode agent with planning middleware
 
 **Commands:**

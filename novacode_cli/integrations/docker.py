@@ -44,6 +44,33 @@ def _validate_sandbox_path(path: str) -> str:
     return normalized
 
 
+# Environment injected into every executed command. These make the sandbox
+# behave non-interactively and predictably so the agent's commands don't hang
+# waiting for input and so output decodes cleanly:
+#   - GIT_TERMINAL_PROMPT=0: git fails fast instead of blocking on a credential
+#     prompt (the classic sandbox hang on a private `git clone`).
+#   - DEBIAN_FRONTEND / CI: apt and many CLIs skip interactive prompts.
+#   - PYTHON*: unbuffered, UTF-8 I/O so output streams promptly and decodes.
+#   - PIP_*: quieter, root-safe, non-interactive pip inside the container.
+#   - TERM=dumb: suppress ANSI control sequences that would pollute captured output.
+#   - LANG/LC_ALL: a UTF-8 locale so tools emit UTF-8 rather than ASCII-mangled bytes.
+# PATH is intentionally NOT set here — overriding it would break custom images
+# that put interpreters on a non-default PATH (venvs, nvm, /opt/...).
+_DEFAULT_EXEC_ENV: dict[str, str] = {
+    "GIT_TERMINAL_PROMPT": "0",
+    "DEBIAN_FRONTEND": "noninteractive",
+    "CI": "1",
+    "PYTHONUNBUFFERED": "1",
+    "PYTHONIOENCODING": "utf-8",
+    "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+    "PIP_ROOT_USER_ACTION": "ignore",
+    "PIP_NO_INPUT": "1",
+    "TERM": "dumb",
+    "LANG": "C.UTF-8",
+    "LC_ALL": "C.UTF-8",
+}
+
+
 class DockerBackend(BaseSandbox):
     """Docker backend implementation conforming to SandboxBackendProtocol.
 
@@ -98,6 +125,7 @@ class DockerBackend(BaseSandbox):
                     tty=False,
                     demux=False,  # Combine stdout and stderr
                     workdir=self._workdir,
+                    environment=_DEFAULT_EXEC_ENV,
                 )
                 try:
                     exec_result = fut.result(timeout=timeout_sec)
@@ -110,8 +138,14 @@ class DockerBackend(BaseSandbox):
                         truncated=False,
                     )
 
-            # Decode output
-            output = exec_result.output.decode("utf-8") if exec_result.output else ""
+            # Decode output. Use errors="replace" so a command that emits any
+            # non-UTF-8 byte (binary output, latin-1 logs) still returns its real
+            # output instead of crashing the whole execute() with UnicodeDecodeError.
+            output = (
+                exec_result.output.decode("utf-8", errors="replace")
+                if exec_result.output
+                else ""
+            )
 
             return ExecuteResponse(
                 output=output,

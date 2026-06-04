@@ -266,6 +266,8 @@ class ProcessManager:
                     callback(decoded)
                 except Exception:
                     pass  # Don't let callback errors kill streaming
+        except asyncio.CancelledError:
+            raise
         except Exception:
             pass  # Process may have terminated
 
@@ -304,6 +306,10 @@ class ProcessManager:
 
                 try:
                     await asyncio.wait_for(info._process.wait(), timeout=timeout)
+                except asyncio.CancelledError:
+                    info._process.kill()
+                    await info._process.wait()
+                    raise
                 except TimeoutError:
                     # Force kill if graceful termination timed out
                     info._process.kill()
@@ -494,6 +500,10 @@ async def stream_subprocess_output(
     try:
         await asyncio.wait_for(read_stream(), timeout=timeout)
         await process.wait()
+    except asyncio.CancelledError:
+        process.kill()
+        await process.wait()
+        raise
     except TimeoutError:
         process.kill()
         await process.wait()

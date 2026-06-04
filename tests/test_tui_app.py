@@ -525,6 +525,63 @@ def test_tui_remote_render():
     asyncio.run(_drive_remote_render())
 
 
+async def _drive_remote_slash():
+    """Slash commands from a remote chat route through _remote_slash."""
+    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.ui.ui_elements import TokenTracker
+
+    class _SSRemote(_SS):
+        prompt_decomposition_enabled = True
+        workspace_root = None
+
+        def __init__(self):
+            self._verbose = False
+
+        def toggle_verbose(self):
+            self._verbose = not self._verbose
+            return self._verbose
+
+    app = NovaApp(
+        agent=_FakeAgent(),
+        assistant_id="nova-agent",
+        session_state=_SSRemote(),
+        backend=None,
+        token_tracker=TokenTracker(),
+        image_tracker=None,
+        model_name="test-model",
+    )
+    async with app.run_test():
+        # /help → direct text reply, no agent turn
+        reply, stream = await app._remote_slash("/help")
+        assert stream is None and "Remote commands" in reply
+
+        # /context → token usage text, no agent turn
+        reply, stream = await app._remote_slash("/context")
+        assert stream is None and isinstance(reply, str)
+
+        # /model → shows current model, declines switching
+        reply, stream = await app._remote_slash("/model")
+        assert stream is None and "test-model" in reply
+
+        # /verbose → toggles and reports state
+        reply, stream = await app._remote_slash("/verbose")
+        assert stream is None and "Verbose mode on" in reply
+
+        # interactive command → declined as local-only
+        reply, stream = await app._remote_slash("/sessions")
+        assert stream is None and "local TUI" in reply
+
+        # unknown / non-skill → safe non-crashing reply, no stream
+        reply, stream = await app._remote_slash("/definitelynotacommand")
+        assert stream is None and isinstance(reply, str)
+
+
+def test_tui_remote_slash():
+    if not _HAS_TEXTUAL:
+        return
+    asyncio.run(_drive_remote_slash())
+
+
 async def _drive_markup_safe():
     """Tool titles + question options containing '[' must not crash markup render."""
     import novacode_cli.ui_events as ev

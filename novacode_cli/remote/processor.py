@@ -9,10 +9,27 @@ local messages do not interleave mid-stream.
 """
 
 import asyncio
+import inspect
 import logging
+import os
 from typing import Any, Callable, Awaitable
 
 logger = logging.getLogger(__name__)
+
+_DEBUG_LOG = os.path.expanduser("~/.nova/remote_debug.log")
+
+
+async def _debug_log(line: str) -> None:
+    """Write a line to the debug log without blocking the event loop."""
+    line = str(line) + "\n"
+    await asyncio.to_thread(_write_debug, line)
+
+
+def _write_debug(line: str) -> None:
+    """Synchronous helper that does the actual file write."""
+    os.makedirs(os.path.dirname(_DEBUG_LOG), exist_ok=True)
+    with open(_DEBUG_LOG, "a") as f:
+        f.write(line)
 
 
 async def remote_message_processor(
@@ -35,12 +52,7 @@ async def remote_message_processor(
         lock = asyncio.Lock()
 
     logger.info("Remote message processor started, queue=%s", id(queue))
-    # Debug: write to file so we can confirm queue ID matches bridge
-    import os as _os
-    _dlog = _os.path.expanduser("~/.nova/remote_debug.log")
-    _os.makedirs(_os.path.dirname(_dlog), exist_ok=True)
-    with open(_dlog, "a") as _df:
-        _df.write("PROCESSOR STARTED queue=" + str(id(queue)) + "\n")
+    await _debug_log(f"PROCESSOR STARTED queue={id(queue)}")
 
     console.print("\n  [dim]\U0001f517 Remote message processor ready[/]\n")
 
@@ -48,8 +60,7 @@ async def remote_message_processor(
         try:
             # Wait for a remote message (blocks until one arrives)
             remote_msg = await queue.get()
-            with open(_dlog, "a") as _df:
-                _df.write("DEQUEUED from queue " + str(id(queue)) + ": " + remote_msg.text[:80] + "\n")
+            await _debug_log(f"DEQUEUED from queue {id(queue)}: {remote_msg.text[:80]}")
 
             logger.info(
                 "Remote message from %s on %s",
@@ -81,31 +92,21 @@ async def remote_message_processor(
             async with lock:
                 try:
                     # Show "typing" indicator on the remote platform while thinking
-                    # Discord: channel.typing is an async context manager method
-                    #   — calling it returns an object with __aenter__/__aexit__.
-                    # Telegram: typing_fn is a regular async function
-                    #   — calling it returns a coroutine that sends a chatAction.
+                    # Discord: channel.typing is an async context manager method.
+                    # Telegram: typing_fn is a regular async function.
                     #
-                    # We probe which type it is by calling it ONCE, then:
-                    #   - If the result has __aenter__, it's a context manager (Discord)
-                    #   - Otherwise, close the probe coroutine and use the loop (Telegram)
+                    # We distinguish them without calling the function (which may
+                    # have side effects) by inspecting its type:
+                    #   - A coroutine function (inspect.iscoroutinefunction) ->
+                    #     Telegram-style: loop sendChatAction every 8 s.
+                    #   - Anything else (bound method returning a context-manager) ->
+                    #     Discord-style: use as async with.
                     _typing_cm = None
                     typing_task: asyncio.Task | None = None
                     typing_fn = getattr(remote_msg, "typing_fn", None)
                     if typing_fn is not None:
-                        # Probe once to decide the type
-                        _probe = typing_fn()
-                        if hasattr(_probe, "__aenter__"):
-                            # Discord-style async context manager
-                            _typing_cm = _probe
-                            try:
-                                await _typing_cm.__aenter__()
-                            except Exception:
-                                _typing_cm = None
-                        else:
-                            # Telegram-style coroutine — close the probe to
-                            # suppress RuntimeWarning, then loop the real calls
-                            _probe.close()
+                        if inspect.iscoroutinefunction(typing_fn):
+                            # Telegram-style coroutine -- loop the real calls
                             async def _typing_loop():
                                 try:
                                     while True:
@@ -114,6 +115,16 @@ async def remote_message_processor(
                                 except asyncio.CancelledError:
                                     pass
                             typing_task = asyncio.create_task(_typing_loop())
+                        else:
+                            # Discord-style async context manager
+                            try:
+                                _typing_cm = typing_fn()
+                                if _typing_cm is not None and hasattr(_typing_cm, "__aenter__"):
+                                    await _typing_cm.__aenter__()
+                                else:
+                                    _typing_cm = None
+                            except Exception:
+                                _typing_cm = None
 
                     # Notify local CLI that agent is thinking
                     console.print(
@@ -128,30 +139,24 @@ async def remote_message_processor(
                     _prev_auto_approve = getattr(session_state, "auto_approve", False)
                     session_state.auto_approve = True
 
-                    # Set up tool notification callback so remote user sees
-                    # tool usage in real-time as it happens
-                    async def _notify_remote(name, info, *, is_result=False):
-                        prefix = "⭐" if not is_result else "✅"
-                        # Strip Rich markup for plain-text platforms
-                        if "[" in info:
-                            import re
-                            info = re.sub(r"\[/?[^\]]+\]", "", info)
-                        msg_text = prefix + " " + name + ": " + info[:200]
-                        try:
-                            await remote_msg.reply_fn(msg_text)
-                        except Exception:
-                            pass
+                    # Accumulate tool activity instead of sending one chat
+                    # message per call (which floods Discord/Telegram). The names
+                    # are collapsed into a single digest message after the turn.
+                    #
+                    # This also fixes an async-correctness bug: the previous code
+                    # scheduled each notification via an untracked
+                    # ``loop.create_task(...)``. Those fire-and-forget tasks could
+                    # be garbage-collected mid-send, swallowed exceptions, and —
+                    # because they weren't awaited — could arrive out of order
+                    # relative to the awaited final reply. Recording into a list
+                    # is synchronous and ordered.
+                    _tool_names: list[str] = []
 
-                    def _notify_remote_sync(name, info, *, is_result=False):
-                        # Called from sync context in execute_task();
-                        # schedule the async notification on the running loop
-                        try:
-                            loop = asyncio.get_running_loop()
-                            loop.create_task(_notify_remote(name, info, is_result=is_result))
-                        except RuntimeError:
-                            pass  # no running event loop
+                    def _record_tool(name, info=None, *, is_result=False):
+                        if not is_result and name:
+                            _tool_names.append(str(name))
 
-                    session_state._remote_tool_notify = _notify_remote_sync
+                    session_state._remote_tool_notify = _record_tool
 
                     try:
                         # Record the message count before execution
@@ -181,6 +186,16 @@ async def remote_message_processor(
                         # Get the agent's response from the state
                         post_state = await agent.aget_state(config)
                         response_text = _extract_response(post_state, pre_msg_count)
+
+                        # One condensed tool digest, in order, before the answer.
+                        from novacode_cli.remote.bridge import format_tool_digest
+
+                        digest = format_tool_digest(_tool_names)
+                        if digest:
+                            try:
+                                await remote_msg.reply_fn(digest)
+                            except Exception:
+                                pass
 
                         if response_text:
                             await remote_msg.reply_fn(response_text)

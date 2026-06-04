@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from pathlib import Path
 from typing import Any
 
 from rich.markdown import Markdown
@@ -367,6 +368,9 @@ class ModelScreen(ModalScreen[dict | None]):
             yield Static(Text("Switch model", style="bold"), id="modal-title")
             yield Select(options, value=default_value, id="provider", allow_blank=True)
             yield Static("", id="modelinfo")
+            # For Ollama: a live list of installed models (from `ollama list`).
+            # Hidden for other providers (shown via _refresh_info).
+            yield OptionList(id="modellist")
             yield Input(
                 placeholder="API key (blank = use saved)", password=True, id="apikey"
             )
@@ -378,6 +382,8 @@ class ModelScreen(ModalScreen[dict | None]):
                 yield Button("Cancel", id="cancel")
 
     def on_mount(self) -> None:
+        # List is shown only for Ollama; hide until a provider is chosen.
+        self.query_one("#modellist", OptionList).display = False
         if self._current:
             self._refresh_info(self._current)
 
@@ -393,13 +399,71 @@ class ModelScreen(ModalScreen[dict | None]):
             return
         info = Text()
         info.append(f"default: {preset['default_model']}\n", style="dim")
-        models = preset.get("models", [])
-        if models:
-            info.append("suggestions: " + ", ".join(models[:6]), style="dim")
+        model_list = self.query_one("#modellist", OptionList)
+
+        if pid == "ollama":
+            # Populate the list from `ollama list` (off the event loop).
+            info.append("loading installed models (ollama list)…", style="dim")
+            model_list.display = True
+            self._load_ollama_models()
+        else:
+            models = preset.get("models", [])
+            if models:
+                info.append("suggestions: " + ", ".join(models[:6]), style="dim")
+            model_list.display = False
+            model_list.clear_options()
+
         self.query_one("#modelinfo", Static).update(info)
         self.query_one("#model", Input).placeholder = (
             f"Model (blank = {preset['default_model']})"
         )
+
+    @work(exclusive=True)
+    async def _load_ollama_models(self) -> None:
+        """Populate the Ollama model list from `ollama list` without blocking."""
+        import asyncio
+
+        from novacode_cli.config.model_manager import get_ollama_models
+
+        try:
+            models = await asyncio.to_thread(get_ollama_models)
+        except Exception:  # noqa: BLE001
+            models = []
+
+        try:
+            model_list = self.query_one("#modellist", OptionList)
+        except Exception:  # noqa: BLE001
+            return  # screen dismissed before load finished
+        model_list.clear_options()
+
+        if not models:
+            model_list.add_option(
+                Option("No Ollama models found — is `ollama` installed/running?", id="__none__")
+            )
+            return
+
+        for name in models:
+            model_list.add_option(Option(name, id=name))
+
+        info = Text()
+        info.append(
+            f"{len(models)} installed model(s) — select one or type a slug below\n",
+            style="dim",
+        )
+        try:
+            self.query_one("#modelinfo", Static).update(info)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def on_option_list_option_selected(
+        self, event: "OptionList.OptionSelected"
+    ) -> None:
+        # Only the Ollama model list lives on this screen.
+        if event.option_list.id != "modellist":
+            return
+        chosen = event.option.id
+        if chosen and chosen != "__none__":
+            self.query_one("#model", Input).value = chosen
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "cancel":
@@ -1488,6 +1552,15 @@ class NovaApp(App):
         self._subagent_widgets: dict[str, tuple[Collapsible, Static, str, float]] = {}
         self._subagent_count: int = 0  # running total for display
         self._remote_msg: Any = None  # current RemoteMessage during remote turn
+        # Tool/subagent names used during the current remote turn — flushed as a
+        # single condensed digest message so chats aren't flooded per call.
+        self._remote_activity: list[str] = []
+        # Strong refs to fire-and-forget background sends so the event loop
+        # doesn't garbage-collect them mid-flight (asyncio only holds weak refs).
+        self._bg_tasks: set[Any] = set()
+        # One-shot guard for the Ollama CPU-offload advisory (set once the model
+        # is loaded and checked, so we don't spawn `ollama ps` every turn).
+        self._ollama_offload_checked = False
         self._todo_widget: Static | None = None  # updated in place per turn
         self._init_widget: Static | None = None  # live /init step tracker widget
         self._init_steps: list[dict] = []
@@ -1673,15 +1746,50 @@ class NovaApp(App):
         self._scroll_end()
 
     def _remote_send(self, text: str) -> None:
-        """Send a status update to the remote platform during a remote turn."""
+        """Send a one-off status line to the remote platform during a remote turn.
+
+        Reserved for low-frequency notices. Per-tool / per-subagent activity must
+        go through :meth:`_remote_record` instead so it's condensed into a single
+        digest rather than flooding the chat.
+        """
         msg = self._remote_msg
         if msg is None:
             return
         try:
             import asyncio
-            asyncio.create_task(msg.reply_fn(f"{text}"))
+            # Track the task so it isn't garbage-collected mid-send and so
+            # exceptions surface rather than vanish (fire-and-forget pitfall).
+            task = asyncio.create_task(msg.reply_fn(f"{text}"))
+            self._bg_tasks.add(task)
+            task.add_done_callback(self._bg_tasks.discard)
         except Exception:  # noqa: BLE001
             pass
+
+    def _remote_record(self, name: str | None) -> None:
+        """Record one tool/subagent name for this remote turn's digest.
+
+        No network call — names are collapsed into a single message by
+        :meth:`_flush_remote_activity` when the turn ends.
+        """
+        if self._remote_msg is None or not name:
+            return
+        self._remote_activity.append(str(name))
+
+    async def _flush_remote_activity(self) -> None:
+        """Send (once) a condensed digest of this turn's tool/subagent activity."""
+        names = self._remote_activity
+        self._remote_activity = []
+        msg = self._remote_msg
+        if msg is None or not names:
+            return
+        from novacode_cli.remote.bridge import format_tool_digest
+
+        digest = format_tool_digest(names)
+        if digest:
+            try:
+                await msg.reply_fn(digest)
+            except Exception:  # noqa: BLE001
+                pass
 
     def _log(self, renderable: Any) -> None:
         """Mount an ancillary line (errors, command output, notices)."""
@@ -2046,13 +2154,14 @@ class NovaApp(App):
             )
             body_text = Text(e.detail or "", style="dim") if e.detail else Text("")
             body = Static(body_text, classes="toolbody")
-            comp = Collapsible(body, title=title, collapsed=False)
+            # Start collapsed (like tool-call panels) so dispatching subagents
+            # doesn't flood the transcript with expanded panels.
+            comp = Collapsible(body, title=title, collapsed=True)
             comp.add_class("subagent")
             await self._mount(comp)
             self._subagent_widgets[cid] = (comp, body, e.subagent_type or "subagent", time.time())
-            # Stream to remote
-            desc = f" — {e.detail}" if e.detail else ""
-            self._remote_send(f"🔍 {e.subagent_type or 'subagent'} dispatched{desc}")
+            # Record for the condensed remote digest (not sent per-event).
+            self._remote_record(f"task:{e.subagent_type or 'subagent'}")
 
         elif e.kind == "completed":
             # Try matching by call_id first, then fallback to subagent_type
@@ -2081,9 +2190,8 @@ class NovaApp(App):
                 else:
                     body.update(Text(""))
                 comp.collapsed = True
-                # Stream to remote
-                detail_str = f" — {e.detail}" if e.detail else ""
-                self._remote_send(f"✅ {icon} completed ({dur}){detail_str}")
+                # Subagent completion is already reflected in the digest's task
+                # count, so no separate remote message is sent here.
             else:
                 # No matching widget — log as a simple line
                 dur_part = ""
@@ -2269,13 +2377,65 @@ class NovaApp(App):
                 for n in self._get_skill_names()
                 if f"/skill:{n}".lower().startswith(v)
             ]
-        # @<agent> — delegate to a subagent
+        # @<agent> — delegate to a subagent (or @file to inject content)
         if value.startswith("@"):
-            return [
-                f"@{n}"
-                for n in self._get_agent_names()
-                if f"@{n}".lower().startswith(v)
-            ]
+            candidates: list[str] = []
+            # Agent completions
+            for n in self._get_agent_names():
+                if f"@{n}".lower().startswith(v):
+                    candidates.append(f"@{n}")
+            # File completions — recursive match across the whole project tree
+            prefix = v.removeprefix("@")
+            max_results = 50
+            try:
+                cwd = Path.cwd()
+                # Skip common non-source directories to keep rglob fast
+                _SKIP_DIRS = frozenset({
+                    ".git", ".nova", ".venv", ".env", "node_modules",
+                    "__pycache__", ".pytest_cache", "build", "dist",
+                    ".ruff_cache", ".mypy_cache",
+                })
+
+                def _walk(p: Path, prefix: str, cwd: Path, seen: set[str]) -> None:
+                    """Recursively match files starting with prefix, skipping noise dirs."""
+                    for child in p.iterdir():
+                        is_dir = child.is_dir()
+                        # Skip hidden dirs (don't descend into them)
+                        if is_dir and (child.name.startswith(".") or child.name in _SKIP_DIRS):
+                            continue
+                        if child.name.lower().startswith(prefix.lower()):
+                            rel = child.relative_to(cwd).as_posix()
+                            tag = f"@{rel}"
+                            if is_dir:
+                                tag += "/"
+                            if tag not in seen:
+                                seen.add(tag)
+                                candidates.append(tag)
+                        if is_dir and len(seen) < max_results:
+                            _walk(child, prefix, cwd, seen)
+
+                seen: set[str] = set()
+                if "/" in prefix:
+                    dir_part, _, file_part = prefix.rpartition("/")
+                    search_dir = (cwd / dir_part).resolve()
+                    if search_dir.is_dir():
+                        for p in search_dir.iterdir():
+                            name = p.name
+                            if name.lower().startswith(file_part.lower()):
+                                rel = p.relative_to(cwd).as_posix()
+                                tag = f"@{rel}"
+                                if p.is_dir():
+                                    tag += "/"
+                                if tag not in seen:
+                                    seen.add(tag)
+                                    candidates.append(tag)
+                            if len(seen) >= max_results:
+                                break
+                else:
+                    _walk(cwd, prefix, cwd, seen)
+            except Exception:
+                pass
+            return candidates
         # /<command>
         if value.startswith("/"):
             return [c for c in _TUI_SLASH_COMMANDS if c.startswith(v)]
@@ -2529,8 +2689,67 @@ class NovaApp(App):
             self._turn_active = False
             self._set_status("ready")
             self._clear_live_steers()
-        # Proactively manage the context window once the turn has settled.
+        # Refresh the per-category context breakdown from agent state, then
+        # proactively manage the context window once the turn has settled.
+        await self._update_context_breakdown()
         await self._check_context()
+
+    async def _update_context_breakdown(self) -> None:
+        """Recompute the context breakdown from agent state after a turn.
+
+        The console renderer does this in its finalization step; without it the
+        TUI's /context view and context warnings had no per-category detail.
+        Best-effort — never blocks the turn on a state read.
+        """
+        tracker = self.token_tracker
+        if tracker is None or not getattr(tracker, "model_name", None):
+            return
+        try:
+            from novacode_cli.context import ContextManager
+
+            ag, _ = self._active_agent()
+            config = {"configurable": {"thread_id": self.session_state.thread_id}}
+            state = await ag.aget_state(config)
+            msgs = state.values.get("messages", []) if state else []
+            if msgs:
+                tracker.set_breakdown(ContextManager(tracker.model_name).breakdown(msgs))
+        except Exception:  # noqa: BLE001
+            pass
+
+        await self._maybe_warn_ollama_offload(tracker.model_name)
+
+    async def _maybe_warn_ollama_offload(self, model_name: str | None) -> None:
+        """Warn once if the loaded Ollama model is offloaded to CPU (slow).
+
+        Skips cloud API models entirely. Probes `ollama ps` off the event loop;
+        stays "unchecked" until the model is actually loaded so the advisory
+        still fires on a later turn, then latches off.
+        """
+        if self._ollama_offload_checked or not model_name:
+            return
+        from novacode_cli.context._dynamic import is_ollama_cloud_model
+
+        if model_name.lower().startswith(
+            ("claude-", "gpt-", "gemini-", "o1", "o3", "o4")
+        ) or is_ollama_cloud_model(model_name):
+            # Cloud (API or Ollama-cloud) runs remotely — never offloads locally.
+            self._ollama_offload_checked = True
+            return
+        try:
+            from novacode_cli.context._dynamic import (
+                check_ollama_offloading,
+                get_ollama_runtime_info,
+            )
+
+            info = await asyncio.to_thread(get_ollama_runtime_info, model_name)
+            if info is None:
+                return  # not loaded yet — retry on a later turn
+            self._ollama_offload_checked = True
+            warning = await asyncio.to_thread(check_ollama_offloading, model_name)
+            if warning:
+                self._log(Text(f"⚠ {warning}", style="bold #e0af68"))
+        except Exception:  # noqa: BLE001
+            self._ollama_offload_checked = True
 
     def _clear_live_steers(self) -> None:
         """Drop transient live-steer instructions added during the turn."""
@@ -2643,15 +2862,36 @@ class NovaApp(App):
                         except Exception:  # noqa: BLE001
                             pass
                     self._remote_msg = msg
-                    pre = await self.agent.aget_state(config)
-                    pre_count = len(pre.values.get("messages", [])) if pre else 0
-                    await self._stream_prompt(msg.text)
-                    post = await self.agent.aget_state(config)
-                    reply = _extract_response(post, pre_count) or "✅ Task completed."
-                    try:
-                        await msg.reply_fn(reply)
-                    except Exception:  # noqa: BLE001
-                        pass
+                    self._remote_activity = []  # fresh digest per turn
+
+                    # Slash commands from chat: handle the remote-safe subset
+                    # directly (info/toggles/conversation), stream skills as a
+                    # turn, and decline interactive/local-only ones.
+                    prompt_text = msg.text.strip()
+                    slash_reply: str | None = None
+                    if prompt_text.startswith("/"):
+                        slash_reply, resolved = await self._remote_slash(prompt_text)
+                        if resolved is not None:
+                            prompt_text = resolved  # e.g. a resolved skill prompt
+
+                    if slash_reply is not None:
+                        # Command fully handled — reply directly, no agent turn.
+                        try:
+                            await msg.reply_fn(slash_reply)
+                        except Exception:  # noqa: BLE001
+                            pass
+                    else:
+                        pre = await self.agent.aget_state(config)
+                        pre_count = len(pre.values.get("messages", [])) if pre else 0
+                        await self._stream_prompt(prompt_text)
+                        post = await self.agent.aget_state(config)
+                        reply = _extract_response(post, pre_count) or "✅ Task completed."
+                        # One condensed tool/subagent digest, in order, then the answer.
+                        await self._flush_remote_activity()
+                        try:
+                            await msg.reply_fn(reply)
+                        except Exception:  # noqa: BLE001
+                            pass
                 finally:
                     self._remote_msg = None
                     self.session_state.auto_approve = prev_auto
@@ -2661,6 +2901,98 @@ class NovaApp(App):
                 self._log(Text(f"Remote error: {ex}", style="red"))
             finally:
                 queue.task_done()
+
+    # Slash commands that require the interactive local TUI (modals, pickers,
+    # launchers) and can't be driven over a chat bridge.
+    _REMOTE_LOCAL_ONLY = frozenset(
+        {
+            "sessions", "mcp", "theme", "remote", "agents", "skills", "init",
+            "trello", "browser-use", "hooks", "servers", "files", "images",
+            "vision", "ralph", "kill", "restore", "reindex", "plan", "steer",
+            "notifications", "trace", "log", "research", "dream", "tests", "fast",
+        }
+    )
+
+    def _remote_help_text(self) -> str:
+        """Plain-text help listing the commands that work over a remote chat."""
+        return (
+            "Remote commands:\n"
+            "• /help — this list\n"
+            "• /context (/tokens, /cost) — context window usage\n"
+            "• /model — show the current model\n"
+            "• /clear — reset the conversation\n"
+            "• /compact — summarize & free up context\n"
+            "• /save — save the session\n"
+            "• /verbose, /decompose — toggle settings\n"
+            "• /<skill> (e.g. /graphify) — run a skill\n"
+            "Anything without a leading / is sent to the agent. Interactive "
+            "panels (/model picker, /sessions, /mcp, /theme…) are local-only."
+        )
+
+    async def _remote_slash(self, text: str) -> "tuple[str | None, str | None]":
+        """Route a slash command arriving from Discord/Telegram.
+
+        Returns ``(reply_text, stream_prompt)``:
+          * ``(str, None)`` — send this text back; no agent turn.
+          * ``(None, str)`` — stream this prompt as an agent turn (skills).
+        Interactive / local-only commands return an explanatory reply.
+        """
+        parts = text[1:].split(maxsplit=1)
+        cmd = parts[0].lower() if parts else ""
+        arg = parts[1].strip() if len(parts) > 1 else ""
+
+        if cmd in ("help", "?", "commands"):
+            return self._remote_help_text(), None
+        if cmd in ("tokens", "context", "cost"):
+            try:
+                return self._token_text().plain, None
+            except Exception:  # noqa: BLE001
+                return "(token usage unavailable)", None
+        if cmd == "model":
+            return (
+                f"Current model: {self.model_name}\n"
+                "Switching models is only available in the local TUI (/model).",
+                None,
+            )
+        if cmd == "verbose":
+            new = self.session_state.toggle_verbose()
+            return f"Verbose mode {'on' if new else 'off'}.", None
+        if cmd == "decompose":
+            cur = getattr(self.session_state, "prompt_decomposition_enabled", True)
+            self.session_state.prompt_decomposition_enabled = not cur
+            on = self.session_state.prompt_decomposition_enabled
+            return f"Prompt decomposition {'on' if on else 'off'}.", None
+        if cmd == "clear":
+            await self._run_clear()
+            return "✅ Conversation cleared.", None
+        if cmd == "compact":
+            await self._run_compact("")
+            return "✅ Context compacted.", None
+        if cmd == "save":
+            await self._run_save()
+            return "✅ Session saved.", None
+
+        if cmd in self._REMOTE_LOCAL_ONLY:
+            return f"/{cmd} is only available in the local TUI.", None
+
+        # Otherwise treat it as a skill: /skill:<name> or a bare /<name>.
+        skill_name = cmd[len("skill:"):] if cmd.startswith("skill:") else cmd
+        if skill_name:
+            try:
+                from novacode_cli.commands.skill_invoke import _try_skill_invocation
+
+                skill = await _try_skill_invocation(
+                    skill_name, arg or None, self.session_state, self.assistant_id
+                )
+            except Exception as ex:  # noqa: BLE001
+                return f"❌ /{cmd} failed: {ex}", None
+            if skill is not None:
+                return None, skill.prompt
+
+        return (
+            f"Unknown command: /{cmd}. Send /help for what works over remote.",
+            None,
+        )
 
     async def _run_bash(self, text: str) -> None:
         """Run a ``!`` shell command and show output in the transcript."""
@@ -4656,8 +4988,8 @@ class NovaApp(App):
             if e.call_id:
                 self._tool_components[e.call_id] = entry
             self._last_tool = entry
-            # Stream tool call to remote
-            self._remote_send(f"🔧 {e.display_str}")
+            # Record for the condensed remote digest (not sent per-event).
+            self._remote_record(e.name)
         elif isinstance(e, ev.ToolResult):
             self._finalize_tool(
                 e.call_id, e.preview, e.full_output, is_error=e.is_error
@@ -4691,11 +5023,9 @@ class NovaApp(App):
             else:
                 self._todo_widget.update(todo_text)
                 self._scroll_end()
-            # Stream todo summary to remote
-            if e.todos:
-                done = sum(1 for t in e.todos if (t.get("status") if isinstance(t, dict) else None) == "completed")
-                total = len(e.todos)
-                self._remote_send(f"📋 Todos: {done}/{total}")
+            # Todo updates are intentionally NOT streamed to remote — they fire
+            # frequently and flooded the chat. The condensed tool digest plus the
+            # final answer convey progress instead.
         elif isinstance(e, ev.ErrorOutput):
             self._log(Text(e.text, style="red"))
         elif isinstance(e, ev.CompactionNotice):
@@ -4722,6 +5052,17 @@ class NovaApp(App):
         # ev.Done -> nothing to render
 
     async def _handle_interrupt(self, e: "ev.InterruptRequest") -> None:
+        # Resolve in a finally so a handler that raises before set_result fails
+        # closed (reject) instead of leaving the agent loop awaiting forever.
+        try:
+            await self._handle_interrupt_inner(e)
+        finally:
+            if not e.future.done():
+                from novacode_cli.core.agent_loop import default_interrupt_response
+
+                e.future.set_result(default_interrupt_response(e.kind))
+
+    async def _handle_interrupt_inner(self, e: "ev.InterruptRequest") -> None:
         if e.kind == "tool":
             req = e.payload
             from novacode_cli.ui.hitl_approval import check_plan_mode_blocked

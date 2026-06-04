@@ -8,11 +8,17 @@ from novacode_cli.remote.bridge import (
     chunk_message,
 )
 from novacode_cli.remote.config import (
-    load_remote_config,
-    save_remote_config,
+    async_get_discord_config,
+    async_get_telegram_config,
+    async_load_remote_config,
+    async_save_discord_config,
+    async_save_remote_config,
+    async_save_telegram_config,
     get_discord_config,
     get_telegram_config,
+    load_remote_config,
     save_discord_config,
+    save_remote_config,
     save_telegram_config,
 )
 
@@ -22,6 +28,14 @@ __all__ = [
     "RemoteMessage",
     "RemotePlatform",
     "chunk_message",
+    # Async variants (prefer these in async code paths)
+    "async_load_remote_config",
+    "async_save_remote_config",
+    "async_get_discord_config",
+    "async_get_telegram_config",
+    "async_save_discord_config",
+    "async_save_telegram_config",
+    # Sync variants (internal / sync-context use only)
     "load_remote_config",
     "save_remote_config",
     "get_discord_config",

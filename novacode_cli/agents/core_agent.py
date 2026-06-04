@@ -65,7 +65,7 @@ from langchain_core.language_models import BaseChatModel
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.pregel import Pregel
-from langgraph.store.memory import InMemoryStore
+from langgraph.store.base import BaseStore
 from deepagents import create_deep_agent
 from deepagents.backends import CompositeBackend
 from deepagents.backends.filesystem import FilesystemBackend
@@ -88,22 +88,20 @@ from novacode_cli.hitl.interrupts import get_interrupt_configs
 from novacode_cli.integrations.sandbox_factory import get_default_working_dir
 from novacode_cli.prompts import render_template
 
-# Module-level shared store for agent/subagent memory sharing
-_shared_store: InMemoryStore | None = None
-_store_lock_initialized = False
+def get_shared_store() -> "BaseStore":
+    """Get the shared, durable store for agent/subagent memory sharing.
 
-
-def get_shared_store() -> InMemoryStore:
-    """Get or create the shared InMemoryStore for agent/subagent communication.
+    Backed by SQLite at ``~/.nova/store.db`` so structured memory written via
+    the store survives restarts (see :mod:`novacode_cli.memory.store`). All
+    agents and subagents in a process share this one instance.
 
     Returns:
-        Shared InMemoryStore instance
+        The shared durable store (falls back to in-memory if SQLite is
+        unavailable).
     """
-    global _shared_store, _store_lock_initialized
-    if _shared_store is None:
-        _shared_store = InMemoryStore()
-        _store_lock_initialized = True
-    return _shared_store
+    from novacode_cli.memory.store import get_durable_store
+
+    return get_durable_store()
 
 
 def _extract_agent_description(agent_md_content: str) -> str:
@@ -519,7 +517,7 @@ def create_agent_with_config(
     sandbox_type: str | None = None,
     system_prompt: str | None = None,
     auto_approve: bool = False,
-    store: InMemoryStore | None = None,
+    store: BaseStore | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
     is_continuation: bool = False,
     steering_instructions: list | None = None,
@@ -533,8 +531,9 @@ def create_agent_with_config(
         sandbox: Optional sandbox backend for remote execution (e.g., ModalBackend).
                  If None, uses local filesystem + shell.
         sandbox_type: Type of sandbox provider ("modal", "runloop", "daytona")
-        store: Optional InMemoryStore. If None and use_shared_store is True,
-               uses a module-level shared store that subagents can also access.
+        store: Optional durable store (BaseStore). If None, the caller is
+               expected to pass the shared store from get_shared_store() so
+               subagents can also access it.
         is_continuation: If True, skip project memory paths (Nova.md/CLAUDE.md)
                from AgentMemoryMiddleware since they're already in the continuation prompt.
 
@@ -621,8 +620,9 @@ def create_agent_with_config(
     if agent_dir:
         allowed_prefixes.append(str(agent_dir))
         # Auto-create simple memory structure on first use so the agent has
-        # a memory file to read/write without needing the (now-removed)
-        # create_memory_structure tool.
+        # a memory file to read/write without needing the
+        # create_memory_structure tool (which is no longer registered in the
+        # default toolset).
         _agent_md = agent_dir / "agent.md"
         if not _agent_md.exists():
             agent_dir.mkdir(parents=True, exist_ok=True)
@@ -842,7 +842,7 @@ This file stores your preferences and context that persist across sessions.
     # "duplicate middleware instances".
 
     # Load pre-defined default and user defined subagents
-    Nova_SubAgent.extend(retrieve_core_subagents(tools=tools, skill_sources=skill_sources))  # type: ignore
+    Nova_SubAgent.extend(retrieve_core_subagents(tools=tools))  # type: ignore
     Nova_SubAgent.extend(build_named_subagents(assistant_id=assistant_id, tools=tools))  # type: ignore
 
     # Own the general-purpose subagent instead of letting create_deep_agent

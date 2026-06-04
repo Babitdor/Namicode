@@ -93,7 +93,7 @@ root_logger.setLevel(logging.WARNING)
 root_logger.addHandler(file_handler)
 
 from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.store.memory import InMemoryStore
+from langgraph.store.base import BaseStore
 from novacode_cli.doctor import run_doctor
 
 try:
@@ -179,9 +179,13 @@ from novacode_cli.tools import (
     duckduckgo_search,
     fetch_url,
     find_related_code,
+    forget,
+    list_memories,
     package_info,
     query_project_graph,
     read_memory,
+    recall,
+    remember,
     think,
     web_search,
     write_memory,
@@ -490,7 +494,7 @@ async def simple_cli(
     no_splash: bool = False,
     model_name: str | None = None,
     session_manager=None,
-    store: InMemoryStore | None = None,
+    store: BaseStore | None = None,
     checkpointer: InMemorySaver | None = None,
     restored_session_data: tuple | None = None,
 ) -> None:
@@ -1389,7 +1393,7 @@ async def _run_agent_session(
     setup_script_path: str | None = None,
     initial_messages: list | None = None,
     session_manager=None,
-    store: InMemoryStore | None = None,
+    store: BaseStore | None = None,
     checkpointer: InMemorySaver | None = None,
     restored_session_data: tuple | None = None,
 ) -> None:
@@ -1429,6 +1433,11 @@ async def _run_agent_session(
         # Memory management (persist across sessions)
         write_memory,
         read_memory,
+        # Structured durable memory (key/value via the LangGraph store)
+        remember,
+        recall,
+        list_memories,
+        forget,
     ]
     # Conditionally add Semble-powered code search tools
     if code_search is not None:
@@ -1759,7 +1768,12 @@ async def main(
     from novacode_cli.session.session_persistence import SessionManager
     from novacode_cli.session.session_restore import restore_session
 
-    store = InMemoryStore()
+    # Durable, SQLite-backed store at ~/.nova/store.db so structured memory
+    # written via the LangGraph store survives restarts (falls back to
+    # in-memory if SQLite is unavailable). See novacode_cli/memory/store.py.
+    from novacode_cli.memory.store import get_durable_store
+
+    store = get_durable_store()
 
     # Use SQLite-backed checkpointer for cross-restart session continuity when available.
     # Falls back to InMemorySaver if langgraph-checkpoint-sqlite is not installed.

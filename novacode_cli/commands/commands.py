@@ -601,8 +601,8 @@ async def _handle_remote_command(cmd_args: str | None, session_state, console) -
     """
     from novacode_cli.remote.bridge import RemoteBridgeManager, RemotePlatform
     from novacode_cli.remote.config import (
-        load_remote_config, save_remote_config,
-        save_discord_config, save_telegram_config,
+        async_load_remote_config, async_save_remote_config,
+        async_save_discord_config, async_save_telegram_config,
     )
 
     # Get or create the bridge manager on the session state
@@ -619,7 +619,7 @@ async def _handle_remote_command(cmd_args: str | None, session_state, console) -
     # ── /remote (no args) or /remote status ────────────────────────
     if not args or args.lower() in ("status", "list", "ls"):
         bridges = manager.active_bridges
-        saved = load_remote_config()
+        saved = await async_load_remote_config()
         console.print()
         if not bridges:
             console.print("[dim]No remote bridges active.[/dim]")
@@ -767,7 +767,7 @@ async def _handle_remote_command(cmd_args: str | None, session_state, console) -
     forget_match = re.match(r"forget(?:\s+(discord|telegram))?$", args, re.IGNORECASE)
     if forget_match:
         platform = (forget_match.group(1) or "").lower()
-        saved = load_remote_config()
+        saved = await async_load_remote_config()
         if platform and platform in saved:
             del saved[platform]
             save_remote_config(saved)
@@ -809,7 +809,7 @@ async def _handle_remote_command(cmd_args: str | None, session_state, console) -
                 chat_id = chat_match.group(1)
 
         # ── Load saved config as fallback ──
-        saved = load_remote_config()
+        saved = await async_load_remote_config()
 
         if platform_str == "discord":
             saved_discord = saved.get("discord", {})
@@ -859,7 +859,7 @@ async def _handle_remote_command(cmd_args: str | None, session_state, console) -
 
                 console.print(f"  [green]✓[/green] Created channel #{channel_name} (ID: {chat_id})")
                 # Save the auto-created channel
-                save_discord_config(token, str(chat_id))
+                await async_save_discord_config(token, str(chat_id))
 
         elif platform_str == "telegram":
             saved_telegram = saved.get("telegram", {})
@@ -885,9 +885,9 @@ async def _handle_remote_command(cmd_args: str | None, session_state, console) -
 
         # ── Save the config ──
         if platform_str == "discord":
-            save_discord_config(token, str(chat_id))
+            await async_save_discord_config(token, str(chat_id))
         else:
-            save_telegram_config(token, str(chat_id))
+            await async_save_telegram_config(token, str(chat_id))
 
         # ── Start the bridge ──
         console.print()
