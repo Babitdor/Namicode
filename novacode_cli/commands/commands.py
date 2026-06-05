@@ -198,7 +198,10 @@ async def handle_command(
 
     # ── Local commands (handled here, not in registry) ─────────────────
     if cmd == "clear":
-        session_state.thread_id = str(uuid.uuid4())
+        # Total reset: new thread+session id (empty checkpointer context) plus
+        # cleared todos / steering / plan mode. Long-term memory, the Nova
+        # learning store, and the agent itself are preserved.
+        session_state.reset_conversation()
         token_tracker.reset()
         console.clear()
         console.print(NOVA_CODE_ASCII, style=f"bold {COLORS['primary']}")

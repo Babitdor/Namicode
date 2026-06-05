@@ -126,10 +126,12 @@ def resolve_plan_content(
     session_state=None,
     dbg_func=None,
     backend: Any = None,
+    inline_plan: str | None = None,
 ) -> tuple[str | None, Path | None]:
-    """Resolve plan content from session state, file, or todos.
+    """Resolve plan content from inline arg, session state, file, or todos.
 
     Priority:
+    0. ``inline_plan`` passed to ``exit_plan_mode(plan=...)`` (Claude-style)
     1. Session state plan_content (most recent, from current session)
     2. Latest plan file in .nova/plans/ (supports plan-<name>.md naming)
     3. todos-based plan (fallback)
@@ -143,12 +145,24 @@ def resolve_plan_content(
         session_state: Optional session state to check for stored plan content
         dbg_func: Optional debug logging function
         backend: Optional CompositeBackend for virtual path access
+        inline_plan: Plan markdown supplied directly by the agent via
+            ``exit_plan_mode(plan=...)``. Takes precedence over all other
+            sources when non-empty.
 
     Returns:
         Tuple of (plan_content, plan_path) or (None, None) if not found
     """
     plan_content: str | None = None
     plan_path = None
+
+    # Priority 0: Inline plan passed straight to exit_plan_mode (Claude-style).
+    if isinstance(inline_plan, str) and inline_plan.strip():
+        if dbg_func:
+            dbg_func(
+                "PLAN-CONTENT",
+                f"Using inline plan from exit_plan_mode ({len(inline_plan)} chars)",
+            )
+        return inline_plan, None
 
     # Priority 1: Check session state for stored plan content (current session)
     if (
@@ -281,6 +295,7 @@ async def handle_plan_approval_interrupt(
     spinner_active: bool,
     status,
     dbg_func=None,
+    interrupt_payload: dict | None = None,
 ) -> tuple[dict, bool, bool, dict]:
     """Handle a plan approval interrupt from exit_plan_mode tool.
 
@@ -290,6 +305,8 @@ async def handle_plan_approval_interrupt(
         spinner_active: Whether spinner is currently active
         status: The status spinner object
         dbg_func: Optional debug logging function
+        interrupt_payload: The raw interrupt payload from exit_plan_mode, which
+            may carry an inline ``plan`` (Claude-style) to display directly.
 
     Returns:
         Tuple of (hitl_response dict, interrupt_occurred bool,
@@ -310,9 +327,11 @@ async def handle_plan_approval_interrupt(
         style="bold",
     )
 
-    # Resolve plan content and file path (prioritize session state)
+    # Resolve plan content and file path (prioritize the inline plan supplied
+    # to exit_plan_mode(plan=...), then session state, then plan files).
+    inline_plan = (interrupt_payload or {}).get("plan")
     plan_content, plan_path = resolve_plan_content(
-        current_todos, session_state, dbg_func
+        current_todos, session_state, dbg_func, inline_plan=inline_plan
     )
 
     # Render plan content inline

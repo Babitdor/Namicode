@@ -116,9 +116,59 @@ def build_continuation_prompt(
             break
         budget_messages.insert(0, msg)
         token_count += est
+    # Repair tool-call pairing: the recent-window split (and the budget trim
+    # above) can slice between an AIMessage's tool_call and its ToolMessage
+    # result. Providers (e.g. Anthropic) reject such sequences ("tool_use
+    # without tool_result" / "tool_result without tool_use"), which would make
+    # the entire restored turn error out — i.e. the conversation appears not to
+    # have been retained. Drop the unpaired pieces so the history is valid.
+    budget_messages = _repair_tool_pairs(budget_messages)
     messages.extend(budget_messages)
 
     return messages
+
+
+def _repair_tool_pairs(messages: list[BaseMessage]) -> list[BaseMessage]:
+    """Return ``messages`` with tool_call/tool_result pairing made valid.
+
+    - Drops an ``AIMessage`` with tool_calls if any of its calls lack a matching
+      ``ToolMessage`` result in this window (a dangling tool_use — usually the
+      last, cut-off turn).
+    - Drops a ``ToolMessage`` whose ``tool_call_id`` was not issued by a kept
+      ``AIMessage`` (an orphaned tool_result — usually at the window start).
+
+    Whole messages are dropped rather than rewritten, so the result stays a
+    well-formed provider message sequence without touching content blocks.
+    """
+    from langchain_core.messages import AIMessage, ToolMessage
+
+    result_ids = {
+        m.tool_call_id
+        for m in messages
+        if isinstance(m, ToolMessage) and getattr(m, "tool_call_id", None)
+    }
+
+    kept: list[BaseMessage] = []
+    kept_call_ids: set[str] = set()
+    for m in messages:
+        if isinstance(m, AIMessage) and getattr(m, "tool_calls", None):
+            call_ids = [tc.get("id") for tc in m.tool_calls]
+            if all(cid in result_ids for cid in call_ids):
+                kept.append(m)
+                kept_call_ids.update(cid for cid in call_ids if cid)
+            # else: at least one call has no result in-window → drop the message
+        else:
+            kept.append(m)
+
+    repaired: list[BaseMessage] = []
+    for m in kept:
+        if isinstance(m, ToolMessage):
+            if getattr(m, "tool_call_id", None) in kept_call_ids:
+                repaired.append(m)
+            # else: orphaned tool result → drop
+        else:
+            repaired.append(m)
+    return repaired
 
 
 def _format_task_state(session_data: SessionData) -> str:

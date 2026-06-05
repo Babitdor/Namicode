@@ -32,6 +32,72 @@ from novacode_cli.prompts import render_template
 logger = logging.getLogger(__name__)
 
 
+def _wrap_tool_error_handling(tool: BaseTool) -> BaseTool:
+    """Make an MCP tool failure non-fatal to the agent run.
+
+    MCP servers run over anyio task groups, so a tool-side failure (a
+    server-side ``ERR_CONNECTION_REFUSED`` from playwright, a crashed server,
+    a timeout) can surface as an exception — sometimes a
+    ``BaseExceptionGroup`` — that escapes LangGraph's ToolNode error handling
+    (which only catches ``Exception``) and aborts the entire turn.
+
+    Wrapping the tool's coroutine/func to catch ``BaseException`` and return a
+    readable error string means the model just sees the failure as the tool's
+    result and can recover (retry, start the server, or report) instead of the
+    run dying. ``KeyboardInterrupt``/``SystemExit`` are re-raised so Ctrl-C and
+    shutdown still work.
+    """
+
+    # MCP tools are loaded with response_format="content_and_artifact", so they
+    # must return a (content, artifact) two-tuple — returning a bare string for
+    # those raises "a two-tuple ... is expected". Match the tool's declared
+    # format so the error result is well-formed either way.
+    response_format = getattr(tool, "response_format", "content")
+
+    def _error_result(exc: BaseException) -> Any:
+        # Plain ASCII (no emoji) so the result can't trip a cp1252 console.
+        msg = f"[MCP error] tool '{tool.name}' failed: {exc}"
+        if response_format == "content_and_artifact":
+            return (msg, None)
+        return msg
+
+    orig_coroutine = getattr(tool, "coroutine", None)
+    if orig_coroutine is not None:
+
+        async def _safe_coroutine(*args: Any, **kwargs: Any) -> Any:
+            try:
+                return await orig_coroutine(*args, **kwargs)
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except BaseException as exc:  # noqa: BLE001
+                logger.warning("MCP tool '%s' failed: %s", tool.name, exc)
+                return _error_result(exc)
+
+        try:
+            tool.coroutine = _safe_coroutine
+        except Exception:  # noqa: BLE001
+            pass
+
+    orig_func = getattr(tool, "func", None)
+    if orig_func is not None:
+
+        def _safe_func(*args: Any, **kwargs: Any) -> Any:
+            try:
+                return orig_func(*args, **kwargs)
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except BaseException as exc:  # noqa: BLE001
+                logger.warning("MCP tool '%s' failed: %s", tool.name, exc)
+                return _error_result(exc)
+
+        try:
+            tool.func = _safe_func
+        except Exception:  # noqa: BLE001
+            pass
+
+    return tool
+
+
 class MCPState(AgentState):
     """State for the MCP middleware."""
 
@@ -126,9 +192,12 @@ class MCPMiddleware(AgentMiddleware):
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
             future = pool.submit(asyncio.run, self._discover_tools_async())
-            # 30-second blanket timeout — discovery involves network I/O to
-            # potentially multiple MCP servers.
-            future.result(timeout=30)
+            # 90-second blanket timeout — discovery involves network I/O and
+            # cold process starts for stdio servers (e.g. ``npx``/``uvx`` may
+            # download packages on first run). A short timeout abandons the
+            # result while the worker is still spawning servers, leaving
+            # ``self.tools`` empty so MCP tools never register.
+            future.result(timeout=90)
 
     async def _discover_tools_async(self) -> None:
         """Async implementation of tool discovery using MultiServerMCPClient.
@@ -160,6 +229,9 @@ class MCPMiddleware(AgentMiddleware):
         # Create the combined client
         self._client = MultiServerMCPClient(config_dict)
 
+        # Reset the metadata cache so a re-run cannot accumulate duplicates.
+        self._tools_cache = []
+
         # Cap concurrent discovery to avoid overwhelming the host
         _discovery_semaphore = asyncio.Semaphore(3)
 
@@ -173,9 +245,26 @@ class MCPMiddleware(AgentMiddleware):
                         session=None,  # Stateless - creates fresh session per invocation
                         connection=connection,
                         server_name=server_name,
+                        # Prefix tool names with the server name (e.g.
+                        # ``serena_read_file``) so MCP tools never collide with
+                        # the agent's built-in tools. Without this, servers like
+                        # serena expose a bare ``read_file`` (which takes
+                        # ``relative_path``) that shadows the built-in
+                        # ``read_file`` (which takes ``file_path``), causing
+                        # "Field required: relative_path" validation errors.
+                        tool_name_prefix=True,
                     )
 
                     if server_tools:
+                        # Make tool failures non-fatal: an MCP/anyio error (e.g.
+                        # a playwright ERR_CONNECTION_REFUSED) can surface as a
+                        # BaseExceptionGroup that escapes LangGraph's ToolNode
+                        # error handling and aborts the whole turn. Wrapping each
+                        # tool so it returns the error as a string lets the model
+                        # see the failure and recover instead.
+                        server_tools = [
+                            _wrap_tool_error_handling(t) for t in server_tools
+                        ]
                         # Build metadata cache with correct server attribution
                         for tool in server_tools:
                             input_schema = {}
@@ -227,25 +316,28 @@ class MCPMiddleware(AgentMiddleware):
         # Mark discovery as complete to avoid re-discovering on every message
         self._tools_discovered = True
 
-    async def on_session_start(
+    async def abefore_agent(
         self,
-        runtime: Runtime,
-        *,
         state: MCPState,
+        runtime: Runtime,
     ) -> MCPStateUpdate | None:
-        """Store MCP tools metadata in state at session start.
+        """Store MCP tools metadata in state before the agent run starts.
 
-        Uses lazy discovery - tools are discovered on first session start,
-        not at __init__ time, to speed up agent startup.
+        ``abefore_agent`` is a valid ``AgentMiddleware`` hook — the previous
+        ``on_session_start`` name was NOT a recognised hook, so it never fired,
+        which left ``mcp_tools`` state empty and the MCP doc section missing.
+
+        Tools are normally discovered eagerly at agent-build time so they are
+        registered with the graph; this hook defensively ensures discovery has
+        run and exposes the metadata via state for the system-prompt section.
 
         Args:
-            runtime: The LangGraph runtime instance
-            state: Current agent state
+            state: Current agent state.
+            runtime: The LangGraph runtime instance.
 
         Returns:
-            State update with MCP tools metadata, or None if no tools
+            State update with MCP tools metadata, or None if no tools.
         """
-        # Lazy discovery - discover tools on first use
         await self._ensure_tools_discovered()
 
         if not self._tools_cache:
@@ -309,6 +401,69 @@ class MCPMiddleware(AgentMiddleware):
 
         return "\n".join(lines)
 
+    def _inject_mcp_section(
+        self, request: ModelRequest
+    ) -> ModelRequest:
+        """Inject MCP documentation into the system prompt (shared by sync/async paths).
+
+        Uses a TTL-backed cache (``_mcp_section_cache``) to avoid re-rendering the
+        Jinja template on every model turn. The cache has a sliding window — each
+        hit extends its lifetime — so active sessions keep the section hot without
+        re-rendering, while idle sessions let the cache expire naturally.
+
+        Args:
+            request: The model request to modify.
+
+        Returns:
+            The request with MCP section injected into ``system_prompt``, or the
+            original request unchanged if no MCP tools are configured.
+        """
+        # Prefer tools recorded in agent state, but fall back to the discovery
+        # cache. State is only populated by the (now-removed) session-start hook;
+        # the cache is filled by eager discovery at agent-build time, so this
+        # fallback keeps the MCP doc section working regardless.
+        mcp_tools = request.state.get("mcp_tools") or self._tools_cache
+        if not mcp_tools:
+            return request
+
+        import time
+        current_time = time.time()
+
+        # Sliding-window cache: refresh on access to keep hot during active use
+        if (
+            self._mcp_section_cache is not None
+            and current_time - self._mcp_section_cache_time < self._mcp_section_cache_ttl
+        ):
+            self._mcp_section_cache_time = current_time
+            mcp_section = self._mcp_section_cache
+        else:
+            servers = self.mcp_config.list_servers()
+            servers_list = self._format_servers_list(servers, mcp_tools)
+            mcp_section = render_template("mcp.jinja", servers_list=servers_list)
+
+            self._mcp_section_cache = mcp_section
+            self._mcp_section_cache_time = current_time
+
+        # Track context usage (best-effort)
+        try:
+            from novacode_cli.context import ContextManager
+
+            budget = ContextManager().budget()
+            tokens_added = budget.track_middleware("MCPMiddleware", mcp_section)
+            logger.debug(
+                f"MCPMiddleware added {tokens_added} tokens to context "
+                f"(total: {budget.total_tokens}/{budget.max_tokens})"
+            )
+        except ImportError:
+            pass
+
+        system_prompt = (
+            request.system_prompt + "\n\n" + mcp_section
+            if request.system_prompt
+            else mcp_section
+        )
+        return request.override(system_prompt=system_prompt)  # type: ignore
+
     def wrap_model_call(
         self,
         request: ModelRequest,
@@ -316,70 +471,14 @@ class MCPMiddleware(AgentMiddleware):
     ) -> ModelResponse:
         """Inject MCP tool information into the model request system prompt.
 
-        MCP tools are already registered statically via self.tools at init time,
-        so they are already present in request.tools. This method only injects
+        MCP tools are registered statically via ``self.tools`` at init time, so
+        they are already present in ``request.tools``. This method only injects
         the MCP documentation section into the system prompt.
 
-        Args:
-            request: The model request being processed
-            handler: The handler function to call with the modified request
-
-        Returns:
-            The model response from the handler
+        Delegates to the shared ``_inject_mcp_section()`` so that the sync and
+        async paths stay in lockstep (same caching, same injection logic).
         """
-        # Get MCP tools metadata from state
-        mcp_tools = request.state.get("mcp_tools", [])
-
-        # Build updated request
-        updated_request = request
-
-        # Inject MCP info into system prompt if we have tools
-        if mcp_tools:
-            import time
-            current_time = time.time()
-            
-            # Use cached MCP section if still valid (sliding window: refreshes on access)
-            if (
-                self._mcp_section_cache is not None
-                and current_time - self._mcp_section_cache_time < self._mcp_section_cache_ttl
-            ):
-                # Sliding window: reset timer on access to keep cache alive during active use
-                self._mcp_section_cache_time = current_time
-                mcp_section = self._mcp_section_cache
-            else:
-                # Get servers configuration
-                servers = self.mcp_config.list_servers()
-
-                # Format the MCP section using Jinja template
-                servers_list = self._format_servers_list(servers, mcp_tools)
-                mcp_section = render_template("mcp.jinja", servers_list=servers_list)
-                
-                # Cache the rendered section
-                self._mcp_section_cache = mcp_section
-                self._mcp_section_cache_time = current_time
-
-            # Track context usage
-            try:
-                from novacode_cli.context import ContextManager
-                budget = ContextManager().budget()
-                tokens_added = budget.track_middleware("MCPMiddleware", mcp_section)
-                logger.debug(
-                    f"MCPMiddleware added {tokens_added} tokens to context "
-                    f"(total: {budget.total_tokens}/{budget.max_tokens})"
-                )
-            except ImportError:
-                # Context budget tracking not available
-                pass
-
-            # Inject into system prompt
-            if updated_request.system_prompt:
-                system_prompt = updated_request.system_prompt + "\n\n" + mcp_section
-            else:
-                system_prompt = mcp_section
-
-            updated_request = updated_request.override(system_prompt=system_prompt)  # type: ignore
-
-        return handler(updated_request)
+        return handler(self._inject_mcp_section(request))
 
     async def awrap_model_call(
         self,
@@ -388,41 +487,10 @@ class MCPMiddleware(AgentMiddleware):
     ) -> ModelResponse:
         """(async) Inject MCP tool information into the model request system prompt.
 
-        MCP tools are already registered statically via self.tools at init time,
-        so they are already present in request.tools. This method only injects
-        the MCP documentation section into the system prompt.
-
-        Args:
-            request: The model request being processed
-            handler: The handler function to call with the modified request
-
-        Returns:
-            The model response from the handler
+        Delegates to the shared ``_inject_mcp_section()`` so that the sync and
+        async paths stay in lockstep (same caching, same injection logic).
         """
-        # Get MCP tools metadata from state
-        mcp_tools = request.state.get("mcp_tools", [])
-
-        # Build updated request
-        updated_request = request
-
-        # Inject MCP info into system prompt if we have tools
-        if mcp_tools:
-            # Get servers configuration
-            servers = self.mcp_config.list_servers()
-
-            # Format the MCP section using Jinja template
-            servers_list = self._format_servers_list(servers, mcp_tools)
-            mcp_section = render_template("mcp.jinja", servers_list=servers_list)
-
-            # Inject into system prompt
-            if updated_request.system_prompt:
-                system_prompt = updated_request.system_prompt + "\n\n" + mcp_section
-            else:
-                system_prompt = mcp_section
-
-            updated_request = updated_request.override(system_prompt=system_prompt)  # type: ignore
-
-        return await handler(updated_request)
+        return await handler(self._inject_mcp_section(request))
 
 
 __all__ = ["MCPMiddleware"]

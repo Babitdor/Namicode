@@ -180,11 +180,15 @@ from novacode_cli.tools import (
     fetch_url,
     find_related_code,
     forget,
+    github_trending,
+    hacker_news,
+    linkedin_jobs,
     list_memories,
     package_info,
     query_project_graph,
     read_memory,
     recall,
+    reddit_posts,
     remember,
     think,
     web_search,
@@ -1482,6 +1486,11 @@ async def _run_agent_session(
         # Web search (always available, no API key needed)
         duckduckgo_search,
         docs_search,
+        # Web scraping (GitHub trending, HN, LinkedIn, Reddit)
+        github_trending,
+        hacker_news,
+        linkedin_jobs,
+        reddit_posts,
         # Memory management (persist across sessions)
         write_memory,
         read_memory,
@@ -1932,22 +1941,27 @@ async def main(
                 )
                 warnings.extend(drift_warnings)
 
-            # Store session display data to show after splash screen
-            session_data_for_display = session_data
-            session_data_for_display.messages = recent_messages
-
-            session_data_with_recent = session_data
-            session_data_with_recent.messages = recent_messages
-
             base_system_prompt = get_default_coding_instructions()
 
-            # Build continuation prompt with correct order
+            # Build the continuation prompt from the FULL prior history (archive +
+            # recent, already loaded by restore_session). build_continuation_prompt
+            # token-budgets it to the most recent ~30k tokens, so this retains far
+            # more of the conversation than the 20-message recent window while
+            # still bounding context. Fall back to the recent window if the
+            # archive wasn't present.
+            full_history = list(session_data.messages or [])
+            session_data.messages = full_history or recent_messages
             initial_messages = build_continuation_prompt(
-                session_data=session_data_with_recent,
+                session_data=session_data,
                 system_prompt=base_system_prompt,
                 Nova_md_content=nova_md_content,
                 workspace_state=current_workspace,
             )
+
+            # Narrow to the recent window for the on-resume transcript replay so
+            # the UI isn't flooded with the entire history.
+            session_data.messages = recent_messages
+            session_data_for_display = session_data
 
             # Restore session state
             session_state.session_id = session_data.meta.session_id

@@ -1,0 +1,43 @@
+<nova_review>
+## 🔄 Nova Review Cycle
+
+You have completed {{ tool_call_count }} tool calls since the last review.
+Perform a brief self-evaluation:
+
+### 1. Extract Lessons
+What did you learn recently that should be remembered? (1-3 bullet points)
+
+### 2. Identify Patterns
+Did you repeat any workflow that could be a reusable skill?
+If so, name the skill and the trigger pattern.
+
+### 3. Memory Health Check
+Are USER.md / MEMORY.md up to date? Any stale entries to prune?
+
+### 4. Pending/Incomplete Work
+What's left unfinished or blocked?
+
+Keep your response concise — this is a checkpoint, not a full session summary.
+
+### Output Format (IMPORTANT)
+Record durable learnings using the XML blocks below so they persist to memory.
+Only include a block if you have something concrete to store; omit empty blocks.
+
+- Put updates about the *user* (communication style, preferences, workflows,
+  frustrations) inside a `<user_updates>` block. Start each entry with a
+  Markdown section header (e.g. `## Communication Style`) so it merges into
+  the matching section of USER.md.
+- Put cross-cutting *session* learnings (decisions, reusable patterns, facts)
+  inside a `<session_memory>` block as bullet points; these append to MEMORY.md.
+
+Example:
+<user_updates>
+## Communication Style
+- Prefers concise bullet points over prose
+</user_updates>
+
+<session_memory>
+- Tests are run with `pytest -x` for fast feedback
+- The MCP middleware is skipped entirely when no servers are configured
+</session_memory>
+</nova_review>

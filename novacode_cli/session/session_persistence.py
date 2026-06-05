@@ -611,6 +611,11 @@ class SessionManager:
             "content": msg.content,
         }
 
+        # Preserve the message id so the add_messages reducer dedupes restored
+        # messages correctly (and replay/seed stay stable across restore).
+        if getattr(msg, "id", None):
+            data["id"] = msg.id
+
         # Handle additional_kwargs (tool calls, etc.)
         if hasattr(msg, "additional_kwargs") and msg.additional_kwargs:
             # Filter out non-serializable items
@@ -668,9 +673,13 @@ class SessionManager:
         msg_type = data.get("type")
         content = data.get("content", "")
         additional_kwargs = data.get("additional_kwargs", {})
+        # Restore the original id (if saved) so dedup by id stays consistent.
+        msg_id = data.get("id")
 
         if msg_type == "HumanMessage":
-            return HumanMessage(content=content, additional_kwargs=additional_kwargs)
+            return HumanMessage(
+                content=content, additional_kwargs=additional_kwargs, id=msg_id
+            )
 
         if msg_type == "AIMessage":
             tool_calls = data.get("tool_calls", [])
@@ -680,10 +689,13 @@ class SessionManager:
                 additional_kwargs=additional_kwargs,
                 tool_calls=tool_calls,
                 response_metadata=response_metadata,
+                id=msg_id,
             )
 
         if msg_type == "SystemMessage":
-            return SystemMessage(content=content, additional_kwargs=additional_kwargs)
+            return SystemMessage(
+                content=content, additional_kwargs=additional_kwargs, id=msg_id
+            )
 
         if msg_type == "ToolMessage":
             tool_call_id = data.get("tool_call_id", "")
@@ -693,6 +705,7 @@ class SessionManager:
                 tool_call_id=tool_call_id,
                 name=name,
                 additional_kwargs=additional_kwargs,
+                id=msg_id,
             )
 
         # Unknown message type - skip

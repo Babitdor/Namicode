@@ -123,7 +123,27 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
 
     captured = ev.UsageUpdate()
 
+    # Drain any Nova events queued by the middleware (review cycles, skill
+    # activity) into proper ContextMessage events for both UIs.
+    def _drain_nova_events() -> list[ev.ContextMessage]:
+        try:
+            from novacode_cli.hermes.middleware import nova_event_log
+
+            events: list[ev.ContextMessage] = []
+            while nova_event_log:
+                etype, icon, color, msg = nova_event_log.pop(0)
+                events.append(
+                    ev.ContextMessage(
+                        message=msg, event_type=etype, icon=icon, color=color
+                    )
+                )
+            return events
+        except Exception:
+            return []
+
     yield ev.StatusUpdate(f"{agent_display_name} is thinking...")
+    for _ctx in _drain_nova_events():
+        yield _ctx
 
     def _flush_events() -> list:
         """Finalize buffered prose into events.
@@ -205,6 +225,12 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
             )
 
             async for chunk in _current_stream_gen:
+                # Surface any Nova learning events (review cycles) as they happen
+                # so the UI's live indicator updates mid-turn rather than only at
+                # turn boundaries.
+                for _ctx in _drain_nova_events():
+                    yield _ctx
+
                 if not isinstance(chunk, tuple) or len(chunk) != 3:
                     continue
                 _namespace, current_stream_mode, data = chunk
@@ -365,8 +391,12 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
                             )
                             out = usage.get("output_tokens", 0)
                             if actual or out:
-                                captured.input_tokens = max(captured.input_tokens, actual)
-                                captured.output_tokens = max(captured.output_tokens, out)
+                                captured.input_tokens = max(
+                                    captured.input_tokens, actual
+                                )
+                                captured.output_tokens = max(
+                                    captured.output_tokens, out
+                                )
                                 captured.cache_read_tokens = max(
                                     captured.cache_read_tokens, cache_read
                                 )
@@ -544,6 +574,8 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
 
     if captured.input_tokens or captured.output_tokens:
         yield captured
+    for _ctx in _drain_nova_events():
+        yield _ctx
     yield ev.Done(had_response=has_responded)
 
 

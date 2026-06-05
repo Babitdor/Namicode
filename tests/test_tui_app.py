@@ -70,6 +70,18 @@ class _SS:
     auto_approve = True
     plan_mode_enabled = False
     todos: list = []
+    steering_instructions: list = []
+
+    def reset_conversation(self):
+        """Mirror SessionState.reset_conversation for /clear tests."""
+        import uuid
+
+        self.thread_id = str(uuid.uuid4())
+        self.session_id = str(uuid.uuid4())
+        self.is_continued = False
+        self.todos = None
+        self.steering_instructions = []
+        self.plan_mode_enabled = False
 
 
 async def _drive():
@@ -501,14 +513,18 @@ async def _drive_live_render():
         assert len(app.query("ChatMessage.reason")) == 1
         await app._render(ev.ToolCall(name="shell", display_str="shell(ls)", icon="+"))
         assert app._activity == "running shell…", app._activity
-        assert app._last_tool is not None
-        # tool result fills the collapsible body and clears the ref
+        # Condensed view: the call goes into a single grouped Collapsible.
+        assert app._tool_group is not None
+        assert len(app._tool_group_entries) == 1
+        # tool result marks the group line; the group Collapsible persists
         await app._render(
             ev.ToolResult(preview="1 result", is_error=False, full_output="line1\nline2")
         )
-        assert app._last_tool is None
+        assert app._tool_group_entries[0]["mark"] == "✓"
         assert len(app.query("Collapsible.tool")) == 1
         await app._render(ev.TextDelta("hi"))
+        # prose starts → the tool group is closed so ordering stays correct
+        assert app._tool_group is None
         assert app._activity == "responding…"
         assert app._stream_msg is not None and app._live_buf == "hi"
         await app._render(
@@ -996,7 +1012,7 @@ def test_tui_live_render():
 
 
 async def _drive_parallel_fileops():
-    """Parallel read_file calls each finalize their OWN tool component via call_id."""
+    """Parallel read_file calls condense into ONE group; each line finalizes by call_id."""
     import novacode_cli.ui_events as ev
 
     from novacode_cli.tui.app import NovaApp
@@ -1018,15 +1034,17 @@ async def _drive_parallel_fileops():
         await app._render(
             ev.ToolCall(name="read_file", display_str="read_file(b.py)", icon="+", call_id="c2")
         )
-        assert len(app._tool_components) == 2
+        # Both calls condense into ONE grouped panel with two lines.
+        assert app._tool_group is not None
+        assert len(app._tool_group_entries) == 2
         # results arrive as FileOp events (file-op tools) — finalize each by id
         await app._render(ev.FileOp(record=None, full_output="content-A", call_id="c1"))
         await app._render(ev.FileOp(record=None, full_output="content-B", call_id="c2"))
-        assert len(app._tool_components) == 0
         comps = list(app.query("Collapsible.tool"))
-        assert len(comps) == 2, len(comps)
-        # both finalized (title shows ✓, not the stuck "running…")
-        assert all("✓" in str(c.title) and "running" not in str(c.title) for c in comps)
+        assert len(comps) == 1, len(comps)
+        # both lines finalized (✓), tracked individually by call_id
+        assert [e["mark"] for e in app._tool_group_entries] == ["✓", "✓"]
+        assert "running" not in str(comps[0].title)
 
 
 def test_tui_approval_modal():
@@ -1036,7 +1054,7 @@ def test_tui_approval_modal():
 
 
 async def _drive_diff_component():
-    """An edit_file FileOp renders its diff into the component (no stray block)."""
+    """An edit_file FileOp renders its full diff in a dedicated tool panel."""
     import novacode_cli.ui_events as ev
 
     from novacode_cli.file_ops import FileOperationRecord, FileOpMetrics
@@ -1257,7 +1275,7 @@ async def _drive_init_live_stream():
 
 
 async def _drive_native_diff_body():
-    """FileOp renders a NATIVE colored diff in the component body (no legacy capture)."""
+    """An edit_file FileOp renders a NATIVE colored diff in its dedicated panel."""
     import novacode_cli.ui_events as ev
     from textual.widgets import Static
 

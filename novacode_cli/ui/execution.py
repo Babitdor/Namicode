@@ -414,6 +414,7 @@ async def execute_task(  # type: ignore
                                 spinner_active=spinner_active,
                                 status=status,
                                 dbg_func=_dbg,
+                                interrupt_payload=event.payload,
                             )
                         )
                         event.future.set_result(
@@ -459,6 +460,20 @@ async def execute_task(  # type: ignore
                 console.print(
                     "[dim]⟳ Context compacted — old messages replaced with summary[/dim]"
                 )
+
+            elif isinstance(event, ev.ContextMessage):
+                flush_tool_previews()
+                if spinner_active:
+                    status.stop()
+                    spinner_active = False
+                console.print()
+                console.print(
+                    f"{event.icon}  {event.message}",
+                    style=event.color,
+                )
+                if not spinner_active:
+                    status.start()
+                    spinner_active = True
 
             elif isinstance(event, ev.UsageUpdate):
                 captured_input_tokens = max(

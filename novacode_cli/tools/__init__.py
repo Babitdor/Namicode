@@ -8,6 +8,7 @@ This package provides various tools for the CLI agent, organized into submodules
 - reflection_tools: Reflection tools for strategic thinking
 - graph_tools: Project knowledge-graph query tool
 - code_search_tools: Semantic code search (Semble-powered, optional)
+- scraper_tools: Web scraping tools (GitHub trending, HN, LinkedIn, Reddit)
 """
 
 # URL fetching tools (covers all HTTP methods — http_request merged into fetch_url)
@@ -55,6 +56,16 @@ from novacode_cli.tools.web_tools import (
     web_search,
 )
 
+# Web scraping tools (GitHub trending, HN, LinkedIn, Reddit, Twitter/X)
+from novacode_cli.tools.scraper_tools import (
+    github_trending,
+    hacker_news,
+    linkedin_jobs,
+    reddit_posts,
+    twitter_search,
+    twitter_trending,
+)
+
 __all__ = [
     "docs_search",
     "duckduckgo_search",
@@ -79,4 +90,11 @@ __all__ = [
     # Code search tools (Semble-powered, optional)
     "code_search",
     "find_related_code",
+    # Web scraping tools
+    "github_trending",
+    "hacker_news",
+    "linkedin_jobs",
+    "reddit_posts",
+    "twitter_search",
+    "twitter_trending",
 ]

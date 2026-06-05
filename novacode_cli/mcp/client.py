@@ -11,6 +11,7 @@ the langchain-mcp-adapters library, with support for:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import shutil
@@ -458,41 +459,68 @@ async def load_mcp_tools_with_session(
         error_msg = f"Failed to initialize MCP client: {e}"
         raise RuntimeError(error_msg) from e
 
-    # Load tools from each server
+    # Load tools from each server in parallel with a concurrency cap.
+    # Pre-enter session contexts sequentially first (fast — just registers
+    # cleanup callbacks on the exit stack), then parallelise the actual
+    # tool loading (which involves network I/O).
     all_tools: list[BaseTool] = []
     server_infos: list[MCPServerInfo] = []
 
-    try:
-        for server_name, config in servers.items():
-            if server_name not in connections:
-                continue
+    # Pre-enter all session contexts so _load_one can use them concurrently
+    sessions: dict[str, Any] = {}
+    for server_name in [n for n in connections if n in servers]:
+        sessions[server_name] = await manager.exit_stack.enter_async_context(
+            client.session(server_name)
+        )
 
-            session = await manager.exit_stack.enter_async_context(
-                client.session(server_name)
-            )
+    _load_semaphore = asyncio.Semaphore(3)
+
+    async def _load_one(
+        server_name: str,
+        config: MCPServerConfig,
+    ) -> tuple[list[BaseTool], MCPServerInfo | None]:
+        """Load tools from a single MCP server."""
+        async with _load_semaphore:
+            session = sessions.get(server_name)
+            if session is None:
+                return [], None
+
             tools = await load_mcp_tools(
                 session, server_name=server_name, tool_name_prefix=True
             )
-            all_tools.extend(tools)
-            server_infos.append(
-                MCPServerInfo(
-                    name=server_name,
-                    transport=config.transport,
-                    tools=[
-                        MCPToolInfo(name=t.name, description=t.description or "")
-                        for t in tools
-                    ],
-                )
+            server_info = MCPServerInfo(
+                name=server_name,
+                transport=config.transport,
+                tools=[
+                    MCPToolInfo(name=t.name, description=t.description or "")
+                    for t in tools
+                ],
             )
-    except Exception as e:
-        await manager.cleanup()
-        error_msg = (
-            f"Failed to load tools from MCP server '{server_name}': {e}\n"
-            "For stdio servers: Check that the command and args are correct, "
-            "and that the MCP server is installed.\n"
-            "For sse/http servers: Check that the URL is correct and the server is running."
+            return tools, server_info
+
+    tasks = [
+        _load_one(name, config)
+        for name, config in servers.items()
+        if name in connections
+    ]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    errors: list[str] = []
+    for r in results:
+        if isinstance(r, Exception):
+            errors.append(str(r))
+        else:
+            tools, server_info = r
+            all_tools.extend(tools)
+            if server_info is not None:
+                server_infos.append(server_info)
+
+    if errors:
+        logger.warning(
+            "MCP server loading completed with %d error(s): %s",
+            len(errors),
+            "; ".join(errors),
         )
-        raise RuntimeError(error_msg) from e
 
     return all_tools, manager, server_infos
 

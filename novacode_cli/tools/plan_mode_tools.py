@@ -118,11 +118,17 @@ def enter_plan_mode(reason: str = "") -> str:
 
 
 @tool
-def exit_plan_mode() -> str:
+def exit_plan_mode(plan: str = "") -> str:
     """Present your completed plan for user approval and exit plan mode.
 
-    Call this after writing your plan to `.nova/plans/plan-<name>.md`.
-    Execution pauses while the user reviews the plan.
+    Pass your full implementation plan as Markdown in ``plan`` — it is shown to
+    the user inline for review (Claude Code plan-mode style), so you do not need
+    to write it to a file first. Execution pauses while the user reviews.
+
+    Args:
+        plan: The implementation plan as Markdown to present for approval.
+            If omitted, the most recent plan written under ``.nova/plans/`` is
+            used as a fallback.
 
     Returns:
         "Plan approved. Proceed with implementation." or
@@ -132,6 +138,7 @@ def exit_plan_mode() -> str:
         {
             "type": "plan_approval",
             "message": "Plan is ready for review.",
+            "plan": plan or "",
         }
     )
 

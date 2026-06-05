@@ -181,6 +181,22 @@ class Done:
 
 
 @dataclass
+class ContextMessage:
+    """System-level context message (not user or assistant text).
+
+    Used for things like review cycle notifications, skill creation, or other
+    system-level status messages that should appear in the UI but are not part
+    of the direct conversation flow.
+    """
+
+    message: str
+    event_type: str = ""
+    """Semantic type like 'nova_review_start', 'nova_review_complete', etc."""
+    icon: str = "•"
+    color: str = "cyan"
+
+
+@dataclass
 class Cancelled:
     """The run was cancelled (Ctrl+C / Escape) and cleaned up."""
 

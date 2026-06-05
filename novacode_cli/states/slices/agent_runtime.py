@@ -29,6 +29,13 @@ class AgentRuntimeState:
         self.plan_content: str | None = None      # Current plan content
         self.approved_plan_content: str | None = None  # Approved plan content
 
+        # Nova learning system state
+        self.nova_tool_call_count: int = 0
+        """In-memory tool call counter for Nova learning middleware
+        (durable store is the source of truth, this is a fast in-memory cache)."""
+        self.nova_last_review_time: float | None = None
+        """Timestamp of the last Nova review cycle (None if never reviewed)."""
+
     # -- context management ---------------------------------------------------
 
     def set_agent_context(

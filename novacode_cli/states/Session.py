@@ -476,6 +476,34 @@ class SessionState:
         self._agent_runtime.clear_plan_agent()
         self._ui_settings.plan_mode_enabled = False
 
+    def reset_conversation(self) -> None:
+        """Total reset for ``/clear`` — begin a brand-new conversation with no
+        carried-over context.
+
+        Assigns fresh ``thread_id``/``session_id`` so the checkpointer returns
+        an empty message history, and clears every piece of per-conversation
+        runtime context so nothing leaks into the new chat:
+
+        - ``todos`` and continuation flag
+        - persistent ``steering_instructions`` (from ``/steer``)
+        - plan mode: exits plan mode and drops the cached plan agent, the
+          in-flight plan, and any approved-but-unconsumed plan
+
+        Preserved by design (these are not conversation context): long-term
+        memory files (``agent.md`` / ``USER.md`` / ``MEMORY.md`` / ``NOVA.md``),
+        the Nova learning store, the compiled agent + backend + model, and
+        explicit UX toggles (``auto_approve``, ``verbose``, ``no_splash``).
+        """
+        self.thread_id = str(uuid.uuid4())
+        self.session_id = str(uuid.uuid4())
+        self.is_continued = False
+        self.todos = None
+        self.steering_instructions = []
+        # Plan mode: exit, drop cached plan agent + in-flight plan content, and
+        # discard any approved-but-unconsumed plan.
+        self.clear_plan_agent()
+        self.consume_approved_plan()
+
     def set_plan_content(self, plan_content: str) -> None:
         """Store current plan content from plan agent."""
         self._agent_runtime.set_plan_content(plan_content)

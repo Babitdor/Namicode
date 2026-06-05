@@ -16,7 +16,12 @@ Tool Categories:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TypedDict
+from typing import Any, TypedDict
+
+try:
+    from typing import NotRequired
+except ImportError:
+    from typing_extensions import NotRequired
 
 from langchain.agents.middleware import InterruptOnConfig
 from langchain.agents.middleware.types import AgentState
@@ -28,12 +33,14 @@ class InterruptConfig(TypedDict):
     """Configuration for a human-in-the-loop interrupt.
 
     Attributes:
-        allowed_decisions: List of allowed user decisions (e.g., ["approve", "reject"])
+        allowed_decisions: List of allowed user decisions (e.g., ["approve", "edit", "reject"])
         description: Function to format the tool call for the approval prompt
+        args_schema: Optional JSON schema for edit validation (enables inline arg editing)
     """
 
     allowed_decisions: list[str]
     description: callable  # type: ignore[valid-type]
+    args_schema: NotRequired[dict[str, Any]]
 
 
 # ---------------------------------------------------------------------------
@@ -198,60 +205,150 @@ def get_interrupt_configs() -> dict[str, InterruptOnConfig]:
         - Browser operations: capture_browser_console
         - Search operations: duckduckgo_search, docs_search
         - User interaction: ask_question
+
+    Each config now includes ``"edit"`` in ``allowed_decisions`` so the user
+    can modify tool arguments before approval (the input form is built from
+    the ``args_schema``).
     """
     # Destructive operations - shell and file system
     shell_interrupt_config: InterruptOnConfig = {
-        "allowed_decisions": ["approve", "reject"],
+        "allowed_decisions": ["approve", "edit", "reject"],
         "description": _format_shell_description,  # type: ignore
+        "args_schema": {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "description": "Shell command to run"},
+                "timeout": {"type": "integer", "description": "Timeout in seconds", "default": 120},
+            },
+            "required": ["command"],
+        },
     }
 
     execute_interrupt_config: InterruptOnConfig = {
-        "allowed_decisions": ["approve", "reject"],
+        "allowed_decisions": ["approve", "edit", "reject"],
         "description": _format_execute_description,  # type: ignore
+        "args_schema": {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "description": "Command to execute in sandbox"},
+                "timeout": {"type": "integer", "description": "Timeout in seconds", "default": 120},
+            },
+            "required": ["command"],
+        },
     }
 
     write_file_interrupt_config: InterruptOnConfig = {
-        "allowed_decisions": ["approve", "reject"],
+        "allowed_decisions": ["approve", "edit", "reject"],
         "description": _format_write_file_description,  # type: ignore
+        "args_schema": {
+            "type": "object",
+            "properties": {
+                "file_path": {"type": "string", "description": "Absolute path to write"},
+                "content": {"type": "string", "description": "File content"},
+            },
+            "required": ["file_path", "content"],
+        },
     }
 
     edit_file_interrupt_config: InterruptOnConfig = {
-        "allowed_decisions": ["approve", "reject"],
+        "allowed_decisions": ["approve", "edit", "reject"],
         "description": _format_edit_file_description,  # type: ignore
+        "args_schema": {
+            "type": "object",
+            "properties": {
+                "file_path": {"type": "string", "description": "Absolute path to edit"},
+                "old_string": {"type": "string", "description": "Text to replace"},
+                "new_string": {"type": "string", "description": "Replacement text"},
+            },
+            "required": ["file_path", "old_string", "new_string"],
+        },
     }
 
     # External operations - network and web
     web_search_interrupt_config: InterruptOnConfig = {
-        "allowed_decisions": ["approve", "reject"],
+        "allowed_decisions": ["approve", "edit", "reject"],
         "description": _format_web_search_description,  # type: ignore
+        "args_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query"},
+                "max_results": {"type": "integer", "description": "Max results", "default": 5},
+            },
+            "required": ["query"],
+        },
     }
 
     fetch_url_interrupt_config: InterruptOnConfig = {
-        "allowed_decisions": ["approve", "reject"],
+        "allowed_decisions": ["approve", "edit", "reject"],
         "description": _format_fetch_url_description,  # type: ignore
+        "args_schema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "URL to fetch"},
+                "timeout": {"type": "integer", "description": "Timeout in seconds", "default": 30},
+            },
+            "required": ["url"],
+        },
     }
 
     # Code execution - remote and testing
     run_tests_interrupt_config: InterruptOnConfig = {
-        "allowed_decisions": ["approve", "reject"],
+        "allowed_decisions": ["approve", "edit", "reject"],
         "description": _format_run_tests_description,  # type: ignore
+        "args_schema": {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "description": "Test command"},
+                "working_dir": {"type": "string", "description": "Working directory"},
+                "timeout": {"type": "integer", "description": "Timeout in seconds", "default": 300},
+            },
+            "required": [],
+        },
     }
 
     start_dev_server_interrupt_config: InterruptOnConfig = {
-        "allowed_decisions": ["approve", "reject"],
+        "allowed_decisions": ["approve", "edit", "reject"],
         "description": _format_start_dev_server_description,  # type: ignore
+        "args_schema": {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "description": "Server start command"},
+                "name": {"type": "string", "description": "Server name"},
+                "port": {"type": "integer", "description": "Port number"},
+                "working_dir": {"type": "string", "description": "Working directory"},
+            },
+            "required": ["command"],
+        },
     }
 
     # Memory operations - file system
     write_memory_interrupt_config: InterruptOnConfig = {
-        "allowed_decisions": ["approve", "reject"],
+        "allowed_decisions": ["approve", "edit", "reject"],
         "description": _format_write_memory_description,  # type: ignore
+        "args_schema": {
+            "type": "object",
+            "properties": {
+                "content": {"type": "string", "description": "Memory content to write"},
+                "memory_type": {"type": "string", "description": "Type of memory", "enum": ["user", "project"]},
+                "path": {"type": "string", "description": "Virtual path to write to"},
+                "append": {"type": "boolean", "description": "Append to existing", "default": False},
+            },
+            "required": ["content"],
+        },
     }
 
     # Search operations
     duckduckgo_search_interrupt_config: InterruptOnConfig = {
-        "allowed_decisions": ["approve", "reject"],
+        "allowed_decisions": ["approve", "edit", "reject"],
         "description": _format_duckduckgo_description,  # type: ignore
+        "args_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query"},
+                "max_results": {"type": "integer", "description": "Max results", "default": 5},
+            },
+            "required": ["query"],
+        },
     }
 
     return {

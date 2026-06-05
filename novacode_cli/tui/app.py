@@ -44,6 +44,15 @@ from textual.css.query import NoMatches
 _MAX_TRANSCRIPT_WIDGETS = 400
 _TRANSCRIPT_LOW_WATER = 320
 
+# Tools whose result is a code change worth seeing in full: these keep their own
+# Collapsible with a colored diff body so the user can review what the agent
+# changed. Every other tool (reads, search, exec, MCP, …) condenses into the
+# shared tool group. Keep in sync with the file-write tools that emit a FileOp
+# record with a diff (see tracking/file_tracker.py).
+_DETAILED_TOOL_NAMES = frozenset(
+    {"write_file", "edit_file", "create_file", "multi_edit", "str_replace", "apply_patch"}
+)
+
 # Slash commands routed through the legacy handle_command via console capture.
 # Restricted to commands that only print or toggle state — never read stdin or
 # use a Live spinner (those would hang or garble inside Textual).
@@ -70,7 +79,6 @@ _TUI_SLASH_COMMANDS = [
     "/dream",
     "/reindex",
     "/images",
-    "/vision",
     "/files",
     "/tests",
     "/servers",
@@ -255,7 +263,9 @@ class ApprovalModal(ModalScreen[str]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="modal-box"):
-            yield Static(Text(f">>> {self._title} <<<", style="bold yellow"), id="modal-title")
+            yield Static(
+                Text(f">>> {self._title} <<<", style="bold yellow"), id="modal-title"
+            )
             # Bound + scroll the body so a long plan can't push the choices
             # off-screen — the options must always stay visible.
             with VerticalScroll(id="modal-body-scroll"):
@@ -278,9 +288,7 @@ class ApprovalModal(ModalScreen[str]):
         ol.highlighted = 0
         ol.focus()
 
-    def on_option_list_option_selected(
-        self, event: OptionList.OptionSelected
-    ) -> None:
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         label = str(event.option.prompt)
         if label.startswith("Approve"):
             self.dismiss("approve")
@@ -320,9 +328,7 @@ class QuestionModal(ModalScreen[dict]):
                 # '[' can't be parsed as markup and crash the render.
                 lines = "\n".join(f"  {i + 1}. {o}" for i, o in enumerate(opts))
                 yield Static(Text(lines), id="modal-body")
-            yield Input(
-                placeholder="Type your answer (or option number)…", id="answer"
-            )
+            yield Input(placeholder="Type your answer (or option number)…", id="answer")
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         from novacode_cli.ui.question_prompt import QuestionResponse
@@ -438,7 +444,10 @@ class ModelScreen(ModalScreen[dict | None]):
 
         if not models:
             model_list.add_option(
-                Option("No Ollama models found — is `ollama` installed/running?", id="__none__")
+                Option(
+                    "No Ollama models found — is `ollama` installed/running?",
+                    id="__none__",
+                )
             )
             return
 
@@ -533,9 +542,7 @@ class SessionsScreen(ModalScreen[None]):
                     f"{meta.message_count} msgs  ·  {age}"
                 )
             )
-        hint.update(
-            Text("Resume with:  nova --continue <id>", style="dim")
-        )
+        hint.update(Text("Resume with:  nova --continue <id>", style="dim"))
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "close":
@@ -585,9 +592,13 @@ class McpScreen(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="modal-box"):
             yield Static(Text("MCP Management", style="bold"), id="modal-title")
-            yield Static(Text("Configured Servers:", style="bold cyan"), id="mcp-section")
+            yield Static(
+                Text("Configured Servers:", style="bold cyan"), id="mcp-section"
+            )
             yield OptionList(id="mcp-configured")
-            yield Static(Text("Available Presets:", style="bold yellow"), id="preset-section")
+            yield Static(
+                Text("Available Presets:", style="bold yellow"), id="preset-section"
+            )
             yield OptionList(id="mcp-presets")
             yield Static("", id="mcp-hint")
             with Horizontal(id="modal-buttons"):
@@ -670,7 +681,11 @@ class McpScreen(ModalScreen[None]):
             active_section.update(
                 Text(
                     f"Configured Servers: {len(self._config_names)} total"
-                    + (f" ({active_count} active, {inactive_count} inactive)" if inactive_count or active_count else ""),
+                    + (
+                        f" ({active_count} active, {inactive_count} inactive)"
+                        if inactive_count or active_count
+                        else ""
+                    ),
                     style="bold cyan",
                 )
             )
@@ -775,9 +790,7 @@ class McpScreen(ModalScreen[None]):
         # Collect API keys / user inputs
         user_inputs: dict[str, str] = {}
         if preset.get("setup_key"):
-            result = await self.app.push_screen_wait(
-                McpInstallModal(preset, preset_id)
-            )
+            result = await self.app.push_screen_wait(McpInstallModal(preset, preset_id))
             if result is None:  # cancelled
                 return
             user_inputs = result
@@ -876,12 +889,19 @@ class McpInstallModal(ModalScreen[dict | None]):
                 id="modal-title",
             )
             yield Static(
-                Text(f"{preset.get('description', '')}\nPackage: {preset.get('package', 'N/A')}", style="dim"),
+                Text(
+                    f"{preset.get('description', '')}\nPackage: {preset.get('package', 'N/A')}",
+                    style="dim",
+                ),
                 id="modal-body",
             )
             if preset.get("setup_prompt"):
-                yield Static(Text(preset["setup_prompt"], style="bold"), id="mcp-key-label")
-                yield Input(placeholder="Enter value\u2026", id="mcp-key-value", password=True)
+                yield Static(
+                    Text(preset["setup_prompt"], style="bold"), id="mcp-key-label"
+                )
+                yield Input(
+                    placeholder="Enter value\u2026", id="mcp-key-value", password=True
+                )
             yield Static("", id="mcp-hint")
             with Horizontal(id="modal-buttons"):
                 yield Button("Install", id="do-install", variant="primary")
@@ -939,7 +959,10 @@ class McpCustomModal(ModalScreen[dict | None]):
                 value="stdio",
             )
             yield Static(Text("Connection:", style="bold"), id="mcp-conn-label")
-            yield Input(placeholder="npx -y @scope/package  OR  https://example.com/mcp", id="mcp-conn")
+            yield Input(
+                placeholder="npx -y @scope/package  OR  https://example.com/mcp",
+                id="mcp-conn",
+            )
             yield Input(placeholder="Description (optional)", id="mcp-desc")
             with Horizontal(id="modal-buttons"):
                 yield Button("Add", id="do-add", variant="primary")
@@ -999,6 +1022,7 @@ class McpCustomModal(ModalScreen[dict | None]):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
 
 class InfoListScreen(ModalScreen[None]):
     """A simple read-only list modal (used by /skills and /agents)."""
@@ -1259,12 +1283,12 @@ class RemoteScreen(ModalScreen[None]):
             with _c.capture() as cap:
                 await handle_command(
                     f"/remote {args}",
-                    app.agent,
-                    app.token_tracker,
+                    app.agent,  # type: ignore
+                    app.token_tracker,  # type: ignore
                     self._ss,
-                    app.assistant_id,
-                    model_name=app.model_name,
-                    image_tracker=app.image_tracker,
+                    app.assistant_id,  # type: ignore
+                    model_name=app.model_name,  # type: ignore
+                    image_tracker=app.image_tracker,  # type: ignore
                 )
             out = cap.get().strip()
         except Exception as ex:  # noqa: BLE001
@@ -1317,26 +1341,50 @@ class PromptInput(Input):
         self._paste_tracker: PasteTracker | None = kwargs.pop("paste_tracker", None)
         self._on_large_paste = kwargs.pop("on_large_paste", None)
         super().__init__(*args, **kwargs)
+        # On Windows terminals, pasting fires BOTH a Paste event AND individual
+        # key events for each character.  We stop the Paste event, but the
+        # keystrokes are already queued.  This flag drops them until the paste
+        # flush window expires.
+        self._paste_active = False
+
+    async def _on_key(self, event: events.Key) -> None:
+        # Drop ALL key events during the paste flush window. On Windows
+        # terminals, pasting fires per-character keystrokes after the Paste
+        # event — the old `len(event.key) == 1` filter was too narrow because
+        # some terminals send the *entire pasted text* as a single key event
+        # (e.g. event.key == "use"), which has len > 1 and was let through,
+        # duplicating the paste.  50ms is imperceptible to human typing so
+        # dropping all keys during that window is safe.
+        if self._paste_active:
+            return
+        await super()._on_key(event)
 
     def _on_paste(self, event: events.Paste) -> None:
         text = event.text
-        if (
-            text
-            and self._paste_tracker is not None
-            and (
-                len(text) >= PASTE_MIN_CHARS
-                or text.count("\n") >= PASTE_MIN_NEWLINES
-            )
+        # Blank this out before Input._on_paste runs (Textual calls _on_* handlers
+        # for every class in the MRO). Without this, the parent inserts the text a
+        # second time, producing duplicates like "useuse".
+        event.text = ""
+
+        if not text:
+            return
+        normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+
+        if self._paste_tracker is not None and (
+            len(normalized) >= PASTE_MIN_CHARS
+            or normalized.count("\n") >= PASTE_MIN_NEWLINES
         ):
-            normalized = text.replace("\r\n", "\n").replace("\r", "\n")
             paste_id = self._paste_tracker.add_paste(normalized)
             placeholder = format_paste_placeholder(paste_id, normalized)
             self.insert_text_at_cursor(placeholder + " ")
             if self._on_large_paste is not None:
                 self._on_large_paste(placeholder, len(normalized))
-            event.stop()
-            return
-        super()._on_paste(event)
+        else:
+            self.insert_text_at_cursor(normalized)
+
+        self._paste_active = True
+        self.set_timer(0.05, lambda: setattr(self, "_paste_active", False))
+        event.stop()
 
 
 class TuiInitRenderer:
@@ -1419,6 +1467,20 @@ class NovaApp(App):
     #transcript > .logline {
         height: auto; padding: 0 1;
         background: $surface; margin: 1 0;
+    }
+    #transcript > .nova-event {
+        height: auto; padding: 0 1;
+        background: $surface; margin: 1 0;
+        border-left: thick $accent;
+    }
+    #transcript > .nova-event.nova-review-start {
+        border-left: thick #00d4ff;
+    }
+    #transcript > .nova-event.nova-review-complete {
+        border-left: thick #00ff88;
+    }
+    #transcript > .nova-event.nova-skill-refinement {
+        border-left: thick #ffcc00;
     }
     #cmdpalette {
         width: 100%;
@@ -1553,6 +1615,14 @@ class NovaApp(App):
         self._tool_components: dict[str, tuple[Collapsible, Static, str]] = {}
         # fallback for tool calls that arrive without an id
         self._last_tool: tuple[Collapsible, Static, str] | None = None
+        # Condensed tool view: a run of consecutive tool calls collapses into a
+        # single "tool group" panel (one compact line per tool) instead of one
+        # Collapsible per call, so a burst of tools doesn't flood the chat.
+        self._tool_group: Collapsible | None = None
+        self._tool_group_body: Static | None = None
+        self._tool_group_entries: list[dict] = []  # per-tool {base, mark, detail, error}
+        self._tool_group_lines: dict[str, int] = {}  # call_id -> entry index
+        self._tool_group_last_idx: int | None = None  # fallback for id-less results
         # subagent tracking: call_id -> (collapsible, body Static, type, start_time)
         self._subagent_widgets: dict[str, tuple[Collapsible, Static, str, float]] = {}
         self._subagent_count: int = 0  # running total for display
@@ -1590,6 +1660,12 @@ class NovaApp(App):
         self._auto_compact = True
         # Live steering: SteeringInstructions added mid-turn, removed when it ends.
         self._live_steers: list = []
+        # Nova learning status (review cycles) shown inline in the #status line
+        # beside the context %, so it never overlaps the input. _nova_status is
+        # the current message (or None); the timer auto-clears it after a moment.
+        self._nova_status: str | None = None
+        self._nova_status_style: str = "dim"
+        self._nova_indicator_timer: Any = None
 
     def compose(self) -> ComposeResult:
         yield VerticalScroll(id="transcript")
@@ -1660,6 +1736,7 @@ class NovaApp(App):
         # Route remote bridge status messages into the transcript (not stdout).
         mgr = getattr(self.session_state, "_remote_bridge_manager", None)
         if mgr is not None:
+
             async def _status_cb(m: str) -> None:
                 self._log(Text(f"🔗 Remote: {m}", style="dim"))
 
@@ -1718,6 +1795,7 @@ class NovaApp(App):
                 self._reason_msg,
                 self._todo_widget,
                 self._init_widget,
+                self._tool_group,
                 *(t[0] for t in self._tool_components.values()),
                 *(s[0] for s in self._subagent_widgets.values()),
             )
@@ -1746,6 +1824,9 @@ class NovaApp(App):
             pass
 
     async def _mount(self, widget) -> None:
+        # Any non-tool content closes the current tool group so transcript order
+        # stays correct and the next tool burst starts a fresh group.
+        self._close_tool_group()
         await self._transcript().mount(widget)
         self._prune_transcript()
         self._scroll_end()
@@ -1762,6 +1843,7 @@ class NovaApp(App):
             return
         try:
             import asyncio
+
             # Track the task so it isn't garbage-collected mid-send and so
             # exceptions surface rather than vanish (fire-and-forget pitfall).
             task = asyncio.create_task(msg.reply_fn(f"{text}"))
@@ -1798,6 +1880,7 @@ class NovaApp(App):
 
     def _log(self, renderable: Any) -> None:
         """Mount an ancillary line (errors, command output, notices)."""
+        self._close_tool_group()
         self._transcript().mount(Static(renderable, classes="logline"))
         self._prune_transcript()
         self._scroll_end()
@@ -1871,7 +1954,9 @@ class NovaApp(App):
             elif event.level == "warn":
                 self._log(Text(event.text, style="yellow"))
 
-    async def _add_message(self, label: Text, role_class: str, body: Any) -> ChatMessage:
+    async def _add_message(
+        self, label: Text, role_class: str, body: Any
+    ) -> ChatMessage:
         msg = ChatMessage(label, role_class)
         await self._mount(msg)
         msg.update_body(body)
@@ -1940,7 +2025,9 @@ class NovaApp(App):
                     parts.append("project: " + ", ".join(p.name for p in proj))
                 t.append(f"  memory: {' · '.join(parts)}\n", style="dim")
             else:
-                t.append("  memory: none (use /init to create project memory)\n", style="dim")
+                t.append(
+                    "  memory: none (use /init to create project memory)\n", style="dim"
+                )
         except Exception:  # noqa: BLE001
             pass
 
@@ -2007,6 +2094,7 @@ class NovaApp(App):
         self._stream_flush_scheduled = False
         self._tool_components.clear()
         self._last_tool = None
+        self._close_tool_group()
         self._subagent_widgets.clear()
         self._subagent_count = 0
         self._todo_widget = None  # next turn starts a fresh todo block
@@ -2128,6 +2216,108 @@ class NovaApp(App):
             return f"Read {n} lines" if n else "Read"
         return f"+{added} / -{removed}"
 
+    # -- condensed tool group -------------------------------------------------
+
+    @staticmethod
+    def _oneline(s: str, limit: int = 110) -> str:
+        """Collapse whitespace/newlines and truncate to a single short line."""
+        s = " ".join((s or "").split())
+        return s if len(s) <= limit else s[: limit - 1] + "…"
+
+    async def _ensure_tool_group(self) -> None:
+        """Create + mount the condensed tool-group panel if one isn't open."""
+        if self._tool_group is not None:
+            return
+        self._tool_group_entries = []
+        self._tool_group_lines = {}
+        self._tool_group_last_idx = None
+        body = Static(Text(""), classes="toolbody")
+        comp = Collapsible(body, title="⚙ tool calls", collapsed=True)
+        comp.add_class("tool")
+        self._tool_group = comp
+        self._tool_group_body = body
+        # Mount directly (not via _mount) so we don't immediately close the group
+        # we're creating.
+        await self._transcript().mount(comp)
+        self._prune_transcript()
+        self._scroll_end()
+
+    def _close_tool_group(self) -> None:
+        """Detach the current tool group so the next burst starts fresh."""
+        self._tool_group = None
+        self._tool_group_body = None
+        self._tool_group_entries = []
+        self._tool_group_lines = {}
+        self._tool_group_last_idx = None
+
+    @staticmethod
+    def _render_tool_line(entry: dict) -> Text:
+        """One compact line for a single tool call in the group body."""
+        mark = entry["mark"]
+        err = entry["error"]
+        mark_style = "red" if err else ("green" if mark == "✓" else "yellow")
+        body_style = "red" if err else "dim"
+        t = Text()
+        t.append(f"{mark} ", style=mark_style)
+        t.append(entry["base"], style=body_style)
+        if entry["detail"]:
+            t.append(f"  — {entry['detail']}", style=body_style)
+        return t
+
+    def _refresh_tool_group(self, *, running: str | None = None) -> None:
+        """Repaint the group body + title from the current entries."""
+        if self._tool_group is None or self._tool_group_body is None:
+            return
+        body = Text()
+        for i, entry in enumerate(self._tool_group_entries[-100:]):
+            if i:
+                body.append("\n")
+            body.append_text(self._render_tool_line(entry))
+        self._tool_group_body.update(body)
+        n = len(self._tool_group_entries)
+        title = f"⚙ {n} tool call" + ("" if n == 1 else "s")
+        if running:
+            title += f"  · running {running}…"
+        self._tool_group.title = title
+
+    def _add_tool_group_call(self, call_id: str | None, base: str, name: str) -> None:
+        """Append a 'running' line for a new tool call."""
+        entry = {"base": self._oneline(base), "mark": "⏳", "detail": "", "error": False}
+        idx = len(self._tool_group_entries)
+        self._tool_group_entries.append(entry)
+        if call_id:
+            self._tool_group_lines[call_id] = idx
+        self._tool_group_last_idx = idx
+        self._refresh_tool_group(running=name)
+
+    def _mark_tool_group_result(
+        self, call_id: str | None, *, is_error: bool, detail: str
+    ) -> None:
+        """Finalize the matching tool line with its status + a short result."""
+        idx: int | None = None
+        if call_id is not None and call_id in self._tool_group_lines:
+            idx = self._tool_group_lines[call_id]
+        elif self._tool_group_last_idx is not None:
+            idx = self._tool_group_last_idx
+        if idx is None or idx >= len(self._tool_group_entries):
+            # No open group line (group already closed) — compact fallback line.
+            if detail:
+                self._log(
+                    Text(
+                        f"  ⎿  {self._oneline(detail)}",
+                        style="red" if is_error else "dim",
+                    )
+                )
+            return
+        entry = self._tool_group_entries[idx]
+        entry["mark"] = "✗" if is_error else "✓"
+        entry["error"] = is_error
+        entry["detail"] = self._oneline(detail)
+        self._refresh_tool_group()
+        # Surface failures: pop the group open so the error isn't hidden.
+        if is_error and self._tool_group is not None:
+            self._tool_group.collapsed = False
+
     def _finalize_tool(
         self, call_id: str | None, preview: str, full_output: str, *, is_error: bool
     ) -> None:
@@ -2164,7 +2354,12 @@ class NovaApp(App):
             comp = Collapsible(body, title=title, collapsed=True)
             comp.add_class("subagent")
             await self._mount(comp)
-            self._subagent_widgets[cid] = (comp, body, e.subagent_type or "subagent", time.time())
+            self._subagent_widgets[cid] = (
+                comp,
+                body,
+                e.subagent_type or "subagent",
+                time.time(),
+            )
             # Record for the condensed remote digest (not sent per-event).
             self._remote_record(f"task:{e.subagent_type or 'subagent'}")
 
@@ -2185,7 +2380,11 @@ class NovaApp(App):
             if entry is not None:
                 comp, body, stype, start_time = entry
                 elapsed = time.time() - start_time
-                dur = f"{elapsed:.1f}s" if elapsed < 60 else f"{int(elapsed // 60)}m {int(elapsed % 60)}s"
+                dur = (
+                    f"{elapsed:.1f}s"
+                    if elapsed < 60
+                    else f"{int(elapsed // 60)}m {int(elapsed % 60)}s"
+                )
                 icon = e.message or f"{e.subagent_type}"
                 count = len(self._subagent_widgets)
                 remaining = f" · {count} active" if count > 0 else ""
@@ -2222,6 +2421,36 @@ class NovaApp(App):
         self._activity = activity
         self._refresh_status()
 
+    def _set_nova_indicator(
+        self, text: str, *, style: str = "dim", auto_clear: float | None = None
+    ) -> None:
+        """Show the Nova learning status (review cycle) inline in the status line.
+
+        The status renders beside the context % (see :meth:`_refresh_status`) so
+        it never overlaps the input box. Empty ``text`` clears it.
+
+        Args:
+            text: Message to display. Empty string clears the status.
+            style: Rich style for the text.
+            auto_clear: If set, clear the status after this many seconds.
+        """
+        # Cancel any pending auto-clear so a new message isn't wiped early.
+        if self._nova_indicator_timer is not None:
+            try:
+                self._nova_indicator_timer.stop()
+            except Exception:  # noqa: BLE001
+                pass
+            self._nova_indicator_timer = None
+
+        self._nova_status = text or None
+        self._nova_status_style = style
+        self._refresh_status()
+
+        if text and auto_clear is not None:
+            self._nova_indicator_timer = self.set_timer(
+                auto_clear, lambda: self._set_nova_indicator("")
+            )
+
     def _refresh_status(self) -> None:
         pct = ""
         if self.token_tracker is not None:
@@ -2238,6 +2467,11 @@ class NovaApp(App):
         else:
             activity = self._activity
         line = Text(f"[{self.model_name}]{pct} · {activity}", style="dim")
+        # Nova learning status (review cycle) — shown beside ctx% so it lives in
+        # the status line and never overlaps the input.
+        if self._nova_status:
+            line.append("  ", style="dim")
+            line.append(self._nova_status, style=self._nova_status_style)
         notif = self._unread_count()
         if notif:
             line.append("  🔔 ", style="bold #e0af68")
@@ -2295,14 +2529,18 @@ class NovaApp(App):
             t.append("  ⏸ PLAN  ", style="bold #7aa2f7")
             t.append("$ BASH — runs in your shell", style="bold #bb9af7")
             badge.update(t)
+            badge.display = True
         elif plan:
             badge.update(
                 Text("  ⏸ PLAN MODE — proposing, not editing", style="bold #7aa2f7")
             )
+            badge.display = True
         elif bash:
             badge.update(Text("  $ BASH — runs in your shell", style="bold #bb9af7"))
+            badge.display = True
         else:
             badge.update("")
+            badge.display = False
 
         # Drive the input look from CSS classes (bash wins over plan visually).
         prompt.set_class(bash, "bash-mode")
@@ -2334,9 +2572,7 @@ class NovaApp(App):
 
         if mode is None:
             # Smoothly fade the tint away.
-            prompt.styles.animate(
-                "tint", value=Color(0, 0, 0, 0.0), duration=0.3
-            )
+            prompt.styles.animate("tint", value=Color(0, 0, 0, 0.0), duration=0.3)
             return
 
         if mode == "bash":
@@ -2395,18 +2631,30 @@ class NovaApp(App):
             try:
                 cwd = Path.cwd()
                 # Skip common non-source directories to keep rglob fast
-                _SKIP_DIRS = frozenset({
-                    ".git", ".nova", ".venv", ".env", "node_modules",
-                    "__pycache__", ".pytest_cache", "build", "dist",
-                    ".ruff_cache", ".mypy_cache",
-                })
+                _SKIP_DIRS = frozenset(
+                    {
+                        ".git",
+                        ".nova",
+                        ".venv",
+                        ".env",
+                        "node_modules",
+                        "__pycache__",
+                        ".pytest_cache",
+                        "build",
+                        "dist",
+                        ".ruff_cache",
+                        ".mypy_cache",
+                    }
+                )
 
                 def _walk(p: Path, prefix: str, cwd: Path, seen: set[str]) -> None:
                     """Recursively match files starting with prefix, skipping noise dirs."""
                     for child in p.iterdir():
                         is_dir = child.is_dir()
                         # Skip hidden dirs (don't descend into them)
-                        if is_dir and (child.name.startswith(".") or child.name in _SKIP_DIRS):
+                        if is_dir and (
+                            child.name.startswith(".") or child.name in _SKIP_DIRS
+                        ):
                             continue
                         if child.name.lower().startswith(prefix.lower()):
                             rel = child.relative_to(cwd).as_posix()
@@ -2448,9 +2696,7 @@ class NovaApp(App):
 
     def _update_palette(self, value: str) -> None:
         matches = self._palette_candidates(value)
-        show = bool(matches) and not (
-            len(matches) == 1 and matches[0] == value.lower()
-        )
+        show = bool(matches) and not (len(matches) == 1 and matches[0] == value.lower())
         if not show:
             self._hide_palette()
             return
@@ -2507,9 +2753,7 @@ class NovaApp(App):
             event.stop()
             event.prevent_default()
 
-    def on_option_list_option_selected(
-        self, event: OptionList.OptionSelected
-    ) -> None:
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         # Mouse-click accept from the command palette (other lists handle their own).
         if event.option_list.id == "cmdpalette":
             self._accept_palette(str(event.option.prompt))
@@ -2524,11 +2768,7 @@ class NovaApp(App):
             return
         # If the palette is open, Enter accepts the highlighted command.
         palette = self.query_one("#cmdpalette", OptionList)
-        if (
-            palette.display
-            and palette.option_count
-            and palette.highlighted is not None
-        ):
+        if palette.display and palette.option_count and palette.highlighted is not None:
             opt = palette.get_option_at_index(palette.highlighted)
             self._accept_palette(str(opt.prompt))
             return
@@ -2658,9 +2898,7 @@ class NovaApp(App):
                 if decomp.decomposed:
                     sub_prompts = decomp.sub_prompts
                     self._log(
-                        Text(
-                            f"Split into {len(sub_prompts)} steps.", style="dim"
-                        )
+                        Text(f"Split into {len(sub_prompts)} steps.", style="dim")
                     )
         except Exception:  # noqa: BLE001
             pass
@@ -2696,6 +2934,10 @@ class NovaApp(App):
             self._turn_active = False
             self._set_status("ready")
             self._clear_live_steers()
+            # Safety net: clear the Nova review indicator if it's still showing
+            # (e.g. a review triggered on the final turn never drained its
+            # completion event).
+            self._set_nova_indicator("")
         # Refresh the per-category context breakdown from agent state, then
         # proactively manage the context window once the turn has settled.
         await self._update_context_breakdown()
@@ -2719,7 +2961,9 @@ class NovaApp(App):
             state = await ag.aget_state(config)
             msgs = state.values.get("messages", []) if state else []
             if msgs:
-                tracker.set_breakdown(ContextManager(tracker.model_name).breakdown(msgs))
+                tracker.set_breakdown(
+                    ContextManager(tracker.model_name).breakdown(msgs)
+                )
         except Exception:  # noqa: BLE001
             pass
 
@@ -2865,6 +3109,7 @@ class NovaApp(App):
                     if msg.typing_fn is not None:
                         try:
                             import asyncio
+
                             asyncio.create_task(msg.typing_fn())
                         except Exception:  # noqa: BLE001
                             pass
@@ -2892,7 +3137,9 @@ class NovaApp(App):
                         pre_count = len(pre.values.get("messages", [])) if pre else 0
                         await self._stream_prompt(prompt_text)
                         post = await self.agent.aget_state(config)
-                        reply = _extract_response(post, pre_count) or "✅ Task completed."
+                        reply = (
+                            _extract_response(post, pre_count) or "✅ Task completed."
+                        )
                         # One condensed tool/subagent digest, in order, then the answer.
                         await self._flush_remote_activity()
                         try:
@@ -2913,10 +3160,33 @@ class NovaApp(App):
     # launchers) and can't be driven over a chat bridge.
     _REMOTE_LOCAL_ONLY = frozenset(
         {
-            "sessions", "mcp", "theme", "remote", "agents", "skills", "init",
-            "trello", "browser-use", "hooks", "servers", "files", "images",
-            "vision", "ralph", "kill", "restore", "reindex", "plan", "steer",
-            "notifications", "trace", "log", "research", "dream", "tests", "fast",
+            "sessions",
+            "mcp",
+            "theme",
+            "remote",
+            "agents",
+            "skills",
+            "init",
+            "trello",
+            "browser-use",
+            "hooks",
+            "servers",
+            "files",
+            "images",
+            "vision",
+            "ralph",
+            "kill",
+            "restore",
+            "reindex",
+            "plan",
+            "steer",
+            "notifications",
+            "trace",
+            "log",
+            "research",
+            "dream",
+            "tests",
+            "fast",
         }
     )
 
@@ -2983,7 +3253,7 @@ class NovaApp(App):
             return f"/{cmd} is only available in the local TUI.", None
 
         # Otherwise treat it as a skill: /skill:<name> or a bare /<name>.
-        skill_name = cmd[len("skill:"):] if cmd.startswith("skill:") else cmd
+        skill_name = cmd[len("skill:") :] if cmd.startswith("skill:") else cmd
         if skill_name:
             try:
                 from novacode_cli.commands.skill_invoke import _try_skill_invocation
@@ -3031,8 +3301,12 @@ class NovaApp(App):
                 self.query_one("#prompt", Input).focus()
                 return
 
-            stdout = stdout_bytes.decode("utf-8", errors="replace") if stdout_bytes else ""
-            stderr = stderr_bytes.decode("utf-8", errors="replace") if stderr_bytes else ""
+            stdout = (
+                stdout_bytes.decode("utf-8", errors="replace") if stdout_bytes else ""
+            )
+            stderr = (
+                stderr_bytes.decode("utf-8", errors="replace") if stderr_bytes else ""
+            )
 
             # Build output, limit total size to avoid rendering issues
             lines: list[str] = []
@@ -3170,7 +3444,7 @@ class NovaApp(App):
         """
         raw = text[1:]
         if raw.lower().startswith("skill:"):
-            raw = raw[len("skill:"):]
+            raw = raw[len("skill:") :]
         parts = raw.split(maxsplit=1)
         name = parts[0] if parts else ""
         args = parts[1] if len(parts) > 1 else None
@@ -3273,9 +3547,7 @@ class NovaApp(App):
             elif existing:
                 os.environ[preset["api_key_var"]] = existing
             else:
-                self._log(
-                    Text(f"{preset['name']} requires an API key.", style="red")
-                )
+                self._log(Text(f"{preset['name']} requires an API key.", style="red"))
                 return
 
         mm.set_provider(provider, model)
@@ -3350,11 +3622,11 @@ class NovaApp(App):
             model=model,
             assistant_id=getattr(ss, "_assistant_id", None) or self.assistant_id,
             tools=getattr(ss, "_tools", None) or [],
-            sandbox=None,        # ← LOCAL filesystem (see docstring #2)
+            sandbox=None,  # ← LOCAL filesystem (see docstring #2)
             sandbox_type=None,
             store=getattr(ss, "_store", None),
             checkpointer=getattr(ss, "_checkpointer", None),
-            auto_approve=True,   # ← no HITL anywhere (see docstring #1)
+            auto_approve=True,  # ← no HITL anywhere (see docstring #1)
             is_continuation=True,
         )
 
@@ -3370,7 +3642,9 @@ class NovaApp(App):
         from novacode_cli.commands.init_handler import InitFlags, InitOrchestrator
         from novacode_cli.config.config import settings
 
-        cmd_args = text.split(maxsplit=1)[1] if len(text.split(maxsplit=1)) > 1 else None
+        cmd_args = (
+            text.split(maxsplit=1)[1] if len(text.split(maxsplit=1)) > 1 else None
+        )
         project_root = settings.project_root
         if not project_root:
             self._log(
@@ -3380,7 +3654,9 @@ class NovaApp(App):
         nova_dir = Path(project_root) / ".nova"
         nova_md_path = nova_dir / "NOVA.md"
         self._log(
-            Text(f"🔍 Initializing NOVA.md for {Path(project_root).name}…", style="bold")
+            Text(
+                f"🔍 Initializing NOVA.md for {Path(project_root).name}…", style="bold"
+            )
         )
 
         # ── TUI-native step tracker setup (renderer concern) ──────────
@@ -3480,7 +3756,9 @@ class NovaApp(App):
                 if a == "--project" and i + 1 < len(args):
                     project_name = args[i + 1]
                     break
-            cfg = configure_tracing(api_key=api_key, project_name=project_name, enable=True)
+            cfg = configure_tracing(
+                api_key=api_key, project_name=project_name, enable=True
+            )
             if cfg.is_configured():
                 t = Text()
                 t.append("✓ LangSmith tracing enabled\n", style="green")
@@ -3535,7 +3813,10 @@ class NovaApp(App):
                     t.append(f"  {tr['name']}", style="cyan")
                     t.append(f"  {created}  {inputs}\n", style="dim")
             else:
-                t.append("  (none — make a request with tracing enabled first)\n", style="dim")
+                t.append(
+                    "  (none — make a request with tracing enabled first)\n",
+                    style="dim",
+                )
             self._log(t)
             return
         if sub in ("-h", "--help", "help"):
@@ -3553,7 +3834,11 @@ class NovaApp(App):
             self._log(t)
             return
         if sub not in ("status", ""):
-            self._log(Text(f"Unknown trace subcommand: {sub} (try /trace help)", style="yellow"))
+            self._log(
+                Text(
+                    f"Unknown trace subcommand: {sub} (try /trace help)", style="yellow"
+                )
+            )
             return
 
         st = get_tracing_status()
@@ -3652,7 +3937,9 @@ class NovaApp(App):
                                 t.append(f"{line.strip()[:120]}\n")
                                 hits += 1
                                 if hits >= limit:
-                                    t.append(f"  … stopped at {limit} hits\n", style="dim")
+                                    t.append(
+                                        f"  … stopped at {limit} hits\n", style="dim"
+                                    )
                                     self._log(t)
                                     return
             if hits == 0:
@@ -3668,7 +3955,9 @@ class NovaApp(App):
         t = Text()
         t.append("Recent runs\n", style="bold")
         if not runs:
-            t.append("  (no runs yet — start a session to generate logs)\n", style="dim")
+            t.append(
+                "  (no runs yet — start a session to generate logs)\n", style="dim"
+            )
         else:
             for r in runs:
                 t.append(f"  {_run_summary_line(r)}\n", style="dim")
@@ -3705,7 +3994,9 @@ class NovaApp(App):
 
             model = getattr(self.session_state, "_model", None)
             if model is None:
-                self._log(Text("Plan mode needs a model; none configured.", style="red"))
+                self._log(
+                    Text("Plan mode needs a model; none configured.", style="red")
+                )
                 return False
             plan_agent, plan_backend = create_plan_agent_with_config(
                 model=model,
@@ -3849,28 +4140,28 @@ class NovaApp(App):
         )
 
     async def _run_clear(self) -> None:
-        """Start a fresh chat: save the current conversation, then reset it.
+        """Start a fresh chat — a total reset. Save the current conversation first.
 
         Clearing only the transcript would leave the agent's full history in the
         checkpointer (same thread_id), so it would still "remember" everything.
         A real reset assigns a new thread_id + session_id (fresh checkpointer
-        state), drops per-conversation tracking, and re-baselines token usage —
-        the previous conversation is saved first so nothing is lost.
+        state) AND clears every piece of carried-over context — todos, steering
+        instructions, and plan mode — then drops per-conversation UI/tracking
+        state and re-baselines token usage. Long-term memory, the Nova learning
+        store, and the agent itself are preserved. The previous conversation is
+        saved first so nothing is lost.
         """
-        import uuid
-
         saved = self.session_manager is not None
         # Preserve the current conversation under its existing id before resetting.
         await self._save_session()
 
-        # New conversation thread (empty checkpointer state) + new session id.
-        self.session_state.thread_id = str(uuid.uuid4())
-        self.session_state.session_id = str(uuid.uuid4())
-        self.session_state.is_continued = False
-        self.session_state.todos = None
+        # Total reset of session/conversation state: new thread+session id
+        # (empty checkpointer state), cleared todos / steering / plan mode.
+        self.session_state.reset_conversation()
 
         # Drop per-conversation UI/tracking state.
         self._reset_streaming()
+        self._clear_live_steers()
         self._seen.clear()
         self._restored_messages = []
 
@@ -3882,6 +4173,8 @@ class NovaApp(App):
                 self.token_tracker.reset()
             except Exception:  # noqa: BLE001
                 pass
+        # Plan/steer were cleared above — refresh the input badge to match.
+        self._update_mode_badge()
         self._refresh_status()
 
         self._log(
@@ -3969,9 +4262,16 @@ class NovaApp(App):
             return
 
         notes = list(ss.notifications)
-        colors = {"info": "cyan", "success": "green", "warning": "yellow", "error": "red"}
+        colors = {
+            "info": "cyan",
+            "success": "green",
+            "warning": "yellow",
+            "error": "red",
+        }
         t = Text()
-        t.append(f"Notifications ({ss.unread_notification_count()} unread)\n", style="bold")
+        t.append(
+            f"Notifications ({ss.unread_notification_count()} unread)\n", style="bold"
+        )
         if not notes:
             t.append("  (none yet — long-running tasks notify here)\n", style="dim")
         else:
@@ -4087,7 +4387,9 @@ class NovaApp(App):
             _reset_index()
             idx = await asyncio.to_thread(_get_index, workspace)
             if idx is not None:
-                self._log(Text(f"✓ Code search index rebuilt for {workspace}", style="green"))
+                self._log(
+                    Text(f"✓ Code search index rebuilt for {workspace}", style="green")
+                )
             else:
                 self._log(Text("Failed to build code search index.", style="red"))
         except Exception as ex:  # noqa: BLE001
@@ -4152,89 +4454,11 @@ class NovaApp(App):
                 self._log(Text("No images to clear.", style="dim"))
             else:
                 it.clear()
-                self._log(Text(f"Cleared {count} image(s) from conversation.", style="green"))
+                self._log(
+                    Text(f"Cleared {count} image(s) from conversation.", style="green")
+                )
             return
         self._log(Text("Usage: /images [list | remove <id> | clear]", style="red"))
-
-    async def _run_vision(self, text: str) -> None:
-        """Native /vision: load @image refs and describe them via a vision model."""
-        from langchain_core.messages import HumanMessage
-
-        from novacode_cli.commands.vision_handler import parse_image_references
-        from novacode_cli.config.model_create import (
-            create_model,
-            get_current_model_name,
-            get_vision_model_suggestion,
-            model_supports_vision,
-        )
-        from novacode_cli.image_utils import load_image_from_path
-
-        parts = text.split(maxsplit=1)
-        args = parts[1].strip() if len(parts) > 1 else ""
-        refs = parse_image_references(args)
-        if not refs:
-            self._log(
-                Text(
-                    "Usage: /vision @path/to/image.png [optional prompt]",
-                    style="yellow",
-                )
-            )
-            return
-
-        images = []
-        for original, path in refs:
-            if path is None:
-                self._log(Text(f"✗ {original}: invalid path", style="red"))
-                continue
-            if not path.exists():
-                self._log(Text(f"✗ {path}: file not found", style="red"))
-                continue
-            try:
-                images.append(load_image_from_path(path))
-                self._log(Text(f"✓ Loaded {path.name}", style="green"))
-            except (OSError, ValueError, RuntimeError) as ex:
-                self._log(Text(f"✗ {path}: {ex}", style="red"))
-        if not images:
-            self._log(Text("No valid images to process.", style="red"))
-            return
-
-        current_model = get_current_model_name()
-        if not model_supports_vision(current_model):
-            sug = get_vision_model_suggestion(current_model)
-            msg = f"⚠ Model '{current_model}' may not support vision."
-            if sug:
-                msg += f"  Try /model {sug}."
-            self._log(Text(msg, style="yellow"))
-
-        prompt_text = "Describe this image in detail."
-        remaining = args
-        for original, _ in refs:
-            remaining = remaining.replace(original, "", 1)
-        remaining = remaining.strip()
-        if remaining:
-            prompt_text = remaining
-
-        content_blocks = [{"type": "text", "text": prompt_text}]
-        content_blocks.extend(img.to_message_content() for img in images)
-
-        self._turn_active = True
-        self._turn_start = time.monotonic()
-        self._set_status(f"analyzing {len(images)} image(s)…")
-        try:
-            model = create_model()
-            resp = await model.ainvoke([HumanMessage(content=content_blocks)])
-            content = resp.content
-            desc = content if isinstance(content, str) else str(content)
-            await self._add_message(
-                Text("Vision", style="bold magenta"), "nova", Markdown(desc)
-            )
-            if self.image_tracker and hasattr(self.image_tracker, "add_vision_result"):
-                self.image_tracker.add_vision_result(images, desc)
-        except (OSError, ValueError, RuntimeError) as ex:
-            self._log(Text(f"Error analyzing image: {ex}", style="red"))
-        finally:
-            self._turn_active = False
-            self._set_status("ready")
 
     async def _run_files(self) -> None:
         """Native /files: session read/write summary from the file tracker."""
@@ -4243,13 +4467,17 @@ class NovaApp(App):
         tr = get_session_tracker()
         t = Text()
         t.append("Session file operations\n", style="bold")
-        t.append(f"  read: {len(tr.files_read)} files / {tr.total_reads} ops\n", style="dim")
+        t.append(
+            f"  read: {len(tr.files_read)} files / {tr.total_reads} ops\n", style="dim"
+        )
         t.append(
             f"  modified: {len(tr.files_written)} files / {tr.total_writes} ops\n",
             style="dim",
         )
         if getattr(tr, "rejected_edits", 0):
-            t.append(f"  rejected edits (unread files): {tr.rejected_edits}\n", style="red")
+            t.append(
+                f"  rejected edits (unread files): {tr.rejected_edits}\n", style="red"
+            )
         if tr.files_read:
             t.append("\nRecently read\n", style="bold")
             for path in tr.read_order[-15:]:
@@ -4295,7 +4523,9 @@ class NovaApp(App):
                     )
                 )
                 return
-            self._log(Text(f"Detected {framework.value} — running: {command}", style="dim"))
+            self._log(
+                Text(f"Detected {framework.value} — running: {command}", style="dim")
+            )
         else:
             command = cmd_args
             self._log(Text(f"Running: {command}", style="dim"))
@@ -4319,8 +4549,10 @@ class NovaApp(App):
                 command=command, working_dir=working_dir, output_callback=_cb
             )
             t = Text()
-            t.append("✓ Tests passed\n" if result.success else "✗ Tests failed\n",
-                     style="green" if result.success else "red")
+            t.append(
+                "✓ Tests passed\n" if result.success else "✗ Tests failed\n",
+                style="green" if result.success else "red",
+            )
             stats = []
             if result.tests_run is not None:
                 stats.append(f"{result.tests_run} run")
@@ -4354,7 +4586,9 @@ class NovaApp(App):
                 title = f"Tests: {passed}/{total} passed"
             else:
                 title = "Tests passed" if ok else "Tests failed"
-            msg = f"{failed} failed" if failed is not None else ("ok" if ok else "failed")
+            msg = (
+                f"{failed} failed" if failed is not None else ("ok" if ok else "failed")
+            )
             if dur is not None:
                 msg += f" · {dur:.1f}s"
             self.session_state.add_notification(
@@ -4385,13 +4619,21 @@ class NovaApp(App):
             t.append(f"  [{'external' if ext else s.pid}] ", style="dim")
             t.append(f"{s.name}", style="cyan")
             t.append(f"  {s.url}  ", style="dim")
-            t.append(f"{s.status.value}\n", style="green" if s.status.value == "healthy" else "yellow")
+            t.append(
+                f"{s.status.value}\n",
+                style="green" if s.status.value == "healthy" else "yellow",
+            )
         self._log(t)
 
         action = await self.push_screen_wait(
             PickScreen(
                 "Servers — choose an action",
-                ["Open in browser", "Stop a server (managed)", "Stop all managed", "Cancel"],
+                [
+                    "Open in browser",
+                    "Stop a server (managed)",
+                    "Stop all managed",
+                    "Cancel",
+                ],
             )
         )
         if action in (-1, 3, None):
@@ -4414,7 +4656,11 @@ class NovaApp(App):
                 ok = await stop_server(pid=stoppable[idx].pid)
                 self._log(
                     Text(
-                        f"✓ Stopped '{stoppable[idx].name}'" if ok else "Failed to stop server",
+                        (
+                            f"✓ Stopped '{stoppable[idx].name}'"
+                            if ok
+                            else "Failed to stop server"
+                        ),
                         style="green" if ok else "red",
                     )
                 )
@@ -4423,7 +4669,11 @@ class NovaApp(App):
             count = await ProcessManager.get_instance().stop_all()
             self._log(
                 Text(
-                    f"✓ Stopped {count} managed server(s)" if count else "No managed servers to stop",
+                    (
+                        f"✓ Stopped {count} managed server(s)"
+                        if count
+                        else "No managed servers to stop"
+                    ),
                     style="green" if count else "yellow",
                 )
             )
@@ -4441,7 +4691,11 @@ class NovaApp(App):
                 ok = await manager.stop_process(pid)
                 self._log(
                     Text(
-                        f"✓ Killed process {pid}" if ok else f"No process with PID {pid}",
+                        (
+                            f"✓ Killed process {pid}"
+                            if ok
+                            else f"No process with PID {pid}"
+                        ),
                         style="green" if ok else "yellow",
                     )
                 )
@@ -4471,7 +4725,11 @@ class NovaApp(App):
             ok = await manager.stop_process(info.pid)
             self._log(
                 Text(
-                    f"✓ Killed '{info.name}' (PID {info.pid})" if ok else "Failed to kill process",
+                    (
+                        f"✓ Killed '{info.name}' (PID {info.pid})"
+                        if ok
+                        else "Failed to kill process"
+                    ),
                     style="green" if ok else "red",
                 )
             )
@@ -4484,7 +4742,9 @@ class NovaApp(App):
 
         mgr = get_recovery_manager()
         if mgr is None:
-            self._log(Text("No recovery manager active for this session.", style="yellow"))
+            self._log(
+                Text("No recovery manager active for this session.", style="yellow")
+            )
             return
         snapshots = mgr.list_snapshots(include_past_sessions=True)
         if not snapshots:
@@ -4505,7 +4765,11 @@ class NovaApp(App):
             ok = mgr.restore(entry, session_id=session_id)
             self._log(
                 Text(
-                    f"✓ Restored {entry.original_path}" if ok else f"Failed to restore {entry.original_path}",
+                    (
+                        f"✓ Restored {entry.original_path}"
+                        if ok
+                        else f"Failed to restore {entry.original_path}"
+                    ),
                     style="green" if ok else "red",
                 )
             )
@@ -4530,12 +4794,21 @@ class NovaApp(App):
         for _sid, entry in snapshots:
             label = REASON_LABELS.get(entry.reason, entry.reason)
             try:
-                secs = int((now - datetime.fromisoformat(entry.timestamp)).total_seconds())
+                secs = int(
+                    (now - datetime.fromisoformat(entry.timestamp)).total_seconds()
+                )
                 age = (
-                    f"{secs}s ago" if secs < 60
-                    else f"{secs // 60}m ago" if secs < 3600
-                    else f"{secs // 3600}h ago" if secs < 86400
-                    else f"{secs // 86400}d ago"
+                    f"{secs}s ago"
+                    if secs < 60
+                    else (
+                        f"{secs // 60}m ago"
+                        if secs < 3600
+                        else (
+                            f"{secs // 3600}h ago"
+                            if secs < 86400
+                            else f"{secs // 86400}d ago"
+                        )
+                    )
                 )
             except Exception:  # noqa: BLE001
                 age = entry.timestamp
@@ -4594,15 +4867,23 @@ class NovaApp(App):
             index = int(idx_arg) - 1
         else:
             opts = [
-                ("✓ " if h.get("enabled", True) else "✗ ") + " ".join(h.get("command", []))
+                ("✓ " if h.get("enabled", True) else "✗ ")
+                + " ".join(h.get("command", []))
                 for h in hooks
             ]
-            picked = await self.push_screen_wait(PickScreen(f"{sub.title()} which hook?", opts))
+            picked = await self.push_screen_wait(
+                PickScreen(f"{sub.title()} which hook?", opts)
+            )
             if picked is None or picked < 0:
                 return
             index = picked
         if index is None or not (0 <= index < len(hooks)):
-            self._log(Text(f"Hook {('' if index is None else index + 1)} does not exist.", style="red"))
+            self._log(
+                Text(
+                    f"Hook {('' if index is None else index + 1)} does not exist.",
+                    style="red",
+                )
+            )
             return
 
         if sub == "test":
@@ -4619,8 +4900,11 @@ class NovaApp(App):
             ok = _save_hooks(hooks)
             self._log(
                 Text(
-                    f"✓ Removed hook: {' '.join(removed.get('command', []))}" if ok
-                    else "Failed to save hook configuration",
+                    (
+                        f"✓ Removed hook: {' '.join(removed.get('command', []))}"
+                        if ok
+                        else "Failed to save hook configuration"
+                    ),
                     style="green" if ok else "red",
                 )
             )
@@ -4630,8 +4914,11 @@ class NovaApp(App):
         ok = _save_hooks(hooks)
         self._log(
             Text(
-                f"✓ Hook {index + 1} {'enabled' if sub == 'enable' else 'disabled'}" if ok
-                else "Failed to save hook configuration",
+                (
+                    f"✓ Hook {index + 1} {'enabled' if sub == 'enable' else 'disabled'}"
+                    if ok
+                    else "Failed to save hook configuration"
+                ),
                 style="green" if ok else "red",
             )
         )
@@ -4882,8 +5169,6 @@ class NovaApp(App):
         t.append("rebuild the semantic code-search index\n", style="dim")
         t.append("  /images          ", style="cyan")
         t.append("list/remove/clear conversation images\n", style="dim")
-        t.append("  /vision          ", style="cyan")
-        t.append("describe images with a vision model\n", style="dim")
         t.append("  /files           ", style="cyan")
         t.append("session file read/write summary\n", style="dim")
         t.append("  /tests           ", style="cyan")
@@ -4984,43 +5269,64 @@ class NovaApp(App):
             self._scroll_end()
         elif isinstance(e, ev.ToolCall):
             self._set_status(f"running {e.name}…")
-            # Escape markup: tool args can contain '[' which Textual would
-            # otherwise parse as console markup and crash the title render.
             base = f"{e.icon} {_esc(e.display_str)}"
-            body = Static("", classes="toolbody")
-            comp = Collapsible(body, title=f"{base}  · running…", collapsed=True)
-            comp.add_class("tool")
-            await self._mount(comp)
-            entry = (comp, body, base)
-            if e.call_id:
-                self._tool_components[e.call_id] = entry
-            self._last_tool = entry
+            if e.name in _DETAILED_TOOL_NAMES:
+                # Write/edit tools keep a DEDICATED Collapsible so the full diff
+                # of what the agent changed stays visible. Mounting it (via
+                # _mount) closes any open tool group, keeping transcript order
+                # correct.
+                body = Static("", classes="toolbody")
+                comp = Collapsible(body, title=f"{base}  · running…", collapsed=True)
+                comp.add_class("tool")
+                await self._mount(comp)
+                entry = (comp, body, base)
+                if e.call_id:
+                    self._tool_components[e.call_id] = entry
+                self._last_tool = entry
+            else:
+                # Everything else (reads, search, exec, MCP, …) condenses into
+                # the shared tool group — one compact line per call.
+                await self._ensure_tool_group()
+                self._add_tool_group_call(
+                    e.call_id, f"{e.icon} {e.display_str}", e.name
+                )
             # Record for the condensed remote digest (not sent per-event).
             self._remote_record(e.name)
         elif isinstance(e, ev.ToolResult):
-            self._finalize_tool(
-                e.call_id, e.preview, e.full_output, is_error=e.is_error
-            )
+            if e.call_id and e.call_id in self._tool_components:
+                # Dedicated panel (write/edit) — finalize with full output body.
+                self._finalize_tool(
+                    e.call_id, e.preview, e.full_output, is_error=e.is_error
+                )
+            else:
+                self._mark_tool_group_result(
+                    e.call_id, is_error=e.is_error, detail=e.preview
+                )
             self._scroll_end()
         elif isinstance(e, ev.FileOp):
-            # File ops (read/write/edit) ARE the result of their tool call —
-            # finalize the matching component with a NATIVE body: a colored diff
-            # for writes/edits, file content for reads.
+            # File ops are the result of their tool call. Write/edit (a dedicated
+            # panel was opened at ToolCall) render the full colored diff body so
+            # the user can see exactly what changed; reads condense into the
+            # group with a concise "Read N lines" summary.
             rec = e.record
             errored = bool(getattr(rec, "error", None)) or (
                 getattr(rec, "status", "") == "error"
             )
-            body_render = self._fileop_body(rec, e.full_output)
-            entry = self._pop_tool(e.call_id)
-            if entry is not None:
-                comp, body, base = entry
+            if e.call_id and e.call_id in self._tool_components:
+                comp, body, base = self._tool_components.pop(e.call_id)
+                if self._last_tool is not None and self._last_tool[0] is comp:
+                    self._last_tool = None
                 mark = "✗" if errored else "✓"
-                comp.title = f"{base}  {mark} {_esc(self._fileop_summary(rec))}".rstrip()
+                comp.title = (
+                    f"{base}  {mark} {_esc(self._fileop_summary(rec))}".rstrip()
+                )
                 if errored:
                     comp.collapsed = False  # surface failures
-                body.update(body_render)
+                body.update(self._fileop_body(rec, e.full_output))
             else:
-                self._log(body_render)
+                self._mark_tool_group_result(
+                    e.call_id, is_error=errored, detail=self._fileop_summary(rec)
+                )
             self._scroll_end()
         elif isinstance(e, ev.TodoUpdate):
             todo_text = self._render_todos(e.todos, e.agent_name)
@@ -5037,6 +5343,35 @@ class NovaApp(App):
             self._log(Text(e.text, style="red"))
         elif isinstance(e, ev.CompactionNotice):
             self._log(Text("⟳ Context compacted", style="dim"))
+        elif isinstance(e, ev.ContextMessage):
+            # Review-cycle start/complete are transient status, not log entries:
+            # surface them on the live indicator above the input instead of
+            # letting them scroll away in the transcript.
+            if e.event_type == "nova_review_start":
+                self._set_nova_indicator(f"{e.icon} {e.message}", style=e.color)
+                return
+            if e.event_type == "nova_review_complete":
+                # Show briefly, then fade so the indicator doesn't linger.
+                self._set_nova_indicator(
+                    f"{e.icon} {e.message}", style=e.color, auto_clear=4.0
+                )
+                return
+
+            t = Text(e.icon + " ", style=e.color)
+            t.append(e.message, style=e.color)
+            # Map event_type (e.g. "nova_skill_refinement") to the CSS modifier
+            # class ("nova-skill-refinement"): strip the leading "nova_"
+            # namespace and convert underscores to hyphens so the per-event
+            # border colors defined in the stylesheet actually match.
+            css = "nova-event"
+            if e.event_type:
+                modifier = e.event_type.replace("nova_", "", 1).replace("_", "-")
+                css += f" nova-{modifier}"
+            # Non-tool content: close any open tool group first to keep order.
+            self._close_tool_group()
+            self._transcript().mount(Static(t, classes=css))
+            self._prune_transcript()
+            self._scroll_end()
         elif isinstance(e, ev.SubagentActivity):
             await self._handle_subagent(e)
         elif isinstance(e, ev.UsageUpdate):
@@ -5111,7 +5446,9 @@ class NovaApp(App):
                 if choice == "auto":
                     # Approve everything for the rest of this session.
                     self.session_state.auto_approve = True
-                    self._log(Text("✓ Auto-approve enabled for this session.", style="green"))
+                    self._log(
+                        Text("✓ Auto-approve enabled for this session.", style="green")
+                    )
                 e.future.set_result(
                     {
                         "decisions": [{"type": "approve"} for _ in action_requests],
@@ -5131,6 +5468,9 @@ class NovaApp(App):
                     getattr(self.session_state, "todos", None),
                     self.session_state,
                     backend=self.backend,
+                    inline_plan=(e.payload or {}).get("plan")
+                    if isinstance(e.payload, dict)
+                    else None,
                 )
                 if content:
                     body = Markdown(content)

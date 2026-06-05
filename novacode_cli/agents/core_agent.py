@@ -70,6 +70,7 @@ from deepagents import create_deep_agent
 from deepagents.backends import CompositeBackend
 from deepagents.backends.filesystem import FilesystemBackend
 from deepagents.backends.protocol import BackendProtocol, SandboxBackendProtocol
+from deepagents.backends.store import StoreBackend
 from deepagents.middleware.subagents import SubAgent
 
 from novacode_cli.agents.default_subagents.subagents import retrieve_core_subagents
@@ -87,6 +88,7 @@ from novacode_cli.config.config import (
 from novacode_cli.hitl.interrupts import get_interrupt_configs
 from novacode_cli.integrations.sandbox_factory import get_default_working_dir
 from novacode_cli.prompts import render_template
+
 
 def get_shared_store() -> "BaseStore":
     """Get the shared, durable store for agent/subagent memory sharing.
@@ -646,6 +648,15 @@ This file stores your preferences and context that persist across sessions.
                 encoding="utf-8",
             )
 
+        # Ensure the Nova learning memory tiers (USER.md / MEMORY.md) exist so
+        # the learning middleware has files to read/write during review cycles.
+        try:
+            from novacode_cli.hermes.memory_tiers import ensure_memory_tiers
+
+            ensure_memory_tiers(agent_dir)
+        except Exception:  # noqa: BLE001
+            console.print("[dim]⚠ Failed to ensure Nova memory tiers[/dim]")
+
     # CONDITIONAL SETUP: Local vs Remote Sandbox
     if sandbox is None:
         # ========== LOCAL MODE ==========
@@ -674,7 +685,7 @@ This file stores your preferences and context that persist across sessions.
                 _sandbox_workdir = None
         if _sandbox_workdir is None:
             _sandbox_workdir = getattr(sandbox, "_workdir", None) or "/workspace"
-        _default_backend = WorkdirSandboxBackend(sandbox, workdir=_sandbox_workdir)
+        _default_backend = WorkdirSandboxBackend(sandbox, workdir=_sandbox_workdir)  # type: ignore
 
     # ------------------------------------------------------------------
     # Build CompositeBackend with routes per deepagents 0.5.6 docs:
@@ -736,6 +747,29 @@ This file stores your preferences and context that persist across sessions.
             virtual_mode=True,
         )
         _routes["/memories/"] = _agent_backend
+        # Nova memory tier routes — point to the same agent directory
+        # but are used solely for USER.md and MEMORY.md access.
+        _routes["/user-memory/"] = _agent_backend
+        _routes["/session-memory/"] = _agent_backend
+
+    # /store/ route → StoreBackend (persistent, cross-thread).
+    #
+    # Unlike /memories/ (which is backed by a FilesystemBackend so
+    # AgentMemoryMiddleware can read agent.md directly from disk), /store/
+    # stores files in LangGraph's durable Store (SQLite at ~/.nova/store.db).
+    # Data written here survives agent restarts, thread switches, and is
+    # shared across subagents.
+    #
+    # The namespace is scoped by (assistant_id, "store") so different agents
+    # have isolated storage.  Use this for cross-session data that the agent
+    # wants to keep — preference records, accumulated facts, etc.
+    if store is not None:
+        _ns = assistant_id  # captured in closure for namespace factory
+        _store_backend = StoreBackend(
+            store=store,
+            namespace=lambda rt: (_ns, "store"),  # type: ignore[union-attr]
+        )
+        _routes["/store/"] = _store_backend
 
     # Add /.nova/plans/ route for plan files.
     # This allows the agent to write and read plan files via virtual paths
@@ -770,6 +804,7 @@ This file stores your preferences and context that persist across sessions.
     from langchain.agents.middleware import ModelRetryMiddleware
     from novacode_cli.bootstrap import BootstrapMiddleware, GraphContextMiddleware
     from novacode_cli.bootstrap.steering import SteeringMiddleware
+    from novacode_cli.hermes.middleware import NovaLearningMiddleware
     from novacode_cli.memory.agent_memory import AgentMemoryMiddleware
     from novacode_cli.shell import ShellMiddleware
     from novacode_cli.tracking.file_tracker import FileTrackerMiddleware
@@ -797,6 +832,16 @@ This file stores your preferences and context that persist across sessions.
             max_retries=3,
             backoff_factor=2.0,
             initial_delay=1.0,
+        ),
+        # Nova — autonomous learning middleware that tracks tool usage,
+        # triggers periodic review cycles, and manages memory tiers.
+        # Positioned after ModelRetryMiddleware so retried tool calls don't
+        # inflate the counter, but before other middleware so learning data
+        # is collected for all downstream operations.
+        NovaLearningMiddleware(
+            store=store,
+            skills_dir=skills_dir,
+            agent_dir=agent_dir,
         ),
         BootstrapMiddleware(workspace_root=str(workspace_root)),
         GraphContextMiddleware(workspace_root=str(workspace_root)),
@@ -834,7 +879,23 @@ This file stores your preferences and context that persist across sessions.
     if _has_mcp:
         from novacode_cli.mcp import get_shared_mcp_middleware
 
-        agent_middleware.insert(3, get_shared_mcp_middleware())
+        mcp_middleware = get_shared_mcp_middleware()
+        # Eagerly discover MCP tools BEFORE building the agent graph.
+        # create_deep_agent collects each middleware's ``.tools`` at construction
+        # time (langchain factory: ``[t for m in middleware for t in m.tools]``),
+        # so lazy discovery would leave ``mcp_middleware.tools`` empty and the
+        # MCP tools (serena, playwright, …) would never be registered or callable.
+        if not mcp_middleware._tools_discovered:
+            try:
+                console.print(
+                    "[dim]🔌 Connecting to MCP servers…[/dim]"
+                )
+                mcp_middleware._discover_tools_sync()
+            except Exception as exc:  # noqa: BLE001
+                console.print(
+                    f"[yellow]⚠ MCP tool discovery did not complete: {exc}[/yellow]"
+                )
+        agent_middleware.insert(3, mcp_middleware)
 
     # NOTE: automatic context-window summarization is provided by
     # create_deep_agent's built-in SummarizationMiddleware (part of its tail
@@ -858,7 +919,8 @@ This file stores your preferences and context that persist across sessions.
     from deepagents.middleware.subagents import GENERAL_PURPOSE_SUBAGENT
 
     if not any(
-        isinstance(s, dict) and s.get("name") == "general-purpose" for s in Nova_SubAgent
+        isinstance(s, dict) and s.get("name") == "general-purpose"
+        for s in Nova_SubAgent
     ):
         Nova_SubAgent.append({**GENERAL_PURPOSE_SUBAGENT, "tools": tools})  # type: ignore
 

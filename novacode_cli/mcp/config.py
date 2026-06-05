@@ -79,6 +79,33 @@ def _acquire_lock(lock_path: Path, timeout: float = 5.0) -> bool:
     return False
 
 
+async def _acquire_lock_async(lock_path: Path, timeout: float = 5.0) -> bool:
+    """Async variant of ``_acquire_lock`` — uses ``asyncio.sleep`` so the event loop
+    is not blocked during the spin-wait loop.
+
+    Call this instead of ``_acquire_lock`` when the caller is already in an async
+    context (e.g. ``mcp_handler.handle_mcp_command`` → ``MCPConfig.add_server``).
+    """
+    import asyncio
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(fd)
+            return True
+        except FileExistsError:
+            try:
+                mtime = lock_path.stat().st_mtime
+                if time.time() - mtime > 2.0:
+                    lock_path.unlink(missing_ok=True)
+                    continue
+            except OSError:
+                pass
+            await asyncio.sleep(0.05)
+    return False
+
+
 def _release_lock(lock_path: Path) -> None:
     """Release an exclusive lock file."""
     try:
@@ -215,6 +242,28 @@ class MCPConfig:
         finally:
             _release_lock(lock_path)
 
+    async def save_async(self, servers: dict[str, MCPServerConfig]) -> None:
+        """Async variant of ``save`` — uses ``_acquire_lock_async`` so the
+        event loop is not blocked during the spin-wait loop.
+
+        Call this from async contexts (e.g. ``mcp_handler.handle_mcp_command``)
+        instead of ``save``.
+        """
+        data = {
+            "mcpServers": {
+                name: config.model_dump(exclude_none=True) for name, config in servers.items()
+            }
+        }
+
+        lock_path = self.config_path.with_suffix(".lock")
+        if not await _acquire_lock_async(lock_path):
+            msg = f"Could not acquire lock for {self.config_path}"
+            raise RuntimeError(msg)
+        try:
+            _atomic_write_json(self.config_path, data)
+        finally:
+            _release_lock(lock_path)
+
     def add_server(self, name: str, config: MCPServerConfig) -> None:
         """Add or update an MCP server configuration.
 
@@ -225,6 +274,16 @@ class MCPConfig:
         servers = self.load()
         servers[name] = config
         self.save(servers)
+
+    async def add_server_async(self, name: str, config: MCPServerConfig) -> None:
+        """Async variant of ``add_server`` — uses the async lock so that the
+        event loop is not blocked during file locking.
+
+        Call from async contexts (e.g. ``mcp_handler.handle_mcp_command``).
+        """
+        servers = self.load()
+        servers[name] = config
+        await self.save_async(servers)
 
     def remove_server(self, name: str) -> bool:
         """Remove an MCP server configuration.
@@ -240,6 +299,19 @@ class MCPConfig:
             return False
         del servers[name]
         self.save(servers)
+        return True
+
+    async def remove_server_async(self, name: str) -> bool:
+        """Async variant of ``remove_server`` — uses the async lock so that the
+        event loop is not blocked during file locking.
+
+        Call from async contexts (e.g. ``mcp_handler.handle_mcp_command``).
+        """
+        servers = self.load()
+        if name not in servers:
+            return False
+        del servers[name]
+        await self.save_async(servers)
         return True
 
     def get_server(self, name: str) -> MCPServerConfig | None:

@@ -91,9 +91,9 @@ async def handle_mcp_command() -> bool:
                     )
 
                     if config:
-                        # Save to MCP config
+                        # Save to MCP config using async lock
                         mcp_config = MCPConfig()
-                        mcp_config.add_server(preset_id, config)
+                        await mcp_config.add_server_async(preset_id, config)
 
                         console.print()
                         console.print(
@@ -186,7 +186,7 @@ async def handle_mcp_command() -> bool:
             )
 
         mcp_config = MCPConfig()
-        mcp_config.add_server(name, config)
+        await mcp_config.add_server_async(name, config)
 
         console.print()
         console.print(
