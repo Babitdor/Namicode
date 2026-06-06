@@ -97,9 +97,10 @@ def build_command_registry() -> CommandRegistry:
     from novacode_cli.commands.research_handler import register_commands as _r17
     from novacode_cli.commands.trello_handler import register_commands as _r18
     from novacode_cli.commands.log_commands import register_commands as _r19
+    from novacode_cli.commands.chat_handler import register_commands as _r20
 
     for _r in (_r1, _r2, _r3, _r4, _r5, _r6, _r7, _r8, _r9, _r10,
-               _r11, _r12, _r13, _r14, _r15, _r16, _r17, _r18, _r19):
+               _r11, _r12, _r13, _r14, _r15, _r16, _r17, _r18, _r19, _r20):
         _r(registry)
 
     return registry

@@ -16,14 +16,15 @@ Pattern detection approach:
 from __future__ import annotations
 
 import json
+import logging
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from novacode_cli.config.config import console
-
 if TYPE_CHECKING:
     from langgraph.store.base import BaseStore
+
+logger = logging.getLogger("nova.hermes.skill_discovery")
 
 # Minimum sequence length to consider as a pattern
 _MIN_PATTERN_LENGTH = 3
@@ -37,41 +38,33 @@ _RECENT_N = 100
 
 
 def _emit_tui_event(event_type: str, message: str) -> None:
-    """Emit a structured notification for TUI display.
+    """Surface a skill-activity notification via the shared Nova event buffer.
 
-    Uses Rich text with TUI-appropriate styling. Events include:
+    Autonomous skill creation/refinement runs *inside the agent loop* (Hermes),
+    so printing to the console here corrupts the Textual TUI (it overlaps the
+    input box). Instead we append to ``nova_event_log``, which
+    ``iterate_agent_events`` drains into a ``ContextMessage`` rendered by both the
+    Rich console REPL and the TUI. Best-effort — never raise from a notification.
+
+    Events include:
     - nova_skill_created: Skill created from pattern
     - nova_skill_refined: Skill improved based on feedback
     - nova_skill_error: Error in skill creation/refinement
     """
+    event_config = {
+        "nova_skill_created": {"icon": "🧠", "color": "green"},
+        "nova_skill_refined": {"icon": "🛠", "color": "yellow"},
+        "nova_skill_error": {"icon": "⚠", "color": "red"},
+    }
+    config = event_config.get(event_type, {"icon": "•", "color": "cyan"})
     try:
-        from rich.text import Text
+        from novacode_cli.hermes.middleware import nova_event_log
 
-        # Map event types to styling and icons
-        event_config = {
-            "nova_skill_created": {
-                "icon": "🧠",
-                "color": "green",
-            },
-            "nova_skill_refined": {
-                "icon": "🛠",
-                "color": "yellow",
-            },
-            "nova_skill_error": {
-                "icon": "⚠",
-                "color": "red",
-            },
-        }
-
-        config = event_config.get(event_type, {"icon": "•", "color": "cyan"})
-        text = Text(f"{config['icon']}  {message}", style=config["color"])
-        console.print(text)
+        nova_event_log.append(
+            (event_type, config["icon"], config["color"], message)
+        )
     except Exception:  # noqa: BLE001
-        # Fallback: plain console output
-        try:
-            console.print(message)
-        except Exception:  # noqa: BLE001
-            pass
+        logger.debug("skill event (not surfaced): %s — %s", event_type, message)
 
 
 # ── Pattern detection ──────────────────────────────────────────────────────

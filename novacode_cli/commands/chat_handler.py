@@ -40,145 +40,283 @@ _agent_lock = threading.Lock()
 # ---------------------------------------------------------------------------
 
 def _make_chat_html() -> str:
-    """Return a self-contained dark-themed chat UI (Claude-inspired)."""
+    """Return a self-contained dark editorial-chat UI (Crimson Archive aesthetic)."""
     return r"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>Nova Chat</title>
+<title>Nova — Agentic Coding</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&family=Playfair+Display:ital,wght@0,500;0,700;1,500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <style>
+  :root {
+    --crimson: #a21c30;
+    --crimson-light: #d43b52;
+    --charcoal: #1a1614;
+    --charcoal-2: #231f1c;
+    --charcoal-3: #2d2824;
+    --cream: #efe9e3;
+    --cream-muted: #b5ada3;
+    --cream-dim: #7d756b;
+    --gold: #b8860b;
+  }
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-    background: #1a1a2e;
-    color: #e0e0e0;
+    font-family: 'DM Sans', sans-serif;
+    background: var(--charcoal);
+    color: var(--cream);
     height: 100vh; display: flex; flex-direction: column;
+    background-image:
+      radial-gradient(ellipse at 20% 50%, rgba(162,28,48,0.06) 0%, transparent 60%),
+      radial-gradient(ellipse at 80% 20%, rgba(162,28,48,0.04) 0%, transparent 50%),
+      repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.007) 2px, rgba(255,255,255,0.007) 4px);
+    position: relative;
+  }
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
+    pointer-events: none; z-index: 999;
   }
   header {
-    background: #16213e;
-    padding: 16px 24px;
-    border-bottom: 1px solid #ef4444;
-    display: flex; align-items: center; gap: 12px;
+    padding: 20px 32px 16px;
+    display: flex; align-items: baseline; gap: 14px;
     flex-shrink: 0;
+    border-bottom: 1px solid var(--charcoal-3);
+    position: relative;
+  }
+  header::after {
+    content: '';
+    position: absolute; bottom: -1px; left: 32px;
+    width: 60px; height: 2px;
+    background: var(--crimson);
   }
   header h1 {
-    font-size: 18px; font-weight: 600;
-    color: #ef4444;
+    font-family: 'Playfair Display', serif;
+    font-weight: 700; font-size: 20px; font-style: italic;
+    color: var(--cream);
+    letter-spacing: 0.02em;
   }
-  header span { color: #9ca3af; font-size: 13px; }
+  header span {
+    font-size: 12px; color: var(--cream-dim);
+    text-transform: uppercase; letter-spacing: 0.15em;
+    font-weight: 400;
+  }
   #messages {
-    flex: 1; overflow-y: auto; padding: 24px;
-    display: flex; flex-direction: column; gap: 16px;
+    flex: 1; overflow-y: auto; padding: 28px 32px;
+    display: flex; flex-direction: column; gap: 20px;
+    scroll-behavior: smooth;
   }
+  #messages::-webkit-scrollbar { width: 6px; }
+  #messages::-webkit-scrollbar-track { background: transparent; }
+  #messages::-webkit-scrollbar-thumb { background: var(--charcoal-3); border-radius: 3px; }
   .message {
-    max-width: 80%; padding: 12px 16px;
-    border-radius: 8px; line-height: 1.6;
-    font-size: 14px; white-space: pre-wrap; word-wrap: break-word;
+    max-width: 78%; padding: 16px 20px;
+    line-height: 1.65; font-size: 14px;
+    white-space: pre-wrap; word-wrap: break-word;
+    animation: msgIn 0.35s ease-out both;
+    position: relative;
+  }
+  @keyframes msgIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
   }
   .message.user {
     align-self: flex-end;
-    background: #ef4444; color: #fff;
-    border-bottom-right-radius: 2px;
+    background: var(--crimson);
+    color: #fff;
+    padding: 14px 20px;
+    border-radius: 4px 4px 2px 4px;
+  }
+  .message.user::before {
+    content: '';
+    position: absolute; top: 0; left: 0; right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent 10%, rgba(255,255,255,0.2) 50%, transparent 90%);
   }
   .message.assistant {
     align-self: flex-start;
-    background: #16213e; color: #e0e0e0;
-    border: 1px solid #2a2a4a;
-    border-bottom-left-radius: 2px;
+    background: var(--charcoal-2);
+    border-left: 3px solid var(--crimson);
+    border-radius: 0 4px 4px 0;
+    color: var(--cream);
   }
-  .message.assistant p { margin: 0 0 8px; }
+  .message.assistant p { margin: 0 0 10px; }
   .message.assistant p:last-child { margin-bottom: 0; }
+  .message.assistant a {
+    color: var(--crimson-light);
+    text-decoration: underline; text-underline-offset: 2px;
+  }
+  .message.assistant a:hover { color: var(--crimson); }
+  .message.assistant strong { color: #fff; font-weight: 600; }
   .message.assistant pre {
-    background: #0f0f23 !important;
-    border-radius: 6px; padding: 12px; overflow-x: auto;
-    margin: 8px 0;
+    background: #0d0b09 !important;
+    border-radius: 3px; padding: 14px; overflow-x: auto;
+    margin: 12px 0; border: 1px solid var(--charcoal-3);
+    font-size: 12.5px;
   }
-  .message.assistant code { font-size: 13px; }
+  .message.assistant pre code {
+    background: none !important; padding: 0 !important;
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  }
+  .message.assistant code {
+    background: rgba(162,28,48,0.12);
+    padding: 1px 6px; border-radius: 3px;
+    font-size: 13px; color: var(--crimson-light);
+  }
   .message.assistant ul, .message.assistant ol {
-    padding-left: 20px; margin: 4px 0;
+    padding-left: 22px; margin: 6px 0;
   }
+  .message.assistant li { margin: 4px 0; }
   .message.assistant blockquote {
-    border-left: 3px solid #ef4444;
-    padding-left: 12px; margin: 8px 0;
-    color: #9ca3af;
+    border-left: 3px solid var(--crimson);
+    padding: 8px 16px; margin: 12px 0;
+    color: var(--cream-muted);
+    background: rgba(162,28,48,0.05);
+    border-radius: 0 3px 3px 0;
   }
+  .message.assistant hr {
+    border: none; border-top: 1px solid var(--charcoal-3);
+    margin: 16px 0;
+  }
+  .message.assistant table {
+    border-collapse: collapse; width: 100%;
+    margin: 12px 0; font-size: 13px;
+  }
+  .message.assistant th, .message.assistant td {
+    border: 1px solid var(--charcoal-3);
+    padding: 8px 12px; text-align: left;
+  }
+  .message.assistant th {
+    background: var(--charcoal); color: var(--cream);
+    font-weight: 600;
+  }
+  /* Typing indicator — refined pulse */
   .typing-indicator {
     align-self: flex-start;
-    display: flex; gap: 4px;
-    padding: 12px 16px;
-    background: #16213e;
-    border-radius: 8px; border: 1px solid #2a2a4a;
-    border-bottom-left-radius: 2px;
+    display: flex; align-items: center; gap: 5px;
+    padding: 16px 20px;
+    border-left: 3px solid var(--crimson);
+    background: var(--charcoal-2);
+    border-radius: 0 4px 4px 0;
+    animation: msgIn 0.35s ease-out both;
   }
   .typing-indicator span {
-    width: 8px; height: 8px; border-radius: 50%;
-    background: #ef4444; display: inline-block;
-    animation: bounce 1.4s infinite ease-in-out both;
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--cream-dim);
+    display: inline-block;
+    animation: typePulse 1.5s infinite ease-in-out both;
   }
   .typing-indicator span:nth-child(1) { animation-delay: -0.32s; }
   .typing-indicator span:nth-child(2) { animation-delay: -0.16s; }
   .typing-indicator span:nth-child(3) { animation-delay: 0s; }
-  @keyframes bounce {
-    0%, 80%, 100% { transform: scale(0); }
-    40% { transform: scale(1); }
+  @keyframes typePulse {
+    0%, 80%, 100% { transform: scale(0.6); opacity: 0.3; }
+    40% { transform: scale(1); opacity: 1; background: var(--crimson); }
   }
   .error-msg {
-    align-self: center; color: #f87171; font-size: 13px;
-    padding: 8px 16px;
-    background: #2a1a1a; border-radius: 6px;
+    align-self: center; color: var(--crimson-light); font-size: 13px;
+    padding: 10px 20px; text-align: center;
+    background: rgba(162,28,48,0.08);
+    border-radius: 4px; border: 1px solid rgba(162,28,48,0.2);
+    animation: msgIn 0.35s ease-out both;
   }
   #input-area {
-    display: flex; gap: 8px; padding: 16px 24px;
-    background: #16213e; border-top: 1px solid #2a2a4a;
-    flex-shrink: 0;
+    display: flex; gap: 10px; padding: 16px 32px 20px;
+    border-top: 1px solid var(--charcoal-3);
+    flex-shrink: 0; align-items: flex-end;
+    background: var(--charcoal);
   }
   #input-area textarea {
-    flex: 1; padding: 10px 14px; border-radius: 8px;
-    border: 1px solid #2a2a4a; background: #0f0f23;
-    color: #e0e0e0; font-size: 14px; font-family: inherit;
-    resize: none; outline: none; min-height: 42px; max-height: 200px;
+    flex: 1; padding: 12px 16px;
+    border: 1px solid var(--charcoal-3);
+    background: var(--charcoal-2);
+    color: var(--cream);
+    font-size: 14px; font-family: 'DM Sans', sans-serif;
+    resize: none; outline: none;
+    min-height: 46px; max-height: 180px;
+    transition: border-color 0.25s, box-shadow 0.25s;
+    border-radius: 4px;
   }
-  #input-area textarea:focus { border-color: #ef4444; }
+  #input-area textarea::placeholder { color: var(--cream-dim); }
+  #input-area textarea:focus {
+    border-color: var(--crimson);
+    box-shadow: 0 0 0 1px rgba(162,28,48,0.2);
+  }
+  #input-area textarea:disabled { opacity: 0.5; }
   #input-area button {
-    padding: 10px 20px; border-radius: 8px; border: none;
-    background: #ef4444; color: #fff; font-size: 14px; font-weight: 500;
-    cursor: pointer; transition: background 0.2s;
+    padding: 12px 22px; border-radius: 4px; border: none;
+    background: var(--crimson); color: #fff;
+    font-size: 13px; font-weight: 500;
+    font-family: 'DM Sans', sans-serif;
+    cursor: pointer;
+    transition: background 0.2s, transform 0.15s;
+    letter-spacing: 0.04em; text-transform: uppercase;
+    min-height: 46px;
   }
-  #input-area button:hover { background: #dc2626; }
-  #input-area button:disabled { opacity: 0.5; cursor: not-allowed; }
+  #input-area button:hover { background: var(--crimson-light); transform: translateY(-1px); }
+  #input-area button:active { transform: translateY(0); }
+  #input-area button:disabled { opacity: 0.35; cursor: not-allowed; transform: none; }
   #status-bar {
-    padding: 4px 24px; font-size: 12px; color: #6b7280;
-    background: #0f0f23; text-align: center; flex-shrink: 0;
+    padding: 6px 32px; font-size: 11px; color: var(--cream-dim);
+    background: var(--charcoal-2);
+    text-align: center; flex-shrink: 0;
+    text-transform: uppercase; letter-spacing: 0.08em;
+    border-top: 1px solid var(--charcoal-3);
   }
+  /* Welcome screen — editorial */
   .welcome {
-    text-align: center; color: #6b7280; margin: auto;
-    padding: 40px 20px;
+    text-align: center; margin: auto;
+    padding: 60px 32px; max-width: 480px;
+    animation: msgIn 0.6s ease-out both;
   }
-  .welcome h2 { color: #ef4444; margin-bottom: 8px; }
-  .welcome p { font-size: 14px; line-height: 1.6; }
+  .welcome h2 {
+    font-family: 'Playfair Display', serif;
+    font-weight: 700; font-size: 28px; font-style: italic;
+    color: var(--cream); margin-bottom: 6px;
+  }
+  .welcome .divider {
+    width: 40px; height: 2px;
+    background: var(--crimson); margin: 16px auto;
+  }
+  .welcome p {
+    font-size: 13.5px; line-height: 1.7;
+    color: var(--cream-muted);
+    margin-bottom: 8px;
+  }
+  .welcome .kbd {
+    display: inline-block;
+    padding: 2px 8px;
+    border: 1px solid var(--charcoal-3);
+    border-radius: 3px;
+    font-size: 11px; font-family: 'DM Sans', sans-serif;
+    color: var(--cream-dim);
+  }
 </style>
 </head>
 <body>
 <header>
   <h1>Nova</h1>
-  <span>— Agentic Coding Assistant</span>
+  <span>Agentic Coding</span>
 </header>
 <div id="messages">
   <div class="welcome">
-    <h2>Welcome to Nova</h2>
-    <p>Ask me anything — coding, architecture, research, or just a question.<br>
-    I'll respond with formatted Markdown and code highlighting.</p>
+    <h2>Nova</h2>
+    <div class="divider"></div>
+    <p>Your agentic coding assistant. Ask me anything — architecture, implementation, research, or debugging.</p>
+    <p><span class="kbd">Enter</span> to send &nbsp;·&nbsp; <span class="kbd">Shift+Enter</span> for newline</p>
   </div>
 </div>
 <div id="input-area">
-  <textarea id="input" rows="1" placeholder="Type your message..." autofocus></textarea>
+  <textarea id="input" rows="1" placeholder="Type your message…" autofocus></textarea>
   <button id="send-btn">Send</button>
 </div>
-<div id="status-bar"></div>
+<div id="status-bar">ready</div>
 
 <script>
 const $ = id => document.getElementById(id);
@@ -186,12 +324,6 @@ const messages = $('messages');
 const input = $('input');
 const sendBtn = $('send-btn');
 const statusBar = $('status-bar');
-
-function escapeHtml(text) {
-  const d = document.createElement('div');
-  d.textContent = text;
-  return d.innerHTML;
-}
 
 function addMessage(text, role) {
   const div = document.createElement('div');
@@ -202,7 +334,6 @@ function addMessage(text, role) {
   } else {
     div.textContent = text;
   }
-  // Remove welcome message on first interaction
   const welcome = messages.querySelector('.welcome');
   if (welcome) welcome.remove();
   messages.appendChild(div);
@@ -229,11 +360,13 @@ async function sendMessage() {
   const text = input.value.trim();
   if (!text) return;
   input.value = '';
+  input.style.height = 'auto';
   input.disabled = true;
   sendBtn.disabled = true;
 
   addMessage(text, 'user');
   showTyping();
+  setStatus('thinking…');
 
   try {
     const res = await fetch('/api/chat', {
@@ -243,17 +376,17 @@ async function sendMessage() {
     });
     const data = await res.json();
     hideTyping();
-    // Highlight the status — red on error, dim on success
-    setStatus(res.ok ? '✓ Response received' : '✗ Error: ' + (data.error || 'Unknown error'));
     if (res.ok) {
+      setStatus('ready');
       addMessage(data.reply, 'assistant');
     } else {
-      addMessage(data.error || 'Request failed', 'error');
+      setStatus('error — ' + (data.error || 'unknown'));
+      addMessage(data.error || 'Request failed', 'error-msg');
     }
   } catch (err) {
     hideTyping();
-    setStatus('✗ Network error');
-    addMessage('Network error: ' + err.message, 'error');
+    setStatus('connection error');
+    addMessage('Network error: ' + err.message, 'error-msg');
   }
 
   input.disabled = false;
@@ -261,10 +394,9 @@ async function sendMessage() {
   input.focus();
 }
 
-// Auto-resize textarea
 input.addEventListener('input', () => {
   input.style.height = 'auto';
-  input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+  input.style.height = Math.min(input.scrollHeight, 180) + 'px';
 });
 
 input.addEventListener('keydown', e => {
@@ -381,7 +513,7 @@ async def _call_agent(message: str) -> str:
         elif isinstance(event, ev.AssistantMessage):
             response_chunks.append(event.text)
         elif isinstance(event, ev.Error):
-            return f"Error: {event.text}"
+            return f"Error: {event.message}"
         elif isinstance(event, ev.Cancelled):
             return "Response was cancelled."
         # Done — stop iterating gracefully (the generator ends on its own)
@@ -408,26 +540,56 @@ def _find_available_port(start_port: int = 8000, max_attempts: int = 100) -> int
 
 
 # ---------------------------------------------------------------------------
-# Command handler
+# Server lifecycle (shared by CLI handler and TUI)
 # ---------------------------------------------------------------------------
 
-async def handle_chat_command(session_state) -> bool:
-    """Handle the /chat command — start or stop the web chat UI.
+def want_restart() -> bool:
+    """Return True if the server should restart (state reset requested)."""
+    return False
 
-    Subcommands:
-      /chat       — start the server (or bring existing to foreground)
-      /chat stop  — stop the running server
+
+def is_server_running() -> bool:
+    """Check if the chat server is currently running."""
+    return _server is not None
+
+
+def get_server_url() -> str | None:
+    """Return the URL of the running server, or None."""
+    if _server_port is None:
+        return None
+    return f"http://localhost:{_server_port}"
+
+
+def set_agent_refs(
+    agent: Any,
+    assistant_id: str | None,
+    session_state: Any,
+    loop: asyncio.AbstractEventLoop,
+) -> None:
+    """Store agent references for the background HTTP server thread."""
+    global _agent, _assistant_id, _session_state, _main_loop
+    _agent = agent
+    _assistant_id = assistant_id
+    _session_state = session_state
+    _main_loop = loop
+
+
+def start_chat_server() -> str:
+    """Start the HTTP chat server in a daemon thread.
+
+    Must have called :func:`set_agent_refs` first.
+
+    Returns:
+        The URL the server is listening on.
+
+    Raises:
+        RuntimeError: If no available port is found.
     """
     global _server, _server_thread, _server_port
 
-    # If the server is already running, stop it if requested.
     if _server is not None:
-        console.print()
-        console.print(
-            f"[green]Chat UI already running at [bold]http://localhost:{_server_port}[/bold][/green]"
-        )
-        webbrowser.open(f"http://localhost:{_server_port}")
-        return True
+        assert _server_port is not None
+        return f"http://localhost:{_server_port}"
 
     port = _find_available_port(8000)
     _server_port = port
@@ -438,7 +600,48 @@ async def handle_chat_command(session_state) -> bool:
     )
     _server_thread.start()
 
-    url = f"http://localhost:{port}"
+    return f"http://localhost:{port}"
+
+
+def stop_chat_server() -> bool:
+    """Stop the running chat server.
+
+    Returns:
+        True if the server was stopped, False if it wasn't running.
+    """
+    global _server, _server_thread, _server_port
+
+    if _server is None:
+        return False
+
+    _server.shutdown()
+    _server.server_close()
+    _server = None
+    _server_thread = None
+    _server_port = None
+    return True
+
+
+# ---------------------------------------------------------------------------
+# CLI command handler
+# ---------------------------------------------------------------------------
+
+async def handle_chat_command() -> bool:
+    """Handle the /chat command — start the web chat UI.
+
+    For the CLI (non-TUI) entry point.
+    """
+    if is_server_running():
+        url = get_server_url()
+        assert url is not None
+        console.print()
+        console.print(
+            f"[green]Chat UI already running at [bold]{url}[/bold][/green]"
+        )
+        webbrowser.open(url)
+        return True
+
+    url = start_chat_server()
     console.print()
     console.print(f"[bold {COLORS['primary']}]╔══ Nova Chat ══╗[/bold {COLORS['primary']}]")
     console.print(f"[green]✓ Chat UI started at [bold]{url}[/bold][/green]")
@@ -448,20 +651,17 @@ async def handle_chat_command(session_state) -> bool:
     return True
 
 
-async def handle_chat_stop_command(session_state) -> bool:
-    """Stop the running chat server."""
-    global _server, _server_thread, _server_port
+async def handle_chat_stop_command() -> bool:
+    """Handle the /chat stop command — stop the web chat UI.
 
-    if _server is None:
+    For the CLI (non-TUI) entry point.
+    """
+    if not is_server_running():
         console.print("[yellow]Chat server is not running.[/yellow]")
         return True
 
     console.print("[dim]Shutting down chat server...[/dim]")
-    _server.shutdown()
-    _server.server_close()
-    _server = None
-    _server_thread = None
-    _server_port = None
+    stop_chat_server()
     console.print("[green]✓ Chat server stopped.[/green]")
     return True
 
@@ -475,18 +675,17 @@ def register_commands(registry) -> None:
     from novacode_cli.commands import CommandContext
 
     async def _handle(ctx: CommandContext) -> bool:
-        global _agent, _assistant_id, _session_state, _main_loop
-
-        # Store references for the background server thread
-        _agent = ctx.agent
-        _assistant_id = ctx.assistant_id
-        _session_state = ctx.session_state
-        _main_loop = asyncio.get_running_loop()
+        set_agent_refs(
+            ctx.agent,
+            ctx.assistant_id,
+            ctx.session_state,
+            asyncio.get_running_loop(),
+        )
 
         args = (ctx.cmd_args or "").strip()
         if args == "stop":
-            return await handle_chat_stop_command(ctx.session_state)
+            return await handle_chat_stop_command()
         else:
-            return await handle_chat_command(ctx.session_state)
+            return await handle_chat_command()
 
     registry.register("chat", _handle)

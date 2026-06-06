@@ -807,6 +807,7 @@ This file stores your preferences and context that persist across sessions.
     from novacode_cli.bootstrap.steering import SteeringMiddleware
     from novacode_cli.hermes.middleware import NovaLearningMiddleware
     from novacode_cli.memory.agent_memory import AgentMemoryMiddleware
+    from novacode_cli.security.middleware import SecurityMiddleware
     from novacode_cli.shell import ShellMiddleware
     from novacode_cli.tracking.file_tracker import FileTrackerMiddleware
 
@@ -844,6 +845,10 @@ This file stores your preferences and context that persist across sessions.
             skills_dir=skills_dir,
             agent_dir=agent_dir,
         ),
+        # Screen URL-bearing tool args for deceptive Unicode / spoofed domains
+        # (warn + sanitize) before the tool runs. Early in the stack so the
+        # cleaned args flow to every downstream middleware and the tool itself.
+        SecurityMiddleware(),
         BootstrapMiddleware(workspace_root=str(workspace_root)),
         GraphContextMiddleware(workspace_root=str(workspace_root)),
         # Connect to the session's shared steering list so /steer AND live

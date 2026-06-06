@@ -48,15 +48,19 @@ async def _generate_skill(
     base_dir: Path,
     description: str | None = None,
 ) -> str | None:
-    """Generate skill content using the configured LLM and return SKILL.md content."""
+    """Generate skill content using the configured LLM and return SKILL.md content.
+
+    This runs both from the standalone ``nova skills create`` CLI *and* from
+    Hermes's autonomous skill creation (inside an agent turn). It must therefore
+    never ``console.print`` — that would corrupt the Textual TUI. Progress/warnings
+    go to the logger; callers surface their own user-facing outcome messages
+    (the CLI prints "✓ created"; Hermes emits skill events).
+    """
     import logging
     logger = logging.getLogger(__name__)
 
     try:
-        console.print(
-            "[dim]Generating comprehensive skill content...[/dim]",
-            style=COLORS["dim"],
-        )
+        logger.debug("Generating skill content for %s", skill_name)
         skill_dir = base_dir / skill_name
 
         skill_query_prompt = _get_skill_query(skill_name, description)
@@ -90,26 +94,18 @@ async def _generate_skill(
 
             # Validate frontmatter
             if not skill_content.startswith("---"):
-                console.print(
-                    "[yellow]Warning: SKILL.md missing valid frontmatter. Adding defaults.[/yellow]"
-                )
+                logger.warning("SKILL.md missing frontmatter; adding defaults")
                 skill_content = _add_frontmatter(skill_content, skill_name, description)
                 skill_file.write_text(skill_content, encoding="utf-8")
 
-            console.print(
-                "[dim]Skill content generated and normalized successfully.[/dim]",
-                style=COLORS["dim"],
-            )
+            logger.debug("Skill content generated and normalized")
             return skill_content
 
         # --- Strategy 2: extract SKILL.md content from agent's text response ---
         if responded:
             extracted = _extract_skill_md_from_response(responded, skill_name)
             if extracted:
-                console.print(
-                    "[dim]Extracted SKILL.md from agent response (file was not written).[/dim]",
-                    style=COLORS["dim"],
-                )
+                logger.debug("Extracted SKILL.md from agent response (file not written)")
                 skill_file.parent.mkdir(parents=True, exist_ok=True)
                 skill_file.write_text(extracted, encoding="utf-8")
                 return extracted
@@ -120,14 +116,12 @@ async def _generate_skill(
                 len(responded),
             )
 
-        console.print("[yellow]Warning: SKILL.md was not created by the agent.[/yellow]")
+        logger.warning("SKILL.md was not created by the agent")
         return None
 
     except Exception as e:
         logger.debug("Skill generation exception", exc_info=True)
-        console.print(
-            f"[yellow]Warning: LLM generation failed ({e}), using static template.[/yellow]"
-        )
+        logger.warning("LLM skill generation failed (%s); using static template", e)
         return None
 
 

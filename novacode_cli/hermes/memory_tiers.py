@@ -16,15 +16,34 @@ LLM-based summarization (reusing the ``summarize_conversation`` pattern from
 
 from __future__ import annotations
 
+import logging
 import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from novacode_cli.config.config import console
-
 if TYPE_CHECKING:
     pass
+
+logger = logging.getLogger("nova.hermes.memory_tiers")
+
+
+def _emit_memory_event(message: str, icon: str = "📝") -> None:
+    """Surface a memory-tier note without printing to the console.
+
+    These writes run inside Hermes's *out-of-band* review, so a direct
+    ``console.print`` here bypasses the UI event stream and corrupts the Textual
+    TUI (it overlaps the input box). Instead we append to the shared Nova event
+    buffer, which ``iterate_agent_events`` drains into a ``ContextMessage`` that
+    both the Rich console and the TUI render. Best-effort — a memory write must
+    never fail because its notice couldn't be shown.
+    """
+    try:
+        from novacode_cli.hermes.middleware import nova_event_log
+
+        nova_event_log.append(("nova_memory", icon, "dim", message))
+    except Exception:  # noqa: BLE001
+        logger.debug("memory event (not surfaced): %s", message)
 
 # Maximum characters per memory file before compaction (~3K tokens at 4 chars/token).
 # Matches the existing MAX_MEMORY_CHARS from agent_memory.py.
@@ -85,12 +104,12 @@ def ensure_memory_tiers(agent_dir: Path) -> None:
     user_md = agent_dir / "USER.md"
     if not user_md.exists():
         user_md.write_text(DEFAULT_USER_MD, encoding="utf-8")
-        console.print(f"[dim]📝 Created USER.md at {user_md}[/dim]")
+        _emit_memory_event(f"Created USER.md at {user_md}")
 
     memory_md = agent_dir / "MEMORY.md"
     if not memory_md.exists():
         memory_md.write_text(DEFAULT_MEMORY_MD, encoding="utf-8")
-        console.print(f"[dim]📝 Created MEMORY.md at {memory_md}[/dim]")
+        _emit_memory_event(f"Created MEMORY.md at {memory_md}")
 
 
 def compact_memory_file(path: Path, max_chars: int = MAX_MEMORY_CHARS) -> bool:
@@ -137,8 +156,9 @@ def compact_memory_file(path: Path, max_chars: int = MAX_MEMORY_CHARS) -> bool:
         return False
     path.write_text(truncated, encoding="utf-8")
 
-    console.print(
-        f"[dim]📦 Compacted {path.name} ({len(content)} → {len(truncated)} chars)[/dim]"
+    _emit_memory_event(
+        f"Compacted {path.name} ({len(content)} → {len(truncated)} chars)",
+        icon="📦",
     )
     return True
 
@@ -195,15 +215,13 @@ def update_user_memory(agent_dir: Path, new_content: str) -> None:
 
             if section_found:
                 user_md.write_text("\n".join(new_lines), encoding="utf-8")
-                console.print(
-                    f"[dim]📝 Updated section in USER.md: {section_name}[/dim]"
-                )
+                _emit_memory_event(f"Updated section in USER.md: {section_name}")
                 return
 
     # Append as new section or bullets
     content += "\n" + new_content
     user_md.write_text(content, encoding="utf-8")
-    console.print(f"[dim]📝 Appended to USER.md[/dim]")
+    _emit_memory_event("Appended to USER.md")
 
 
 def update_session_memory(agent_dir: Path, session_summary: str) -> None:
@@ -236,7 +254,7 @@ def update_session_memory(agent_dir: Path, session_summary: str) -> None:
 
     new_content = before + entry + after
     memory_md.write_text(new_content, encoding="utf-8")
-    console.print(f"[dim]📝 Updated MEMORY.md[/dim]")
+    _emit_memory_event("Updated MEMORY.md")
 
     # Compact if needed
     compact_memory_file(memory_md)
@@ -327,7 +345,7 @@ def update_from_review(agent_dir: Path, user_updates: str, session_memory: str) 
 
         new_content = before + entry + after
         memory_md.write_text(new_content, encoding="utf-8")
-        console.print(f"[dim]📝 Applied review to MEMORY.md[/dim]")
+        _emit_memory_event("Applied review to MEMORY.md")
 
         # Compact if needed
         compact_memory_file(memory_md)

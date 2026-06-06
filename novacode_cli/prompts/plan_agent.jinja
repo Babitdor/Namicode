@@ -18,7 +18,7 @@ Your audience is a capable developer who knows the codebase but needs concrete, 
 
 <workflow>
 1. **Clarify** — if anything material is unclear, `ask_user_question` now, before investigating.
-2. **Investigate** — read the relevant files; understand structure, conventions, call chains, and what could break. Trace the change end to end.
+2. **Investigate** — read the relevant files; understand structure, conventions, call chains, and what could break. Trace the change end to end. Use the research tools (below) for *external* unknowns — third-party APIs, error meanings, best practices.
 3. **Design** — choose the minimal approach that achieves the goal; note tradeoffs if you weighed alternatives.
 4. **Self-check** — review your plan against the quality checklist below.
 5. **Present** — call `exit_plan_mode(plan=<your markdown plan>)`. The plan is shown to the user inline for approval.
@@ -45,6 +45,16 @@ Before presenting, make sure you can answer:
 
 `write_todos` is for organizing execution **after** approval — never call it during planning.
 </investigation_checklist>
+
+<research_tools>
+Beyond reading the codebase, you have **read-only web research** tools — safe to use in plan mode. Always investigate the actual code first; reach for these only to resolve **external** unknowns the repo can't answer (third-party library APIs, version-specific behavior, the meaning of an error, current best practices).
+
+- **`docs_search`** — searches **official documentation sites only** (filters out blogs, tutorials, and Stack Overflow). Your first choice for authoritative API/reference details. Pass a `topic` to focus it, e.g. `docs_search("useEffect cleanup", topic="react")` or `docs_search("asyncio gather", topic="python")`.
+- **`web_search`** — general web search via Tavily for broader or current information. Requires a Tavily API key; if it returns a configuration error, fall back to `duckduckgo_search`.
+- **`duckduckgo_search`** — free web search, no API key required. Use it as a fallback to `web_search` or for a second opinion.
+
+When an external finding shapes the plan, ground the affected step in it and **cite the source** (page title or URL) so the reviewer can verify. Research supplements code investigation — it never replaces it; the plan must remain specific to *this* codebase.
+</research_tools>
 
 <plan_quality_checklist>
 Before calling `exit_plan_mode`, confirm every item:

@@ -9,18 +9,21 @@ An open-source terminal-based AI coding assistant that runs in your terminal, si
 
 ## Features
 
-- **Built-in Tools**: 35+ tools including file operations, shell commands, web search, git, LSP, browser automation, and subagent delegation
+- **Autonomous Learning System (Hermes)**: Periodically reviews tool usage patterns, extracts lessons, and autonomously creates reusable skills — the agent improves itself over time without user intervention
+- **Built-in Tools**: 40+ tools including file operations, shell commands, web search, git, LSP, browser automation, subagent delegation, and web scraping (GitHub trending, Hacker News, LinkedIn, Reddit, Twitter/X)
 - **Customizable Skills**: Add domain-specific capabilities through a progressive disclosure skill system (50+ built-in skills)
-- **Persistent Memory**: Agent remembers your preferences, coding style, and project context across sessions
+- **Durable Memory**: Two-tier memory system — persistent markdown files (`USER.md`/`MEMORY.md`) auto-maintained by the learning system, plus a LangGraph key/value store (`remember`/`recall`) for cross-session facts
 - **Project-Aware**: Automatically detects project roots and loads project-specific configurations
 - **Project Graph**: Visualize and query your codebase architecture with community detection and dependency analysis
-- **MCP Support**: Extend capabilities with Model Context Protocol servers (12+ presets available)
+- **MCP Support**: Extend capabilities with Model Context Protocol servers (12+ presets available) — tools are eagerly discovered before graph build with server-prefixed names to avoid collisions
 - **Sandbox Execution**: Run code safely in remote sandboxes (Modal, Runloop, Daytona, Docker, E2B)
 - **Plan Mode**: Structured planning phase before implementation with plan approval workflow
+- **Web Chat UI**: Launch a local browser-based chat interface via `/chat` — dark-themed, Claude-inspired, with Markdown rendering and code highlighting
 - **Voice Agent**: Hands-free coding with wake-word detection, STT/TTS providers, and voice-driven file operations
 - **Graphify Integration**: Generate interactive visualizations and knowledge graphs from codebases
 - **LSP Integration**: Language Server Protocol support for go-to-definition, find references, rename, diagnostics, and more
 - **Semantic Code Search**: Find code by description or meaning, not just exact text matches
+- **Web Scraping**: Built-in tools for GitHub trending repos, Hacker News headlines, LinkedIn jobs, Reddit posts, and Twitter/X trends — no external API keys required
 - **Async Subagents**: Background task execution on remote LangGraph servers
 - **Remote Bridges**: Discord and Telegram integration for remote agent interaction
 - **Onboarding System**: Interactive first-run setup with API key management and model selection
@@ -28,6 +31,8 @@ An open-source terminal-based AI coding assistant that runs in your terminal, si
 - **Default Subagents**: 20+ built-in specialized agents with skill-aware prompts — each subagent auto-loads relevant skills for its domain
 - **Security-First**: Automatic .gitignore enforcement, command injection detection, and input validation
 - **File Recovery**: Automatic snapshots before destructive operations — restore deleted or overwritten files via `/restore` or agent tools
+- **Condensed Tool UI**: Consecutive tool calls are grouped into collapsible sections — full diffs shown for code edits; reads, searches, and other calls stay compact
+- **Modal Animations**: Entrance animations (fade/slide) for all modal dialogs, pulsing borders, and a shimmer status bar
 
 ## Installation
 
@@ -244,7 +249,7 @@ nova doctor
 | `shell` | Execute shell commands (local mode) |
 | `execute` | Execute commands in remote sandbox (sandbox mode) |
 | `web_search` | Search the web using Tavily API |
-| `fetch_url` | Fetch and convert web pages to markdown |
+| `fetch_url` | Fetch and convert web pages to markdown (covers all HTTP methods) |
 | `browser_automate` | AI-powered browser automation for web tasks |
 | `capture_browser_console` | Capture browser console errors and logs from web apps |
 | `task` | Delegate work to subagents for parallel execution |
@@ -252,16 +257,15 @@ nova doctor
 | `think` | Structured reasoning and reflection before acting |
 | `duckduckgo_search` | Web search using DuckDuckGo (no API key required) |
 | `docs_search` | Search official documentation (LangGraph, LangChain, etc.) |
-| `convert_format` | Convert between JSON, YAML, and TOML formats |
-| `format_code_file` | Auto-format code files (Ruff, Prettier) |
-| `lint_code` | Run linting on code files (Ruff) |
-| `check_types` | Run type checking (mypy, pyright) |
-| `http_request` | Make HTTP GET/POST/PUT/DELETE requests |
-| `package_info` | Get package version and dependency info |
-| `get_current_time` | Get current time in various formats and timezones |
+| `github_trending` | Scrape GitHub trending repositories by language/time range |
+| `hacker_news` | Scrape Hacker News front page headlines |
+| `linkedin_jobs` | Search LinkedIn job listings (Playwright-based, no login) |
+| `reddit_posts` | Scrape Reddit posts by subreddit, user, or search query |
+| `twitter_search` | Search Twitter/X for recent tweets by query |
+| `twitter_trending` | Get current Twitter/X trending topics |
+| `package_info` | Get package version and dependency info (PyPI / npm) |
 | `git_status` / `git_log` / `git_diff` / `git_blame` | Git repository introspection tools |
-| `create_memory_structure` | Initialize persistent memory storage |
-| `read_memory` / `write_memory` | Read and write agent memories |
+| `read_memory` / `write_memory` | Read and write persistent markdown agent memories |
 | `remember` / `recall` | Store and fetch durable cross-session facts by key |
 | `list_memories` / `forget` | List and delete stored durable memory facts |
 | `execute_in_e2b` | Run code in E2B cloud sandbox |
@@ -431,6 +435,71 @@ Tasks move through the lifecycle automatically — no manual intervention needed
 # Stop the server
 /trello stop
 ```
+
+## Web Chat UI
+
+NOVA includes a `/chat` command that launches a local browser-based chat interface:
+
+```
+/chat              Start the chat server and open browser
+/chat stop         Stop the chat server
+/chat status       Show chat server status
+```
+
+### Features
+
+- **Dark-themed UI**: Claude-inspired design with red accent colors
+- **Markdown Rendering**: Messages rendered with full Markdown support and code syntax highlighting (via `marked` + `highlight.js`)
+- **Typing Indicator**: Animated bouncing dots while the agent responds
+- **Same Agent**: Connects to the same LangGraph agent from your CLI session — no separate configuration needed
+- **Auto-open**: Browser opens automatically on launch
+
+### How It Works
+
+The `/chat` command starts a `ThreadingHTTPServer` in a background thread. The server communicates with the main agent loop via `asyncio.run_coroutine_threadsafe`, sharing the same session state and agent configuration.
+
+## Web Scraping Tools
+
+NOVA includes built-in web scraping tools that work with public data — no API keys required:
+
+| Tool | Data Source | No API Key? |
+|------|-------------|-------------|
+| `github_trending` | GitHub trending repositories (filter by language/time) | ✅ |
+| `hacker_news` | Hacker News front page headlines | ✅ |
+| `linkedin_jobs` | LinkedIn job listings (Playwright-based) | ✅ |
+| `reddit_posts` | Reddit posts by subreddit, user, or search | ✅ |
+| `twitter_search` | Twitter/X recent tweets by query | ✅ |
+| `twitter_trending` | Twitter/X current trending topics | ✅ |
+
+These tools use `requests` + `BeautifulSoup` (or `playwright` for LinkedIn/Twitter) to scrape publicly available data and return structured results.
+
+### Standalone CLI Scripts
+
+The scraping logic is also available as standalone scripts in `scripts/scraper/`:
+
+```
+scripts/scraper/
+├── gh_trending.py          # GitHub trending scraper
+├── hn_scraper.py           # Hacker News scraper
+├── linkedin_job_scraper.py # LinkedIn job scraper (Playwright)
+├── reddit_scraper.py       # Reddit scraper
+├── twitter_scraper.py      # Twitter/X scraper (Playwright)
+└── inline_json.py          # JSON extraction utility
+```
+
+## Autonomous Learning System (Hermes)
+
+NOVA includes **Hermes**, an autonomous learning system that runs in the background:
+
+- **Self-Review**: Every ~10 tool calls, Hermes reviews tool usage patterns and extracts lessons
+- **Self-Improving Memory**: Automatically maintains two memory tiers:
+  - `USER.md` — User model: communication style, preferences, workflows, recurring frustrations
+  - `MEMORY.md` — Cross-session memory: architecture decisions, reusable patterns, key facts
+- **Skill Creation**: Analyzes repeated successful tool sequences and autonomously creates reusable skills with deterministic naming and refinement
+- **No Interruption**: Reviews run out-of-band in the background — no pause in agent operation
+- **Live Indicator**: A visible indicator in the TUI status line shows when Hermes is reviewing
+
+The system is always active and designed to require zero user configuration. Lessons are compacted automatically as they grow.
 
 ## Configuration
 
@@ -839,6 +908,16 @@ make test_cov
 make test TEST_FILE=tests/unit_tests/test_specific.py
 ```
 
+**Test suite includes:**
+
+| Directory | What it tests |
+|-----------|---------------|
+| `tests/test_hermes/` | Hermes learning system — middleware, memory tiers, skill discovery |
+| `tests/test_tui_app.py` | Textual TUI — animations, chat messages, modals, tool groups |
+| `tests/test_workdir_grep.py` | Sandbox-backed grep tool with path-rebased execution |
+| `tests/test_notifications.py` | Notification system integration |
+| `tests/test_context_breakdown_tokens.py` | Token budget and context optimization |
+
 ## Development
 
 ### Setup Development Environment
@@ -900,7 +979,8 @@ The CLI implements a "Deep Agent" architecture with four key components:
 - `agents/plan_agent/` - Plan mode agent with planning middleware
 
 **Commands:**
-- `commands/` - 17 CLI command handlers (`/model`, `/mcp`, `/skills`, `/plan`, `/browser`, etc.)
+- `commands/` - 18+ CLI command handlers (`/model`, `/mcp`, `/skills`, `/plan`, `/browser`, `/chat`, etc.)
+- `commands/chat_handler.py` - `/chat` command — launches a local web chat UI with a background HTTP server that connects to the same LangGraph agent
 
 **Configuration:**
 - `config/config.py` - Settings, color scheme, model factory, project root detection
@@ -910,8 +990,13 @@ The CLI implements a "Deep Agent" architecture with four key components:
 
 **Context & Memory:**
 - `context/` - Context budget tracking, eviction, optimization, and growth monitoring
-- `memory/` - Persistent agent memory system
+- `memory/store.py` - Durable LangGraph key/value store (`remember`/`recall`) using sync SqliteStore with async wrappers; includes a stdlib-fallback BaseStore (works without `langgraph-checkpoint-sqlite`)
 - `prompts/` - Jinja2 template rendering
+
+**Learning System (Hermes):**
+- `hermes/middleware.py` - NovaLearningMiddleware — reviews tool usage every ~10 calls, writes lessons to `USER.md`/`MEMORY.md`, and triggers autonomous skill creation
+- `hermes/memory_tiers.py` - Manages the two memory tiers (user model in `USER.md`, session decisions in `MEMORY.md`)
+- `hermes/skill_discovery.py` - Analyzes repeated successful tool sequences and autonomously creates reusable skills with deterministic naming
 
 **UI:**
 - `ui/ui_elements.py` - Token tracking, help display, diff rendering, todo lists
@@ -921,8 +1006,12 @@ The CLI implements a "Deep Agent" architecture with four key components:
 - `ui/hitl_approval.py` - Human-in-the-loop approval UI
 - `ui/subagent_tracking.py` - Subagent progress visualization
 
-**Tools (20 modules):**
-- `tools/` - HTTP, web search, fetch, code execution, git, LSP, browser, format, lint, typecheck, memory, time, reflection, package, graph, code search, and plan mode tools
+**TUI (Textual):**
+- `tui/app.py` - NovaApp — the full Textual terminal UI with chat messages, modals, keyboard shortcuts, condensed tool groups, click-to-copy, and history management
+- `tui/animations.py` - Entrance animations (fade/slide) for modals, pulsing borders, shimmer effects, and thinking dots
+
+**Tools (21 modules):**
+- `tools/` - HTTP fetch, web search, DuckDuckGo search, docs search, web scraping (GitHub trending, HN, LinkedIn, Reddit, Twitter/X), package info, git, LSP, browser, memory, reflection, project graph, code search, and plan mode tools
 
 **Integrations:**
 - `integrations/` - Sandbox providers (Modal, Runloop, Daytona, Docker, E2B)

@@ -148,6 +148,11 @@ async def _start_plan_mode(
             enter_plan_mode,
             exit_plan_mode,
         )
+        from novacode_cli.tools.web_tools import (
+            web_search,
+            docs_search,
+            duckduckgo_search,
+        )
 
         # Create plan agent. Share the core agent's checkpointer + store so plan
         # mode continues from the existing conversation (same thread_id) and
@@ -155,7 +160,14 @@ async def _start_plan_mode(
         plan_agent, plan_backend = create_plan_agent_with_config(
             model=model,
             assistant_id=session_state._assistant_id or "nova",
-            tools=[ask_user_question, enter_plan_mode, exit_plan_mode],
+            tools=[
+                ask_user_question,
+                enter_plan_mode,
+                exit_plan_mode,
+                web_search,
+                docs_search,
+                duckduckgo_search,
+            ],
             steering_instructions=session_state.steering_instructions,
             checkpointer=getattr(session_state, "_checkpointer", None),
             store=getattr(session_state, "_store", None),
@@ -323,6 +335,7 @@ __all__ = [
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
+
 
 def register_commands(registry) -> None:
     from novacode_cli.commands import CommandContext

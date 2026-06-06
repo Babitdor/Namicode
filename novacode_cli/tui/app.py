@@ -62,7 +62,14 @@ _TRANSCRIPT_LOW_WATER = 320
 # shared tool group. Keep in sync with the file-write tools that emit a FileOp
 # record with a diff (see tracking/file_tracker.py).
 _DETAILED_TOOL_NAMES = frozenset(
-    {"write_file", "edit_file", "create_file", "multi_edit", "str_replace", "apply_patch"}
+    {
+        "write_file",
+        "edit_file",
+        "create_file",
+        "multi_edit",
+        "str_replace",
+        "apply_patch",
+    }
 )
 
 # Slash commands routed through the legacy handle_command via console capture.
@@ -101,6 +108,7 @@ _TUI_SLASH_COMMANDS = [
     "/browser-use",
     "/ralph",
     "/trello",
+    "/chat",
     "/clear",
     "/tokens",
     "/context",
@@ -1624,6 +1632,7 @@ class NovaApp(App):
         border: thick $accent; background: $panel;
         padding: 0 1;
         display: none; layer: overlay; dock: bottom;
+        margin-bottom: 5;
     }
     #status {
         height: 1; color: $text-muted;
@@ -1767,7 +1776,9 @@ class NovaApp(App):
         # Collapsible per call, so a burst of tools doesn't flood the chat.
         self._tool_group: Collapsible | None = None
         self._tool_group_body: Static | None = None
-        self._tool_group_entries: list[dict] = []  # per-tool {base, mark, detail, error}
+        self._tool_group_entries: list[dict] = (
+            []
+        )  # per-tool {base, mark, detail, error}
         self._tool_group_lines: dict[str, int] = {}  # call_id -> entry index
         self._tool_group_last_idx: int | None = None  # fallback for id-less results
         # subagent tracking: call_id -> (collapsible, body Static, type, start_time)
@@ -1777,6 +1788,18 @@ class NovaApp(App):
         # Tool/subagent names used during the current remote turn — flushed as a
         # single condensed digest message so chats aren't flooded per call.
         self._remote_activity: list[str] = []
+        # Edit-in-place streaming of the agent's answer to the remote chat.
+        # _remote_stream_buf is the full accumulated answer text; a background
+        # pump (_remote_stream_pump) coalesces edits so we don't HTTP-call per
+        # token. _remote_streamed marks that text was streamed (so we finalize
+        # the live message instead of sending a duplicate answer).
+        self._remote_stream_buf: str = ""
+        self._remote_streamed: bool = False
+        self._remote_stream_task: Any = None
+        # The home ASCII banner widget, tracked so on_resize can re-render it at
+        # the new width (the art has wide/medium/narrow variants).
+        self._home_banner: Static | None = None
+        self._home_banner_art: str = ""  # last rendered art (for resize diffing)
         # Strong refs to fire-and-forget background sends so the event loop
         # doesn't garbage-collect them mid-flight (asyncio only holds weak refs).
         self._bg_tasks: set[Any] = set()
@@ -1818,13 +1841,13 @@ class NovaApp(App):
         yield VerticalScroll(id="transcript")
         yield Static("", id="status")
         yield Static("", id="mode-badge")
+        yield OptionList(id="cmdpalette")
         yield PromptInput(
             placeholder="Ask Nova…  (/help · !cmd · @agent · /quit to exit)",
             id="prompt",
             paste_tracker=self.paste_tracker,
             on_large_paste=self._on_large_paste,
         )
-        yield OptionList(id="cmdpalette")
 
     def _apply_saved_theme(self) -> None:
         """Register Nova's palette and apply the persisted theme (or default)."""
@@ -2019,6 +2042,48 @@ class NovaApp(App):
                 await msg.reply_fn(digest)
             except Exception:  # noqa: BLE001
                 pass
+
+    def _remote_react(self, emoji: str, msg: Any = None) -> None:
+        """Add a reaction emoji to the remote user's message (best-effort).
+
+        ``msg`` defaults to the active remote message, but callers can pass it
+        explicitly (e.g. the error handler, which runs after ``_remote_msg`` has
+        already been cleared).
+        """
+        msg = msg if msg is not None else self._remote_msg
+        if msg is None or getattr(msg, "react_fn", None) is None:
+            return
+        try:
+            import asyncio
+
+            task = asyncio.create_task(msg.react_fn(emoji))
+            self._bg_tasks.add(task)
+            task.add_done_callback(self._bg_tasks.discard)
+        except Exception:  # noqa: BLE001
+            pass
+
+    async def _remote_stream_pump(self, msg: Any) -> None:
+        """Coalesce streamed answer text into edit-in-place updates of one message.
+
+        Runs for the duration of a remote turn: every ~1.2s it edits the live
+        reply message with whatever has accumulated in ``_remote_stream_buf`` (a
+        single serialized editor — no per-token HTTP calls, no edit races).
+        """
+        import asyncio
+
+        last = ""
+        try:
+            while True:
+                await asyncio.sleep(1.2)
+                buf = self._remote_stream_buf
+                if buf and buf != last and getattr(msg, "edit_fn", None):
+                    last = buf
+                    try:
+                        await msg.edit_fn(buf, False)
+                    except Exception:  # noqa: BLE001
+                        pass
+        except asyncio.CancelledError:
+            return
 
     def _log(self, renderable: Any) -> None:
         """Mount an ancillary line (errors, command output, notices)."""
@@ -2426,7 +2491,12 @@ class NovaApp(App):
 
     def _add_tool_group_call(self, call_id: str | None, base: str, name: str) -> None:
         """Append a 'running' line for a new tool call."""
-        entry = {"base": self._oneline(base), "mark": "⏳", "detail": "", "error": False}
+        entry = {
+            "base": self._oneline(base),
+            "mark": "⏳",
+            "detail": "",
+            "error": False,
+        }
         idx = len(self._tool_group_entries)
         self._tool_group_entries.append(entry)
         if call_id:
@@ -2481,9 +2551,7 @@ class NovaApp(App):
 
         final_color = "#f7768e" if is_error else "#73daca"  # error / success
         try:
-            comp.styles.animate(
-                "border_left", f"thick {final_color}", duration=0.35
-            )
+            comp.styles.animate("border_left", f"thick {final_color}", duration=0.35)
         except Exception:  # noqa: BLE001
             pass
 
@@ -2932,6 +3000,9 @@ class NovaApp(App):
         # them back to the full text, which is what both the agent receives AND
         # what the chat shows — the sent message is displayed in full.
         text = resolve_paste_placeholders(event.value, self.paste_tracker).strip()
+        # Strip deceptive/invisible Unicode (BiDi overrides, zero-width chars) a
+        # paste may smuggle in — a prompt-injection vector. Warn + sanitize.
+        text = self._sanitize_user_text(text)
         if not text:
             return
         event.input.value = ""
@@ -2943,6 +3014,35 @@ class NovaApp(App):
             self._add_live_steer(text)
             return
         self._dispatch(text)
+
+    def _sanitize_user_text(self, text: str) -> str:
+        """Strip deceptive/invisible Unicode from user input (warn + sanitize).
+
+        Hidden BiDi/zero-width characters in a prompt (often pasted) can hide
+        instructions from the human while still reaching the model. We remove
+        them and surface a TUI notice. Best-effort — never block input on error.
+        """
+        try:
+            from novacode_cli.security.unicode_security import (
+                detect_dangerous_unicode,
+                strip_dangerous_unicode,
+                summarize_issues,
+            )
+
+            issues = detect_dangerous_unicode(text)
+            if not issues:
+                return text
+            cleaned = strip_dangerous_unicode(text)
+            self._log(
+                Text(
+                    f"🛡 Removed {len(issues)} hidden Unicode char(s) from input "
+                    f"({summarize_issues(issues)})",
+                    style="yellow",
+                )
+            )
+            return cleaned
+        except Exception:  # noqa: BLE001
+            return text
 
     def _add_live_steer(self, text: str) -> None:
         """Inject a transient steering instruction into the in-flight turn.
@@ -3286,6 +3386,9 @@ class NovaApp(App):
                             pass
                     self._remote_msg = msg
                     self._remote_activity = []  # fresh digest per turn
+                    self._remote_stream_buf = ""  # fresh answer stream per turn
+                    self._remote_streamed = False
+                    self._remote_react("🤔")  # acknowledge: thinking
 
                     # Slash commands from chat: handle the remote-safe subset
                     # directly (info/toggles/conversation), stream skills as a
@@ -3303,20 +3406,47 @@ class NovaApp(App):
                             await msg.reply_fn(slash_reply)
                         except Exception:  # noqa: BLE001
                             pass
+                        self._remote_react("✅")
                     else:
                         pre = await self.agent.aget_state(config)
                         pre_count = len(pre.values.get("messages", [])) if pre else 0
-                        await self._stream_prompt(prompt_text)
+                        # Stream the answer edit-in-place via a coalescing pump.
+                        if getattr(msg, "edit_fn", None) is not None:
+                            self._remote_stream_task = asyncio.create_task(
+                                self._remote_stream_pump(msg)
+                            )
+                        try:
+                            await self._stream_prompt(prompt_text)
+                        finally:
+                            if self._remote_stream_task is not None:
+                                self._remote_stream_task.cancel()
+                                try:
+                                    await self._remote_stream_task
+                                except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                                    pass
+                                self._remote_stream_task = None
                         post = await self.agent.aget_state(config)
                         reply = (
                             _extract_response(post, pre_count) or "✅ Task completed."
                         )
-                        # One condensed tool/subagent digest, in order, then the answer.
+                        # If we streamed text, finalize the live message in place
+                        # (the stream IS the answer — no duplicate send). Otherwise
+                        # (tools-only turn, or no edit_fn) send the answer once.
+                        if self._remote_streamed and getattr(msg, "edit_fn", None):
+                            try:
+                                await msg.edit_fn(
+                                    self._remote_stream_buf or reply, True
+                                )
+                            except Exception:  # noqa: BLE001
+                                pass
+                        else:
+                            try:
+                                await msg.reply_fn(reply)
+                            except Exception:  # noqa: BLE001
+                                pass
+                        # Condensed tool/subagent digest as a trailing message.
                         await self._flush_remote_activity()
-                        try:
-                            await msg.reply_fn(reply)
-                        except Exception:  # noqa: BLE001
-                            pass
+                        self._remote_react("✅")
                 finally:
                     self._remote_msg = None
                     self.session_state.auto_approve = prev_auto
@@ -3324,6 +3454,7 @@ class NovaApp(App):
                 self._log(Text("Remote turn cancelled.", style="yellow"))
             except Exception as ex:  # noqa: BLE001
                 self._log(Text(f"Remote error: {ex}", style="red"))
+                self._remote_react("❌", msg)
             finally:
                 queue.task_done()
 
@@ -3577,6 +3708,8 @@ class NovaApp(App):
             await self._run_ralph(text)
         elif cmd == "trello":
             await self._run_trello(text)
+        elif cmd == "chat":
+            await self._run_chat(text)
         elif cmd in _PASSTHROUGH_SLASH:
             await self._passthrough_command(text)
         # A bare /<name> may be a skill (e.g. /graphify) — resolve it natively
@@ -4399,12 +4532,53 @@ class NovaApp(App):
             )
         )
 
-    def _show_home_banner(self) -> None:
-        """Render the ASCII-art home banner into the transcript (best effort)."""
+    def _banner_width(self) -> int:
+        """Current usable width for the banner (falls back to the Rich console)."""
         try:
-            art = get_responsive_ascii(_rich_console)
-            if art.strip():
-                self._log(Text(art, style="bold #7aa2f7"))
+            w = self.size.width
+            if w and w > 0:
+                return w
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            return _rich_console.width
+        except Exception:  # noqa: BLE001
+            return 80
+
+    def _show_home_banner(self) -> None:
+        """Render the ASCII-art home banner, sized to the live TUI width.
+
+        Tracks the widget so :meth:`on_resize` can swap in the wide/medium/narrow
+        art variant when the window changes size.
+        """
+        try:
+            art = get_responsive_ascii(width=self._banner_width())
+            if not art.strip():
+                return
+            banner = Static(Text(art, style="bold #7aa2f7"), classes="logline")
+            self._home_banner = banner
+            self._home_banner_art = art
+            self._transcript().mount(banner)
+            self._prune_transcript()
+        except Exception:  # noqa: BLE001
+            self._home_banner = None
+
+    def on_resize(self, event: events.Resize) -> None:
+        """Re-render width-dependent content (the home banner) on window resize.
+
+        Textual reflows the layout (1fr / % / auto widths) automatically; this
+        handles the one piece that doesn't — the static ASCII art, which has
+        discrete size variants chosen by width.
+        """
+        banner = self._home_banner
+        if banner is None or not banner.is_mounted:
+            return
+        try:
+            art = get_responsive_ascii(width=self._banner_width())
+            if art == self._home_banner_art:
+                return  # same variant — nothing to repaint
+            self._home_banner_art = art
+            banner.update(Text(art, style="bold #7aa2f7"))
         except Exception:  # noqa: BLE001
             pass
 
@@ -5270,6 +5444,43 @@ class NovaApp(App):
         except Exception:
             pass  # Server stopped, loop ends
 
+    async def _run_chat(self, text: str) -> None:
+        """Run /chat — start or stop the web chat UI in the browser."""
+        from novacode_cli.commands.chat_handler import (
+            is_server_running,
+            get_server_url,
+            set_agent_refs,
+            start_chat_server,
+            stop_chat_server,
+        )
+
+        parts = text.split(maxsplit=1)
+        sub = parts[1].strip().lower() if len(parts) > 1 else ""
+
+        # Wire agent refs (same as the CLI handler does)
+        set_agent_refs(
+            self.agent,
+            self.assistant_id,
+            self.session_state,
+            asyncio.get_running_loop(),
+        )
+
+        if sub == "stop":
+            if not is_server_running():
+                self._log(Text("Chat server is not running.", style="yellow"))
+                return
+            stop_chat_server()
+            self._log(Text("✓ Chat server stopped.", style="green"))
+            return
+
+        if is_server_running():
+            url = get_server_url()
+            self._log(Text(f"Chat UI already running at {url}", style="green"))
+            return
+
+        url = start_chat_server()
+        self._log(Text(f"Chat UI started at {url}", style="bold green"))
+
     async def _run_agents(self) -> None:
         """Show configured subagents (read-only)."""
         lines = []
@@ -5381,7 +5592,9 @@ class NovaApp(App):
         t.append("  /save            ", style="cyan")
         t.append("save the session now\n", style="dim")
         t.append("  /copy [all]      ", style="cyan")
-        t.append("copy last response (or whole chat) — or click a message\n", style="dim")
+        t.append(
+            "copy last response (or whole chat) — or click a message\n", style="dim"
+        )
         t.append("  /steer           ", style="cyan")
         t.append("add/list/clear steering instructions\n", style="dim")
         t.append("  /notifications   ", style="cyan")
@@ -5467,6 +5680,16 @@ class NovaApp(App):
             self._schedule_stream_flush()
             if self._activity != "responding…":
                 self._set_status("responding…")
+            # Mirror the answer text to the remote chat (edit-in-place). The pump
+            # task flushes this buffer on a timer so we don't edit per token.
+            if (
+                self._remote_msg is not None
+                and getattr(self._remote_msg, "edit_fn", None) is not None
+            ):
+                if not self._remote_streamed:
+                    self._remote_streamed = True
+                    self._remote_react("💬")
+                self._remote_stream_buf += e.text
         elif isinstance(e, ev.TextDiscard):
             self._stream_flush_scheduled = False
             if self._stream_msg is not None:
@@ -5693,9 +5916,11 @@ class NovaApp(App):
                     getattr(self.session_state, "todos", None),
                     self.session_state,
                     backend=self.backend,
-                    inline_plan=(e.payload or {}).get("plan")
-                    if isinstance(e.payload, dict)
-                    else None,
+                    inline_plan=(
+                        (e.payload or {}).get("plan")
+                        if isinstance(e.payload, dict)
+                        else None
+                    ),
                 )
                 if content:
                     body = Markdown(content)

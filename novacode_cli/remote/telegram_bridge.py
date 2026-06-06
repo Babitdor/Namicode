@@ -172,6 +172,79 @@ class TelegramBridge:
                         """Trigger 'typing' indicator in the Telegram chat."""
                         await self._trigger_typing(_chat_id)
 
+                    # Edit-in-place streaming state. `text` is the FULL accumulated
+                    # answer; keep one live message and roll over past Telegram's
+                    # 4096-char cap. Stream as PLAIN text (partial markdown like an
+                    # unclosed code fence makes editMessageText reject the entity
+                    # parse); apply Markdown only on the final edit, best-effort.
+                    _live: dict = {"id": None, "base": 0, "last": None}
+                    _EDIT_LIMIT = 3900
+
+                    async def edit_fn(
+                        body: str, final: bool = False, _chat_id: int = chat_id
+                    ) -> None:
+                        try:
+                            while len(body) - _live["base"] > _EDIT_LIMIT:
+                                block = body[_live["base"] : _live["base"] + _EDIT_LIMIT]
+                                if _live["id"] is None:
+                                    sent = await self._api_call(
+                                        "sendMessage",
+                                        {"chat_id": _chat_id, "text": block},
+                                    )
+                                    _live["id"] = (
+                                        (sent or {}).get("result", {}).get("message_id")
+                                    )
+                                elif block != _live["last"]:
+                                    await self._api_call(
+                                        "editMessageText",
+                                        {
+                                            "chat_id": _chat_id,
+                                            "message_id": _live["id"],
+                                            "text": block,
+                                        },
+                                    )
+                                _live["base"] += _EDIT_LIMIT
+                                _live["id"] = None
+                                _live["last"] = None
+                            remainder = body[_live["base"] :] or "…"
+                            if _live["id"] is None:
+                                params = {"chat_id": _chat_id, "text": remainder}
+                                if final:
+                                    params["parse_mode"] = "Markdown"
+                                sent = await self._api_call("sendMessage", params)
+                                if sent is None and final:
+                                    sent = await self._api_call(
+                                        "sendMessage",
+                                        {"chat_id": _chat_id, "text": remainder},
+                                    )
+                                _live["id"] = (
+                                    (sent or {}).get("result", {}).get("message_id")
+                                )
+                                _live["last"] = remainder
+                            elif remainder != _live["last"]:
+                                # Telegram 400s on identical edits — guarded above.
+                                params = {
+                                    "chat_id": _chat_id,
+                                    "message_id": _live["id"],
+                                    "text": remainder,
+                                }
+                                if final:
+                                    params["parse_mode"] = "Markdown"
+                                res = await self._api_call("editMessageText", params)
+                                if res is None and final:
+                                    # Markdown likely rejected — retry as plain text.
+                                    await self._api_call(
+                                        "editMessageText",
+                                        {
+                                            "chat_id": _chat_id,
+                                            "message_id": _live["id"],
+                                            "text": remainder,
+                                        },
+                                    )
+                                _live["last"] = remainder
+                        except Exception as e:  # noqa: BLE001
+                            logger.error(f"Telegram stream edit error: {e}")
+
                     remote_msg = RemoteMessage(
                         platform=RemotePlatform.TELEGRAM,
                         chat_id=chat_id,
@@ -179,6 +252,7 @@ class TelegramBridge:
                         text=text,
                         reply_fn=reply_fn,
                         typing_fn=typing_fn,
+                        edit_fn=edit_fn,
                     )
 
                     await self._queue.put(remote_msg)

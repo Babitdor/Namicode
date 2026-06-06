@@ -188,6 +188,41 @@ class DiscordBridge:
                     except Exception as e:
                         logger.error(f"Unexpected Discord send error: {e}")
 
+            async def react_fn(emoji: str) -> None:
+                """Add a reaction emoji to the user's message (best-effort)."""
+                try:
+                    await message.add_reaction(emoji)
+                except Exception as e:  # noqa: BLE001 — reactions are optional
+                    logger.debug(f"Discord reaction failed: {e}")
+
+            # Edit-in-place streaming state. `text` passed to edit_fn is the FULL
+            # accumulated answer; we keep a single live message and roll over to a
+            # new one whenever we exceed Discord's 2000-char cap.
+            _live: dict = {"msg": None, "base": 0}
+            _EDIT_LIMIT = 1990
+
+            async def edit_fn(text: str, final: bool = False) -> None:
+                """Create-or-edit the live answer message, rolling on overflow."""
+                try:
+                    # Flush full blocks past the limit into frozen messages.
+                    while len(text) - _live["base"] > _EDIT_LIMIT:
+                        block = text[_live["base"] : _live["base"] + _EDIT_LIMIT]
+                        if _live["msg"] is None:
+                            _live["msg"] = await message.channel.send(block)
+                        else:
+                            await _live["msg"].edit(content=block)
+                        _live["base"] += _EDIT_LIMIT
+                        _live["msg"] = None  # next remainder starts a fresh message
+                    remainder = text[_live["base"] :] or "…"
+                    if _live["msg"] is None:
+                        _live["msg"] = await message.channel.send(remainder)
+                    else:
+                        await _live["msg"].edit(content=remainder)
+                except discord.HTTPException as e:
+                    logger.error(f"Discord stream edit error: {e}")
+                except Exception as e:  # noqa: BLE001
+                    logger.error(f"Unexpected Discord edit error: {e}")
+
             try:
                 remote_msg = RemoteMessage(
                     platform=RemotePlatform.DISCORD,
@@ -196,6 +231,8 @@ class DiscordBridge:
                     text=content,
                     reply_fn=reply_fn,
                     typing_fn=message.channel.typing,
+                    react_fn=react_fn,
+                    edit_fn=edit_fn,
                 )
             except Exception as _e:
                 logger.error(f"Failed to create RemoteMessage: {_e}")
@@ -206,6 +243,8 @@ class DiscordBridge:
                     user_name=str(message.author),
                     text=content,
                     reply_fn=reply_fn,
+                    react_fn=react_fn,
+                    edit_fn=edit_fn,
                 )
 
             await self._queue.put(remote_msg)

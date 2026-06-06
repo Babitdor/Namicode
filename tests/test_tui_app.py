@@ -538,6 +538,183 @@ def test_tui_remote_render():
     asyncio.run(_drive_remote_render())
 
 
+async def _drive_remote_streaming():
+    """When the bridge supports edit_fn, the answer streams edit-in-place.
+
+    Assertions:
+    - the answer is streamed via edit_fn (finalized with final=True), NOT re-sent
+      via reply_fn (no duplicate),
+    - reactions fire at lifecycle points (🤔 on dequeue, 💬 on first text, ✅ done),
+    - a tools-only/no-edit_fn bridge still gets a normal reply_fn answer.
+    """
+    from langchain_core.messages import AIMessage
+
+    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.ui.ui_elements import TokenTracker
+
+    class _StateMsgs:
+        def __init__(self, msgs):
+            self.values = {"messages": msgs, "todos": []}
+
+    class _AgentRecording:
+        def __init__(self):
+            self._msgs = []
+
+        async def aget_state(self, config):
+            return _StateMsgs(list(self._msgs))
+
+        async def astream(self, inp, **kw):
+            yield ((), "messages", (_Chunk("r1", [{"type": "text", "text": "Streamed answer"}]), {}))
+            self._msgs.append(AIMessage(content="Streamed answer", id="r1"))
+
+        async def aupdate_state(self, **kw):
+            pass
+
+    replies: list[str] = []
+    edits: list[tuple[str, bool]] = []
+    reactions: list[str] = []
+
+    class _Platform:
+        value = "discord"
+
+    class _RemoteMsg:
+        text = "hi"
+        user_name = "alice"
+        platform = _Platform()
+        typing_fn = None
+
+        async def reply_fn(self, t):
+            replies.append(t)
+
+        async def edit_fn(self, text, final=False):
+            edits.append((text, final))
+
+        async def react_fn(self, emoji):
+            reactions.append(emoji)
+
+    class _SSRemote:
+        thread_id = "t1"
+        session_id = "s1"
+        auto_approve = False
+        plan_mode_enabled = False
+        todos: list = []
+
+        def __init__(self):
+            self._remote_message_queue = asyncio.Queue()
+            self._remote_message_lock = asyncio.Lock()
+            self._remote_bridge_manager = None
+
+    ss = _SSRemote()
+    app = NovaApp(
+        agent=_AgentRecording(),
+        assistant_id="nova-agent",
+        session_state=ss,
+        backend=None,
+        token_tracker=TokenTracker(),
+        image_tracker=None,
+        model_name="m",
+    )
+    async with app.run_test() as pilot:
+        await ss._remote_message_queue.put(_RemoteMsg())
+        for _ in range(40):
+            await pilot.pause()
+            if edits:
+                break
+
+        # The answer was streamed + finalized via edit_fn...
+        assert edits, edits
+        assert any(final and "Streamed answer" in text for text, final in edits), edits
+        # ...and NOT duplicated through reply_fn (no digest here — no tools).
+        assert replies == [], replies
+        # Lifecycle reactions fired.
+        assert "🤔" in reactions and "✅" in reactions, reactions
+        assert "💬" in reactions, reactions
+        assert ss.auto_approve is False  # restored
+
+
+def test_tui_remote_streaming():
+    if not _HAS_TEXTUAL:
+        return
+    asyncio.run(_drive_remote_streaming())
+
+
+async def _drive_responsive_banner():
+    """The home ASCII banner re-renders to the right size variant on resize."""
+    from novacode_cli.config.config import get_responsive_ascii
+    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.ui.ui_elements import TokenTracker
+
+    # Width drives discrete art variants (wide ≥75, medium ≥60, narrow <60).
+    wide_art = get_responsive_ascii(width=100)
+    narrow_art = get_responsive_ascii(width=40)
+    assert wide_art != narrow_art
+    assert "NOVA" in narrow_art  # narrow fallback still shows the name
+
+    app = NovaApp(
+        agent=_FakeAgent(),
+        assistant_id="nova-agent",
+        session_state=_SS(),
+        backend=None,
+        token_tracker=TokenTracker(),
+        image_tracker=None,
+        model_name="m",
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # Banner is shown at startup and tracked for resize updates.
+        assert app._home_banner is not None
+        assert app._home_banner.is_mounted
+
+        # Simulate a wide then a narrow resize; the banner swaps art variants.
+        app._banner_width = lambda: 100  # noqa: SLF001
+        app.on_resize(object())
+        await pilot.pause()
+        wide_text = app._home_banner_art
+
+        app._banner_width = lambda: 40  # noqa: SLF001
+        app.on_resize(object())
+        await pilot.pause()
+        narrow_text = app._home_banner_art
+
+        assert wide_text != narrow_text, (len(wide_text), len(narrow_text))
+        assert "NOVA" in narrow_text
+
+
+def test_tui_responsive_banner():
+    if not _HAS_TEXTUAL:
+        return
+    asyncio.run(_drive_responsive_banner())
+
+
+async def _drive_user_input_sanitization():
+    """Hidden Unicode in user input is stripped (warn + sanitize) before dispatch."""
+    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.ui.ui_elements import TokenTracker
+
+    app = NovaApp(
+        agent=_FakeAgent(),
+        assistant_id="nova-agent",
+        session_state=_SS(),
+        backend=None,
+        token_tracker=TokenTracker(),
+        image_tracker=None,
+        model_name="m",
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # ZERO WIDTH SPACE (U+200B) smuggled into the input is removed.
+        cleaned = app._sanitize_user_text("hel​lo")  # noqa: SLF001
+        assert cleaned == "hello", repr(cleaned)
+        # Clean text is returned untouched.
+        assert app._sanitize_user_text("plain text") == "plain text"
+
+
+def test_tui_user_input_sanitization():
+    if not _HAS_TEXTUAL:
+        return
+    asyncio.run(_drive_user_input_sanitization())
+
+
 async def _drive_remote_slash():
     """Slash commands from a remote chat route through _remote_slash."""
     from novacode_cli.tui.app import NovaApp

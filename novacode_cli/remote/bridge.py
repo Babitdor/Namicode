@@ -61,6 +61,14 @@ class RemoteMessage:
         text: The raw text of the message.
         reply_fn: Async callable that sends a response back to the originating chat.
         typing_fn: Optional async callable that triggers a "typing" indicator on the platform.
+        react_fn: Optional async callable that adds a reaction emoji to the user's
+            message (Discord). Best-effort; ``None`` on platforms without reactions.
+        edit_fn: Optional async callable ``(text, final=False)`` that creates a
+            single "live" reply message on first call and edits it in place on
+            subsequent calls — used to stream the agent's answer GPT-style without
+            flooding the chat or hitting rate limits. ``final=True`` signals the
+            last edit (the bridge may then apply richer formatting). ``None`` if
+            the platform/bridge doesn't support edit-in-place streaming.
     """
     platform: RemotePlatform
     chat_id: str | int
@@ -68,6 +76,8 @@ class RemoteMessage:
     text: str
     reply_fn: Callable[[str], Awaitable[None]]
     typing_fn: Callable[[], Awaitable[None]] | None = None
+    react_fn: Callable[[str], Awaitable[None]] | None = None
+    edit_fn: Callable[..., Awaitable[None]] | None = None
 
 
 @dataclass

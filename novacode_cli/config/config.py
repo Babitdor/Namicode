@@ -161,20 +161,28 @@ def parse_agent_color(agent_md_path: Path) -> str | None:
         return None
 
 
-def get_responsive_ascii(console: Console) -> str:
+def get_responsive_ascii(
+    console: Console | None = None, width: int | None = None
+) -> str:
     """Generate responsive ASCII art that adapts to terminal width.
 
     Args:
-        console: Rich console instance to get terminal width
+        console: Rich console instance to get terminal width from (used only
+            when ``width`` is not given).
+        width: Explicit terminal width in columns. Prefer this from a Textual
+            app (``self.size.width``), since the global Rich console width does
+            not track the live TUI size on resize.
 
     Returns:
         ASCII art string sized appropriately for the terminal
     """
-    # Get terminal width (with fallback to 80)
-    try:
-        terminal_width = console.width
-    except Exception:
-        terminal_width = 80
+    # Resolve width: explicit arg wins; else the console; else a safe default.
+    terminal_width = width
+    if terminal_width is None:
+        try:
+            terminal_width = console.width if console is not None else 80
+        except Exception:
+            terminal_width = 80
 
     # Minimum width for full ASCII art
     min_width = 75
@@ -276,6 +284,7 @@ COMMANDS = {
     "critique": "Run critique agent on recent changes (e.g., /critique or /critique src/)",
     "ralph": "Run autonomous looping mode (e.g., /ralph <task>, /ralph <task> --iterations 5)",
     "browser-use": "Run browser automation with AI (e.g., /browser-use <task>, /browser-use <task> --model llama3.2)",
+    "chat": "Start a web chat UI in the browser",
     "dream": "Run memory consolidation to organize and clean up memory files",
     "research": "Run agent swarm research (e.g., /research <query>, /research academic <query>, /research market <query>)",
     "reindex": "Rebuild the semantic code search index (after significant code changes)",

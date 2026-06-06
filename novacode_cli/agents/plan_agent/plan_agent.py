@@ -18,7 +18,10 @@ from langchain.agents.middleware import ModelRetryMiddleware
 
 from novacode_cli.agents.plan_agent.plan_mode_middleware import PlanModeMiddleware
 from novacode_cli.bootstrap.steering import SteeringMiddleware
-from novacode_cli.config.plan_mode import BLOCKED_TOOLS_DISPLAY, RESTRICTED_WRITE_TOOLS_DISPLAY
+from novacode_cli.config.plan_mode import (
+    BLOCKED_TOOLS_DISPLAY,
+    RESTRICTED_WRITE_TOOLS_DISPLAY,
+)
 from novacode_cli.hitl.interrupts import get_interrupt_configs
 from novacode_cli.config.config import settings
 from novacode_cli.prompts import render_template
@@ -275,9 +278,9 @@ def create_plan_agent_with_config(
             # `or []` would swap in a fresh list and break live steering, since
             # the list is usually empty at plan-agent creation time.
             SteeringMiddleware(
-                instructions=steering_instructions
-                if steering_instructions is not None
-                else []
+                instructions=(
+                    steering_instructions if steering_instructions is not None else []
+                )
             ),
         ],
     )
