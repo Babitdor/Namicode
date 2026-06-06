@@ -385,7 +385,8 @@ def _infer_project_description(
     # Try to find a description from node labels
     nodes = extraction.get("nodes", [])
     for node in nodes:
-        label = node.get("label", "")
+        # `or ""` because a node may have an explicit null label.
+        label = node.get("label") or ""
         source = node.get("source_file", "")
         # Look for main entry points
         if "main" in label.lower() or "app" in label.lower():
@@ -557,7 +558,7 @@ def _extract_conventions(
 
     # Infer from node types
     nodes = extraction.get("nodes", [])
-    has_async = any("async" in n.get("label", "").lower() for n in nodes)
+    has_async = any("async" in (n.get("label") or "").lower() for n in nodes)
     if has_async:
         conventions.append({
             "rule": "Use async patterns",
@@ -595,7 +596,7 @@ def _extract_key_files(
 
     # Add entry points from nodes
     for node in extraction.get("nodes", []):
-        label = node.get("label", "").lower()
+        label = (node.get("label") or "").lower()
         source = node.get("source_file", "")
         if source and source not in seen_sources:
             if any(kw in label for kw in ["main", "cli", "app", "entry"]):

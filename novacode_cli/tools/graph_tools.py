@@ -19,8 +19,9 @@ def _load_raw_graph(workspace_root: Path) -> dict[str, Any] | None:
         return None
 
 
-def _matches(text: str, query_lower: str) -> bool:
-    return query_lower in text.lower()
+def _matches(text: str | None, query_lower: str) -> bool:
+    # `or ""` because node label/id/source_file may be null in the graph.
+    return query_lower in (text or "").lower()
 
 
 @tool

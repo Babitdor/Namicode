@@ -313,7 +313,9 @@ class GraphContextMiddleware(AgentMiddleware):
                     for mid in members:
                         deg = degree_map.get(mid, 0)
                         node = node_map.get(mid, {})
-                        nl = node.get("label", mid)
+                        # `or mid` because a node may have an explicit null label
+                        # (else best_label could become None → .replace crash).
+                        nl = node.get("label") or mid
                         sf = node.get("source_file", "")
 
                         score = 0
@@ -376,7 +378,7 @@ class GraphContextMiddleware(AgentMiddleware):
 
             # Also add entry points
             for node in nodes:
-                label = node.get("label", "").lower()
+                label = (node.get("label") or "").lower()
                 nid = node.get("id", "")
                 sf = node.get("source_file", "")
                 if sf and sf not in seen_files:

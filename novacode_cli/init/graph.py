@@ -295,7 +295,9 @@ def _enrich_graph_json(
 
     # Also add entry points from nodes in the graph
     for node in data.get("nodes", []):
-        label = node.get("label", "").lower()
+        # `.get("label", "")` returns None when the key exists but is null
+        # (graphify can emit null labels) — `or ""` guards `.lower()`.
+        label = (node.get("label") or "").lower()
         nid = node.get("id", "")
         sf = node.get("source_file", "")
         if sf and sf not in seen_files:

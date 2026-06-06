@@ -121,7 +121,10 @@ yarn-error.log*
 package-lock.json
 yarn.lock
 
-# Graphify
+# Graphify — the /graphify skill writes its knowledge-graph output + AST cache
+# here. The dir uses a hyphen; the old underscore pattern never matched it, so
+# the multi-MB cache leaked into `git status`. Ignore both spellings.
+graphify-out/
 graphify_out/
 
 # Runtime data (never commit)
