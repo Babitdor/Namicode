@@ -204,56 +204,46 @@ class DualModeStore:
         self._lock = threading.RLock()
 
     # ── Sync methods ──────────────────────────────────────────────────────
+    # Each forwards **kwargs to the wrapped store so the FULL BaseStore
+    # signature is supported (search: query/filter/limit/offset/refresh_ttl;
+    # put: index/ttl; get: refresh_ttl) — deepagents/LangGraph call these with
+    # those keywords, e.g. search(..., query=...).
 
-    def put(self, namespace: tuple[str, ...], key: str, value: dict, /) -> None:
+    def put(self, namespace: tuple[str, ...], key: str, value: dict, /, **kwargs: Any) -> None:
         with self._lock:
-            self._store.put(namespace, key, value)
+            self._store.put(namespace, key, value, **kwargs)
 
-    def get(self, namespace: tuple[str, ...], key: str, /) -> "Item | None":
+    def get(self, namespace: tuple[str, ...], key: str, /, **kwargs: Any) -> "Item | None":
         with self._lock:
-            return self._store.get(namespace, key)
+            return self._store.get(namespace, key, **kwargs)
 
-    def search(
-        self,
-        namespace_prefix: tuple[str, ...],
-        /,
-        *,
-        filter: dict[str, Any] | None = None,
-        limit: int = 10,
-        offset: int = 0,
-    ) -> "list[Item]":
+    def search(self, namespace_prefix: tuple[str, ...], /, **kwargs: Any) -> "list[Item]":
         with self._lock:
-            return self._store.search(
-                namespace_prefix, filter=filter, limit=limit, offset=offset
-            )
+            return self._store.search(namespace_prefix, **kwargs)
 
-    def delete(self, namespace: tuple[str, ...], key: str, /) -> None:
+    def delete(self, namespace: tuple[str, ...], key: str, /, **kwargs: Any) -> None:
         with self._lock:
-            self._store.delete(namespace, key)
+            self._store.delete(namespace, key, **kwargs)
 
     # ── Async methods (run the sync store in a thread; lock serializes) ─────
 
-    async def aput(self, namespace: tuple[str, ...], key: str, value: dict, /) -> None:
-        await asyncio.to_thread(self.put, namespace, key, value)
+    async def aput(
+        self, namespace: tuple[str, ...], key: str, value: dict, /, **kwargs: Any
+    ) -> None:
+        await asyncio.to_thread(self.put, namespace, key, value, **kwargs)
 
-    async def aget(self, namespace: tuple[str, ...], key: str, /) -> "Item | None":
-        return await asyncio.to_thread(self.get, namespace, key)
+    async def aget(
+        self, namespace: tuple[str, ...], key: str, /, **kwargs: Any
+    ) -> "Item | None":
+        return await asyncio.to_thread(self.get, namespace, key, **kwargs)
 
     async def asearch(
-        self,
-        namespace_prefix: tuple[str, ...],
-        /,
-        *,
-        filter: dict[str, Any] | None = None,
-        limit: int = 10,
-        offset: int = 0,
+        self, namespace_prefix: tuple[str, ...], /, **kwargs: Any
     ) -> "list[Item]":
-        return await asyncio.to_thread(
-            self.search, namespace_prefix, filter=filter, limit=limit, offset=offset
-        )
+        return await asyncio.to_thread(self.search, namespace_prefix, **kwargs)
 
-    async def adelete(self, namespace: tuple[str, ...], key: str, /) -> None:
-        await asyncio.to_thread(self.delete, namespace, key)
+    async def adelete(self, namespace: tuple[str, ...], key: str, /, **kwargs: Any) -> None:
+        await asyncio.to_thread(self.delete, namespace, key, **kwargs)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
