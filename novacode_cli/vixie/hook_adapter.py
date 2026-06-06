@@ -77,8 +77,6 @@ def _map_event(event_name: str, payload: dict[str, Any]) -> dict[str, Any] | Non
         return {"event_type": "state_update", "data": {"state": "error"}, "message": display, "popup_state": "error"}
     elif event_name == "user.message":
         return {"event_type": "state_update", "data": {"state": "user_input"}, "message": "Waiting for input\u2026", "popup_state": "user_input"}
-    elif event_name == "prompt.decompose":
-        return {"event_type": "state_update", "data": {"state": "planning"}, "message": "Decomposing task\u2026", "popup_state": "planning"}
     elif event_name == "model.switch":
         model = payload.get("model", "unknown")
         return {"event_type": "state_update", "data": {"state": "idle"}, "message": f"Switched to {model}", "popup_state": "idle"}

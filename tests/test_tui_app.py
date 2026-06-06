@@ -113,13 +113,10 @@ async def _drive_routing():
     from novacode_cli.tui.app import NovaApp
     from novacode_cli.ui.ui_elements import TokenTracker
 
-    class _SSNoDecomp(_SS):
-        prompt_decomposition_enabled = False
-
     app = NovaApp(
         agent=_FakeAgent(),
         assistant_id="nova-agent",
-        session_state=_SSNoDecomp(),
+        session_state=_SS(),
         backend=None,
         token_tracker=TokenTracker(),
         image_tracker=None,
@@ -547,7 +544,6 @@ async def _drive_remote_slash():
     from novacode_cli.ui.ui_elements import TokenTracker
 
     class _SSRemote(_SS):
-        prompt_decomposition_enabled = True
         workspace_root = None
 
         def __init__(self):
@@ -1911,6 +1907,189 @@ def test_tui_input_routing():
     if not _HAS_TEXTUAL:
         return
     asyncio.run(_drive_routing())
+
+
+async def _drive_fragmented_paste():
+    """A large paste split into several Paste events must reach the agent whole.
+
+    Terminals deliver a big bracketed paste as multiple Paste events (split at
+    arbitrary, mid-line byte boundaries). PromptInput must coalesce them into a
+    single [paste #N] placeholder holding the WHOLE text, so that on Enter the
+    agent receives the entire pasted block as ONE message — not 4 fragments.
+    """
+    from textual import events
+
+    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.ui.ui_elements import TokenTracker
+
+    app = NovaApp(
+        agent=_FakeAgent(),
+        assistant_id="nova-agent",
+        session_state=_SS(),
+        backend=None,
+        token_tracker=TokenTracker(),
+        image_tracker=None,
+        model_name="m",
+    )
+
+    # A multi-line block, then sliced into 4 fragments at mid-line boundaries.
+    full_text = "\n".join(f"line {i} some content here" for i in range(120))
+    n = len(full_text)
+    cuts = [0, n // 4, n // 2, (3 * n) // 4, n]
+    fragments = [full_text[a:b] for a, b in zip(cuts, cuts[1:])]
+    assert len(fragments) == 4
+    assert "".join(fragments) == full_text  # sanity: slicing is lossless
+
+    dispatched: list[str] = []
+
+    async with app.run_test() as pilot:
+        inp = app.query_one("#prompt")
+        inp.focus()
+        # Capture exactly what would be sent to the agent.
+        app._dispatch = lambda text: dispatched.append(text)  # noqa: SLF001
+
+        # Deliver the paste as 4 separate Paste events (the fragmentation bug).
+        for frag in fragments:
+            inp.post_message(events.Paste(frag))
+            await pilot.pause()
+
+        # The input must show ONE placeholder, not four.
+        assert inp.value.count("[paste #") == 1, inp.value
+        # That one placeholder must hold the COMPLETE pasted text. Peek
+        # non-destructively (resolve_paste_placeholders consumes the entry).
+        assert app.paste_tracker.get_paste("paste-1") == full_text
+
+        # Hitting Enter sends the whole thing to the agent in a single dispatch.
+        await pilot.press("enter")
+        await pilot.pause()
+
+    assert dispatched == [full_text], (
+        len(dispatched),
+        [len(d) for d in dispatched],
+    )
+
+
+def test_tui_fragmented_paste_one_message():
+    if not _HAS_TEXTUAL:
+        return
+    asyncio.run(_drive_fragmented_paste())
+
+
+async def _drive_copy_response():
+    """Agent responses can be copied: via /copy, /copy all, and click-to-copy."""
+    from rich.markdown import Markdown
+    from rich.text import Text
+
+    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.ui.ui_elements import TokenTracker
+
+    app = NovaApp(
+        agent=_FakeAgent(),
+        assistant_id="nova-agent",
+        session_state=_SS(),
+        backend=None,
+        token_tracker=TokenTracker(),
+        image_tracker=None,
+        model_name="m",
+    )
+
+    copied: list[str] = []
+
+    async with app.run_test() as pilot:
+        app.copy_to_clipboard = lambda s: copied.append(s)  # noqa: SLF001
+
+        await app._add_message(Text("You"), "user", Markdown("what is 2+2?"))
+        await app._add_message(Text("Nova"), "nova", Markdown("It is **4**."))
+        await app._add_message(Text("You"), "user", Markdown("and 3+3?"))
+        nova2 = await app._add_message(Text("Nova"), "nova", Markdown("That is `6`."))
+        await pilot.pause()
+
+        # raw_text is captured verbatim from the markdown source.
+        assert nova2.raw_text == "That is `6`."
+
+        # /copy → the LAST agent response only.
+        await app._run_copy("/copy")
+        assert copied[-1] == "That is `6`.", copied
+
+        # /copy all → the whole conversation, both turns, labeled.
+        await app._run_copy("/copy all")
+        whole = copied[-1]
+        assert "It is **4**." in whole and "That is `6`." in whole
+        assert "what is 2+2?" in whole and "## You" in whole and "## Nova" in whole
+
+        # Click-to-copy: clicking a message copies that message's text.
+        class _Click:
+            def stop(self):
+                pass
+
+        nova2.on_click(_Click())
+        assert copied[-1] == "That is `6`.", copied
+
+
+def test_tui_copy_response():
+    if not _HAS_TEXTUAL:
+        return
+    asyncio.run(_drive_copy_response())
+
+
+async def _drive_plan_shares_conversation():
+    """Plan mode must reuse the core agent's checkpointer + store + thread.
+
+    That shared checkpointer (keyed by the same thread_id the TUI streams under)
+    is what lets the plan agent SEE the prior conversation with the core agent
+    and continue planning from it.
+    """
+    import novacode_cli.agents.plan_agent as plan_pkg
+
+    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.ui.ui_elements import TokenTracker
+
+    captured: dict = {}
+
+    def _fake_factory(**kwargs):
+        captured.update(kwargs)
+        return ("PLAN_AGENT", "PLAN_BACKEND")
+
+    sentinel_ckpt = object()
+    sentinel_store = object()
+
+    ss = _SS()
+    ss._model = object()  # truthy model so plan mode proceeds
+    ss._assistant_id = "nova-agent"
+    ss._checkpointer = sentinel_ckpt
+    ss._store = sentinel_store
+
+    app = NovaApp(
+        agent=_FakeAgent(),
+        assistant_id="nova-agent",
+        session_state=ss,
+        backend=None,
+        token_tracker=TokenTracker(),
+        image_tracker=None,
+        model_name="m",
+    )
+
+    orig = plan_pkg.create_plan_agent_with_config
+    plan_pkg.create_plan_agent_with_config = _fake_factory
+    try:
+        async with app.run_test() as pilot:
+            ok = await app._enable_plan_mode()
+            await pilot.pause()
+    finally:
+        plan_pkg.create_plan_agent_with_config = orig
+
+    assert ok is True, "plan mode should enable with a model present"
+    # The core agent's checkpointer + store are handed to the plan agent — same
+    # objects, so the same thread_id resolves to the same conversation history.
+    assert captured.get("checkpointer") is sentinel_ckpt, captured
+    assert captured.get("store") is sentinel_store, captured
+    assert ss.plan_agent == "PLAN_AGENT"
+
+
+def test_tui_plan_shares_conversation():
+    if not _HAS_TEXTUAL:
+        return
+    asyncio.run(_drive_plan_shares_conversation())
 
 
 if __name__ == "__main__":

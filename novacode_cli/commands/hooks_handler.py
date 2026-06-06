@@ -455,7 +455,6 @@ def _list_events() -> bool:
 
     # Lifecycle events
     console.print("[bold]Lifecycle Events:[/bold]")
-    console.print(f"  • {HookEvent.PROMPT_DECOMPOSE} - Prompt decomposed into sub-prompts")
     console.print(f"  • {HookEvent.REMOTE_MESSAGE} - Remote (Discord/Telegram) message received")
     console.print(f"  • {HookEvent.CONTEXT_WARNING} - Context usage warning/critical")
     console.print(f"  • {HookEvent.COMPACT} - Conversation compacted")

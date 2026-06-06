@@ -156,6 +156,25 @@ class PasteTracker:
         """
         return self._pastes.get(paste_id)
 
+    def extend_paste(self, paste_id: str, text: str) -> bool:
+        """Append more text to an existing paste (for coalescing fragments).
+
+        A single large paste can be delivered by the terminal as several Paste
+        events; appending the later fragments onto the first paste keeps the
+        whole thing as one block under one placeholder.
+
+        Args:
+            paste_id: The paste ID to extend (e.g., "paste-1")
+            text: The text to append
+
+        Returns:
+            True if the paste existed and was extended, False otherwise
+        """
+        if paste_id in self._pastes:
+            self._pastes[paste_id] += text
+            return True
+        return False
+
     def remove_paste(self, paste_id: str) -> bool:
         """Remove a paste by ID.
 

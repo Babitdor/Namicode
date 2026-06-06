@@ -149,12 +149,16 @@ async def _start_plan_mode(
             exit_plan_mode,
         )
 
-        # Create plan agent
+        # Create plan agent. Share the core agent's checkpointer + store so plan
+        # mode continues from the existing conversation (same thread_id) and
+        # persists across restarts, instead of starting from an empty context.
         plan_agent, plan_backend = create_plan_agent_with_config(
             model=model,
             assistant_id=session_state._assistant_id or "nova",
             tools=[ask_user_question, enter_plan_mode, exit_plan_mode],
             steering_instructions=session_state.steering_instructions,
+            checkpointer=getattr(session_state, "_checkpointer", None),
+            store=getattr(session_state, "_store", None),
         )
 
         # Store the plan agent in session state for later use

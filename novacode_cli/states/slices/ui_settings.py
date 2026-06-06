@@ -1,7 +1,7 @@
 """UI-level configuration state slice.
 
 Owns all fields that affect UI behavior independent of agent or runtime:
-auto-approve, plan mode, verbose output, prompt decomposition, exit hints,
+auto-approve, plan mode, verbose output, exit hints,
 and the no_splash flag.
 """
 
@@ -28,7 +28,6 @@ class UISettings:
         self.exit_hint_handle: Any = None
         self.plan_mode_enabled: bool = False
         self.verbose: bool = False
-        self.prompt_decomposition_enabled: bool = True
 
     # -- toggles ---------------------------------------------------------------
 

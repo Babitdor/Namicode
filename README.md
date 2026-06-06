@@ -17,7 +17,6 @@ An open-source terminal-based AI coding assistant that runs in your terminal, si
 - **MCP Support**: Extend capabilities with Model Context Protocol servers (12+ presets available)
 - **Sandbox Execution**: Run code safely in remote sandboxes (Modal, Runloop, Daytona, Docker, E2B)
 - **Plan Mode**: Structured planning phase before implementation with plan approval workflow
-- **Prompt Decomposition**: Automatically splits complex multi-intent prompts into sequential sub-prompts
 - **Voice Agent**: Hands-free coding with wake-word detection, STT/TTS providers, and voice-driven file operations
 - **Graphify Integration**: Generate interactive visualizations and knowledge graphs from codebases
 - **LSP Integration**: Language Server Protocol support for go-to-definition, find references, rename, diagnostics, and more
@@ -955,7 +954,6 @@ The CLI implements a "Deep Agent" architecture with four key components:
 - `hooks.py` - Lifecycle hook system
 - `compaction.py` - Conversation summarization via LLM
 - `plans.py` - Plan management and persistence
-- `prompt_decomposer.py` - Multi-intent prompt splitting
 - `onboarding.py` - Interactive first-run setup with SecretManager
 - `doctor.py` - System diagnostics and environment validation
 - `migrate.py` - Configuration migration utilities

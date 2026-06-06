@@ -126,14 +126,6 @@ class SessionState:
         self._ui_settings.verbose = value
 
     @property
-    def prompt_decomposition_enabled(self) -> bool:
-        return self._ui_settings.prompt_decomposition_enabled
-
-    @prompt_decomposition_enabled.setter
-    def prompt_decomposition_enabled(self, value: bool) -> None:
-        self._ui_settings.prompt_decomposition_enabled = value
-
-    @property
     def exit_hint_until(self) -> float | None:
         return self._ui_settings.exit_hint_until
 
@@ -400,7 +392,7 @@ class SessionState:
         # property descriptor (data descriptors always win).
         if name in {
             "auto_approve", "no_splash", "plan_mode_enabled", "verbose",
-            "prompt_decomposition_enabled", "exit_hint_until", "exit_hint_handle",
+            "exit_hint_until", "exit_hint_handle",
             "token_tracker", "plan_agent", "plan_backend", "plan_content",
             "approved_plan_content",
             "_remote_message_queue", "_remote_message_lock",

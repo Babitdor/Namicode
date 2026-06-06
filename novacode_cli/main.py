@@ -1153,58 +1153,25 @@ async def simple_cli(
                     active_agent = session_state.plan_agent
                     active_backend = session_state.plan_backend
 
-                # ── Prompt decomposition ─────────────────────────────
-                # If the user's prompt contains multiple sequential intents
-                # ("add auth, and then add rate limiting"), decompose into
-                # sub-prompts and execute them one at a time.  This gives
-                # the agent full conversation context between steps and
-                # prevents it from trying to do everything at once.
-                sub_prompts = [user_input]  # default: single prompt
-                if getattr(session_state, "prompt_decomposition_enabled", True):
-                    from novacode_cli.prompt_decomposer import (
-                        decompose_prompt,
-                        format_decomposition_message,
+                _exec_task = asyncio.create_task(
+                    execute_task(
+                        user_input,
+                        active_agent,
+                        assistant_id,
+                        session_state,
+                        token_tracker,
+                        backend=active_backend,
+                        is_subagent=False,
+                        image_tracker=image_tracker,
+                        seen_message_ids=_seen_message_ids,  # type: ignore
                     )
-
-                    decomp = decompose_prompt(user_input)
-                    if decomp.decomposed:
-                        msg = format_decomposition_message(decomp)
-                        if msg:
-                            console.print()
-                            console.print(msg)
-                            console.print()
-                        # Fire prompt.decompose hook
-                        dispatch_hook_fire_and_forget(
-                            HookEvent.PROMPT_DECOMPOSE,
-                            {
-                                "original_prompt": user_input[:300],
-                                "sub_prompt_count": len(decomp.sub_prompts),
-                                "session_id": session_state.session_id,
-                            },
-                        )
-                    sub_prompts = decomp.sub_prompts
-
-                # Execute sub-prompts sequentially
-                for sub_prompt in sub_prompts:
-                    _exec_task = asyncio.create_task(
-                        execute_task(
-                            sub_prompt,
-                            active_agent,
-                            assistant_id,
-                            session_state,
-                            token_tracker,
-                            backend=active_backend,
-                            is_subagent=False,
-                            image_tracker=image_tracker,
-                            seen_message_ids=_seen_message_ids,  # type: ignore
-                        )
-                    )
-                    try:
-                        await _exec_task
-                    except asyncio.CancelledError:
-                        pass  # execute_task's CancelledError handler ran cleanup
-                    finally:
-                        _exec_task = None
+                )
+                try:
+                    await _exec_task
+                except asyncio.CancelledError:
+                    pass  # execute_task's CancelledError handler ran cleanup
+                finally:
+                    _exec_task = None
 
                 # After plan approval, inject approved plan into Nova agent
                 approved_plan = session_state.consume_approved_plan()
@@ -1437,6 +1404,24 @@ async def _shutdown_background_services(session_state) -> None:
         if task is not None and not task.done():
             task.cancel()
             await _guard(task, timeout=2.0)
+    except Exception:  # noqa: BLE001, S110
+        pass
+
+    # Catch-all: cancel every other lingering task so asyncio.run's own shutdown
+    # (which awaits all pending tasks) can't hang /quit on a slow or
+    # uncancellable background coroutine — e.g. a Nova review / skill-creation
+    # task, a fire-and-forget hook, or a remote reply still in flight.
+    try:
+        current = asyncio.current_task()
+        pending = [
+            t
+            for t in asyncio.all_tasks()
+            if t is not current and not t.done()
+        ]
+        for t in pending:
+            t.cancel()
+        if pending:
+            await asyncio.wait(pending, timeout=3.0)
     except Exception:  # noqa: BLE001, S110
         pass
 
@@ -1859,7 +1844,13 @@ async def main(
             # session (closed implicitly on process exit).
             import aiosqlite
 
-            conn = await aiosqlite.connect(_db_path)
+            # Daemonise aiosqlite's worker thread BEFORE it starts (on await):
+            # it's non-daemon by default and is never closed, so it blocks the
+            # interpreter at exit — making /quit hang. WAL + per-turn commits
+            # mean nothing in-flight is lost when the daemon thread is abandoned.
+            _conn_cm = aiosqlite.connect(_db_path)
+            _conn_cm.daemon = True
+            conn = await _conn_cm
             saver = _AsyncSqliteSaver(conn)  # type: ignore[call-arg]
             await saver.setup()
             # Enable WAL mode on the saver's own connection: concurrent reads
@@ -2559,6 +2550,15 @@ def cli_main() -> None:
                     explicit_sandbox=explicit_sandbox,
                 )
             )
+            # main() returned normally — every teardown step has run (session
+            # saved, sandbox stopped, background tasks cancelled, connections
+            # committed). Force a prompt process exit so a lingering non-daemon
+            # thread (sqlite/aiosqlite worker, docker SDK pool, etc.) can't hang
+            # /quit during interpreter shutdown. Error paths use sys.exit() and
+            # propagate before reaching here, so exit codes are preserved.
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os._exit(0)
     except KeyboardInterrupt:
         # Clean exit on Ctrl+C - suppress ugly traceback
         console.print("\n\n[yellow]Interrupted[/yellow]")

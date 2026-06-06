@@ -46,6 +46,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import posixpath
+import shlex
 from typing import TYPE_CHECKING, Any
 
 from deepagents.backends.sandbox import BaseSandbox
@@ -55,6 +56,34 @@ logger = logging.getLogger(__name__)
 # Default timeout for remote sandbox file operations. Operations that
 # exceed this are cancelled to prevent hangs on unresponsive backends.
 _DEFAULT_ASYNC_TIMEOUT: float = 120.0
+
+# Directories that are huge and never worth grepping (dependency trees, VCS
+# metadata, caches, build/output dirs). The base sandbox grep does a plain
+# `grep -r` with NO exclusions, so on a real project tree it scans .venv /
+# node_modules / .git etc. and blows past the timeout. We skip these in both
+# the ripgrep and grep code paths to keep a project-root search fast.
+_GREP_EXCLUDE_DIRS: tuple[str, ...] = (
+    ".git",
+    ".hg",
+    ".svn",
+    ".venv",
+    "venv",
+    "env",
+    "node_modules",
+    "__pycache__",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".tox",
+    "graphify-out",
+    "graphify_out",
+    "dist",
+    "build",
+    ".idea",
+    ".vscode",
+    ".next",
+    "target",
+)
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -218,15 +247,83 @@ class WorkdirSandboxBackend(BaseSandbox):
             super().aedit(self._rebase(file_path), old_string, new_string, replace_all)
         )
 
+    @staticmethod
+    def _build_grep_command(pattern: str, search_path: str, glob: str | None) -> str:
+        """Build a fast, exclusion-aware content-search command.
+
+        Prefers ``rg`` (ripgrep) — parallel, respects ``.gitignore``, and we
+        additionally force-exclude the heavy directories so it stays fast even
+        when the project root isn't a git repo. Falls back to ``grep -r`` with
+        the same ``--exclude-dir`` set. ``; true`` keeps the shell exit status 0
+        so a no-match (exit 1) isn't treated as a failure by ``execute``.
+        """
+        pat = shlex.quote(pattern)
+        sp = shlex.quote(search_path)
+
+        rg_excludes = " ".join(
+            f"-g {shlex.quote('!' + d)}" for d in _GREP_EXCLUDE_DIRS
+        )
+        rg_include = f"-g {shlex.quote(glob)} " if glob else ""
+        rg = (
+            f"rg -n --no-heading -F --color=never "
+            f"{rg_include}{rg_excludes} -e {pat} -- {sp}"
+        )
+
+        grep_excludes = " ".join(
+            f"--exclude-dir={shlex.quote(d)}" for d in _GREP_EXCLUDE_DIRS
+        )
+        grep_include = f"--include={shlex.quote(glob)} " if glob else ""
+        gr = f"grep -rHnF {grep_excludes} {grep_include}-e {pat} {sp}"
+
+        return (
+            f"if command -v rg >/dev/null 2>&1; then {rg} 2>/dev/null; "
+            f"else {gr} 2>/dev/null; fi; true"
+        )
+
+    @staticmethod
+    def _parse_grep_output(output: str | None) -> list[Any]:
+        """Parse ``path:line:text`` grep/ripgrep output into GrepMatch dicts."""
+        matches: list[Any] = []
+        for line in (output or "").rstrip().split("\n"):
+            if not line:
+                continue
+            parts = line.split(":", 2)
+            if len(parts) < 3:  # noqa: PLR2004
+                continue
+            try:
+                line_no = int(parts[1])
+            except ValueError:
+                continue
+            matches.append({"path": parts[0], "line": line_no, "text": parts[2]})
+        return matches
+
     def grep(
         self, pattern: str, path: str | None = None, glob: str | None = None
     ) -> GrepResult:
-        return super().grep(pattern, self._rebase_opt(path), glob)
+        # Override the base sandbox grep (plain `grep -r`, no excludes) with a
+        # fast, exclusion-aware search so a project-root grep doesn't scan
+        # .venv/node_modules/.git and time out.
+        from deepagents.backends.protocol import GrepResult as _GrepResult
+
+        cmd = self._build_grep_command(pattern, self._rebase_opt(path), glob)
+        try:
+            result = self.execute(cmd)
+        except Exception as exc:  # noqa: BLE001
+            return _GrepResult(error=f"grep failed: {exc}")
+        return _GrepResult(matches=self._parse_grep_output(result.output))
 
     async def agrep(
         self, pattern: str, path: str | None = None, glob: str | None = None
     ) -> GrepResult:
-        return await self._run_async(super().agrep(pattern, self._rebase_opt(path), glob))
+        # Run our fast sync grep off-thread under the standard timeout backstop.
+        from deepagents.backends.protocol import GrepResult as _GrepResult
+
+        cmd = self._build_grep_command(pattern, self._rebase_opt(path), glob)
+        try:
+            result = await self._run_async(self.aexecute(cmd))
+        except Exception as exc:  # noqa: BLE001
+            return _GrepResult(error=f"grep failed: {exc}")
+        return _GrepResult(matches=self._parse_grep_output(result.output))
 
     def grep_raw(
         self, pattern: str, path: str | None = None, glob: str | None = None

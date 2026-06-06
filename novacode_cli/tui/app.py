@@ -36,10 +36,7 @@ from textual.theme import Theme
 from novacode_cli.tui.animations import (
     animate_entrance,
     animate_modal_screen,
-    glow_breathe,
-    pulse_border,
     shimmer_bar,
-    stop_animation,
 )
 
 from textual.widgets import (
@@ -88,6 +85,7 @@ _TUI_SLASH_COMMANDS = [
     "/remote",
     "/compact",
     "/save",
+    "/copy",
     "/steer",
     "/notifications",
     "/research",
@@ -108,7 +106,6 @@ _TUI_SLASH_COMMANDS = [
     "/context",
     "/cost",
     "/verbose",
-    "/decompose",
     "/trace",
     "/log",
     "/theme",
@@ -171,6 +168,8 @@ class ChatMessage(Vertical):
         padding: 1 3;
         background: $surface;
     }
+    /* Subtle hover cue that a message is clickable (click = copy it). */
+    ChatMessage:hover { background: $boost; }
     ChatMessage > .role { text-style: bold; }
     ChatMessage > .body { height: auto; }
     ChatMessage.user { border-left: thick $primary; }
@@ -181,6 +180,11 @@ class ChatMessage(Vertical):
     def __init__(self, header: Text, role_class: str) -> None:
         super().__init__(classes=role_class)
         self._header = header
+        # Plain-text form of the body, kept in sync by update_body so the message
+        # can be copied verbatim (click-to-copy / the /copy command) without
+        # re-deriving it from the rendered markdown.
+        self.raw_text: str = ""
+        self.tooltip = "Click to copy this message"
 
     def compose(self) -> ComposeResult:
         yield Static(self._header, classes="role")
@@ -188,6 +192,42 @@ class ChatMessage(Vertical):
 
     def update_body(self, renderable: Any) -> None:
         self.query_one(".body", Static).update(renderable)
+        self.raw_text = self._renderable_text(renderable)
+
+    @staticmethod
+    def _renderable_text(renderable: Any) -> str:
+        """Best-effort plain text for a body renderable (Markdown/Text/other)."""
+        if isinstance(renderable, Markdown):
+            return renderable.markup
+        if isinstance(renderable, Text):
+            return renderable.plain
+        return str(renderable)
+
+    def on_click(self, event: events.Click) -> None:
+        """Click a message to copy its full text to the clipboard.
+
+        This is deterministic and terminal-independent — unlike mouse
+        drag-selection, which a captured-mouse TUI can't reliably support.
+        Drag-selection still works: Textual only fires Click when there was no
+        drag, and an explicit selection takes precedence here.
+        """
+        body = (self.raw_text or "").strip()
+        if not body:
+            return
+        app = self.app
+        try:
+            if app.screen.get_selected_text():
+                return  # honor an explicit selection — ctrl+c will copy it
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            app.copy_to_clipboard(body)
+            app._log(  # type: ignore[attr-defined]
+                Text(f"📋 Copied message ({len(body):,} chars)", style="dim")
+            )
+            event.stop()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _capture(fn, *args, **kwargs) -> Text:
@@ -498,6 +538,15 @@ class ModelScreen(ModalScreen[dict | None]):
         if event.button.id == "cancel":
             self.dismiss(None)
             return
+        self._submit()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        # Enter in the API-key / model field applies the switch (same as the
+        # Switch button) — a keyboard path so the user is never blocked when the
+        # button is scrolled off a short terminal (e.g. behind the Ollama list).
+        self._submit()
+
+    def _submit(self) -> None:
         provider = self.query_one("#provider", Select).value
         if provider is Select.BLANK:
             self.dismiss(None)
@@ -1360,26 +1409,45 @@ class PromptInput(Input):
     input (:mod:`novacode_cli.input`) so both UIs behave identically.
     """
 
+    # After the last Paste fragment, how long an in-progress paste stays "open"
+    # for more fragments to merge into it. A single large paste is often split
+    # by the terminal into several Paste events that can arrive hundreds of ms
+    # apart, so this is generous — it does NOT block typing (that's the separate
+    # key-drop window below) and is also ended early by any real keystroke.
+    PASTE_MERGE_WINDOW = 1.5
+    # How long stray per-character key events are dropped after a Paste fragment
+    # (Windows terminals echo a paste as queued keystrokes). Short, so real
+    # typing right after a paste is never swallowed.
+    PASTE_KEYDROP_WINDOW = 0.05
+
     def __init__(self, *args, **kwargs) -> None:
         self._paste_tracker: PasteTracker | None = kwargs.pop("paste_tracker", None)
         self._on_large_paste = kwargs.pop("on_large_paste", None)
         super().__init__(*args, **kwargs)
         # On Windows terminals, pasting fires BOTH a Paste event AND individual
         # key events for each character.  We stop the Paste event, but the
-        # keystrokes are already queued.  This flag drops them until the paste
-        # flush window expires.
+        # keystrokes are already queued.  This flag drops them until the key-drop
+        # window expires.
         self._paste_active = False
+        self._keydrop_timer: Any = None
+        # Identity-merge state for coalescing a fragmented paste: while a paste
+        # is "open", later fragments are appended to this SAME paste id (one
+        # block, one placeholder) instead of each becoming its own [paste #N].
+        self._active_paste_id: str | None = None
+        self._active_paste_ph: str = ""
+        self._merge_timer: Any = None
 
     async def _on_key(self, event: events.Key) -> None:
-        # Drop ALL key events during the paste flush window. On Windows
-        # terminals, pasting fires per-character keystrokes after the Paste
-        # event — the old `len(event.key) == 1` filter was too narrow because
-        # some terminals send the *entire pasted text* as a single key event
-        # (e.g. event.key == "use"), which has len > 1 and was let through,
-        # duplicating the paste.  50ms is imperceptible to human typing so
-        # dropping all keys during that window is safe.
+        # Drop ALL key events during the key-drop window. On Windows terminals,
+        # pasting fires per-character keystrokes after the Paste event — the old
+        # `len(event.key) == 1` filter was too narrow because some terminals send
+        # the *entire pasted text* as a single key event (e.g. event.key == "use"),
+        # which has len > 1 and was let through, duplicating the paste.
         if self._paste_active:
             return
+        # A real keystroke means the paste burst is over — stop merging further
+        # fragments into it so the next paste starts fresh.
+        self._end_paste_merge()
         await super()._on_key(event)
 
     def _on_paste(self, event: events.Paste) -> None:
@@ -1388,26 +1456,71 @@ class PromptInput(Input):
         # for every class in the MRO). Without this, the parent inserts the text a
         # second time, producing duplicates like "useuse".
         event.text = ""
+        event.stop()
 
         if not text:
             return
         normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+        tracker = self._paste_tracker
 
-        if self._paste_tracker is not None and (
+        if self._active_paste_id is not None and tracker is not None:
+            # Continuation of a fragmented paste: append to the SAME paste so the
+            # whole thing stays one block for the agent, and refresh the inline
+            # placeholder's line count in place (same id, updated count).
+            old_ph = self._active_paste_ph
+            tracker.extend_paste(self._active_paste_id, normalized)
+            full = tracker.get_paste(self._active_paste_id) or normalized
+            new_ph = format_paste_placeholder(self._active_paste_id, full)
+            if new_ph != old_ph and old_ph in self.value:
+                self.value = self.value.replace(old_ph, new_ph, 1)
+                self.cursor_position = len(self.value)
+            self._active_paste_ph = new_ph
+        elif tracker is not None and (
             len(normalized) >= PASTE_MIN_CHARS
             or normalized.count("\n") >= PASTE_MIN_NEWLINES
         ):
-            paste_id = self._paste_tracker.add_paste(normalized)
+            # First fragment of a large paste: create the placeholder and open
+            # the merge window so any trailing fragments fold into this one.
+            paste_id = tracker.add_paste(normalized)
             placeholder = format_paste_placeholder(paste_id, normalized)
             self.insert_text_at_cursor(placeholder + " ")
-            if self._on_large_paste is not None:
-                self._on_large_paste(placeholder, len(normalized))
+            self._active_paste_id = paste_id
+            self._active_paste_ph = placeholder
         else:
+            # Small paste — won't fragment; insert literally, no merge needed.
             self.insert_text_at_cursor(normalized)
 
+        # Drop the echo keystrokes for a short moment after each fragment.
         self._paste_active = True
-        self.set_timer(0.05, lambda: setattr(self, "_paste_active", False))
-        event.stop()
+        if self._keydrop_timer is not None:
+            self._keydrop_timer.stop()
+        self._keydrop_timer = self.set_timer(
+            self.PASTE_KEYDROP_WINDOW, lambda: setattr(self, "_paste_active", False)
+        )
+        # Keep the paste "open" for more fragments; close it after a quiet gap.
+        if self._merge_timer is not None:
+            self._merge_timer.stop()
+        self._merge_timer = self.set_timer(
+            self.PASTE_MERGE_WINDOW, self._end_paste_merge
+        )
+
+    def _end_paste_merge(self) -> None:
+        """Close the current paste so the next paste/fragment starts fresh.
+
+        Logs the collapsed-paste note to the transcript once, with the FINAL
+        merged size, so a fragmented paste shows a single accurate notice.
+        """
+        if self._merge_timer is not None:
+            self._merge_timer.stop()
+            self._merge_timer = None
+        if self._active_paste_id is None:
+            return
+        if self._on_large_paste is not None and self._paste_tracker is not None:
+            full = self._paste_tracker.get_paste(self._active_paste_id)
+            if full is not None:
+                self._on_large_paste(self._active_paste_ph, len(full))
+        self._active_paste_id = None
+        self._active_paste_ph = ""
 
 
 class TuiInitRenderer:
@@ -1517,7 +1630,7 @@ class NovaApp(App):
         padding: 0 2; background: $surface;
     }
     #prompt {
-        dock: bottom; border: none;
+        dock: bottom; border: round $primary 60%;
         background: $panel; color: $text;
         padding: 1 3; min-height: 5;
         /* Smooth fade when switching into/out of a mode. */
@@ -1525,27 +1638,27 @@ class NovaApp(App):
     }
     #prompt:focus {
         background: $boost;
-        border: none;
+        border: round $accent;
     }
-    /* BASH mode — magenta, thick left bar, urgent. */
+    /* BASH mode — magenta, urgent. */
     #prompt.bash-mode {
         background: #2a1a2e; color: #d7c4ff;
-        border-left: thick #bb9af7;
+        border: round #bb9af7;
         border-title-color: #bb9af7;
     }
     #prompt:focus.bash-mode {
         background: #2f1e35;
-        border-left: thick #bb9af7;
+        border: round #bb9af7;
     }
-    /* PLAN mode — blue, thick left bar, calm. */
+    /* PLAN mode — blue, calm. */
     #prompt.plan-mode {
         background: #161f33; color: #b4c6ef;
-        border-left: thick #7aa2f7;
+        border: round #7aa2f7;
         border-title-color: #7aa2f7;
     }
     #prompt:focus.plan-mode {
         background: #1b2540;
-        border-left: thick #7aa2f7;
+        border: round #7aa2f7;
     }
     #mode-badge {
         dock: bottom; height: 1;
@@ -1572,6 +1685,13 @@ class NovaApp(App):
     /* Long lists scroll inside the box instead of overflowing the screen. */
     #sessions, #pick-list, #infolist, #mcp-configured, #mcp-presets {
         height: auto; max-height: 60%;
+    }
+    /* The Ollama model list sits ABOVE the inputs + Switch/Cancel buttons, so it
+       gets a tighter cap and its own scroll — otherwise a long list pushes the
+       buttons out of the modal and they can't be clicked. */
+    #modellist {
+        height: auto; max-height: 9;
+        border: round $accent 50%; margin-bottom: 1;
     }
     #modal-buttons {
         height: auto; align: center middle;
@@ -2455,20 +2575,6 @@ class NovaApp(App):
     def _set_status(self, activity: str) -> None:
         self._activity = activity
         self._refresh_status()
-        # Glow the input while the agent is actively thinking, remove it when
-        # idle — gives a subtle visual hint that the model is working.
-        try:
-            prompt = self.query_one("#prompt", Input)
-            active = activity not in ("ready", "cancelling…")
-            if active and not getattr(prompt, "_glow_timer", None):
-                prompt._glow_timer = glow_breathe(prompt)
-            elif not active:
-                timer = getattr(prompt, "_glow_timer", None)
-                if timer is not None:
-                    stop_animation(timer)
-                    setattr(prompt, "_glow_timer", None)
-        except Exception:  # noqa: BLE001
-            pass
 
     def _set_nova_indicator(
         self, text: str, *, style: str = "dim", auto_clear: float | None = None
@@ -2967,24 +3073,9 @@ class NovaApp(App):
             )
             return
 
-        # Plain prompt. Decompose multi-intent requests into sequential turns.
+        # Plain prompt — send it to the agent as a single turn.
         await self._add_message(Text("You", style="bold cyan"), "user", Text(text))
-        sub_prompts = [text]
-        try:
-            from novacode_cli.prompt_decomposer import decompose_prompt
-
-            if getattr(self.session_state, "prompt_decomposition_enabled", True):
-                decomp = decompose_prompt(text)
-                if decomp.decomposed:
-                    sub_prompts = decomp.sub_prompts
-                    self._log(
-                        Text(f"Split into {len(sub_prompts)} steps.", style="dim")
-                    )
-        except Exception:  # noqa: BLE001
-            pass
-
-        for sub_prompt in sub_prompts:
-            await self._stream_prompt(sub_prompt)
+        await self._stream_prompt(text)
         # If a plan was approved during this turn, hand off to the main agent.
         await self._maybe_run_approved_plan()
 
@@ -3280,7 +3371,7 @@ class NovaApp(App):
             "• /clear — reset the conversation\n"
             "• /compact — summarize & free up context\n"
             "• /save — save the session\n"
-            "• /verbose, /decompose — toggle settings\n"
+            "• /verbose — toggle settings\n"
             "• /<skill> (e.g. /graphify) — run a skill\n"
             "Anything without a leading / is sent to the agent. Interactive "
             "panels (/model picker, /sessions, /mcp, /theme…) are local-only."
@@ -3314,11 +3405,6 @@ class NovaApp(App):
         if cmd == "verbose":
             new = self.session_state.toggle_verbose()
             return f"Verbose mode {'on' if new else 'off'}.", None
-        if cmd == "decompose":
-            cur = getattr(self.session_state, "prompt_decomposition_enabled", True)
-            self.session_state.prompt_decomposition_enabled = not cur
-            on = self.session_state.prompt_decomposition_enabled
-            return f"Prompt decomposition {'on' if on else 'off'}.", None
         if cmd == "clear":
             await self._run_clear()
             return "✅ Conversation cleared.", None
@@ -3447,16 +3533,6 @@ class NovaApp(App):
                     style="green" if new else "dim",
                 )
             )
-        elif cmd == "decompose":
-            cur = getattr(self.session_state, "prompt_decomposition_enabled", True)
-            self.session_state.prompt_decomposition_enabled = not cur
-            new = self.session_state.prompt_decomposition_enabled
-            self._log(
-                Text(
-                    f"Prompt decomposition {'on' if new else 'off'}.",
-                    style="green" if new else "dim",
-                )
-            )
         elif cmd == "trace":
             await self._run_trace(text)
         elif cmd == "log":
@@ -3467,6 +3543,8 @@ class NovaApp(App):
             await self._run_compact(text)
         elif cmd == "save":
             await self._run_save()
+        elif cmd == "copy":
+            await self._run_copy(text)
         elif cmd == "steer":
             await self._run_steer(text)
         elif cmd == "notifications":
@@ -3513,6 +3591,51 @@ class NovaApp(App):
                     style="yellow",
                 )
             )
+
+    async def _run_copy(self, text: str) -> None:
+        """Copy agent output to the clipboard.
+
+        ``/copy``      — copy the last Nova response.
+        ``/copy all``  — copy the whole conversation (You/Nova turns).
+        """
+        parts = text[1:].split(maxsplit=1)
+        arg = parts[1].strip().lower() if len(parts) > 1 else ""
+        msgs = list(self._transcript().query(ChatMessage))
+        if not msgs:
+            self._log(Text("Nothing to copy yet.", style="dim"))
+            return
+
+        if arg == "all":
+            blocks: list[str] = []
+            for m in msgs:
+                body = (m.raw_text or "").strip()
+                if not body:
+                    continue
+                who = "You" if m.has_class("user") else "Nova"
+                blocks.append(f"## {who}\n{body}")
+            payload = "\n\n".join(blocks)
+            label = "conversation"
+        else:
+            nova = [m for m in msgs if m.has_class("nova")]
+            if not nova:
+                self._log(Text("No agent response to copy yet.", style="dim"))
+                return
+            payload = (nova[-1].raw_text or "").strip()
+            label = "last response"
+
+        if not payload:
+            self._log(Text("Nothing to copy.", style="dim"))
+            return
+        try:
+            self.copy_to_clipboard(payload)
+            self._log(
+                Text(
+                    f"📋 Copied {label} ({len(payload):,} chars) to clipboard",
+                    style="dim",
+                )
+            )
+        except Exception as ex:  # noqa: BLE001
+            self._log(Text(f"Copy failed: {ex}", style="red"))
 
     async def _run_skill(self, text: str) -> bool:
         """Resolve a ``/skill:<name>`` (or bare ``/<name>``) and run it natively.
@@ -4088,6 +4211,10 @@ class NovaApp(App):
                 steering_instructions=getattr(
                     self.session_state, "steering_instructions", None
                 ),
+                # Share the core agent's checkpointer + store so plan mode sees
+                # the ongoing conversation (same thread_id) and persists.
+                checkpointer=getattr(self.session_state, "_checkpointer", None),
+                store=getattr(self.session_state, "_store", None),
             )
             self.session_state.plan_mode_enabled = True
             self._update_mode_badge()
@@ -5253,6 +5380,8 @@ class NovaApp(App):
         t.append("summarize conversation to free context\n", style="dim")
         t.append("  /save            ", style="cyan")
         t.append("save the session now\n", style="dim")
+        t.append("  /copy [all]      ", style="cyan")
+        t.append("copy last response (or whole chat) — or click a message\n", style="dim")
         t.append("  /steer           ", style="cyan")
         t.append("add/list/clear steering instructions\n", style="dim")
         t.append("  /notifications   ", style="cyan")
@@ -5287,8 +5416,6 @@ class NovaApp(App):
         t.append("show token / context usage\n", style="dim")
         t.append("  /verbose         ", style="cyan")
         t.append("toggle internal-context display\n", style="dim")
-        t.append("  /decompose       ", style="cyan")
-        t.append("toggle multi-step prompt splitting\n", style="dim")
         t.append("  /quit            ", style="cyan")
         t.append("exit the TUI\n", style="dim")
         t.append("  !<command>       ", style="magenta")

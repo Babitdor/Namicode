@@ -269,7 +269,6 @@ COMMANDS = {
     "images": "Manage images in conversation (list, remove <id>, clear)",
     "plan": "Toggle plan mode (e.g., /plan, /plan on, /plan off)",
     "verbose": "Toggle verbose mode - show/hide internal agent context",
-    "decompose": "Toggle prompt decomposition - split multi-step requests into sequential sub-prompts",
     "steer": "Add persistent steering instructions (e.g., /steer focus on database layer)",
     "remote": "Manage remote bridges to Discord or Telegram (start/stop/status/test)",
     "vision": "Analyze images with vision model (e.g., /vision @image.png, /vision @img1.png @img2.png)",

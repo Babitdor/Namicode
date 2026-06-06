@@ -8,6 +8,7 @@ prompt that enforces the clarify → investigate → write plan → exit_plan_mo
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
@@ -74,6 +75,8 @@ def create_plan_agent_with_config(
     system_prompt: str | None = None,
     auto_approve: bool = False,
     steering_instructions: list | None = None,
+    checkpointer: Any = None,
+    store: Any = None,
 ) -> tuple[Pregel, CompositeBackend]:
     """Create and configure a plan-mode agent with the specified model and tools.
 
@@ -92,6 +95,10 @@ def create_plan_agent_with_config(
         sandbox_type: Type of sandbox provider ("modal", "runloop", "daytona")
         system_prompt: Optional custom system prompt
         auto_approve: If True, skip human-in-the-loop approvals
+        checkpointer: Conversation checkpointer to share with the core agent so
+            plan mode SEES the prior conversation (and persists across restarts).
+            When None, a private in-memory checkpointer is used (no continuity).
+        store: Durable KV store to share with the core agent (memory/learning).
 
     Returns:
         2-tuple of (graph, backend)
@@ -238,15 +245,21 @@ def create_plan_agent_with_config(
     # Import create_deep_agent here to avoid circular imports
     from deepagents.graph import create_deep_agent
 
+    # Share the core agent's checkpointer + thread so plan mode continues from
+    # the existing conversation (with the core agent OR a prior plan turn) and
+    # survives restarts. Fall back to a private in-memory saver only when no
+    # shared checkpointer is provided (e.g. standalone/tests).
+    plan_checkpointer = checkpointer if checkpointer is not None else InMemorySaver()
+
     agent = create_deep_agent(
         name=assistant_id,
         model=wrapped_model,
         skills=skill_sources,
         system_prompt=system_prompt,
         tools=tools,
-        checkpointer=InMemorySaver(),  # In-memory checkpointer for plan agent state
+        checkpointer=plan_checkpointer,
         backend=composite_backend,
-        store=None,
+        store=store,
         interrupt_on=interrupt_on,  # type: ignore
         subagents=[],  # Plan agents don't use subagents by default
         middleware=[

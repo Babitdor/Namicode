@@ -253,26 +253,6 @@ async def handle_command(
             console.print()
         return True
 
-    if cmd == "decompose":
-        current = getattr(session_state, "prompt_decomposition_enabled", True)
-        session_state.prompt_decomposition_enabled = not current
-        new_val = session_state.prompt_decomposition_enabled
-        if new_val:
-            console.print()
-            console.print(
-                "  [bold green]Prompt decomposition enabled[/bold green] — "
-                "multi-step requests will be split into sequential sub-prompts"
-            )
-            console.print()
-        else:
-            console.print()
-            console.print(
-                "  [bold yellow]Prompt decomposition disabled[/bold yellow] — "
-                "all requests sent as a single prompt"
-            )
-            console.print()
-        return True
-
     if cmd == "steer":
         try:
             return await _handle_steer_command(cmd_args, session_state, console)
