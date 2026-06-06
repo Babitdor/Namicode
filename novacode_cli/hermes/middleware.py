@@ -401,41 +401,89 @@ class NovaLearningMiddleware(AgentMiddleware[NovaState]):
                 except Exception:  # noqa: BLE001
                     logger.exception("Failed to compact memory files")
 
-            # Check skill effectiveness periodically (every 5th review)
+            # Skill maintenance, periodically (every 5th review). Both creation
+            # and refinement run as tracked background tasks via _generate_skill,
+            # which spins up a dedicated file-writing agent — so the toolless
+            # review model.ainvoke never needs to create files itself.
             if self._skills_dir and new_count % 5 == 0:
-                try:
-                    from novacode_cli.hermes.skill_discovery import (
-                        check_skill_effectiveness,
-                        refine_skill,
-                    )
-
-                    candidates = await check_skill_effectiveness(self._store)
-                    for skill_name, issue in candidates[
-                        :1
-                    ]:  # Process one skill per cycle
-                        await self._emit_tui_event(
-                            "nova_skill_refinement",
-                            f"🛠 Nova: skill '{skill_name}' needs refinement ({issue})",
-                        )
-                        # Create tracked task with proper lifecycle management
-                        task = asyncio.create_task(
-                            refine_skill(skill_name, self._skills_dir, issue)
-                        )
-                        self._refinement_tasks.add(task)
-
-                        def task_done_callback(t: asyncio.Task) -> None:
-                            self._refinement_tasks.discard(t)
-                            if t.exception():
-                                logger.error(
-                                    f"Skill refinement failed: {t.exception()}"
-                                )
-
-                        task.add_done_callback(task_done_callback)
-                except Exception:  # noqa: BLE001
-                    logger.exception("Failed to check skill effectiveness / refine")
+                await self._maybe_create_skills()
+                await self._maybe_refine_skills()
 
         except Exception:  # noqa: BLE001
             logger.exception("Failed to apply review content")
+
+    def _spawn_skill_task(self, coro) -> None:
+        """Run a skill create/refine coroutine as a tracked background task."""
+        task = asyncio.create_task(coro)
+        self._refinement_tasks.add(task)
+
+        def _done(t: asyncio.Task) -> None:
+            self._refinement_tasks.discard(t)
+            if not t.cancelled() and t.exception():
+                logger.error("Skill task failed: %s", t.exception())
+
+        task.add_done_callback(_done)
+
+    async def _maybe_create_skills(self) -> None:
+        """Autonomously create a skill from a repeated, successful tool pattern.
+
+        Detects patterns from tool history and, for the top candidate, kicks off
+        ``create_skill_from_pattern`` — which runs a dedicated agent that writes
+        ``SKILL.md`` to disk. Deduped by deterministic skill name so the same
+        workflow isn't recreated.
+        """
+        if not self._skills_dir:
+            return
+        try:
+            from novacode_cli.hermes.skill_discovery import (
+                analyze_tool_history,
+                create_skill_from_pattern,
+                generate_skill_name,
+            )
+
+            patterns = await analyze_tool_history(self._store)
+            for pattern in patterns[:1]:  # one creation per cycle (it's an LLM call)
+                skill_name = generate_skill_name(pattern)
+                # Skip if already created (store record or on-disk SKILL.md).
+                already = await self._store.aget(("nova", "created_skills"), skill_name)
+                if already is not None or (self._skills_dir / skill_name).exists():
+                    continue
+                await self._emit_tui_event(
+                    "nova_skill_created",
+                    f"🧠 Nova: creating skill from pattern "
+                    f"{' → '.join(pattern.sequence)}",
+                )
+                self._spawn_skill_task(
+                    create_skill_from_pattern(pattern, self._skills_dir, self._store)
+                )
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to analyze / create skills")
+
+    async def _maybe_refine_skills(self) -> None:
+        """Refine an existing skill flagged as ineffective."""
+        if not self._skills_dir:
+            return
+        try:
+            from novacode_cli.hermes.skill_discovery import (
+                check_skill_effectiveness,
+                refine_skill,
+            )
+
+            candidates = await check_skill_effectiveness(self._store)
+            for skill_name, issue in candidates[:1]:  # one per cycle
+                # Only refine skills that actually exist on disk (skill_stats can
+                # hold tool names that aren't skills).
+                if not (self._skills_dir / skill_name / "SKILL.md").exists():
+                    continue
+                await self._emit_tui_event(
+                    "nova_skill_refinement",
+                    f"🛠 Nova: skill '{skill_name}' needs refinement ({issue})",
+                )
+                self._spawn_skill_task(
+                    refine_skill(skill_name, self._skills_dir, issue)
+                )
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to check skill effectiveness / refine")
 
     async def _get_review_count(self) -> int:
         """Return the total number of reviews completed from the durable store."""
@@ -491,6 +539,7 @@ class NovaLearningMiddleware(AgentMiddleware[NovaState]):
             event_config = {
                 "nova_review_start": {"icon": "🔄", "color": "cyan"},
                 "nova_review_complete": {"icon": "✓", "color": "green"},
+                "nova_skill_created": {"icon": "🧠", "color": "green"},
                 "nova_skill_refinement": {"icon": "🛠", "color": "yellow"},
             }
             conf = event_config.get(event_type, {"icon": "•", "color": "cyan"})

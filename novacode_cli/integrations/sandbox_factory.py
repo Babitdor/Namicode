@@ -511,9 +511,8 @@ def create_docker_sandbox(
     """
     import docker
 
+    from novacode_cli.config.config import boot_status
     from novacode_cli.integrations.docker import DockerBackend
-
-    console.print("[yellow]Starting Docker container...[/yellow]")
 
     # Connect to Docker daemon
     try:
@@ -611,24 +610,21 @@ def create_docker_sandbox(
     try:
         if sandbox_id:
             # Try to reuse an existing container; self-heal if it's gone.
-            console.print(
-                f"[dim]Connecting to existing container {sandbox_id}...[/dim]"
-            )
             try:
                 container = client.containers.get(sandbox_id)
                 if container.status != "running":
-                    console.print("[dim]Starting stopped container...[/dim]")
                     container.start()
             except docker.errors.NotFound:
-                console.print(
-                    f"[yellow]⚠ Container {sandbox_id} not found; creating a fresh one...[/yellow]"
+                boot_status(
+                    f"sandbox: container {sandbox_id[:12]} gone — creating a fresh one",
+                    "warn",
                 )
                 container, created_new = _create_new_container()
         else:
             container, created_new = _create_new_container()
 
         backend = DockerBackend(container)
-        console.print(f"[green]✓ Docker container ready: {backend.id}[/green]")
+        boot_status(f"sandbox: docker {backend.id[:12]} ready", "ok")
 
         # Show exposed ports if any
         if ports:
@@ -657,18 +653,13 @@ def create_docker_sandbox(
             if persist:
                 # Keep the container (and its writable layer + mount) so a later
                 # session can reconnect. Stop it to free resources.
-                console.print(
-                    f"[dim]Stopping Docker container {container.id[:12]} "
-                    f"(kept for resume)...[/dim]"
-                )
                 try:
                     container.stop(timeout=10)
-                    console.print(
-                        f"[dim]✓ Container {container.id[:12]} stopped "
-                        f"(reconnect with the same session)[/dim]"
+                    boot_status(
+                        f"sandbox: docker {container.id[:12]} stopped (kept for resume)"
                     )
                 except Exception as e:  # noqa: BLE001
-                    console.print(f"[yellow]⚠ Could not stop container: {e}[/yellow]")
+                    boot_status(f"sandbox: could not stop container: {e}", "warn")
             elif created_new:
                 # Ephemeral: remove the freshly-created container on exit.
                 console.print(

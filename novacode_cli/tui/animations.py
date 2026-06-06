@@ -1,0 +1,215 @@
+"""Cool animated effects for the Nova TUI.
+
+Provides reusable animation sequences and helpers that add visual polish —
+entrance transitions, pulse effects, shimmer bars, and breathing indicators.
+All animations use Textual's native Python-side ``animate()`` API (TCSS does
+not support ``@keyframes``).
+
+Usage
+-----
+Call one of the helpers on *mount* (or right after *mount*) so the animation
+fires when the widget appears:
+
+    from textual.color import Color
+
+    class MyWidget(Widget):
+        def on_mount(self) -> None:
+            animate_entrance(self, "slide")   # slide in from below
+            animate_entrance(self, "fade")    # pure fade
+            pulse_border(self)                # pulsing left-border glow
+            pulse_soft(self)                  # gentle opacity breathing
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Any
+
+from textual.color import Color
+from textual.widget import Widget
+
+__all__ = [
+    "animate_entrance",
+    "animate_modal_screen",
+    "pulse_border",
+    "pulse_soft",
+    "shimmer_bar",
+    "glow_breathe",
+    "stop_animation",
+]
+
+# ── Entrance animations ─────────────────────────────────────────────────────
+
+
+def animate_entrance(widget: Widget, style: str = "slide") -> None:
+    """Fade *widget* in as it first appears, using Textual's ``animate()``.
+
+    Note: Textual 8.2.7 has **no ``scale`` style**, and animating ``offset``
+    raises (``start_value must be float`` on a ``ScalarOffset``) — so a true
+    zoom/slide transform isn't available. Opacity is the only entrance property
+    that animates reliably here, so every style fades in; ``style`` only tunes
+    the duration/easing so different surfaces (modals vs. messages) feel a
+    little distinct.
+
+    Styles
+    ------
+    ``"fade"``  — quick fade (0.25s).
+    ``"slide"`` — slightly longer fade (0.32s).
+    ``"zoom"``  — medium fade (0.28s).
+    """
+    duration = {"fade": 0.25, "slide": 0.32, "zoom": 0.28}.get(style, 0.28)
+    widget.styles.opacity = 0.0
+    widget.styles.animate("opacity", 1.0, duration=duration, easing="out_cubic")
+
+
+def animate_modal_screen(screen: Any) -> None:
+    """Apply a zoom-in entrance to a ``ModalScreen``'s ``#modal-box``.
+
+    Must be called from ``on_mount`` (the DOM is ready, and the animation
+    fires before the user sees the modal).
+    """
+    try:
+        box = screen.query_one("#modal-box")
+        animate_entrance(box, "zoom")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+# ── Ongoing animated effects (call from on_mount, return a timer ref) ───────
+
+
+def pulse_border(
+    widget: Widget, color: Color | str | None = None, period: float = 1.2
+) -> Any:
+    """Make the left border of *widget* pulse with a breathing glow.
+
+    Returns a ``set_interval`` timer handler that can be stopped via
+    ``timer.stop()`` (or :func:`stop_animation`).
+    """
+    if color is None:
+        try:
+            color = widget.app.theme_colors.warning
+        except Exception:  # noqa: BLE001
+            color = Color.parse("#e0af68")
+
+    peak_alpha = 1.0
+    low_alpha = 0.4
+    t = widget.set_interval(
+        period,
+        _BorderPulser(widget, color, peak_alpha, low_alpha),
+    )
+    return t
+
+
+def pulse_soft(widget: Widget, period: float = 1.5) -> Any:
+    """Gentle opacity breathing for status indicators.
+
+    Returns a ``set_interval`` timer that can be stopped.
+    """
+    peak = 1.0
+    trough = 0.45
+    frame = [0]
+
+    def _tick() -> None:
+        frame[0] += 0.5
+        normalized = (math.sin(frame[0] * math.pi) + 1) / 2
+        alpha = trough + (peak - trough) * normalized
+        widget.styles.opacity = alpha
+
+    t = widget.set_interval(0.05, _tick)
+    return t
+
+
+def shimmer_bar(widget: Widget) -> Any:
+    """Sweeping highlight effect for loading/progress bars.
+
+    Animates the ``tint`` property back and forth over 2s.
+    Returns a ``set_interval`` timer.
+    """
+    try:
+        accent = widget.app.theme_colors.accent
+    except Exception:  # noqa: BLE001
+        accent = Color.parse("#bb9af7")
+
+    forward = True
+    intensity = [0.0]
+
+    def _tick() -> None:
+        nonlocal forward
+        step = 0.04
+        if forward:
+            intensity[0] = min(intensity[0] + step, 0.35)
+            if intensity[0] >= 0.35:
+                forward = False
+        else:
+            intensity[0] = max(intensity[0] - step, 0.0)
+            if intensity[0] <= 0.0:
+                forward = True
+        widget.styles.tint = accent.with_alpha(intensity[0])
+
+    t = widget.set_interval(0.04, _tick)
+    return t
+
+
+def glow_breathe(widget: Widget, period: float = 2.5) -> Any:
+    """Border glow that breathes gently.
+
+    Uses the theme's accent color.
+    Returns a ``set_interval`` timer.
+    """
+    try:
+        accent = widget.app.theme_colors.accent
+    except Exception:  # noqa: BLE001
+        accent = Color.parse("#7aa2f7")
+
+    peak = 0.35
+    trough = 0.05
+
+    def _tick() -> None:
+        t_val = getattr(_tick, "_time", 0.0) + 0.04
+        setattr(_tick, "_time", t_val)
+        normalized = (math.sin(t_val * math.pi) + 1) / 2
+        alpha = trough + (peak - trough) * normalized
+        widget.styles.tint = accent.with_alpha(alpha)
+
+    t_ref = widget.set_interval(0.04, _tick)
+    return t_ref
+
+
+def stop_animation(timer: Any) -> None:
+    """Safely stop an animation timer created by one of the helpers above."""
+    if timer is not None:
+        try:
+            timer.stop()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+# ── Internal helpers ─────────────────────────────────────────────────────────
+
+
+class _BorderPulser:
+    """Callable for ``set_interval`` that oscillates border opacity."""
+
+    def __init__(
+        self, widget: Widget, color: Color, peak: float, low: float
+    ) -> None:
+        self._widget = widget
+        self._color = color
+        self._peak = peak
+        self._low = low
+        self._frame = 0
+
+    def __call__(self) -> None:
+        self._frame += 1
+        normalized = (math.sin(self._frame * math.pi / 2) + 1) / 2
+        alpha = self._low + (self._peak - self._low) * normalized
+        try:
+            # Textual's border style takes a (type, color) tuple — a single
+            # "thick #hex" string raises "too many values to unpack".
+            self._widget.styles.border_left = (
+                "thick",
+                self._color.with_alpha(alpha).hex,
+            )
+        except Exception:  # noqa: BLE001
+            pass

@@ -76,6 +76,17 @@ When available (built by `/init`):
 - **Central hubs** = high-degree nodes; changes ripple widely — check blast radius first
 - **Cross-module connections** = architectural seams (interfaces, event buses, shared utils)
 - Refresh: `/init` (full rebuild) or `/init --update` (incremental, faster)
+
+**`query_project_graph("<file or symbol>")` — use it proactively.** The graph
+summary in your context lists only the top communities/hubs; everything else
+must be looked up. Query the graph BEFORE you act, not after:
+- Before editing an unfamiliar file → check its community + what depends on it (blast radius)
+- "What connects to / uses X?", "where does this fit?", tracing a change across modules
+- Before a refactor/rename → find callers and cross-module seams that will break
+- When a file you touched isn't in the summary above — it usually won't be
+
+Prefer one `query_project_graph` call over guessing or reading many files to
+rediscover structure. Skip it only for trivial, single-file edits.
 </project_graph>
 
 <todo_management>

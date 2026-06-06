@@ -223,7 +223,12 @@ def generate_skill_name(pattern: Pattern) -> str:
     else:
         base = "tool"
 
-    seq_hash = hex(hash(_sequence_key(pattern.sequence)) & 0xFFFF)[2:]
+    # Deterministic hash (stable across processes) so the same pattern always
+    # maps to the same skill name — enables dedup. Python's built-in hash() is
+    # randomized per process (PYTHONHASHSEED) and must not be used here.
+    import hashlib
+
+    seq_hash = hashlib.sha1(_sequence_key(pattern.sequence).encode("utf-8")).hexdigest()[:6]
     return f"nova-{base}-{seq_hash}"
 
 

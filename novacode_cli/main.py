@@ -149,6 +149,7 @@ from novacode_cli.config.config import (
     COLORS,
     HOME_DIR,
     NOVA_CODE_ASCII,
+    boot_status,
     console,
     settings,
     get_responsive_ascii,
@@ -1663,9 +1664,7 @@ async def _run_agent_session(
             values={"messages": initial_messages},
             as_node="model",
         )
-        console.print(
-            f"[dim]Restored {len(initial_messages)} messages from previous session.[/dim]"
-        )
+        boot_status(f"session: {len(initial_messages)} messages restored")
 
     # Calculate baseline token count for accurate token tracking
     from novacode_cli.agents.core_agent import get_system_prompt
@@ -1839,9 +1838,9 @@ async def main(
     # Durable, SQLite-backed store at ~/.nova/store.db so structured memory
     # written via the LangGraph store survives restarts (falls back to
     # in-memory if SQLite is unavailable). See novacode_cli/memory/store.py.
-    from novacode_cli.memory.store import get_durable_store
+    from novacode_cli.memory.store import get_async_durable_store
 
-    store = get_durable_store()
+    store = await get_async_durable_store()
 
     # Use SQLite-backed checkpointer for cross-restart session continuity when available.
     # Falls back to InMemorySaver if langgraph-checkpoint-sqlite is not installed.
@@ -2073,8 +2072,8 @@ async def main(
                 and restored_sandbox_id
             ):
                 effective_sandbox_id = restored_sandbox_id
-                console.print(
-                    f"[dim]Resuming — reconnecting to sandbox {restored_sandbox_id[:12]}...[/dim]"
+                boot_status(
+                    f"sandbox: reconnecting to docker {restored_sandbox_id[:12]}…"
                 )
 
             sandbox_kwargs = {
@@ -2095,9 +2094,7 @@ async def main(
                 sandbox_kwargs["session_id"] = session_state.session_id  # type: ignore
 
             with create_sandbox(sandbox_type, **sandbox_kwargs) as sandbox_backend:  # type: ignore
-                console.print(
-                    f"[yellow]⚡ Isolated execution enabled ({sandbox_type})[/yellow]"
-                )
+                boot_status(f"sandbox: isolated execution ({sandbox_type})", "ok")
                 console.print()
 
                 await _run_agent_session(

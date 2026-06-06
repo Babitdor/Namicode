@@ -79,6 +79,7 @@ from novacode_cli.agents.default_subagents.async_subagents import (
 )
 from novacode_cli.config.config import (
     COLORS,
+    boot_status,
     config,
     console,
     get_default_coding_instructions,
@@ -887,13 +888,11 @@ This file stores your preferences and context that persist across sessions.
         # MCP tools (serena, playwright, …) would never be registered or callable.
         if not mcp_middleware._tools_discovered:
             try:
-                console.print(
-                    "[dim]🔌 Connecting to MCP servers…[/dim]"
-                )
+                boot_status("mcp: connecting to servers…")
                 mcp_middleware._discover_tools_sync()
             except Exception as exc:  # noqa: BLE001
-                console.print(
-                    f"[yellow]⚠ MCP tool discovery did not complete: {exc}[/yellow]"
+                boot_status(
+                    f"mcp: discovery did not complete ({type(exc).__name__})", "warn"
                 )
         agent_middleware.insert(3, mcp_middleware)
 

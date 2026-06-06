@@ -63,6 +63,10 @@ class SessionMeta:
     sandbox_id: str | None = None
     sandbox_type: str | None = None
     storage_version: int = 2  # v2: recent+archive, no conversation.jsonl
+    # Set when the user runs /clear on this session. Cleared sessions are
+    # excluded from --continue auto-resume so a cleared conversation doesn't
+    # come back. They remain on disk (and in the session picker) for recovery.
+    cleared: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -80,6 +84,7 @@ class SessionMeta:
             "sandbox_id": None,
             "sandbox_type": None,
             "storage_version": 1,  # Old sessions default to v1
+            "cleared": False,
         }
         # Merge defaults with provided data (data takes precedence)
         merged = {**defaults, **data}
@@ -147,6 +152,7 @@ class SessionManager:
         shared_memory: dict | None = None,
         sandbox_id: str | None = None,
         sandbox_type: str | None = None,
+        cleared: bool = False,
     ) -> Path:
         """Save a session to disk.
 
@@ -201,6 +207,7 @@ class SessionManager:
             next_step_hint=next_step_hint,
             sandbox_id=sandbox_id,
             sandbox_type=sandbox_type,
+            cleared=cleared,
         )
 
         # Save metadata
@@ -436,11 +443,34 @@ class SessionManager:
         """
         sessions = self.list_sessions(limit=100)
 
+        # Skip sessions the user explicitly /clear-ed — they shouldn't come back
+        # on --continue (they're still listed in the picker for recovery).
+        sessions = [s for s in sessions if not getattr(s, "cleared", False)]
+
         if project_root:
             project_str = str(project_root)
             sessions = [s for s in sessions if s.project_root == project_str]
 
         return sessions[0] if sessions else None
+
+    def mark_cleared(self, session_id: str) -> None:
+        """Mark a saved session as ``cleared`` without rewriting its messages.
+
+        Used by ``/clear`` so the conversation is excluded from ``--continue``
+        auto-resume (it stays on disk and in the picker). No-op if the session
+        has no saved metadata yet.
+        """
+        meta_path = self.sessions_dir / session_id / "meta.json"
+        if not meta_path.exists():
+            return
+        try:
+            with open(meta_path) as f:
+                data = json.load(f)
+            data["cleared"] = True
+            with open(meta_path, "w") as f:
+                json.dump(data, f, indent=2)
+        except (OSError, json.JSONDecodeError):
+            pass
 
     def load_recent_messages(self, session_id: str) -> list[BaseMessage]:
         """Load only recent messages from a session (for prompt construction).

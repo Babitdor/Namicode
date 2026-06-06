@@ -415,7 +415,15 @@ class GraphContextMiddleware(AgentMiddleware):
         if not graph_context:
             return request
 
-        block = f"[Project Graph]\n{graph_context}\n[/Project Graph]"
+        block = (
+            f"[Project Graph]\n{graph_context}\n"
+            "This is a high-level summary only — most files and symbols are NOT "
+            "listed above. Before reading or editing an unfamiliar file, and to "
+            "find what a specific file/symbol connects to, its community, or "
+            "whether it's a high-degree hub (blast radius), call "
+            '`query_project_graph("<file or symbol>")` for the targeted detail.\n'
+            "[/Project Graph]"
+        )
         system_prompt = request.system_prompt
         new_prompt = (system_prompt + "\n\n" + block) if system_prompt else block
         return request.override(system_message=SystemMessage(new_prompt))

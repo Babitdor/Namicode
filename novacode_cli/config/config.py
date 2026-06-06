@@ -327,6 +327,28 @@ else:
     console = Console(highlight=False)
 
 
+def boot_status(message: str, level: str = "info") -> None:
+    """Print a uniform, minimal startup status line.
+
+    Keeps Nova's launch output tidy: one muted glyph per line, a consistent
+    palette, and short ``subsystem: detail`` messages instead of a mix of
+    colors and emoji.
+
+    Args:
+        message: Short status, ideally ``"subsystem: detail"`` (e.g.
+            ``"sandbox: docker 3b7334a ready"``).
+        level: ``"info"`` (dim), ``"ok"`` (green), or ``"warn"`` (yellow).
+    """
+    from rich.text import Text
+
+    glyph, style = {
+        "info": ("·", "grey50"),
+        "ok": ("✓", "green"),
+        "warn": ("⚠", "yellow"),
+    }.get(level, ("·", "grey50"))
+    console.print(Text(f"  {glyph} {message}", style=style))
+
+
 # Cache for project skills directories with TTL
 _project_skills_cache: dict[str, tuple[float, list[Path]]] = {}
 _PROJECT_SKILLS_CACHE_TTL = 30.0  # seconds

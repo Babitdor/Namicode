@@ -198,6 +198,13 @@ async def handle_command(
 
     # ── Local commands (handled here, not in registry) ─────────────────
     if cmd == "clear":
+        # Mark the current session cleared so --continue won't auto-resume it
+        # (it stays on disk / in the picker), then total-reset to a fresh one.
+        if session_manager is not None:
+            try:
+                session_manager.mark_cleared(session_state.session_id)
+            except Exception:  # noqa: BLE001
+                pass
         # Total reset: new thread+session id (empty checkpointer context) plus
         # cleared todos / steering / plan mode. Long-term memory, the Nova
         # learning store, and the agent itself are preserved.

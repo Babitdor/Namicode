@@ -8,6 +8,12 @@ modal screens.
 Existing ``rich`` renderers are reused by capturing their output to a ``Text``
 (``_capture``), so the visual style matches the legacy UI without duplicating
 rendering code.
+
+Animations
+----------
+All animated effects (entrance slide/fade/zoom, pulsing borders, shimmer,
+thinking dots) are defined in :mod:`novacode_cli.tui.animations` and called
+from ``on_mount`` handlers via Python's ``animate()`` API.
 """
 
 from __future__ import annotations
@@ -26,6 +32,15 @@ from textual.color import Color
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.theme import Theme
+
+from novacode_cli.tui.animations import (
+    animate_entrance,
+    animate_modal_screen,
+    glow_breathe,
+    pulse_border,
+    shimmer_bar,
+    stop_animation,
+)
 
 from textual.widgets import (
     Button,
@@ -232,6 +247,9 @@ class ConfirmModal(ModalScreen[bool]):
                 yield Button("Yes (y)", id="yes", variant="error")
                 yield Button("No (n)", id="no")
 
+    def on_mount(self) -> None:
+        animate_modal_screen(self)
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.dismiss(event.button.id == "yes")
 
@@ -280,6 +298,7 @@ class ApprovalModal(ModalScreen[str]):
             )
 
     def on_mount(self) -> None:
+        animate_modal_screen(self)
         ol = self.query_one("#choices", OptionList)
         ol.add_option(Option("Approve (y)"))
         if self._allow_auto:
@@ -388,6 +407,7 @@ class ModelScreen(ModalScreen[dict | None]):
                 yield Button("Cancel", id="cancel")
 
     def on_mount(self) -> None:
+        animate_modal_screen(self)
         # List is shown only for Ollama; hide until a provider is chosen.
         self.query_one("#modellist", OptionList).display = False
         if self._current:
@@ -969,6 +989,7 @@ class McpCustomModal(ModalScreen[dict | None]):
                 yield Button("Cancel", id="cancel")
 
     def on_mount(self) -> None:
+        animate_modal_screen(self)
         self.query_one("#mcp-name", Input).focus()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -1119,6 +1140,7 @@ class ThemeScreen(ModalScreen[None]):
                 yield Button("Close", id="close")
 
     def on_mount(self) -> None:
+        animate_modal_screen(self)
         self._reload()
 
     def _reload(self) -> None:
@@ -1216,6 +1238,7 @@ class RemoteScreen(ModalScreen[None]):
             yield Static("", id="remote-result")
 
     def on_mount(self) -> None:
+        animate_modal_screen(self)
         self._refresh()
 
     def _refresh(self) -> None:
@@ -1563,7 +1586,11 @@ class NovaApp(App):
 
     BINDINGS = [
         ("ctrl+q", "quit", "Quit"),
-        ("ctrl+c", "quit", "Quit"),
+        # ctrl+c copies the current text selection if there is one, else quits.
+        # Textual captures the mouse, so the terminal's native copy doesn't work
+        # in the transcript — this restores select-then-copy while keeping the
+        # familiar ctrl+c-to-quit when nothing is selected. ctrl+q always quits.
+        ("ctrl+c", "copy_or_quit", "Copy / Quit"),
         ("escape", "cancel_turn", "Cancel"),
     ]
 
@@ -1723,12 +1750,7 @@ class NovaApp(App):
         self.set_interval(0.2, self._tick)
         self.query_one("#prompt", Input).focus()
         # Show ASCII art banner on home screen
-        try:
-            art = get_responsive_ascii(_rich_console)
-            if art.strip():
-                self._log(Text(art, style="bold #7aa2f7"))
-        except Exception:  # noqa: BLE001
-            pass
+        self._show_home_banner()
         # Native startup panel (model / cwd / sandbox / memory / web-search).
         self._render_startup_info()
         # Replay prior conversation when resuming a session.
@@ -1960,6 +1982,7 @@ class NovaApp(App):
         msg = ChatMessage(label, role_class)
         await self._mount(msg)
         msg.update_body(body)
+        animate_entrance(msg, "slide")
         return msg
 
     @staticmethod
@@ -2234,6 +2257,7 @@ class NovaApp(App):
         body = Static(Text(""), classes="toolbody")
         comp = Collapsible(body, title="⚙ tool calls", collapsed=True)
         comp.add_class("tool")
+        animate_entrance(comp, "zoom")
         self._tool_group = comp
         self._tool_group_body = body
         # Mount directly (not via _mount) so we don't immediately close the group
@@ -2332,6 +2356,16 @@ class NovaApp(App):
         if len(out) > 6000:
             out = out[:6000] + "\n… (truncated)"
         body.update(Text(out, style="red" if is_error else ""))
+        # Animate border to settled state
+        from textual.color import Color as TColor
+
+        final_color = "#f7768e" if is_error else "#73daca"  # error / success
+        try:
+            comp.styles.animate(
+                "border_left", f"thick {final_color}", duration=0.35
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
     async def _handle_subagent(self, e: ev.SubagentActivity) -> None:
         """Render subagent dispatch and completion with collapsible widgets."""
@@ -2354,6 +2388,7 @@ class NovaApp(App):
             comp = Collapsible(body, title=title, collapsed=True)
             comp.add_class("subagent")
             await self._mount(comp)
+            animate_entrance(comp, "fade")
             self._subagent_widgets[cid] = (
                 comp,
                 body,
@@ -2420,6 +2455,20 @@ class NovaApp(App):
     def _set_status(self, activity: str) -> None:
         self._activity = activity
         self._refresh_status()
+        # Glow the input while the agent is actively thinking, remove it when
+        # idle — gives a subtle visual hint that the model is working.
+        try:
+            prompt = self.query_one("#prompt", Input)
+            active = activity not in ("ready", "cancelling…")
+            if active and not getattr(prompt, "_glow_timer", None):
+                prompt._glow_timer = glow_breathe(prompt)
+            elif not active:
+                timer = getattr(prompt, "_glow_timer", None)
+                if timer is not None:
+                    stop_animation(timer)
+                    setattr(prompt, "_glow_timer", None)
+        except Exception:  # noqa: BLE001
+            pass
 
     def _set_nova_indicator(
         self, text: str, *, style: str = "dim", auto_clear: float | None = None
@@ -2815,13 +2864,43 @@ class NovaApp(App):
         self.workers.cancel_all()
         self._set_status("cancelling…")
 
+    async def action_copy_or_quit(self) -> None:
+        """ctrl+c: copy the active text selection to the clipboard, else quit.
+
+        Lets users select text in the transcript (chat messages, tool output)
+        and copy it with ctrl+c. With no selection, behaves like quit.
+        """
+        try:
+            selected = self.screen.get_selected_text()
+        except Exception:  # noqa: BLE001
+            selected = None
+        if selected:
+            try:
+                self.copy_to_clipboard(selected)
+                self._log(
+                    Text(f"📋 Copied {len(selected)} chars to clipboard", style="dim")
+                )
+                # Clear the highlight now that it's copied.
+                self.screen.selections = {}
+                self.screen.refresh()
+            except Exception:  # noqa: BLE001
+                pass
+            return
+        await self.action_quit()
+
     async def action_quit(self) -> None:
         """Persist the session (so --continue works) then exit."""
         await self._save_session()
         self.exit()
 
-    async def _save_session(self) -> None:
-        """Save the conversation to disk via the session manager (best effort)."""
+    async def _save_session(self, *, cleared: bool = False) -> None:
+        """Save the conversation to disk via the session manager (best effort).
+
+        Args:
+            cleared: Mark the saved session as cleared (used by /clear) so it is
+                excluded from --continue auto-resume — a cleared conversation
+                won't come back, but stays on disk for the picker.
+        """
         if self.session_manager is None:
             return
         try:
@@ -2849,6 +2928,7 @@ class NovaApp(App):
                 project_root=Path.cwd(),
                 sandbox_id=self._sandbox_id,
                 sandbox_type=self._sandbox_type,
+                cleared=cleared,
             )
         except Exception:  # noqa: BLE001
             pass  # never block exit on a save failure
@@ -3672,6 +3752,8 @@ class NovaApp(App):
         ]
         self._init_widget = Static("", classes="initlog")
         await self._mount(self._init_widget)
+        # Shimmer effect during init
+        shimmer_bar(self._init_widget)
         self._init_render_steps()
 
         # Quiet sink for graphify's internal Rich output (detection/extraction
@@ -4152,8 +4234,9 @@ class NovaApp(App):
         saved first so nothing is lost.
         """
         saved = self.session_manager is not None
-        # Preserve the current conversation under its existing id before resetting.
-        await self._save_session()
+        # Preserve the current conversation under its existing id, but mark it
+        # cleared so --continue won't auto-resume it (it stays in the picker).
+        await self._save_session(cleared=True)
 
         # Total reset of session/conversation state: new thread+session id
         # (empty checkpointer state), cleared todos / steering / plan mode.
@@ -4166,6 +4249,10 @@ class NovaApp(App):
         self._restored_messages = []
 
         await self.query_one("#transcript", VerticalScroll).remove_children()
+
+        # Refresh the home screen: re-show the ASCII-art banner so /clear looks
+        # like a fresh launch, not just an empty transcript.
+        self._show_home_banner()
 
         # Re-baseline context/token accounting for the fresh chat.
         if self.token_tracker is not None:
@@ -4184,6 +4271,15 @@ class NovaApp(App):
                 style="green",
             )
         )
+
+    def _show_home_banner(self) -> None:
+        """Render the ASCII-art home banner into the transcript (best effort)."""
+        try:
+            art = get_responsive_ascii(_rich_console)
+            if art.strip():
+                self._log(Text(art, style="bold #7aa2f7"))
+        except Exception:  # noqa: BLE001
+            pass
 
     async def _run_steer(self, text: str) -> None:
         """Manage persistent steering instructions natively (add/list/clear/remove)."""
@@ -5278,6 +5374,8 @@ class NovaApp(App):
                 body = Static("", classes="toolbody")
                 comp = Collapsible(body, title=f"{base}  · running…", collapsed=True)
                 comp.add_class("tool")
+                comp.add_class("tool-active")
+                animate_entrance(comp, "zoom")
                 await self._mount(comp)
                 entry = (comp, body, base)
                 if e.call_id:
