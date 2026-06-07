@@ -148,9 +148,6 @@ class OnboardingApp(App[bool]):
                 Text("Optional keys — leave blank to skip", style="dim"), classes="lbl"
             )
             yield Input(placeholder="Tavily API key (web search)", password=True, id="tavily")
-            yield Input(placeholder="E2B API key (code sandbox)", password=True, id="e2b")
-            yield Input(placeholder="Replicate API key (image gen)", password=True, id="replicate")
-            yield Input(placeholder="NVIDIA API key (NIM models)", password=True, id="nvidia")
             yield Static("", id="status")
             with Horizontal(id="buttons"):
                 yield Button("Finish", id="finish", variant="success")
@@ -194,9 +191,6 @@ class OnboardingApp(App[bool]):
         status.update(Text("Saving…", style="dim"))
         opt = {
             "tavily": self.query_one("#tavily", Input).value.strip(),
-            "e2b": self.query_one("#e2b", Input).value.strip(),
-            "replicate": self.query_one("#replicate", Input).value.strip(),
-            "nvidia": self.query_one("#nvidia", Input).value.strip(),
         }
         try:
             await asyncio.to_thread(self._persist, provider, key, opt)

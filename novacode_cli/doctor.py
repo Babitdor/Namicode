@@ -171,33 +171,7 @@ def run_doctor() -> int:
             results.append(("✗", f"Tavily connection failed: {e}", ""))
             all_passed = False
 
-    # Check 5: E2B sandbox connection (if configured)
-    e2b_key = secret_manager.get_secret("e2b_api_key")
-    if e2b_key:
-        results.append(("✓", "E2B API key configured", ""))
-        try:
-            from novacode_cli.integrations.e2b_executor import E2BExecutor
-
-            executor = E2BExecutor(api_key=e2b_key)
-            result = executor.execute("print('test')", language="python", timeout=10)
-            if result.exit_code == 0:
-                results.append(("✓", "E2B sandbox test successful", ""))
-            else:
-                results.append(
-                    (
-                        "✗",
-                        f"E2B sandbox test failed (exit code {result.exit_code})",
-                        result.error or "",
-                    )
-                )
-                all_passed = False
-        except Exception as e:  # noqa: BLE001
-            results.append(("✗", f"E2B sandbox test failed: {e}", ""))
-            all_passed = False
-    else:
-        results.append(("ℹ", "E2B not configured (optional)", "For secure code execution"))
-
-    # Check 6: File permissions on secrets.json (if using fallback)
+    # Check 5: File permissions on secrets.json (if using fallback)
     secrets_file = SecretManager.FALLBACK_FILE
     if secrets_file.exists() and not secret_manager.use_keyring:
         try:

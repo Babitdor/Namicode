@@ -444,7 +444,6 @@ def get_system_prompt(assistant_id: str, sandbox_type: str | None = None) -> str
         working_dir = "/"
 
     has_tavily = getattr(settings, "has_tavily", False)
-    has_e2b = bool(os.environ.get("E2B_API_KEY"))
     has_graph = getattr(settings, "has_graph", False)
     shell_info = _get_shell_platform_info(sandbox_type)
 
@@ -454,7 +453,6 @@ def get_system_prompt(assistant_id: str, sandbox_type: str | None = None) -> str
         sandbox_type=sandbox_type,
         skills_directory=agent_dir_path,
         has_tavily=has_tavily,
-        has_e2b=has_e2b,
         has_graph=has_graph,
         **shell_info,
     )

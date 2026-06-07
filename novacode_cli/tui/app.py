@@ -5759,21 +5759,40 @@ class NovaApp(App):
             )
 
     async def _run_ralph(self, text: str) -> None:
-        """Run /ralph; foreground iterations stream natively via execute_fn."""
+        """Run /ralph natively: messages render via a thread-safe emit, and
+        foreground iterations stream through ``_tui_execute_fn``."""
+        import threading
+
         from novacode_cli.commands.ralph_handler import handle_ralph_command
 
         parts = text.split(maxsplit=1)
         args = parts[1].strip() if len(parts) > 1 else ""
         self._log(Text(f"🔁 Ralph: {args or '(status)'}", style="bold"))
-        with _rich_console.capture():
-            await handle_ralph_command(
-                self.agent,
-                self.session_state,
-                self.assistant_id,
-                self.token_tracker,
-                args or None,
-                execute_fn=self._tui_execute_fn,
-            )
+
+        loop_tid = threading.get_ident()
+
+        def _emit(message: str = "") -> None:
+            try:
+                renderable = Text.from_markup(message) if message else Text("")
+            except Exception:  # noqa: BLE001 - never let bad markup break the run
+                renderable = Text(message)
+            if threading.get_ident() == loop_tid:
+                self._log(renderable)
+            else:
+                try:
+                    self.call_from_thread(self._log, renderable)
+                except Exception:  # noqa: BLE001 - app may be shutting down
+                    pass
+
+        await handle_ralph_command(
+            self.agent,
+            self.session_state,
+            self.assistant_id,
+            self.token_tracker,
+            args or None,
+            execute_fn=self._tui_execute_fn,
+            emit=_emit,
+        )
 
     async def _run_trello(self, text: str) -> None:
         """Run /trello; start the server inline, then watch for tasks in background."""
@@ -5886,19 +5905,19 @@ class NovaApp(App):
 
         if sub == "stop":
             if not is_server_running():
-                self._log(Text("Chat server is not running.", style="yellow"))
+                self._log(Text("Council server is not running.", style="yellow"))
                 return
             stop_chat_server()
-            self._log(Text("✓ Chat server stopped.", style="green"))
+            self._log(Text("✓ Council server stopped.", style="green"))
             return
 
         if is_server_running():
             url = get_server_url()
-            self._log(Text(f"Chat UI already running at {url}", style="green"))
+            self._log(Text(f"Council UI already running at {url}", style="green"))
             return
 
         url = start_chat_server()
-        self._log(Text(f"Chat UI started at {url}", style="bold green"))
+        self._log(Text(f"Council UI started at {url} — present a topic to convene", style="bold green"))
 
     async def _run_agents(self) -> None:
         """Show configured subagents (read-only)."""

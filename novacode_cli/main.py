@@ -1477,7 +1477,7 @@ async def _run_agent_session(
     """
     # Create agent with conditional tools.
     # NOTE: several built-in tools are intentionally NOT registered to keep the
-    # agent lean — code execution (execute_in_e2b), browser automation
+    # agent lean — browser automation
     # (browser_automate / capture_browser_console), git tools, and the code-quality
     # tools (lint_code / format_code_file / check_types). LSP tools are likewise
     # not registered. Test running and dev-server management are likewise done via

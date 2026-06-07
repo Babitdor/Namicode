@@ -8,7 +8,7 @@ before execution. Each configuration includes:
 Tool Categories:
 - Destructive operations: shell, execute, write_file, edit_file
 - External operations: web_search, fetch_url, http_request, browser_automate
-- Code execution: execute_in_e2b, run_tests, start_dev_server
+- Code execution: run_tests, start_dev_server
 - Memory operations: write_memory, create_memory_structure
 - User interaction: ask_question
 """
@@ -200,7 +200,7 @@ def get_interrupt_configs() -> dict[str, InterruptOnConfig]:
     Interrupt Categories:
         - Destructive operations: shell, execute, write_file, edit_file
         - External operations: web_search, fetch_url, browser_automate
-        - Code execution: execute_in_e2b, run_tests, start_dev_server
+        - Code execution: run_tests, start_dev_server
         - Memory operations: write_memory
         - Browser operations: capture_browser_console
         - Search operations: duckduckgo_search, docs_search

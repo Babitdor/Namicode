@@ -290,7 +290,7 @@ COMMANDS = {
     "critique": "Run critique agent on recent changes (e.g., /critique or /critique src/)",
     "ralph": "Run autonomous looping mode (e.g., /ralph <task>, /ralph <task> --iterations 5)",
     "browser-use": "Run browser automation with AI (e.g., /browser-use <task>, /browser-use <task> --model llama3.2)",
-    "chat": "Start a web chat UI in the browser",
+    "chat": "Open the Council web UI in the browser (5 agents debate + vote on a topic)",
     "dream": "Run memory consolidation to organize and clean up memory files",
     "research": "Run agent swarm research (e.g., /research <query>, /research academic <query>, /research market <query>)",
     "reindex": "Rebuild the semantic code search index (after significant code changes)",
@@ -498,7 +498,6 @@ class Settings:
     openrouter_api_key: str | None
     tavily_api_key: str | None
     langsmith_api_key: str | None
-    replicate_api_key: str | None
 
     # Ollama configuration
     ollama_host: str | None
@@ -555,16 +554,12 @@ class Settings:
             tavily_key = secret_manager.get_secret("tavily_api_key") or os.environ.get(
                 "TAVILY_API_KEY"
             )
-            replicate_key = secret_manager.get_secret(
-                "replicate_api_key"
-            ) or os.environ.get("REPLICATE_API_TOKEN")
         else:
             openai_key = os.environ.get("OPENAI_API_KEY")
             anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
             google_key = os.environ.get("GOOGLE_API_KEY")
             openrouter_key = os.environ.get("OPENROUTER_API_KEY")
             tavily_key = os.environ.get("TAVILY_API_KEY")
-            replicate_key = os.environ.get("REPLICATE_API_TOKEN")
 
         langsmith_key = os.environ.get("LANGSMITH_API_KEY")
 
@@ -586,7 +581,6 @@ class Settings:
             openrouter_api_key=openrouter_key,
             tavily_api_key=tavily_key,
             langsmith_api_key=langsmith_key,
-            replicate_api_key=replicate_key,
             ollama_host=ollama_host,
             project_root=project_root,
             langsmith_project=langsmith_project,
@@ -618,11 +612,6 @@ class Settings:
     def has_tavily(self) -> bool:
         """Check if Tavily API key is configured."""
         return self.tavily_api_key is not None
-
-    @property
-    def has_replicate(self) -> bool:
-        """Check if Replicate API key is configured."""
-        return self.replicate_api_key is not None
 
     @property
     def has_langsmith(self) -> bool:
