@@ -1,16 +1,16 @@
 """Graph context middleware for injecting project graph knowledge into system prompts.
 
 This middleware loads the project graph from `.nova/project-graph.json` (created
-by `/init`) on the first agent turn and injects a structured summary into every
-system prompt. This gives the agent architectural awareness — communities, god
-nodes, key files, and surprising connections — on every session, not just during
-`/init`.
+by `/init`) on the first agent turn and injects a small **legend** into every
+system prompt: the total node/edge counts and the module (community) names. That
+is just enough orientation for the agent to know a graph exists and what the
+module boundaries are called.
 
-The graph summary includes:
-- Community structure (module boundaries)
-- God nodes (central hubs that connect many modules)
-- Surprising connections (cross-community links)
-- Key files (most important files in the project)
+Everything richer — god nodes (central hubs), cross-module connections, key
+files, and per-symbol locations/communities — is **intentionally NOT injected**.
+It lives behind the `query_project_graph` tool so the agent looks it up on demand
+instead of reasoning from a stale, heuristic summary standing in every prompt
+(which both taxes context on every call and suppresses tool use).
 
 Enabled by default when `.nova/project-graph.json` exists; silently skipped
 when no graph is available.
@@ -75,79 +75,38 @@ class _GraphSummary:
         self.key_files: list[dict[str, str]] = graph_data.get("key_files", [])
 
     def to_prompt_section(self) -> str:
-        """Format the graph summary as a system prompt section.
+        """Format a minimal *legend* of the project graph for the system prompt.
+
+        Deliberately limited to total counts + module (community) names — the
+        cheap orientation the agent needs to know a graph exists and what the
+        module boundaries are. The detailed "insight" payloads (god nodes,
+        cross-module connections, key files, and per-symbol locations) are
+        intentionally NOT injected: they live behind ``query_project_graph`` so
+        the agent looks them up on demand instead of reasoning from a stale,
+        heuristic summary that would sit in every prompt and suppress tool use.
 
         Returns:
-            Formatted markdown section for injection into the system prompt.
-            Empty string if the graph has no useful content.
+            Formatted markdown legend, or an empty string when the graph has no
+            content (so the caller skips injection).
         """
-        lines: list[str] = []
+        if not self.total_nodes and not self.communities:
+            return ""
 
-        # Header
-        lines.append(f"Project graph: {self.total_nodes} nodes, {self.total_edges} edges")
-        lines.append("")
+        lines: list[str] = [
+            f"Project graph: {self.total_nodes} nodes, {self.total_edges} edges"
+        ]
 
-        # Communities (module boundaries)
+        # Communities (module boundaries) — names only, the one thing worth
+        # standing in context. Everything else is tool-only.
         if self.communities:
-            lines.append("### Module Boundaries (Communities)")
             lines.append("")
+            lines.append("### Module Boundaries (Communities)")
             for comm in self.communities[:12]:  # Limit to 12 communities
                 label = comm.get("label", f"Community {comm.get('id', '?')}")
                 count = comm.get("node_count", len(comm.get("nodes", [])))
                 lines.append(f"- **{label}**: {count} components")
             if len(self.communities) > 12:
                 lines.append(f"- ... and {len(self.communities) - 12} more modules")
-            lines.append("")
-
-        # God nodes (central hubs)
-        if self.god_nodes:
-            lines.append("### Central Hubs (God Nodes)")
-            lines.append("")
-            for gn in self.god_nodes[:6]:
-                label = gn.get("label", gn.get("id", "?"))
-                edges = gn.get("edges", gn.get("degree", 0))
-                lines.append(f"- **{label}** ({edges} connections) — changes here affect many modules")
-            lines.append("")
-
-        # Surprising connections
-        if self.surprising_connections:
-            lines.append("### Cross-Module Connections")
-            lines.append("")
-            for sc in self.surprising_connections[:4]:
-                source = sc.get("source", "?")
-                target = sc.get("target", "?")
-                # graphify often uses docstrings as 'source' labels for rationale
-                # nodes — they're not useful as display names.  Prefer source_files.
-                source_files = sc.get("source_files", [])
-                if source_files:
-                    source_display = source_files[0]
-                    if len(source_files) > 1:
-                        source_display += f", {source_files[1]}"
-                else:
-                    # Truncate long docstring labels
-                    if len(source) > 50:
-                        source_display = source[:47] + "..."
-                    else:
-                        source_display = source
-                reason = sc.get("why", "")
-                # graphify's 'why' often embeds the full source docstring as a quote;
-                # strip it to keep the reason concise for the agent
-                if "peripheral node" in reason:
-                    reason = "cross-module link"
-                elif len(reason) > 80:
-                    reason = reason[:77] + "..."
-                lines.append(f"- `{source_display}` ↔ `{target}` — {reason}" if reason else f"- `{source_display}` ↔ `{target}`")
-            lines.append("")
-
-        # Key files
-        if self.key_files:
-            lines.append("### Key Files")
-            lines.append("")
-            for kf in self.key_files[:8]:
-                path = kf.get("path", "?")
-                purpose = kf.get("purpose", "")
-                lines.append(f"- `{path}` — {purpose}")
-            lines.append("")
 
         result = "\n".join(lines)
         if len(result) > MAX_GRAPH_CONTEXT_CHARS:
@@ -156,15 +115,16 @@ class _GraphSummary:
 
 
 class GraphContextMiddleware(AgentMiddleware):
-    """Inject project graph context into the system prompt.
+    """Inject a minimal project-graph legend into the system prompt.
 
-    Loads `.nova/project-graph.json` on the first turn and caches it for
-    the session. Injects a structured summary of communities, god nodes,
-    and key files into every system prompt.
+    Loads `.nova/project-graph.json` on the first turn and caches it for the
+    session. Injects only the node/edge counts and module (community) names —
+    plus a pointer to `query_project_graph` for everything else (hubs,
+    connections, key files, per-symbol locations).
 
-    This gives the agent architectural awareness without requiring the
-    user to run `/init` every session — the graph is loaded automatically
-    when available.
+    This gives the agent cheap architectural orientation without standing a
+    heavy, heuristic summary in every prompt — the detail is fetched on demand
+    through the tool.
     """
 
     state_schema = AgentState
@@ -419,11 +379,12 @@ class GraphContextMiddleware(AgentMiddleware):
 
         block = (
             f"[Project Graph]\n{graph_context}\n"
-            "This is a high-level summary only — most files and symbols are NOT "
-            "listed above. Before reading or editing an unfamiliar file, and to "
-            "find what a specific file/symbol connects to, its community, or "
-            "whether it's a high-degree hub (blast radius), call "
-            '`query_project_graph("<file or symbol>")` for the targeted detail.\n'
+            "This is a legend only — module names above, nothing else. The graph "
+            "also knows each file/symbol's location, which community it belongs "
+            "to, its blast radius (high-degree hubs), and cross-module "
+            "connections — but none of that is listed here. Call "
+            '`query_project_graph("<file or symbol>")` to look up those details '
+            "on demand instead of inferring them from the module list.\n"
             "[/Project Graph]"
         )
         system_prompt = request.system_prompt
