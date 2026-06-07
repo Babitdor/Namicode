@@ -79,6 +79,7 @@ class MatrixRain(Static):
         self._columns: list[dict] = []
         self._chars = list(MatrixRain.KATAKANA)
         self._width: int | None = None
+        self._timer: Any = None  # set_interval handle for pause/resume
         self._configure(art, width)
 
     def _configure(self, art: str, width: int | None) -> None:
@@ -157,7 +158,18 @@ class MatrixRain(Static):
     def on_mount(self) -> None:
         self._init_columns()
         # ~7.5 fps: slow, calm rain that's also cheap to render.
-        self.set_interval(0.13, self._tick)
+        self._timer = self.set_interval(0.13, self._tick)
+
+    def pause(self) -> None:
+        """Pause the rain timer (called when the app loses OS focus or rain is
+        scrolled out of view)."""
+        if self._timer is not None:
+            self._timer.pause()
+
+    def resume(self) -> None:
+        """Resume the rain timer (called when the app regains OS focus)."""
+        if self._timer is not None:
+            self._timer.resume()
 
     def _init_columns(self) -> None:
         self._columns = []
@@ -170,7 +182,24 @@ class MatrixRain(Static):
             })
 
     def _tick(self) -> None:
-        """Advance one frame of the rain, then stamp the logo over it."""
+        """Advance one frame of the rain, then stamp the logo over it.
+
+        Early-returns (no work) when the widget is scrolled out of the visible
+        viewport, so transcript messages push the rain off-screen cheaply.
+        """
+        # Skip when scrolled out of view.  region is relative to parent — if the
+        # widget's bottom edge hasn't been scrolled into view yet, or its top
+        # edge has scrolled past the bottom of the visible window, bail out.
+        try:
+            p = self.parent
+            if p is not None and hasattr(p, "scroll_y"):
+                sy = p.scroll_y
+                vh = p.size.height
+                r = self.region
+                if r.bottom <= sy or r.y >= sy + vh:
+                    return
+        except Exception:  # noqa: BLE001
+            pass
         cols = self._col_count
         rows = self._row_count
         lines: list[list[str]] = [[" "] * cols for _ in range(rows)]
@@ -2243,6 +2272,29 @@ class NovaApp(App):
                     style="dim",
                 )
             )
+
+    # -- OS focus handlers ----------------------------------------------------
+    # Pause/resume the MatrixRain animation when the terminal window gains or
+    # loses OS-focus, so the TUI never spins the CPU on an invisible animation.
+
+    def _matrix_rain(self) -> MatrixRain | None:
+        """Return the MatrixRain widget if it is mounted, else None."""
+        try:
+            return self.query_one("#matrix-rain", MatrixRain)
+        except NoMatches:
+            return None
+
+    def on_app_blur(self) -> None:
+        """Pause MatrixRain when the terminal loses OS focus."""
+        rain = self._matrix_rain()
+        if rain is not None:
+            rain.pause()
+
+    def on_app_focus(self) -> None:
+        """Resume MatrixRain when the terminal regains OS focus."""
+        rain = self._matrix_rain()
+        if rain is not None:
+            rain.resume()
 
     # -- helpers --------------------------------------------------------------
     def _w(self, selector: str, kind: Any) -> Any:
