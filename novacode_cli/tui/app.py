@@ -187,16 +187,16 @@ class MatrixRain(Static):
         Early-returns (no work) when the widget is scrolled out of the visible
         viewport, so transcript messages push the rain off-screen cheaply.
         """
-        # Skip when scrolled out of view.  region is relative to parent — if the
-        # widget's bottom edge hasn't been scrolled into view yet, or its top
-        # edge has scrolled past the bottom of the visible window, bail out.
+        # Skip the (expensive) frame build when the banner is scrolled out of the
+        # transcript viewport. Both regions are in SCREEN coordinates, so they're
+        # directly comparable: if the widget sits entirely above or below the
+        # parent scroll-container's visible area, there's nothing to draw.
         try:
             p = self.parent
-            if p is not None and hasattr(p, "scroll_y"):
-                sy = p.scroll_y
-                vh = p.size.height
+            visible = getattr(p, "region", None)
+            if visible is not None:
                 r = self.region
-                if r.bottom <= sy or r.y >= sy + vh:
+                if r.height == 0 or r.bottom <= visible.y or r.y >= visible.bottom:
                     return
         except Exception:  # noqa: BLE001
             pass

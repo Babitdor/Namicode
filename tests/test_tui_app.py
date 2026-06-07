@@ -695,6 +695,17 @@ async def _drive_home_banner():
         app.on_resize(_Resize())
         assert rain._col_count == min(max(140 - 6, 60), 200)
 
+        # Pause the rain when the terminal loses OS focus; resume on focus.
+        timer = rain._timer
+        assert timer is not None
+        active = getattr(timer, "_active", None)  # Textual Timer's run flag
+        app.on_app_blur()
+        if active is not None:
+            assert not active.is_set()
+        app.on_app_focus()
+        if active is not None:
+            assert active.is_set()
+
 
 def test_tui_home_banner():
     if not _HAS_TEXTUAL:
