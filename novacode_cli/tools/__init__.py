@@ -56,14 +56,12 @@ from novacode_cli.tools.web_tools import (
     web_search,
 )
 
-# Web scraping tools (GitHub trending, HN, LinkedIn, Reddit, Twitter/X)
+# Web scraping tools (GitHub trending, HN, LinkedIn, Reddit)
 from novacode_cli.tools.scraper_tools import (
     github_trending,
     hacker_news,
     linkedin_jobs,
     reddit_posts,
-    twitter_search,
-    twitter_trending,
 )
 
 __all__ = [
@@ -95,6 +93,4 @@ __all__ = [
     "hacker_news",
     "linkedin_jobs",
     "reddit_posts",
-    "twitter_search",
-    "twitter_trending",
 ]

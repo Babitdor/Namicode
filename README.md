@@ -10,7 +10,7 @@ An open-source terminal-based AI coding assistant that runs in your terminal, si
 ## Features
 
 - **Autonomous Learning System (Hermes)**: Periodically reviews tool usage patterns, extracts lessons, and autonomously creates reusable skills — the agent improves itself over time without user intervention
-- **Built-in Tools**: 40+ tools including file operations, shell commands, web search, git, LSP, browser automation, subagent delegation, and web scraping (GitHub trending, Hacker News, LinkedIn, Reddit, Twitter/X)
+- **Built-in Tools**: 25+ tools including file operations, shell commands, web search, subagent delegation, semantic code search, and web scraping (GitHub trending, Hacker News, LinkedIn, Reddit)
 - **Customizable Skills**: Add domain-specific capabilities through a progressive disclosure skill system (50+ built-in skills)
 - **Durable Memory**: Two-tier memory system — persistent markdown files (`USER.md`/`MEMORY.md`) auto-maintained by the learning system, plus a LangGraph key/value store (`remember`/`recall`) for cross-session facts
 - **Project-Aware**: Automatically detects project roots and loads project-specific configurations
@@ -229,9 +229,6 @@ nova --sandbox daytona
 nova --sandbox runloop
 nova --sandbox docker
 
-# Execute code in E2B cloud sandbox (via tool)
-# The agent can use execute_in_e2b() when E2B_API_KEY is set
-
 # Run system diagnostics
 nova doctor
 ```
@@ -248,42 +245,26 @@ nova doctor
 | `grep` | Search for text patterns across files |
 | `shell` | Execute shell commands (local mode) |
 | `execute` | Execute commands in remote sandbox (sandbox mode) |
-| `web_search` | Search the web using Tavily API |
-| `fetch_url` | Fetch and convert web pages to markdown (covers all HTTP methods) |
-| `browser_automate` | AI-powered browser automation for web tasks |
-| `capture_browser_console` | Capture browser console errors and logs from web apps |
 | `task` | Delegate work to subagents for parallel execution |
 | `write_todos` | Create and manage task lists for complex work |
 | `think` | Structured reasoning and reflection before acting |
+| `web_search` | Search the web using Tavily API |
 | `duckduckgo_search` | Web search using DuckDuckGo (no API key required) |
-| `docs_search` | Search official documentation (LangGraph, LangChain, etc.) |
+| `docs_search` | Search official documentation sites |
+| `fetch_url` | Fetch and convert web pages to markdown (covers all HTTP methods) |
 | `github_trending` | Scrape GitHub trending repositories by language/time range |
 | `hacker_news` | Scrape Hacker News front page headlines |
 | `linkedin_jobs` | Search LinkedIn job listings (Playwright-based, no login) |
 | `reddit_posts` | Scrape Reddit posts by subreddit, user, or search query |
-| `twitter_search` | Search Twitter/X for recent tweets by query |
-| `twitter_trending` | Get current Twitter/X trending topics |
 | `package_info` | Get package version and dependency info (PyPI / npm) |
-| `git_status` / `git_log` / `git_diff` / `git_blame` | Git repository introspection tools |
 | `read_memory` / `write_memory` | Read and write persistent markdown agent memories |
 | `remember` / `recall` | Store and fetch durable cross-session facts by key |
 | `list_memories` / `forget` | List and delete stored durable memory facts |
-| `execute_in_e2b` | Run code in E2B cloud sandbox |
-| `start_dev_server` / `stop_server` / `list_servers` | Manage local development servers |
-| `run_tests` | Execute test suites |
 | `list_trash` | List file snapshots available for recovery |
 | `restore_file` | Restore a deleted or overwritten file from snapshots |
 | `query_project_graph` | Query the project graph for architectural information |
 | `code_search` | Semantic code search by description or symbol name |
 | `find_related_code` | Find code semantically similar to a known location |
-| `lsp_goto_definition` | Navigate to symbol definition via LSP |
-| `lsp_find_references` | Find all usages of a symbol via LSP |
-| `lsp_hover` | Get documentation and type info for a symbol |
-| `lsp_document_symbols` | List classes, functions, and variables in a file |
-| `lsp_workspace_symbols` | Find symbols across the entire workspace |
-| `lsp_diagnostics` | Get syntax errors and linting issues via LSP |
-| `lsp_rename` | Rename a symbol across all files |
-| `lsp_signature_help` | Get parameter info for function calls |
 | `start_async_task` | Start a background task on a remote LangGraph server |
 | `check_async_task` | Check status and result of a background task |
 | `update_async_task` | Send updated instructions to a running background task |
@@ -291,108 +272,6 @@ nova doctor
 | `list_async_tasks` | List all tracked background tasks |
 
 > **Note**: Potentially destructive operations require user approval. Use `--auto-approve` to skip prompts.
-
-## Browser Automation
-
-NOVA includes AI-powered browser automation capabilities for web-based tasks:
-
-### Direct Command
-
-```bash
-# Run browser automation task
-/browser-use <task> [--model M] [--no-vision]
-
-# Examples:
-/browser-use Go to github.com and find trending Python repos
-/browser-use Fill out the contact form on example.com --model llama3.2
-/browser-use Search for Python tutorials --no-vision
-```
-
-### Agent Tool
-
-The agent can also use browser automation directly:
-
-```python
-# Browser automation tool
-browser_automate(
-    task="Go to news.ycombinator.com and get the top 5 stories",
-    model="llama3.1:8b",
-    use_vision=True
-)
-```
-
-## Browser Console Capture
-
-NOVA can capture browser console errors and logs from running web applications:
-
-### Use Cases
-
-- Debug JavaScript errors in development
-- Monitor console warnings during testing
-- Capture console output from web applications
-- Identify runtime errors in production
-
-### Agent Tool
-
-```python
-# Capture console errors from local development server
-capture_browser_console(
-    url="http://localhost:3000",
-    duration=60,
-    capture_errors=True,
-    capture_warnings=True,
-    capture_logs=False
-)
-
-# Quick error check (5 seconds)
-capture_browser_console("http://localhost:8080", duration=5)
-
-# Capture all console messages from production site
-capture_browser_console("https://example.com", duration=30)
-```
-
-### Output
-
-Returns a dictionary with:
-- `messages`: List of captured console messages with type, content, timestamp, and location
-- `summary`: Statistics including error count, warning count, and log count
-- `success`: Whether the capture succeeded
-
-### Requirements
-
-```bash
-pip install playwright
-playwright install chromium
-```
-
-### Specialized Subagent
-
-NOVA includes a specialized browser-automation-agent for complex web tasks:
-
-- **Web Scraping**: Extract data from websites
-- **Form Filling**: Automate form submissions
-- **Data Collection**: Gather information from multiple pages
-- **Multi-step Interactions**: Perform complex web workflows
-
-### Browser-Use Features
-
-- **Vision Support**: Optional vision capabilities for visual understanding
-- **Model Selection**: Choose different Ollama models (default: llama3.1:8b)
-- **Result Integration**: Results automatically sent to Nova for analysis
-- **Conversation History**: Browser results become part of the conversation context
-
-### Requirements
-
-```bash
-# Install browser-use
-pip install browser-use
-
-# Or with uv
-uv pip install browser-use
-
-# Ensure Ollama is running with the model installed
-ollama pull llama3.1:8b
-```
 
 ## Trello Task Board
 
@@ -468,10 +347,8 @@ NOVA includes built-in web scraping tools that work with public data — no API 
 | `hacker_news` | Hacker News front page headlines | ✅ |
 | `linkedin_jobs` | LinkedIn job listings (Playwright-based) | ✅ |
 | `reddit_posts` | Reddit posts by subreddit, user, or search | ✅ |
-| `twitter_search` | Twitter/X recent tweets by query | ✅ |
-| `twitter_trending` | Twitter/X current trending topics | ✅ |
 
-These tools use `requests` + `BeautifulSoup` (or `playwright` for LinkedIn/Twitter) to scrape publicly available data and return structured results.
+These tools use `requests` + `BeautifulSoup` (or `playwright` for LinkedIn) to scrape publicly available data and return structured results.
 
 ### Standalone CLI Scripts
 
@@ -483,7 +360,6 @@ scripts/scraper/
 ├── hn_scraper.py           # Hacker News scraper
 ├── linkedin_job_scraper.py # LinkedIn job scraper (Playwright)
 ├── reddit_scraper.py       # Reddit scraper
-├── twitter_scraper.py      # Twitter/X scraper (Playwright)
 └── inline_json.py          # JSON extraction utility
 ```
 
@@ -1076,3 +952,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 3. Commit your changes (`git commit -m 'Add amazing feature'`)
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
+n a Pull Request
+ature/amazing-feature`)
+5. Open a Pull Request
+n a Pull Request
