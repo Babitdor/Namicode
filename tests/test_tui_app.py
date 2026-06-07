@@ -638,17 +638,14 @@ def test_tui_remote_streaming():
     asyncio.run(_drive_remote_streaming())
 
 
-async def _drive_responsive_banner():
-    """The home ASCII banner re-renders to the right size variant on resize."""
+async def _drive_home_banner():
+    """The home banner composites the config ASCII logo over the Matrix rain."""
     from novacode_cli.config.config import get_responsive_ascii
-    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.app import MatrixRain, NovaApp
     from novacode_cli.ui.ui_elements import TokenTracker
 
-    # Width drives discrete art variants (wide ≥75, medium ≥60, narrow <60).
-    wide_art = get_responsive_ascii(width=100)
-    narrow_art = get_responsive_ascii(width=40)
-    assert wide_art != narrow_art
-    assert "NOVA" in narrow_art  # narrow fallback still shows the name
+    # The config banner exists and carries the NOVA name.
+    assert "NOVA" in get_responsive_ascii(width=80)
 
     app = NovaApp(
         agent=_FakeAgent(),
@@ -661,29 +658,48 @@ async def _drive_responsive_banner():
     )
     async with app.run_test() as pilot:
         await pilot.pause()
-        # Banner is shown at startup and tracked for resize updates.
-        assert app._home_banner is not None
-        assert app._home_banner.is_mounted
+        rain = app._home_banner
+        # The single rain widget IS the banner — logo is composited into it.
+        assert isinstance(rain, MatrixRain)
+        assert len(app.query(MatrixRain)) == 1
+        # The ASCII art is embedded in the rain widget (rain behind, logo on top).
+        assert "NOVA" in "\n".join(rain._art_lines)
+        # The logo style tracks the active theme (bold <theme primary color>).
+        style = rain._art_style()
+        assert style.startswith("bold ")
+        # A frame renders without error and includes art glyphs over the rain.
+        rain._tick()
+        out = rain.render()
+        assert "NOVA" in (out.plain if hasattr(out, "plain") else str(out))
 
-        # Simulate a wide then a narrow resize; the banner swaps art variants.
-        app._banner_width = lambda: 100  # noqa: SLF001
-        app.on_resize(object())
-        await pilot.pause()
-        wide_text = app._home_banner_art
+        # Responsive: reflow grows the grid on a wider terminal and shrinks +
+        # swaps the art variant on a narrow one.
+        before = rain._col_count
+        rain.reflow(get_responsive_ascii(width=200), 200)
+        assert rain._col_count > before
+        rain.reflow(get_responsive_ascii(width=50), 50)
+        assert rain._col_count <= 60
+        # reflow is a no-op when the width is unchanged.
+        cols = rain._col_count
+        rain.reflow(get_responsive_ascii(width=50), 50)
+        assert rain._col_count == cols
 
-        app._banner_width = lambda: 40  # noqa: SLF001
-        app.on_resize(object())
-        await pilot.pause()
-        narrow_text = app._home_banner_art
+        # The app's on_resize handler drives the reflow from a Resize event.
+        class _Size:
+            width = 140
+            height = 30
 
-        assert wide_text != narrow_text, (len(wide_text), len(narrow_text))
-        assert "NOVA" in narrow_text
+        class _Resize:
+            size = _Size()
+
+        app.on_resize(_Resize())
+        assert rain._col_count == min(max(140 - 6, 60), 200)
 
 
-def test_tui_responsive_banner():
+def test_tui_home_banner():
     if not _HAS_TEXTUAL:
         return
-    asyncio.run(_drive_responsive_banner())
+    asyncio.run(_drive_home_banner())
 
 
 async def _drive_user_input_sanitization():
@@ -2267,6 +2283,110 @@ def test_tui_plan_shares_conversation():
     if not _HAS_TEXTUAL:
         return
     asyncio.run(_drive_plan_shares_conversation())
+
+
+async def _drive_plugin_command_dispatch():
+    """A plugin-contributed slash command is dispatched in the TUI."""
+    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.ui.ui_elements import TokenTracker
+
+    seen: list[str] = []
+
+    async def weather_handler(args: str) -> str:
+        seen.append(args)
+        return f"weather: {args}"
+
+    app = NovaApp(
+        agent=_FakeAgent(),
+        assistant_id="nova-agent",
+        session_state=_SS(),
+        backend=None,
+        token_tracker=TokenTracker(),
+        image_tracker=None,
+        model_name="m",
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app._plugin_commands = {"weather": weather_handler}  # noqa: SLF001
+
+        # Known plugin command → handled (returns True), handler gets the args.
+        handled = await app._run_plugin_command("/weather Tokyo")
+        assert handled is True
+        assert seen == ["Tokyo"]
+
+        # Unknown command → not handled (falls through to skill/unavailable).
+        assert await app._run_plugin_command("/nope") is False
+
+
+def test_tui_plugin_command_dispatch():
+    if not _HAS_TEXTUAL:
+        return
+    asyncio.run(_drive_plugin_command_dispatch())
+
+
+async def _drive_plugins_screen():
+    """The native /plugins screen lists plugins and toggles enable/disable."""
+    import novacode_cli.plugins.loader as loader
+    from novacode_cli.tui.app import NovaApp, PluginsScreen
+    from novacode_cli.ui.ui_elements import TokenTracker
+
+    state: set[str] = set()
+    fake = [
+        ("demo-plugin", {
+            "description": "demo",
+            "middleware": [1],
+            "tools": [1, 2],
+            "commands": [1],
+        }),
+    ]
+    orig = (
+        loader.discover_plugins,
+        loader.list_enabled_plugins,
+        loader.enable_plugin,
+        loader.disable_plugin,
+    )
+    loader.discover_plugins = lambda: fake
+    loader.list_enabled_plugins = lambda: list(state)
+    loader.enable_plugin = lambda n: (state.add(n) or True)
+    loader.disable_plugin = lambda n: (state.discard(n) or True)
+
+    app = NovaApp(
+        agent=_FakeAgent(),
+        assistant_id="nova-agent",
+        session_state=_SS(),
+        backend=None,
+        token_tracker=TokenTracker(),
+        image_tracker=None,
+        model_name="m",
+    )
+    try:
+        async with app.run_test() as pilot:
+            screen = PluginsScreen()
+            await app.push_screen(screen)
+            await pilot.pause()
+
+            ol = screen.query_one("#plugins")
+            assert ol.option_count == 1, ol.option_count
+
+            # Toggle on, then off.
+            screen._toggle(0)
+            assert "demo-plugin" in state
+            await pilot.pause()
+            screen._toggle(0)
+            assert "demo-plugin" not in state
+    finally:
+        (
+            loader.discover_plugins,
+            loader.list_enabled_plugins,
+            loader.enable_plugin,
+            loader.disable_plugin,
+        ) = orig
+
+
+def test_tui_plugins_screen():
+    if not _HAS_TEXTUAL:
+        return
+    asyncio.run(_drive_plugins_screen())
 
 
 if __name__ == "__main__":

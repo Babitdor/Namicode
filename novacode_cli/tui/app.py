@@ -19,6 +19,7 @@ from ``on_mount`` handlers via Python's ``animate()`` API.
 from __future__ import annotations
 
 import asyncio
+import random
 import time
 from pathlib import Path
 from typing import Any
@@ -49,6 +50,200 @@ from textual.widgets import (
 )
 from textual.widgets.option_list import Option
 from textual.css.query import NoMatches
+
+# ---------------------------------------------------------------------------
+# Matrix rain — animated home screen banner
+# ---------------------------------------------------------------------------
+
+class MatrixRain(Static):
+    """A matrix-style digital rain with the NOVA ASCII logo composited on top.
+
+    Columns of falling half-width katakana/hex characters cascade down with a
+    fading trail (bright head, dimmer green tail). The ASCII banner is stamped
+    over the rain each frame: its solid cells occlude the rain (logo in front),
+    while regular-space gaps stay transparent so the rain shows *through* the
+    art — "rain behind the banner". The logo is tinted with the active TUI
+    theme's primary color, so it recolors live when the theme changes.
+
+    Half-width katakana (U+FF66–FF9D) are single-cell, so they align exactly
+    with the width-1 ASCII art — full-width katakana would drift the columns.
+    """
+
+    KATAKANA = (
+        "ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎ"
+        "ﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜｦﾝ0123456789ABCDEF"
+    )
+
+    def __init__(self, art: str = "", width: int | None = None) -> None:
+        super().__init__("", id="matrix-rain")
+        self._columns: list[dict] = []
+        self._chars = list(MatrixRain.KATAKANA)
+        self._width: int | None = None
+        self._configure(art, width)
+
+    def _configure(self, art: str, width: int | None) -> None:
+        """(Re)compute the grid + logo placement for the given art and width."""
+        # Trim blank top/bottom lines so the logo sits tightly in the rain.
+        art_lines = art.splitlines() if art else []
+        while art_lines and not art_lines[0].strip():
+            art_lines.pop(0)
+        while art_lines and not art_lines[-1].strip():
+            art_lines.pop()
+        self._art_lines = art_lines
+
+        art_w = max((len(ln) for ln in art_lines), default=0)
+        art_h = len(art_lines)
+        # Fill (most of) the terminal width so the rain spans the whole row and
+        # the logo is centered within it. Leave a small margin for the transcript
+        # padding + scrollbar (avoids wrapping) and cap very wide terminals so
+        # the per-frame build stays cheap.
+        usable = (width or 80) - 6
+        self._col_count = min(max(usable, art_w, 60), 200)
+        self._row_count = max(art_h + 6, 18)
+        self._art_left = max(0, (self._col_count - art_w) // 2)
+        self._art_top = 2  # a couple rows of rain above the logo
+        self._width = width
+
+    def reflow(self, art: str, width: int | None) -> None:
+        """Re-grid for a new terminal width (called on resize). No-op if same."""
+        if width == self._width:
+            return
+        self._configure(art, width)
+        if self.is_mounted:
+            self._init_columns()  # rebuild rain columns for the new width
+
+    def _theme_base_color(self):
+        """The active theme's primary color as a Textual ``Color`` object.
+
+        Handles ANSI theme names (``ansi_blue`` → ``blue``) and falls back to
+        matrix green if the theme color can't be parsed.
+        """
+        from textual.color import Color
+
+        raw = None
+        try:
+            raw = self.app.current_theme.primary
+        except Exception:  # noqa: BLE001
+            try:
+                raw = self.app.theme_variables.get("primary")
+            except Exception:  # noqa: BLE001
+                raw = None
+        raw = (raw or "#00ff88").strip()
+        if raw.startswith("ansi_"):
+            raw = raw[len("ansi_") :]
+        try:
+            return Color.parse(raw)
+        except Exception:  # noqa: BLE001
+            return Color.parse("#00ff88")
+
+    def _art_style(self) -> str:
+        """Bold style for the logo — the theme's primary color at full strength."""
+        return f"bold {self._theme_base_color().hex}"
+
+    def _rain_palette(self) -> tuple[str, str, str, str]:
+        """(head, near, mid, tail) hex colors — a *dimmed* theme-tinted gradient.
+
+        Derived from the theme color and darkened progressively so the rain reads
+        as a subtle backdrop (no bright white head) and recolors with the theme.
+        """
+        base = self._theme_base_color()
+        return (
+            base.darken(0.15).hex,  # head — muted, not white
+            base.darken(0.40).hex,  # near head
+            base.darken(0.60).hex,  # mid trail
+            base.darken(0.78).hex,  # tail — barely there
+        )
+
+    def on_mount(self) -> None:
+        self._init_columns()
+        # ~7.5 fps: slow, calm rain that's also cheap to render.
+        self.set_interval(0.13, self._tick)
+
+    def _init_columns(self) -> None:
+        self._columns = []
+        span = self._row_count + 5
+        for _ in range(self._col_count):
+            self._columns.append({
+                "pos": random.uniform(-span, 0),
+                "speed": random.uniform(0.25, 0.7),  # slower fall
+                "trail": random.randint(5, 14),
+            })
+
+    def _tick(self) -> None:
+        """Advance one frame of the rain, then stamp the logo over it."""
+        cols = self._col_count
+        rows = self._row_count
+        lines: list[list[str]] = [[" "] * cols for _ in range(rows)]
+        styles: list[list[str]] = [[""] * cols for _ in range(rows)]
+
+        head_c, near_c, mid_c, tail_c = self._rain_palette()
+        choice = random.choice
+        chars = self._chars
+
+        for col, d in enumerate(self._columns):
+            d["pos"] += d["speed"]
+            if d["pos"] > rows + d["trail"]:  # reset when fully off-screen
+                d["pos"] = random.uniform(-rows, -3)
+                d["speed"] = random.uniform(0.25, 0.7)
+                d["trail"] = random.randint(5, 14)
+
+            tail_start = max(0, int(d["pos"]) - d["trail"])
+            head = min(rows - 1, int(d["pos"]))
+            for y in range(tail_start, head + 1):
+                dist = head - y
+                lines[y][col] = choice(chars)
+                if dist == 0:
+                    styles[y][col] = head_c
+                elif dist <= 2:
+                    styles[y][col] = near_c
+                elif dist <= 5:
+                    styles[y][col] = mid_c
+                else:
+                    styles[y][col] = tail_c
+
+        # Composite the logo on top. Solid art cells occlude the rain; regular
+        # spaces stay transparent so the rain shows through the gaps. (Braille
+        # "blank" U+2800 is treated as solid so any silhouette stays intact.)
+        if self._art_lines:
+            art_style = self._art_style()
+            for ay, art_line in enumerate(self._art_lines):
+                gy = self._art_top + ay
+                if not 0 <= gy < rows:
+                    continue
+                row_l = lines[gy]
+                row_s = styles[gy]
+                left = self._art_left
+                for ax, ch in enumerate(art_line):
+                    if ch == " ":
+                        continue
+                    gx = left + ax
+                    if 0 <= gx < cols:
+                        row_l[gx] = ch
+                        row_s[gx] = art_style
+
+        # Build the frame with run-length coalescing: emit one append per run of
+        # same-styled cells instead of one per cell. Most of each row is a single
+        # unstyled run of spaces, so this cuts ~(cols×rows) appends down to a
+        # handful per row — the key to keeping the animation cheap.
+        from rich.text import Text as RichText
+
+        text = RichText()
+        for y in range(rows):
+            line = lines[y]
+            st = styles[y]
+            x = 0
+            while x < cols:
+                s = st[x]
+                j = x + 1
+                while j < cols and st[j] == s:
+                    j += 1
+                segment = "".join(line[x:j]) if s else " " * (j - x)
+                text.append(segment, style=s or None)
+                x = j
+            if y < rows - 1:
+                text.append("\n")
+
+        self.update(text)
 
 # Transcript is pruned from the top once it exceeds this many widgets, down to
 # _TRANSCRIPT_LOW_WATER — keeps Textual's layout/scroll/repaint fast in long
@@ -93,6 +288,7 @@ _TUI_SLASH_COMMANDS = [
     "/compact",
     "/save",
     "/copy",
+    "/plugins",
     "/steer",
     "/notifications",
     "/research",
@@ -124,7 +320,6 @@ _TUI_SLASH_COMMANDS = [
 from novacode_cli import ui_events as ev
 from novacode_cli.agent_stream import run_agent_stream
 from novacode_cli.config.config import console as _rich_console
-from novacode_cli.config.config import get_responsive_ascii
 from novacode_cli.input import (
     PASTE_MIN_CHARS,
     PASTE_MIN_NEWLINES,
@@ -1178,6 +1373,131 @@ class PickScreen(ModalScreen[int]):
         self.dismiss(-1)
 
 
+class PluginsScreen(ModalScreen[None]):
+    """Native ``/plugins`` manager: list installed plugins and toggle them.
+
+    Enable/disable writes ``~/.nova/plugins/manifest.json``; the agent reads it
+    at build time, so a session restart is needed for changes to take effect.
+    """
+
+    BINDINGS = [("escape", "close", "Close")]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._plugins: list = []  # list of (name, spec)
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="modal-box"):
+            yield Static(Text("Plugins", style="bold"), id="modal-title")
+            yield OptionList(id="plugins")
+            yield Static("", id="plugins-hint")
+            with Horizontal(id="modal-buttons"):
+                yield Button("Enable / Disable", id="toggle", variant="success")
+                yield Button("Close", id="close")
+
+    def on_mount(self) -> None:
+        animate_modal_screen(self)
+        self._reload()
+
+    @staticmethod
+    def _counts(spec: Any) -> str:
+        if not isinstance(spec, dict):
+            return ""
+        parts = []
+        for key, label in (
+            ("middleware", "mw"),
+            ("tools", "t"),
+            ("subagents", "sa"),
+            ("commands", "cmd"),
+        ):
+            n = len(spec.get(key, []) or [])
+            if n:
+                parts.append(f"{n}{label}")
+        return " · ".join(parts)
+
+    def _reload(self) -> None:
+        from novacode_cli.plugins.loader import (
+            discover_plugins,
+            list_enabled_plugins,
+        )
+
+        try:
+            self._plugins = discover_plugins()
+        except Exception:  # noqa: BLE001
+            self._plugins = []
+        enabled = set(list_enabled_plugins())
+
+        ol = self.query_one("#plugins", OptionList)
+        keep = ol.highlighted
+        ol.clear_options()
+        hint = self.query_one("#plugins-hint", Static)
+
+        if not self._plugins:
+            hint.update(
+                Text(
+                    "No plugins installed.  pip install one (it registers a "
+                    "'nova.plugins' entry point), then reopen /plugins.",
+                    style="dim",
+                )
+            )
+            return
+
+        for name, spec in self._plugins:
+            on = name in enabled
+            opt = Text()
+            opt.append("✓ enabled  " if on else "○ disabled ", style="green" if on else "dim")
+            opt.append(str(name), style="bold")
+            desc = spec.get("description", "") if isinstance(spec, dict) else ""
+            if desc:
+                opt.append(f"  — {desc}")
+            counts = self._counts(spec)
+            if counts:
+                opt.append(f"   [{counts}]", style="dim")
+            ol.add_option(Option(opt))
+
+        if keep is not None and 0 <= keep < len(self._plugins):
+            ol.highlighted = keep
+        else:
+            ol.highlighted = 0
+        ol.focus()
+        hint.update(
+            Text(
+                "Enter or Enable/Disable to toggle · restart the session to apply",
+                style="dim",
+            )
+        )
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self._toggle(event.option_index)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "close":
+            self.dismiss(None)
+        elif event.button.id == "toggle":
+            ol = self.query_one("#plugins", OptionList)
+            if ol.highlighted is not None:
+                self._toggle(ol.highlighted)
+
+    def _toggle(self, idx: int) -> None:
+        if not 0 <= idx < len(self._plugins):
+            return
+        from novacode_cli.plugins.loader import (
+            disable_plugin,
+            enable_plugin,
+            list_enabled_plugins,
+        )
+
+        name = self._plugins[idx][0]
+        if name in set(list_enabled_plugins()):
+            disable_plugin(name)
+        else:
+            enable_plugin(name)
+        self._reload()
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
 class ThemeScreen(ModalScreen[None]):
     """Browse and apply Textual themes with live preview."""
 
@@ -1692,7 +2012,7 @@ class NovaApp(App):
     #modal-title { margin-bottom: 1; padding: 0 1; }
     #modal-body { padding: 0 1; }
     /* Long lists scroll inside the box instead of overflowing the screen. */
-    #sessions, #pick-list, #infolist, #mcp-configured, #mcp-presets {
+    #sessions, #pick-list, #infolist, #mcp-configured, #mcp-presets, #plugins {
         height: auto; max-height: 60%;
     }
     /* The Ollama model list sits ABOVE the inputs + Switch/Cancel buttons, so it
@@ -1796,10 +2116,10 @@ class NovaApp(App):
         self._remote_stream_buf: str = ""
         self._remote_streamed: bool = False
         self._remote_stream_task: Any = None
-        # The home ASCII banner widget, tracked so on_resize can re-render it at
-        # the new width (the art has wide/medium/narrow variants).
+        # The MatrixRain animation widget, tracked so it can be removed on clear.
         self._home_banner: Static | None = None
-        self._home_banner_art: str = ""  # last rendered art (for resize diffing)
+        # name → async (args) -> str  for slash commands contributed by plugins.
+        self._plugin_commands: dict[str, Any] = {}
         # Strong refs to fire-and-forget background sends so the event loop
         # doesn't garbage-collect them mid-flight (asyncio only holds weak refs).
         self._bg_tasks: set[Any] = set()
@@ -1889,6 +2209,8 @@ class NovaApp(App):
         self.query_one("#cmdpalette", OptionList).display = False
         self._set_status("ready")
         self._update_mode_badge()
+        # Load slash commands contributed by enabled plugins (TUI dispatch).
+        self._load_plugin_commands()
         # Animate the live status (~5 fps) while a turn is active.
         self.set_interval(0.2, self._tick)
         self.query_one("#prompt", Input).focus()
@@ -3710,8 +4032,16 @@ class NovaApp(App):
             await self._run_trello(text)
         elif cmd == "chat":
             await self._run_chat(text)
+        elif cmd in ("plugins", "plugin"):
+            await self.push_screen_wait(PluginsScreen())
+            # Reload plugin commands so newly-enabled command plugins work this
+            # session (middleware/subagents still need a restart, as noted).
+            self._load_plugin_commands()
         elif cmd in _PASSTHROUGH_SLASH:
             await self._passthrough_command(text)
+        # A slash command contributed by an enabled plugin.
+        elif await self._run_plugin_command(text):
+            pass
         # A bare /<name> may be a skill (e.g. /graphify) — resolve it natively
         # before reporting the command as unavailable.
         elif await self._run_skill(text):
@@ -3724,6 +4054,50 @@ class NovaApp(App):
                     style="yellow",
                 )
             )
+
+    def _load_plugin_commands(self) -> None:
+        """Discover slash commands from enabled plugins and register them.
+
+        Populates ``self._plugin_commands`` (name → async handler) and adds the
+        names to the autocomplete list. Built-ins are matched first in
+        :meth:`_run_slash`, so a plugin can't shadow a core command.
+        """
+        try:
+            from novacode_cli.plugins.loader import (
+                collect_plugin_commands,
+                discover_enabled_plugins,
+            )
+
+            cmds = collect_plugin_commands(discover_enabled_plugins())
+            self._plugin_commands = {
+                name: c["handler"] for name, c in cmds.items() if c.get("handler")
+            }
+            for name in self._plugin_commands:
+                slash = f"/{name}"
+                if slash not in _TUI_SLASH_COMMANDS:
+                    _TUI_SLASH_COMMANDS.append(slash)
+        except Exception:  # noqa: BLE001 — a bad plugin must not break startup
+            self._plugin_commands = {}
+
+    async def _run_plugin_command(self, text: str) -> bool:
+        """Dispatch a plugin-contributed slash command. Returns True if handled.
+
+        Built-ins are matched earlier in :meth:`_run_slash`, so they always win.
+        The plugin handler is ``async (args) -> str``; its returned text is logged.
+        """
+        parts = text[1:].split(maxsplit=1)
+        cmd = parts[0].lower() if parts else ""
+        args = parts[1] if len(parts) > 1 else ""
+        handler = self._plugin_commands.get(cmd)
+        if handler is None:
+            return False
+        try:
+            result = await handler(args)
+            if result:
+                self._log(Text(str(result)))
+        except Exception as ex:  # noqa: BLE001
+            self._log(Text(f"Plugin command /{cmd} failed: {ex}", style="red"))
+        return True
 
     async def _run_copy(self, text: str) -> None:
         """Copy agent output to the clipboard.
@@ -4532,53 +4906,46 @@ class NovaApp(App):
             )
         )
 
-    def _banner_width(self) -> int:
-        """Current usable width for the banner (falls back to the Rich console)."""
-        try:
-            w = self.size.width
-            if w and w > 0:
-                return w
-        except Exception:  # noqa: BLE001
-            pass
-        try:
-            return _rich_console.width
-        except Exception:  # noqa: BLE001
-            return 80
-
     def _show_home_banner(self) -> None:
-        """Render the ASCII-art home banner, sized to the live TUI width.
+        """Render the home banner: the NOVA ASCII logo composited over the rain.
 
-        Tracks the widget so :meth:`on_resize` can swap in the wide/medium/narrow
-        art variant when the window changes size.
+        The ASCII art (from ``config.get_responsive_ascii``, sized to the live
+        terminal width) is stamped on top of the Matrix rain inside a single
+        :class:`MatrixRain` widget, so the rain falls *behind* the logo and the
+        logo is tinted with the active TUI theme color.
         """
         try:
-            art = get_responsive_ascii(width=self._banner_width())
-            if not art.strip():
-                return
-            banner = Static(Text(art, style="bold #7aa2f7"), classes="logline")
-            self._home_banner = banner
-            self._home_banner_art = art
-            self._transcript().mount(banner)
+            from novacode_cli.config.config import get_responsive_ascii
+
+            try:
+                width = self.size.width or None
+            except Exception:  # noqa: BLE001
+                width = None
+            art = get_responsive_ascii(width=width)
+
+            rain = MatrixRain(art=art, width=width)
+            self._home_banner = rain
+            self._transcript().mount(rain)
             self._prune_transcript()
         except Exception:  # noqa: BLE001
             self._home_banner = None
 
     def on_resize(self, event: events.Resize) -> None:
-        """Re-render width-dependent content (the home banner) on window resize.
+        """Reflow the home banner to the new terminal width.
 
-        Textual reflows the layout (1fr / % / auto widths) automatically; this
-        handles the one piece that doesn't — the static ASCII art, which has
-        discrete size variants chosen by width.
+        The rain grid width and the ASCII-art size variant are chosen from the
+        terminal width, so on resize we re-pick the art variant and re-grid the
+        rain. Only acts while the banner is still on screen (home screen).
         """
-        banner = self._home_banner
-        if banner is None or not banner.is_mounted:
+        rain = self._home_banner
+        if not isinstance(rain, MatrixRain) or not rain.is_mounted:
             return
         try:
-            art = get_responsive_ascii(width=self._banner_width())
-            if art == self._home_banner_art:
-                return  # same variant — nothing to repaint
-            self._home_banner_art = art
-            banner.update(Text(art, style="bold #7aa2f7"))
+            from novacode_cli.config.config import get_responsive_ascii
+
+            size = getattr(event, "size", None)
+            width = (size.width if size else self.size.width) or None
+            rain.reflow(get_responsive_ascii(width=width), width)
         except Exception:  # noqa: BLE001
             pass
 

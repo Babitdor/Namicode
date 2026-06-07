@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 # Types
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class CommandContext:
     """Context passed to every command handler.
@@ -44,6 +45,7 @@ CommandHandler = Callable[[CommandContext], Awaitable[str | bool]]
 # Registry
 # ---------------------------------------------------------------------------
 
+
 class CommandRegistry:
     """Registry mapping command names to their handler functions."""
 
@@ -65,8 +67,50 @@ class CommandRegistry:
 
 
 # ---------------------------------------------------------------------------
+# Plugin commands
+# ---------------------------------------------------------------------------
+
+
+def _make_plugin_command_handler(
+    plugin_handler: Callable[[str], Awaitable[str]],
+) -> CommandHandler:
+    """Adapt a plugin's ``async (args) -> str`` into a registry CommandHandler."""
+
+    async def _handler(ctx: CommandContext) -> str | bool:
+        try:
+            return await plugin_handler(ctx.cmd_args or "")
+        except Exception as exc:  # noqa: BLE001
+            return f"Plugin command '/{ctx.cmd}' failed: {exc}"
+
+    return _handler
+
+
+def _register_plugin_commands(registry: CommandRegistry) -> None:
+    """Register slash commands from enabled plugins (built-ins take precedence)."""
+    try:
+        from novacode_cli.plugins.loader import (
+            collect_plugin_commands,
+            discover_enabled_plugins,
+        )
+
+        for name, cmd in collect_plugin_commands(discover_enabled_plugins()).items():
+            if registry.get(name) is not None:
+                continue  # never shadow a built-in command
+            handler = cmd.get("handler")
+            if handler is not None:
+                registry.register(name, _make_plugin_command_handler(handler))
+    except Exception:  # noqa: BLE001 — a bad plugin must not break the CLI
+        import logging
+
+        logging.getLogger("nova.plugins").exception(
+            "Failed to register plugin commands"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
+
 
 def build_command_registry() -> CommandRegistry:
     """Create and populate the global command registry.
@@ -88,19 +132,42 @@ def build_command_registry() -> CommandRegistry:
     from novacode_cli.commands.agents_commands import register_commands as _r8
     from novacode_cli.commands.file_commands import register_commands as _r9
     from novacode_cli.commands.notifications_handler import register_commands as _r10
-    from novacode_cli.commands.vision_handler import register_commands as _r11
-    from novacode_cli.commands.plan_handler import register_commands as _r12
-    from novacode_cli.commands.trace_handler import register_commands as _r13
-    from novacode_cli.commands.ralph_handler import register_commands as _r14
-    from novacode_cli.commands.browser_use_handler import register_commands as _r15
-    from novacode_cli.commands.dream_handler import register_commands as _r16
-    from novacode_cli.commands.research_handler import register_commands as _r17
-    from novacode_cli.commands.trello_handler import register_commands as _r18
-    from novacode_cli.commands.log_commands import register_commands as _r19
-    from novacode_cli.commands.chat_handler import register_commands as _r20
+    from novacode_cli.commands.plan_handler import register_commands as _r11
+    from novacode_cli.commands.trace_handler import register_commands as _r12
+    from novacode_cli.commands.ralph_handler import register_commands as _r13
+    from novacode_cli.commands.browser_use_handler import register_commands as _r14
+    from novacode_cli.commands.dream_handler import register_commands as _r15
+    from novacode_cli.commands.research_handler import register_commands as _r16
+    from novacode_cli.commands.trello_handler import register_commands as _r17
+    from novacode_cli.commands.log_commands import register_commands as _r18
+    from novacode_cli.commands.chat_handler import register_commands as _r19
+    from novacode_cli.commands.plugins_handler import register_commands as _r20
 
-    for _r in (_r1, _r2, _r3, _r4, _r5, _r6, _r7, _r8, _r9, _r10,
-               _r11, _r12, _r13, _r14, _r15, _r16, _r17, _r18, _r19, _r20):
+    for _r in (
+        _r1,
+        _r2,
+        _r3,
+        _r4,
+        _r5,
+        _r6,
+        _r7,
+        _r8,
+        _r9,
+        _r10,
+        _r11,
+        _r12,
+        _r13,
+        _r14,
+        _r15,
+        _r16,
+        _r17,
+        _r18,
+        _r19,
+        _r20,
+    ):
         _r(registry)
+
+    # Plugin-contributed commands last, so built-ins always win on collision.
+    _register_plugin_commands(registry)
 
     return registry

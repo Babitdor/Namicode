@@ -879,6 +879,38 @@ This file stores your preferences and context that persist across sessions.
         ),
     ]
 
+    # Plugin middleware injection — discover and inject user-enabled plugins
+    # from installed pip packages that register "nova.plugins" entry points.
+    # Plugins sit after the built-in middleware assembly but before the optional
+    # MCP middleware so slot-based positioning remains predictable regardless of
+    # whether MCP is configured on this machine.
+    _plugin_specs: list = []
+    try:
+        from novacode_cli.plugins.loader import (
+            discover_enabled_plugins,
+            merge_plugin_middleware,
+            merge_plugin_tools,
+        )
+
+        _plugin_specs = discover_enabled_plugins()
+        if _plugin_specs:
+            merge_plugin_middleware(agent_middleware, _plugin_specs)
+            merge_plugin_tools(tools, _plugin_specs)
+            # Surface lifecycle hooks if any plugins registered them
+            for _pkg_name, _spec in _plugin_specs:
+                _hooks = _spec.get("hooks") or {}
+                _before = _hooks.get("before_agent_setup")
+                if _before:
+                    try:
+                        import asyncio
+
+                        asyncio.create_task(_before())
+                    except Exception:
+                        logger = __import__("logging").getLogger("nova.plugins")
+                        logger.exception("Plugin '%s' before_agent_setup hook failed", _pkg_name)
+    except Exception:
+        pass
+
     # MCP middleware: only add when servers are actually configured.
     # Insert after GraphContext (index 3 now that ModelRetryMiddleware leads the
     # stack) so MCP tools keep their original position relative to the others.
@@ -909,6 +941,19 @@ This file stores your preferences and context that persist across sessions.
     # Load pre-defined default and user defined subagents
     Nova_SubAgent.extend(retrieve_core_subagents(tools=tools))  # type: ignore
     Nova_SubAgent.extend(build_named_subagents(assistant_id=assistant_id, tools=tools))  # type: ignore
+
+    # Plugin subagents — delegate agents contributed by enabled plugins. Added
+    # after the built-ins so they go through the same _harden_subagent_specs pass
+    # below (retry + no nested HITL) and can be dispatched via the `task` tool.
+    if _plugin_specs:
+        try:
+            from novacode_cli.plugins.loader import merge_plugin_subagents
+
+            merge_plugin_subagents(Nova_SubAgent, _plugin_specs)  # type: ignore
+        except Exception:  # noqa: BLE001
+            __import__("logging").getLogger("nova.plugins").exception(
+                "Failed to merge plugin subagents"
+            )
 
     # Own the general-purpose subagent instead of letting create_deep_agent
     # auto-inject it. The auto-injected one inherits the main `interrupt_on` and
@@ -985,5 +1030,26 @@ This file stores your preferences and context that persist across sessions.
     ).with_config(
         config  # type: ignore
     )
+
+    # Plugin after_agent_setup hooks — call any registered lifecycle hooks
+    # now that the agent graph is fully built.
+    try:
+        from novacode_cli.plugins.loader import discover_enabled_plugins
+
+        for _pkg_name, _spec in discover_enabled_plugins():
+            _hooks = _spec.get("hooks") or {}
+            _after = _hooks.get("after_agent_setup")
+            if _after:
+                try:
+                    import asyncio
+
+                    asyncio.create_task(_after(agent))
+                except Exception:
+                    _log = __import__("logging").getLogger("nova.plugins")
+                    _log.exception(
+                        "Plugin '%s' after_agent_setup hook failed", _pkg_name
+                    )
+    except Exception:
+        pass
 
     return agent, composite_backend

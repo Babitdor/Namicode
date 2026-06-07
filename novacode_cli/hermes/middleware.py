@@ -401,12 +401,19 @@ class NovaLearningMiddleware(AgentMiddleware[NovaState]):
                 except Exception:  # noqa: BLE001
                     logger.exception("Failed to compact memory files")
 
-            # Skill maintenance, periodically (every 5th review). Both creation
-            # and refinement run as tracked background tasks via _generate_skill,
-            # which spins up a dedicated file-writing agent — so the toolless
-            # review model.ainvoke never needs to create files itself.
+            # Episode-grounded skill creation: the review ran WITH the full
+            # conversation in context, so if it proposed a <skill> block we
+            # persist it directly (real name + trigger + steps) — far better
+            # signal than n-grams of tool names (which produced opaque
+            # `nova-<hash>` skills the agent never invoked).
+            if self._skills_dir:
+                await self._cleanup_legacy_skills_once()
+                await self._maybe_create_skill_from_review(response_content)
+
+            # Refine only genuinely *failing* skills, periodically (every 5th
+            # review). We no longer regenerate low-usage skills — that would
+            # clobber good, newly-created ones before they've been used.
             if self._skills_dir and new_count % 5 == 0:
-                await self._maybe_create_skills()
                 await self._maybe_refine_skills()
 
         except Exception:  # noqa: BLE001
@@ -424,40 +431,53 @@ class NovaLearningMiddleware(AgentMiddleware[NovaState]):
 
         task.add_done_callback(_done)
 
-    async def _maybe_create_skills(self) -> None:
-        """Autonomously create a skill from a repeated, successful tool pattern.
+    async def _maybe_create_skill_from_review(self, review_text: str) -> None:
+        """Persist an episode-grounded skill if the review proposed one.
 
-        Detects patterns from tool history and, for the top candidate, kicks off
-        ``create_skill_from_pattern`` — which runs a dedicated agent that writes
-        ``SKILL.md`` to disk. Deduped by deterministic skill name so the same
-        workflow isn't recreated.
+        The review LLM writes a ``<skill>`` block (name + trigger + steps) only
+        when it recognizes a genuinely reusable workflow from this session. We
+        just frame frontmatter and write the file — no second LLM, no opaque
+        names. Deduped by skill name.
         """
         if not self._skills_dir:
             return
         try:
             from novacode_cli.hermes.skill_discovery import (
-                analyze_tool_history,
-                create_skill_from_pattern,
-                generate_skill_name,
+                parse_skill_spec,
+                write_skill_from_spec,
             )
 
-            patterns = await analyze_tool_history(self._store)
-            for pattern in patterns[:1]:  # one creation per cycle (it's an LLM call)
-                skill_name = generate_skill_name(pattern)
-                # Skip if already created (store record or on-disk SKILL.md).
-                already = await self._store.aget(("nova", "created_skills"), skill_name)
-                if already is not None or (self._skills_dir / skill_name).exists():
-                    continue
+            spec = parse_skill_spec(review_text)
+            if spec is None:
+                return
+            await write_skill_from_spec(spec, self._skills_dir, self._store)
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to create skill from review")
+
+    async def _cleanup_legacy_skills_once(self) -> None:
+        """One-time removal of the old ``nova-<hash>`` n-gram skills (guarded)."""
+        if not self._skills_dir:
+            return
+        try:
+            done = await self._store.aget(("nova", "meta"), "legacy_skills_cleaned_v1")
+            if done is not None:
+                return
+            from novacode_cli.hermes.skill_discovery import (
+                cleanup_legacy_pattern_skills,
+            )
+
+            removed = cleanup_legacy_pattern_skills(self._skills_dir)
+            await self._store.aput(
+                ("nova", "meta"), "legacy_skills_cleaned_v1", {"removed": removed}
+            )
+            if removed:
                 await self._emit_tui_event(
-                    "nova_skill_created",
-                    f"🧠 Nova: creating skill from pattern "
-                    f"{' → '.join(pattern.sequence)}",
-                )
-                self._spawn_skill_task(
-                    create_skill_from_pattern(pattern, self._skills_dir, self._store)
+                    "nova_skill_refinement",
+                    f"🧹 Nova: removed {len(removed)} legacy auto-skill(s) "
+                    "(opaque nova-* patterns; replaced by episode-grounded skills)",
                 )
         except Exception:  # noqa: BLE001
-            logger.exception("Failed to analyze / create skills")
+            logger.exception("Failed legacy skill cleanup")
 
     async def _maybe_refine_skills(self) -> None:
         """Refine an existing skill flagged as ineffective."""
@@ -471,6 +491,11 @@ class NovaLearningMiddleware(AgentMiddleware[NovaState]):
 
             candidates = await check_skill_effectiveness(self._store)
             for skill_name, issue in candidates[:1]:  # one per cycle
+                # Only regenerate skills that are genuinely *failing*. "low_usage"
+                # just means new/rarely-used — regenerating it would clobber good
+                # episode-grounded content before it's had a chance to be used.
+                if issue != "high_failure":
+                    continue
                 # Only refine skills that actually exist on disk (skill_stats can
                 # hold tool names that aren't skills).
                 if not (self._skills_dir / skill_name / "SKILL.md").exists():

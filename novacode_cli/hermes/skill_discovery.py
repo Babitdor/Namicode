@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import shutil
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -286,6 +288,153 @@ async def create_skill_from_pattern(
             "nova_skill_error", f"Nova skill creation failed for '{skill_name}': {exc}"
         )
     return None
+
+
+# ── Episode-grounded skill creation (from the review LLM) ───────────────────
+#
+# The review runs an out-of-band model call WITH the full conversation in
+# context (see NovaLearningMiddleware._run_review), so it can recognize a real,
+# reusable workflow from this session and write a proper skill — a semantic
+# name, a "use when…" trigger, and concrete steps. That is far better signal
+# than n-grams of tool *names* (which produce opaque `nova-exec-<hash>` skills
+# the agent never invokes). The functions below parse that spec and write it.
+
+
+# Legacy auto-skill names: nova-<hint>[-<hint>]-<6 hex>, e.g. nova-edit-test-5628de.
+_LEGACY_SKILL_RE = re.compile(r"^nova-[a-z]+(?:-[a-z]+)?-[0-9a-f]{6}$")
+
+# <skill> … </skill> block in a review response, with name/description/body.
+_SKILL_BLOCK_RE = re.compile(r"<skill>(.*?)</skill>", re.DOTALL | re.IGNORECASE)
+_SKILL_NAME_RE = re.compile(r"<name>(.*?)</name>", re.DOTALL | re.IGNORECASE)
+_SKILL_DESC_RE = re.compile(r"<description>(.*?)</description>", re.DOTALL | re.IGNORECASE)
+_SKILL_BODY_RE = re.compile(r"<body>(.*?)</body>", re.DOTALL | re.IGNORECASE)
+
+
+def _slugify_skill_name(raw: str) -> str:
+    """Normalize an LLM-proposed name into a safe kebab-case skill slug."""
+    slug = raw.strip().lower()
+    slug = re.sub(r"[\s_]+", "-", slug)
+    slug = re.sub(r"[^a-z0-9-]", "", slug)
+    slug = re.sub(r"-{2,}", "-", slug).strip("-")
+    return slug[:50]
+
+
+def parse_skill_spec(review_text: str) -> dict[str, str] | None:
+    """Extract an episode skill spec from a review response.
+
+    Looks for::
+
+        <skill>
+        <name>add-tui-slash-command</name>
+        <description>Use when adding a new /command to the Textual TUI.</description>
+        <body>… full SKILL.md body (markdown, no frontmatter) …</body>
+        </skill>
+
+    Returns:
+        ``{"name", "description", "body"}`` with a slugified name, or ``None``
+        when no valid block is present (name + body are required).
+    """
+    block_match = _SKILL_BLOCK_RE.search(review_text or "")
+    if not block_match:
+        return None
+    block = block_match.group(1)
+
+    name_match = _SKILL_NAME_RE.search(block)
+    body_match = _SKILL_BODY_RE.search(block)
+    desc_match = _SKILL_DESC_RE.search(block)
+    if not name_match or not body_match:
+        return None
+
+    name = _slugify_skill_name(name_match.group(1))
+    body = body_match.group(1).strip()
+    description = (desc_match.group(1).strip() if desc_match else "").replace("\n", " ")
+    if not name or not body or _LEGACY_SKILL_RE.match(name):
+        return None
+
+    return {"name": name, "description": description, "body": body}
+
+
+async def write_skill_from_spec(
+    spec: dict[str, str],
+    skills_dir: Path,
+    store: BaseStore | None = None,
+) -> str | None:
+    """Write an episode-grounded skill (name + trigger + body) to disk.
+
+    Unlike ``create_skill_from_pattern`` this does NOT spin up a second LLM to
+    invent content — the review already wrote it. We just frame valid YAML
+    frontmatter and persist it. Deduped by directory existence + store record.
+
+    Returns:
+        The skill name if written, else ``None`` (invalid spec / duplicate).
+    """
+    name = spec.get("name", "")
+    body = spec.get("body", "")
+    description = spec.get("description", "") or f"Reusable workflow: {name}"
+    if not name or not body:
+        return None
+
+    skill_dir = skills_dir / name
+    if skill_dir.exists():
+        return None  # dedup: skill already exists
+    if store is not None:
+        try:
+            if await store.aget(("nova", "created_skills"), name) is not None:
+                return None
+        except Exception:  # noqa: BLE001
+            pass
+
+    # Escape any double-quotes in the description for the YAML scalar.
+    safe_desc = description.replace('"', "'")
+    content = f'---\nname: {name}\ndescription: "{safe_desc}"\n---\n\n{body}\n'
+
+    try:
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
+    except OSError as exc:
+        _emit_tui_event("nova_skill_error", f"Could not write skill '{name}': {exc}")
+        return None
+
+    _emit_tui_event(
+        "nova_skill_created",
+        f"Nova learned a skill: {name}\n   {description}\n   {skill_dir}/",
+    )
+    if store is not None:
+        try:
+            await store.aput(
+                ("nova", "created_skills"),
+                name,
+                {"description": description, "source": "review", "timestamp": time.time()},
+            )
+        except Exception:  # noqa: BLE001
+            pass
+    return name
+
+
+def cleanup_legacy_pattern_skills(skills_dir: Path) -> list[str]:
+    """Delete the old n-gram auto-skills (``nova-<hint>-<hash>``) from disk.
+
+    These were generated from tool-name sequences with opaque names and generic
+    bodies the agent never invokes. Only directories matching the exact legacy
+    naming are removed — hand-written or episode skills are untouched.
+
+    Returns:
+        The list of removed skill names.
+    """
+    removed: list[str] = []
+    if not skills_dir.exists():
+        return removed
+    try:
+        for child in skills_dir.iterdir():
+            if child.is_dir() and _LEGACY_SKILL_RE.match(child.name):
+                try:
+                    shutil.rmtree(child)
+                    removed.append(child.name)
+                except OSError:
+                    logger.debug("Could not remove legacy skill %s", child.name)
+    except OSError:
+        logger.debug("Could not scan skills dir for legacy cleanup")
+    return removed
 
 
 # ── Skill refinement ───────────────────────────────────────────────────────

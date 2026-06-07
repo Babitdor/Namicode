@@ -244,6 +244,31 @@ def check_cli_dependencies() -> None:
         sys.exit(1)
 
 
+def format_version_banner(version: str) -> str:
+    """Return a styled version banner for ``nova --version``."""
+    return f"""
+⣿⣿⣿⣿⣟⠊⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠙⢿⣿
+⣿⣿⣿⡏⠁⠀⠀⠀⠀⠀⠀⢀⣰⣶⣶⡄⠀⠀⠀⠀⠀⠀⢀⠀⠀⠈⢻
+⣿⣿⣿⠁⠄⠀⠀⠀⠀⠀⣤⣾⣿⣿⣿⣿⡂⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠽
+⣿⣿⡏⣸⠀⠀⠀⠀⢀⣼⣿⣿⣿⣿⣿⣿⣿⡆⠀⠀⠈⠀⠀⠀⠀⠀⠀⠰
+⣿⣿⡇⠁⠀⠀⠀⣤⣍⣙⣿⣿⣏⣠⠄⠲⠲⠦⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢻
+⣿⣿⠁⠀⠀⠀⠀⠀⢤⠙⣿⣿⣿⣇⣀⡐⢂⣠⡄⠠⠀⠀⠀⠀⠀⠀⡀⢠⢸
+⣿⣿⠀⠀⠐⠀⣶⣷⣷⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⠀⠀⠐⠈⠀⠀⠀⠉⠘⣼
+⣿⣿⠀⠈⠀⠀⣿⣿⣿⡿⣿⠿⢿⣿⣿⣿⣿⣿⣿⣧⡀⠀⢄⠲⠀⠀⠀⣱
+⣿⣿⡆⠀⠀⠀⠈⣿⣿⣷⣶⣼⣾⣿⣿⣿⣿⣿⣿⣿⣷⠂⠀⠀⠂⢀⢲
+⣿⣿⣿⡆⠀⠀⠀⠙⣿⠋⠠⠄⢀⠉⣹⣿⣿⣿⣿⣿⣿⠀⠀⠀⠀⠀⣿
+⣿⣿⣿⣿⣦⠀⠀⠀⠘⣿⣤⣤⣶⣿⣿⣿⣿⣿⠟⣛⡽⠀⠀⠀⠠⣸
+⣿⣿⣿⣿⣿⣷⡀⠀⠀⠈⠻⣿⣿⣿⠿⠛⠋⠐⠚⠛⠃   ⣰⣿
+
+███╗   ██╗ ██████╗  ██╗   ██╗  █████╗
+████╗  ██║ ██╔═══██╗ ██║   ██║ ██╔══██╗
+██╔██╗ ██║ ██║   ██║ ██║   ██║ ███████║
+██║╚██╗██║ ██║   ██║ ╚██╗ ██╔╝ ██╔══██║
+██║ ╚████║ ╚██████╔╝  ╚████╔╝  ██║  ██║
+╚═╝  ╚═══╝  ╚═════╝    ╚═══╝   ╚═╝  ╚═╝ ~ v{version}
+"""
+
+
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
@@ -445,7 +470,7 @@ def parse_args():
     parser.add_argument(
         "--version",
         action="version",
-        version=f"{settings.version} (NovaCode)",
+        version=format_version_banner(settings.version),
         help="Show the version number and exit",
     )
     parser.add_argument(
@@ -764,9 +789,7 @@ async def simple_cli(
         async def _stop_processes():
             try:
                 manager = ProcessManager.get_instance()
-                stopped_count = await asyncio.wait_for(
-                    manager.stop_all(), timeout=15.0
-                )
+                stopped_count = await asyncio.wait_for(manager.stop_all(), timeout=15.0)
                 if stopped_count > 0:
                     console.print(
                         f"[dim]Stopped {stopped_count} managed process(es).[/dim]"
@@ -828,14 +851,16 @@ async def simple_cli(
         # ═══════════════════════════════════════════════════════════════
         try:
             await asyncio.wait_for(
-                _maybe_compact_on_exit(), timeout=30.0,
+                _maybe_compact_on_exit(),
+                timeout=30.0,
             )
         except asyncio.TimeoutError:
             console.print("[dim]Compaction timed out, skipping...[/dim]")
 
         try:
             await asyncio.wait_for(
-                _save_session(silent=False), timeout=30.0,
+                _save_session(silent=False),
+                timeout=30.0,
             )
         except asyncio.TimeoutError:
             console.print("[dim]Session save timed out; exiting anyway.[/dim]")
@@ -1413,11 +1438,7 @@ async def _shutdown_background_services(session_state) -> None:
     # task, a fire-and-forget hook, or a remote reply still in flight.
     try:
         current = asyncio.current_task()
-        pending = [
-            t
-            for t in asyncio.all_tasks()
-            if t is not current and not t.done()
-        ]
+        pending = [t for t in asyncio.all_tasks() if t is not current and not t.done()]
         for t in pending:
             t.cancel()
         if pending:
@@ -1806,6 +1827,21 @@ async def main(
             (the implicit Docker default), a sandbox-creation failure falls back to
             local mode instead of exiting.
     """
+    # Check path approval before creating any resources (model, sandbox, store,
+    # checkpointer, Vixie server, etc.). If the user denies access, nothing
+    # expensive has been allocated — no cleanup needed.
+    if not await check_path_approval():
+        console.print()
+        console.print(
+            "[red]Cannot start nova without path approval.[/red]",
+            style="dim",
+        )
+        console.print(
+            "[dim]Path approval is required to ensure safe file system access.[/dim]"
+        )
+        console.print()
+        sys.exit(1)
+
     # Hydrate API keys stored in the OS keychain into the environment so model
     # clients (which read os.environ) can find them — keys may live only in the
     # keychain, not in .env. Must run before create_model() below.
