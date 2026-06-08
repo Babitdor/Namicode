@@ -110,3 +110,16 @@ class GraphContextMiddleware(AgentMiddleware):
     ) -> ModelResponse:
         """Inject graph context into the system prompt."""
         return handler(self._inject(request))
+
+    async def awrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
+    ) -> ModelResponse:
+        """Async variant — required when the agent runs via ``ainvoke``/``astream``.
+
+        ``_inject`` is synchronous (it reads the cached graph), so we just inject
+        and await the downstream handler. Without this, LangChain raises
+        ``NotImplementedError`` for async invocations.
+        """
+        return await handler(self._inject(request))
