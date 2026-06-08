@@ -335,7 +335,6 @@ _TUI_SLASH_COMMANDS = [
     "/ralph",
     "/trello",
     "/council",
-    "/chat",
     "/clear",
     "/tokens",
     "/context",
@@ -4113,7 +4112,7 @@ class NovaApp(App):
             await self._run_ralph(text)
         elif cmd == "trello":
             await self._run_trello(text)
-        elif cmd in ("council", "chat"):
+        elif cmd == "council":
             await self._run_chat(text)
         elif cmd in ("plugins", "plugin"):
             await self.push_screen_wait(PluginsScreen())
@@ -5937,7 +5936,7 @@ class NovaApp(App):
             pass  # Server stopped, loop ends
 
     async def _run_chat(self, text: str) -> None:
-        """Run /chat — start or stop the web chat UI in the browser."""
+        """Run /council — start or stop the Council web UI in the browser."""
         from novacode_cli.commands.chat_handler import (
             is_server_running,
             get_server_url,

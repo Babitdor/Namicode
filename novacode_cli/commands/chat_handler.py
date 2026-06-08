@@ -990,7 +990,7 @@ async def handle_chat_stop_command() -> bool:
 # ---------------------------------------------------------------------------
 
 def register_commands(registry) -> None:
-    """Register the /council command (with /chat kept as a back-compat alias)."""
+    """Register the /council command."""
     from novacode_cli.commands import CommandContext
 
     async def _handle(ctx: CommandContext) -> bool:
@@ -1007,4 +1007,3 @@ def register_commands(registry) -> None:
         return await handle_chat_command()
 
     registry.register("council", _handle)
-    registry.register("chat", _handle)  # back-compat alias
