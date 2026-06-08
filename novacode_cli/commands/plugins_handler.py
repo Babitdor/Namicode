@@ -6,6 +6,10 @@ details about what each plugin provides.
 
 from __future__ import annotations
 
+from prompt_toolkit import PromptSession
+
+from novacode_cli.commands import CommandContext
+from novacode_cli.commands.menu_helper import MenuOption, run_interactive_menu
 from novacode_cli.config.config import COLORS, console
 from novacode_cli.plugins.loader import (
     discover_plugins,
@@ -15,118 +19,112 @@ from novacode_cli.plugins.loader import (
 )
 
 
-async def handle_plugins_command() -> bool:
-    """Handle the /plugins command for Nova plugin management.
+async def handle_plugins_command(ctx: CommandContext) -> bool:
+    """Handle the /plugins command — delegates to interactive menu."""
+    options = [
+        MenuOption("List installed plugins", _action_list_plugins),
+        MenuOption("Enable a plugin", _action_enable_plugin),
+        MenuOption("Disable a plugin", _action_disable_plugin),
+        MenuOption("Show plugin details", _action_show_details),
+    ]
+    return await run_interactive_menu("Nova Plugin Management", options, ctx)
 
-    Returns:
-        True (command always handled)
-    """
-    from prompt_toolkit import PromptSession
 
-    session = PromptSession()
+async def _action_list_plugins(
+    ctx: CommandContext, session: PromptSession,
+) -> bool:
+    """Option 1: list installed plugins."""
+    _list_plugins(discover_plugins(), set(list_enabled_plugins()))
+    return True
 
-    console.print()
-    console.print("[bold]Nova Plugin Management[/bold]", style=COLORS["primary"])
-    console.print()
 
+async def _action_enable_plugin(
+    ctx: CommandContext, session: PromptSession,
+) -> bool:
+    """Option 2: enable a plugin."""
+    all_plugins = discover_plugins()
+    name = (
+        await session.prompt_async(
+            "Plugin name to enable (or press Enter to cancel): "
+        )
+    ).strip()
+    names = {n for n, _ in all_plugins}
+    if name and name in names:
+        ok = enable_plugin(name)
+        if ok:
+            console.print()
+            console.print(
+                f"✓ Plugin '[bold]{name}[/bold]' enabled.",
+                style=COLORS["primary"],
+            )
+        else:
+            console.print()
+            console.print(
+                f"[yellow]Plugin '{name}' is already enabled.[/yellow]"
+            )
+        console.print(
+            "[dim]Restart your session for changes to take effect.[/dim]"
+        )
+    elif name:
+        console.print(
+            f"[yellow]Unknown plugin '{name}'. Use option 1 to list available plugins.[/yellow]"
+        )
+    return True
+
+
+async def _action_disable_plugin(
+    ctx: CommandContext, session: PromptSession,
+) -> bool:
+    """Option 3: disable a plugin."""
+    all_plugins = discover_plugins()
+    name = (
+        await session.prompt_async(
+            "Plugin name to disable (or press Enter to cancel): "
+        )
+    ).strip()
+    names = {n for n, _ in all_plugins}
+    if name and name in names:
+        ok = disable_plugin(name)
+        if ok:
+            console.print()
+            console.print(
+                f"✗ Plugin '[bold]{name}[/bold]' disabled.",
+                style=COLORS["primary"],
+            )
+        else:
+            console.print()
+            console.print(
+                f"[yellow]Plugin '{name}' was not enabled.[/yellow]"
+            )
+        console.print(
+            "[dim]Restart your session for changes to take effect.[/dim]"
+        )
+    elif name:
+        console.print(
+            f"[yellow]Unknown plugin '{name}'. Use option 1 to list available plugins.[/yellow]"
+        )
+    return True
+
+
+async def _action_show_details(
+    ctx: CommandContext, session: PromptSession,
+) -> bool:
+    """Option 4: show plugin details."""
     all_plugins = discover_plugins()
     enabled = set(list_enabled_plugins())
-
-    if not all_plugins:
-        console.print("[yellow]No Nova plugins are currently installed.[/yellow]")
-        console.print()
-        console.print("[dim]Install a plugin with:[/dim]")
-        console.print("  [bold]pip install nova-plugin-name[/bold]", style="cyan")
-        console.print()
-        console.print("[dim]Then run option 2 to enable it.[/dim]")
-        console.print()
-        return True
-
-    console.print("What would you like to do?", style=COLORS["primary"])
-    console.print("  1. List installed plugins")
-    console.print("  2. Enable a plugin")
-    console.print("  3. Disable a plugin")
-    console.print("  4. Show plugin details")
-    console.print("  5. Cancel")
-    console.print()
-
-    choice = (await session.prompt_async("Choose (1-5): ")).strip()
-
-    if choice == "1":
-        _list_plugins(all_plugins, enabled)
-
-    elif choice == "2":
-        name = (
-            await session.prompt_async(
-                "Plugin name to enable (or press Enter to cancel): "
-            )
-        ).strip()
-        names = {n for n, _ in all_plugins}
-        if name and name in names:
-            ok = enable_plugin(name)
-            if ok:
-                console.print()
-                console.print(
-                    f"✓ Plugin '[bold]{name}[/bold]' enabled.",
-                    style=COLORS["primary"],
-                )
-            else:
-                console.print()
-                console.print(
-                    f"[yellow]Plugin '{name}' is already enabled.[/yellow]"
-                )
-            console.print(
-                "[dim]Restart your session for changes to take effect.[/dim]"
-            )
-        elif name:
+    name = (
+        await session.prompt_async(
+            "Plugin name to inspect (or press Enter to cancel): "
+        )
+    ).strip()
+    if name:
+        match = [s for n, s in all_plugins if n == name]
+        if match:
+            _show_plugin_detail(name, match[0], name in enabled)
+        else:
             console.print(
                 f"[yellow]Unknown plugin '{name}'. Use option 1 to list available plugins.[/yellow]"
             )
-
-    elif choice == "3":
-        name = (
-            await session.prompt_async(
-                "Plugin name to disable (or press Enter to cancel): "
-            )
-        ).strip()
-        names = {n for n, _ in all_plugins}
-        if name and name in names:
-            ok = disable_plugin(name)
-            if ok:
-                console.print()
-                console.print(
-                    f"✗ Plugin '[bold]{name}[/bold]' disabled.",
-                    style=COLORS["primary"],
-                )
-            else:
-                console.print()
-                console.print(
-                    f"[yellow]Plugin '{name}' was not enabled.[/yellow]"
-                )
-            console.print(
-                "[dim]Restart your session for changes to take effect.[/dim]"
-            )
-        elif name:
-            console.print(
-                f"[yellow]Unknown plugin '{name}'. Use option 1 to list available plugins.[/yellow]"
-            )
-
-    elif choice == "4":
-        name = (
-            await session.prompt_async(
-                "Plugin name to inspect (or press Enter to cancel): "
-            )
-        ).strip()
-        if name:
-            match = [s for n, s in all_plugins if n == name]
-            if match:
-                _show_plugin_detail(name, match[0], name in enabled)
-            else:
-                console.print(
-                    f"[yellow]Unknown plugin '{name}'. Use option 1 to list available plugins.[/yellow]"
-                )
-
-    console.print()
     return True
 
 
@@ -208,7 +206,7 @@ def register_commands(registry):
     from novacode_cli.commands import CommandContext
 
     async def _plugins_handler(ctx: CommandContext) -> str | bool:
-        return await handle_plugins_command()
+        return await handle_plugins_command(ctx)
 
     registry.register("plugin", _plugins_handler)
     registry.register("plugins", _plugins_handler)

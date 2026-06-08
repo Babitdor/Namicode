@@ -10,6 +10,16 @@ Architecture:
     ``novacode_cli/bootstrap/steering.py``).  Uses the shared durable store
     for persistence across restarts.
 
+    This module is a **thin orchestrator** that delegates to three focused
+    modules extracted from the original god-middleware:
+
+    - :mod:`novacode_cli.hermes.tracker` — ``ToolUsageTracker``
+      (counter, tool history, skill stats)
+    - :mod:`novacode_cli.hermes.review` — ``ReviewRunner``
+      (trigger, OOB invoke, content persistence)
+    - :mod:`novacode_cli.hermes.skill_manager` — ``SkillManager``
+      (create/cleanup/refine skills)
+
 Durable Store Schema (namespace="Nova"):
     ("nova", "tool_counter")    → {"count": int}
     ("nova", "tool_history")    → [{"tool": str, "success": bool, "timestamp": float}, ...]
@@ -23,7 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
+import re
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
@@ -34,12 +44,12 @@ from langchain.agents.middleware.types import (
     ModelRequest,
     ModelResponse,
 )
-from langchain_core.messages import SystemMessage, ToolMessage
+from langchain_core.messages import ToolMessage
 from langgraph.prebuilt.tool_node import ToolCallRequest
 from langgraph.types import Command
 from typing_extensions import NotRequired
 
-from novacode_cli.prompts import render_template
+from novacode_cli.events import nova_event_log
 
 if TYPE_CHECKING:
     from langgraph.store.base import BaseStore
@@ -47,22 +57,52 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("nova.hermes.middleware")
 
-_MAX_COUNTER = 1_000_000  # Sanity cap to prevent integer overflow
-_MAX_EVENT_LOG = 200  # Cap on nova_event_log to prevent unbounded growth
+# Tools whose textual output can reveal a *latent* failure: the call returned
+# status="success" (the tool ran) but the command it ran actually failed.
+_EXECUTE_TOOLS: frozenset[str] = frozenset(
+    {"execute", "run_tests", "shell", "bash", "run_command"}
+)
+# High-precision failure markers in shell/test output. Kept conservative to
+# avoid false positives (e.g. we match "3 failed" but not "0 failed").
+_FAILURE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"traceback \(most recent call last\)", re.IGNORECASE),
+    re.compile(r"\bcommand not found\b", re.IGNORECASE),
+    re.compile(r"is not recognized as (?:an |the name of a )?", re.IGNORECASE),
+    re.compile(r"^fatal:", re.IGNORECASE | re.MULTILINE),
+    re.compile(r"npm err!", re.IGNORECASE),
+    re.compile(r"\b[1-9]\d* failed\b", re.IGNORECASE),
+    re.compile(r"\b[1-9]\d* error(?:s)?\b", re.IGNORECASE),
+)
 
-# Module-level event buffer for Nova events (review cycles, skill activity).
-# The middleware appends ``(event_type, icon, message)`` tuples here, and
-# ``iterate_agent_events`` in ``core/agent_loop.py`` drains them into proper
-# :class:`~novacode_cli.ui_events.ContextMessage` events that both the Rich
-# console renderer and the Textual TUI consume.
-nova_event_log: list[tuple[str, str, str, str]] = []
-"""``(event_type, icon, color, message)`` log drained by the agent event loop.
 
-The list is cleared after each drain.  Event types:
-- ``nova_review_start``
-- ``nova_review_complete``
-- ``nova_skill_refinement``
-"""
+def _content_to_text(response: Any) -> str:
+    """Best-effort flatten of a tool response's content to a string."""
+    content = getattr(response, "content", None)
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                parts.append(str(item.get("text", "")))
+        return "\n".join(parts)
+    return "" if content is None else str(content)
+
+
+def _execution_failed(tool_name: str, response: Any) -> bool:
+    """Detect a latent failure in an execute/test tool's output.
+
+    Only applies to shell-like tools; everything else returns ``False`` (their
+    ``status`` field is authoritative). Conservative by design.
+    """
+    if tool_name not in _EXECUTE_TOOLS or response is None:
+        return False
+    text = _content_to_text(response)
+    if not text:
+        return False
+    return any(p.search(text) for p in _FAILURE_PATTERNS)
 
 
 class NovaState(AgentState):
@@ -78,58 +118,17 @@ class NovaState(AgentState):
     """Preview of the last review content."""
 
 
-class AtomicCounter:
-    """Atomic counter using asyncio lock for thread-safe operations."""
-
-    def __init__(self, store: BaseStore):
-        self._store = store
-        self._lock = asyncio.Lock()
-
-    async def increment(self) -> int:
-        """Increment counter atomically and return new value."""
-        async with self._lock:
-            # Read current
-            entry = await self._store.aget(("nova", "tool_counter"), "counter")
-            current = 0
-            if entry and isinstance(entry.value, dict):
-                current = entry.value.get("count", 0)
-
-            new_value = min(current + 1, _MAX_COUNTER)
-
-            # Write back
-            await self._store.aput(
-                ("nova", "tool_counter"), "counter", {"count": new_value}
-            )
-            return new_value
-
-    async def get(self) -> int:
-        """Get current counter value."""
-        async with self._lock:
-            entry = await self._store.aget(("nova", "tool_counter"), "counter")
-            if entry and isinstance(entry.value, dict):
-                return min(entry.value.get("count", 0), _MAX_COUNTER)
-            return 0
-
-    async def reset(self) -> None:
-        """Reset counter to zero."""
-        async with self._lock:
-            await self._store.aput(("nova", "tool_counter"), "counter", {"count": 0})
-
-
 class NovaLearningMiddleware(AgentMiddleware[NovaState]):
     """Track tool usage, trigger periodic reviews, and manage learning state.
 
-    The middleware sits in the agent middleware stack and wraps both tool call
-    and model call hooks to implement the Nova learning loop.
-
-    State schema:
-        - ``nova_review_triggered`` — set to True when a review is injected
-        - ``last_review_timestamp`` — updated after each review completes
-        - ``review_count`` — incremented after each review completes
+    Thin orchestrator that delegates all business logic to:
+    - ``self._tracker`` — :class:`~novacode_cli.hermes.tracker.ToolUsageTracker`
+    - ``self._review`` — :class:`~novacode_cli.hermes.review.ReviewRunner`
+    - ``self._skill_manager`` — :class:`~novacode_cli.hermes.skill_manager.SkillManager`
     """
 
     state_schema = NovaState
-    tools: list = []
+    tools: list = []  # type: ignore
 
     def __init__(
         self,
@@ -155,425 +154,118 @@ class NovaLearningMiddleware(AgentMiddleware[NovaState]):
         self._skills_dir = skills_dir
         self._agent_dir = agent_dir
         self._enabled = enabled
-        self._counter = AtomicCounter(store)
-        self._refinement_tasks: set[asyncio.Task] = set()
-        """Track refinement tasks to prevent garbage collection issues."""
+
+        # Lazy-import the extracted modules to keep startup footprint small.
+        from novacode_cli.hermes.tracker import ToolUsageTracker
+        from novacode_cli.hermes.review import ReviewRunner
+        from novacode_cli.hermes.skill_manager import SkillManager
+
+        self._skill_manager = SkillManager(
+            store,
+            skills_dir=skills_dir,
+            enabled=enabled,
+        )
+        self._tracker = ToolUsageTracker(
+            store,
+            enabled=enabled,
+        )
+        self._review = ReviewRunner(
+            store,
+            self._tracker,
+            self._skill_manager,
+            review_threshold=review_threshold,
+            agent_dir=agent_dir,
+            enabled=enabled,
+        )
+
+    @property
+    def _refinement_tasks(self) -> set[asyncio.Task]:
+        """Background review/skill tasks (owned by the SkillManager).
+
+        Exposed on the middleware for callers/tests that drain pending work
+        without reaching into the delegated ``SkillManager``.
+        """
+        return self._skill_manager._refinement_tasks
 
     # ------------------------------------------------------------------
-    # Tool call tracking
+    # Counter delegation
     # ------------------------------------------------------------------
 
     async def _get_tool_call_count(self) -> int:
-        """Return the current tool call count from the durable store."""
-        if not self._enabled:
-            return 0
-        return await self._counter.get()
+        return await self._tracker.get_call_count()
 
     async def _set_tool_call_count(self, count: int) -> None:
-        """Persist the tool call count to the durable store."""
-        if not self._enabled:
-            return
-        # This is handled by AtomicCounter, but keep for interface compatibility
         await self._store.aput(
-            ("nova", "tool_counter"), "counter", {"count": min(count, _MAX_COUNTER)}
+            ("nova", "tool_counter"),
+            "counter",
+            {"count": min(count, 1_000_000)},
         )
 
     async def _increment_counter(self) -> int:
-        """Increment and persist the tool call counter. Returns the new count."""
-        return await self._counter.increment()
+        return await self._tracker.increment_counter()
 
     async def _reset_counter(self) -> None:
-        """Reset the tool call counter to zero (after a review)."""
-        await self._counter.reset()
-        # Mark that a review was just completed (persisted to durable store)
-        await self._set_review_just_completed(True)
+        await self._tracker.reset_counter()
+        await self._review._set_review_just_completed(True)
+
+    # ------------------------------------------------------------------
+    # Tool usage delegation
+    # ------------------------------------------------------------------
 
     async def _record_tool_usage(self, tool_name: str, success: bool) -> None:
-        """Record a single tool call in the tool history."""
-        if not self._enabled:
-            return
-        try:
-            # Get existing history (capped at last 200 entries)
-            existing = await self._store.aget(("nova", "tool_history"), "history")
-            history: list[dict[str, Any]] = []
-            if (
-                existing
-                and isinstance(existing.value, dict)
-                and "entries" in existing.value
-            ):
-                # Value is wrapped as {"entries": [...]}
-                history = existing.value["entries"][-199:]
+        await self._tracker.record_tool_usage(tool_name, success)
 
-            history.append(
-                {
-                    "tool": tool_name,
-                    "success": success,
-                    "timestamp": time.time(),
-                }
-            )
-            # Wrap the list in a dict for storage
-            await self._store.aput(
-                ("nova", "tool_history"), "history", {"entries": history}
-            )
+    async def get_tool_history(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Return the most recent tool usage history."""
+        return await self._tracker.get_tool_history(limit=limit)
 
-            # Also track skill-level stats
-            await self._track_skill_usage(tool_name, success)
-        except Exception:  # noqa: BLE001
-            logger.exception("Failed to record tool usage for '%s'", tool_name)
-
-    async def _track_skill_usage(self, tool_name: str, success: bool) -> None:
-        """Track per-skill usage statistics.
-
-        Only tracks tool calls that correspond to known skills (i.e. not
-        built-in tools like read_file, write_file, edit_file, grep).
-        """
-        # Skip built-in filesystem and basic tools
-        builtin = {
-            "read_file",
-            "write_file",
-            "edit_file",
-            "grep",
-            "ls",
-            "glob",
-            "execute",
-            "think",
-            "web_search",
-            "duckduckgo_search",
-            "docs_search",
-            "code_search",
-            "find_related_code",
-            "fetch_url",
-            "package_info",
-        }
-        if tool_name in builtin:
-            return
-
-        try:
-            entry = await self._store.aget(("nova", "skill_stats"), tool_name)
-            stats: dict[str, int] = {"uses": 0, "successes": 0, "failures": 0}
-            if entry and isinstance(entry.value, dict):
-                stats = dict(entry.value)
-
-            stats["uses"] += 1
-            if success:
-                stats["successes"] += 1
-            else:
-                stats["failures"] += 1
-
-            await self._store.aput(("nova", "skill_stats"), tool_name, stats)
-        except Exception:  # noqa: BLE001
-            logger.exception("Failed to track skill usage for '%s'", tool_name)
+    async def get_skill_stats(self) -> dict[str, dict[str, int]]:
+        """Return all tracked skill usage statistics."""
+        return await self._tracker.get_skill_stats()
 
     # ------------------------------------------------------------------
-    # Review injection
+    # Review delegation
     # ------------------------------------------------------------------
-
-    async def _run_review(self, request: ModelRequest) -> None:
-        """Run a self-review as a *separate, out-of-band* model call.
-
-        CRITICAL: the review must NOT be injected into the agent's task turn.
-        Injecting the review prompt as the final message made the model answer
-        the review (plain text, no tool calls); the agent loop then saw a
-        no-tool-call response and terminated — abandoning the user's actual
-        task. Instead we issue an independent ``model.ainvoke`` with the
-        conversation history plus the review prompt, parse the result, and
-        persist learnings. The agent's real turn is returned untouched by the
-        caller, so the loop continues normally.
-
-        Tool calls in the review response (if any) are ignored — this call is
-        never wired into the graph's tool node.
-        """
-        if not self._enabled:
-            return
-
-        try:
-            review_content = render_template(
-                "nova_review.jinja", tool_call_count=self._review_threshold
-            )
-            messages = [*request.messages, SystemMessage(content=review_content)]
-
-            review_msg = await request.model.ainvoke(messages)
-
-            content = ""
-            raw = getattr(review_msg, "content", "")
-            content = raw if isinstance(raw, str) else str(raw)
-
-            await self._apply_review_content(content)
-        except Exception:  # noqa: BLE001
-            logger.exception("Nova out-of-band review failed")
 
     async def _should_review(self) -> bool:
-        """Check whether a review cycle should be triggered.
+        return await self._review.should_review()
 
-        Returns True if:
-        - Tool call count >= threshold, AND
-        - No review was just completed (to avoid back-to-back reviews)
-        """
-        count = await self._get_tool_call_count()
-        if count < self._review_threshold:
-            return False
+    async def _run_review(self, request: ModelRequest) -> None:
+        await self._review.run_review(request)
 
-        # Check if a review just completed (in this middleware session)
-        just_completed = await self._get_review_just_completed()
-        if just_completed:
-            # Clear the flag for next cycle
-            await self._set_review_just_completed(False)
-            return False
-
-        return True
-
-    async def _apply_review_content(self, response_content: str) -> None:
-        """Persist a completed review's learnings.
-
-        Given the raw text produced by the out-of-band review call, this:
-        1. Parses structured updates from XML tags
-        2. Updates USER.md and MEMORY.md with learnings
-        3. Stores review metadata in the durable store
-        4. Compacts memory files if needed
-        5. Checks if any skills need refinement (every 5th review)
-
-        It performs no state mutation on the agent graph — the agent's real
-        turn output is owned by the caller and returned untouched.
-        """
-        if not self._enabled:
-            return
-
-        try:
-            response_content = response_content or ""
-
-            # Parse structured updates from the response
-            from novacode_cli.hermes.memory_tiers import (
-                parse_review_response,
-                update_from_review,
-            )
-
-            parsed = parse_review_response(response_content)
-
-            # Apply to memory files
-            if self._agent_dir and (parsed["user_updates"] or parsed["session_memory"]):
-                update_from_review(
-                    self._agent_dir, parsed["user_updates"], parsed["session_memory"]
-                )
-                logger.info(
-                    f"Nova review applied: user_updates={bool(parsed['user_updates'])}, session_memory={bool(parsed['session_memory'])}"
-                )
-            elif self._agent_dir and response_content:
-                # Fallback: if no XML but content exists, treat as session memory
-                update_from_review(self._agent_dir, "", response_content)
-                logger.info("Nova review applied as session memory (no XML structure)")
-
-            # Load existing review count before any state changes
-            current_count = await self._get_review_count()
-
-            # Store the review in the durable store
-            review_id = f"review_{int(time.time())}"
-            await self._store.aput(
-                ("nova", "reviews"),
-                review_id,
-                {
-                    "timestamp": time.time(),
-                    "content": response_content[:2000],
-                },  # Store preview
-            )
-
-            # Update last_review meta
-            new_count = current_count + 1
-            await self._store.aput(
-                ("nova", "meta"),
-                "last_review",
-                {
-                    "timestamp": time.time(),
-                    "lessons_str": response_content[:500] if response_content else "",
-                    "review_count": new_count,
-                },
-            )
-
-            # Try memory compaction if we have an agent directory
-            if self._agent_dir:
-                try:
-                    from novacode_cli.hermes.memory_tiers import compact_memory_file
-
-                    user_md = self._agent_dir / "USER.md"
-                    memory_md = self._agent_dir / "MEMORY.md"
-                    for f in [user_md, memory_md]:
-                        if f.exists():
-                            compact_memory_file(f)
-                except Exception:  # noqa: BLE001
-                    logger.exception("Failed to compact memory files")
-
-            # Episode-grounded skill creation: the review ran WITH the full
-            # conversation in context, so if it proposed a <skill> block we
-            # persist it directly (real name + trigger + steps) — far better
-            # signal than n-grams of tool names (which produced opaque
-            # `nova-<hash>` skills the agent never invoked).
-            if self._skills_dir:
-                await self._cleanup_legacy_skills_once()
-                await self._maybe_create_skill_from_review(response_content)
-
-            # Refine only genuinely *failing* skills, periodically (every 5th
-            # review). We no longer regenerate low-usage skills — that would
-            # clobber good, newly-created ones before they've been used.
-            if self._skills_dir and new_count % 5 == 0:
-                await self._maybe_refine_skills()
-
-        except Exception:  # noqa: BLE001
-            logger.exception("Failed to apply review content")
-
-    def _spawn_skill_task(self, coro) -> None:
-        """Run a skill create/refine coroutine as a tracked background task."""
-        task = asyncio.create_task(coro)
-        self._refinement_tasks.add(task)
-
-        def _done(t: asyncio.Task) -> None:
-            self._refinement_tasks.discard(t)
-            if not t.cancelled() and t.exception():
-                logger.error("Skill task failed: %s", t.exception())
-
-        task.add_done_callback(_done)
-
-    async def _maybe_create_skill_from_review(self, review_text: str) -> None:
-        """Persist an episode-grounded skill if the review proposed one.
-
-        The review LLM writes a ``<skill>`` block (name + trigger + steps) only
-        when it recognizes a genuinely reusable workflow from this session. We
-        just frame frontmatter and write the file — no second LLM, no opaque
-        names. Deduped by skill name.
-        """
-        if not self._skills_dir:
-            return
-        try:
-            from novacode_cli.hermes.skill_discovery import (
-                parse_skill_spec,
-                write_skill_from_spec,
-            )
-
-            spec = parse_skill_spec(review_text)
-            if spec is None:
-                return
-            await write_skill_from_spec(spec, self._skills_dir, self._store)
-        except Exception:  # noqa: BLE001
-            logger.exception("Failed to create skill from review")
-
-    async def _cleanup_legacy_skills_once(self) -> None:
-        """One-time removal of the old ``nova-<hash>`` n-gram skills (guarded)."""
-        if not self._skills_dir:
-            return
-        try:
-            done = await self._store.aget(("nova", "meta"), "legacy_skills_cleaned_v1")
-            if done is not None:
-                return
-            from novacode_cli.hermes.skill_discovery import (
-                cleanup_legacy_pattern_skills,
-            )
-
-            removed = cleanup_legacy_pattern_skills(self._skills_dir)
-            await self._store.aput(
-                ("nova", "meta"), "legacy_skills_cleaned_v1", {"removed": removed}
-            )
-            if removed:
-                await self._emit_tui_event(
-                    "nova_skill_refinement",
-                    f"🧹 Nova: removed {len(removed)} legacy auto-skill(s) "
-                    "(opaque nova-* patterns; replaced by episode-grounded skills)",
-                )
-        except Exception:  # noqa: BLE001
-            logger.exception("Failed legacy skill cleanup")
-
-    async def _maybe_refine_skills(self) -> None:
-        """Refine an existing skill flagged as ineffective."""
-        if not self._skills_dir:
-            return
-        try:
-            from novacode_cli.hermes.skill_discovery import (
-                check_skill_effectiveness,
-                refine_skill,
-            )
-
-            candidates = await check_skill_effectiveness(self._store)
-            for skill_name, issue in candidates[:1]:  # one per cycle
-                # Only regenerate skills that are genuinely *failing*. "low_usage"
-                # just means new/rarely-used — regenerating it would clobber good
-                # episode-grounded content before it's had a chance to be used.
-                if issue != "high_failure":
-                    continue
-                # Only refine skills that actually exist on disk (skill_stats can
-                # hold tool names that aren't skills).
-                if not (self._skills_dir / skill_name / "SKILL.md").exists():
-                    continue
-                await self._emit_tui_event(
-                    "nova_skill_refinement",
-                    f"🛠 Nova: skill '{skill_name}' needs refinement ({issue})",
-                )
-                self._spawn_skill_task(
-                    refine_skill(skill_name, self._skills_dir, issue)
-                )
-        except Exception:  # noqa: BLE001
-            logger.exception("Failed to check skill effectiveness / refine")
+    async def _apply_review_content(self, content: str) -> None:
+        await self._review._apply_review_content(content)
 
     async def _get_review_count(self) -> int:
-        """Return the total number of reviews completed from the durable store."""
-        try:
-            entry = await self._store.aget(("nova", "meta"), "last_review")
-            if entry and isinstance(entry.value, dict):
-                return entry.value.get("review_count", 0)
-        except Exception:  # noqa: BLE001
-            logger.exception("Failed to get review count")
-        return 0
+        return await self._review._get_review_count()
 
     async def _get_review_just_completed(self) -> bool:
-        """Check if a review was just completed (in this middleware session).
-
-        Used to prevent rapid back-to-back review injections when the middleware
-        is instantiated fresh (e.g., /init creating its own agent) but the counter
-        still reports >= threshold from a prior review.
-        """
-        try:
-            entry = await self._store.aget(("nova", "meta"), "review_just_completed")
-            if entry and isinstance(entry.value, dict):
-                return entry.value.get("value", False)
-        except Exception:  # noqa: BLE001
-            logger.exception("Failed to check if review just completed")
-        return False
+        return await self._review._get_review_just_completed()
 
     async def _set_review_just_completed(self, value: bool) -> None:
-        """Mark whether a review was just completed (to skip next trigger)."""
-        if not self._enabled:
-            return
-        try:
-            await self._store.aput(
-                ("nova", "meta"),
-                "review_just_completed",
-                {"value": value},  # Wrap bool in dict
-            )
-        except Exception:  # noqa: BLE001
-            logger.exception("Failed to set review_just_completed flag")
+        await self._review._set_review_just_completed(value)
+
+    # ------------------------------------------------------------------
+    # Skill delegation
+    # ------------------------------------------------------------------
+
+    async def _maybe_create_skill_from_review(self, review_text: str) -> None:
+        await self._skill_manager.maybe_create_from_review(review_text)
+
+    async def _cleanup_legacy_skills_once(self) -> None:
+        await self._skill_manager.cleanup_legacy_skills_once()
+
+    async def _maybe_refine_skills(self) -> None:
+        await self._skill_manager.maybe_refine_skills()
+
+    # ------------------------------------------------------------------
+    # TUI event emission
+    # ------------------------------------------------------------------
 
     async def _emit_tui_event(self, event_type: str, message: str) -> None:
-        """Append a Nova event to the shared module-level buffer.
+        from novacode_cli.hermes.review import _emit_event
 
-        The buffer is drained by ``iterate_agent_events`` which yields proper
-        :class:`~novacode_cli.ui_events.ContextMessage` events — consumed by
-        both the Rich console renderer and the Textual TUI.
-
-        Events are:
-        - nova_review_start: Review cycle beginning
-        - nova_review_complete: Review cycle finished
-        - nova_skill_refinement: Skill detected for improvement
-        """
-        try:
-            event_config = {
-                "nova_review_start": {"icon": "🔄", "color": "cyan"},
-                "nova_review_complete": {"icon": "✓", "color": "green"},
-                "nova_skill_created": {"icon": "🧠", "color": "green"},
-                "nova_skill_refinement": {"icon": "🛠", "color": "yellow"},
-            }
-            conf = event_config.get(event_type, {"icon": "•", "color": "cyan"})
-            nova_event_log.append((event_type, conf["icon"], conf["color"], message))
-            # Cap the buffer to prevent unbounded growth if drain stalls
-            if len(nova_event_log) > _MAX_EVENT_LOG:
-                del nova_event_log[: len(nova_event_log) - _MAX_EVENT_LOG]
-        except Exception:  # noqa: BLE001
-            logger.exception("Failed to emit TUI event '%s'", event_type)
+        _emit_event(event_type, message)
 
     # ------------------------------------------------------------------
     # Middleware hooks
@@ -584,14 +276,7 @@ class NovaLearningMiddleware(AgentMiddleware[NovaState]):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]],
     ) -> ToolMessage | Command[Any]:
-        """Synchronous wrapper — pass-through only.
-
-        The agent runs in an async context (``astream`` / ``ainvoke``), so
-        ``asyncio.run()`` would raise ``RuntimeError`` from a running event
-        loop.  All tracking happens in the async hooks (``awrap_tool_call`` /
-        ``awrap_model_call``).  This sync stub exists solely to satisfy the
-        ``AgentMiddleware`` interface for synchronous test contexts.
-        """
+        """Synchronous wrapper — pass-through only."""
         return handler(request)
 
     def wrap_model_call(
@@ -599,11 +284,7 @@ class NovaLearningMiddleware(AgentMiddleware[NovaState]):
         request: ModelRequest,
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> ModelResponse | ExtendedModelResponse:
-        """Synchronous wrapper — pass-through only.
-
-        See ``wrap_tool_call`` for the rationale.  All review injection and
-        tracking happens in the async hooks.
-        """
+        """Synchronous wrapper — pass-through only."""
         return handler(request)
 
     async def awrap_tool_call(
@@ -615,30 +296,44 @@ class NovaLearningMiddleware(AgentMiddleware[NovaState]):
         if not self._enabled:
             return await handler(request)
 
+        tool_call = getattr(request, "tool_call", None)
+        skill_invoked = self._tracker.skill_name_from_tool_call(tool_call)
         try:
             response = await handler(request)
             tool_name = (
-                request.tool_call.get("name", "unknown")
-                if hasattr(request, "tool_call")
+                tool_call.get("name", "unknown")
+                if isinstance(tool_call, dict)
                 else "unknown"
             )
-            success = (
+            status_ok = (
                 (getattr(response, "status", "success") != "error")
                 if response
                 else True
             )
-            await self._increment_counter()
-            await self._record_tool_usage(tool_name, success)
+            # A shell/test call can report status="success" yet have actually
+            # failed (non-zero exit, traceback, N failed tests). Inspect output.
+            success = status_ok and not _execution_failed(tool_name, response)
+            await self._tracker.increment_counter()
+            await self._tracker.record_tool_usage(
+                tool_name,
+                success,
+                skill_invoked=skill_invoked,
+                error_excerpt=None if success else _content_to_text(response)[:300],
+            )
             return response
         except Exception as exc:
-            # Track failures too
             tool_name = (
-                request.tool_call.get("name", "unknown")
-                if hasattr(request, "tool_call")
+                tool_call.get("name", "unknown")
+                if isinstance(tool_call, dict)
                 else "unknown"
             )
-            await self._increment_counter()
-            await self._record_tool_usage(tool_name, False)
+            await self._tracker.increment_counter()
+            await self._tracker.record_tool_usage(
+                tool_name,
+                False,
+                skill_invoked=skill_invoked,
+                error_excerpt=f"{type(exc).__name__}: {exc}"[:300],
+            )
             raise
 
     async def awrap_model_call(
@@ -651,77 +346,26 @@ class NovaLearningMiddleware(AgentMiddleware[NovaState]):
         The agent's real model call is ALWAYS executed and its response is
         returned untouched, so the agent loop continues normally. When the tool
         call count has reached the threshold, the review runs as a separate
-        ``model.ainvoke`` (see :meth:`_run_review`) — it never replaces the
-        agent's task turn. This avoids the previous bug where injecting the
-        review prompt into the turn produced a no-tool-call response that
-        terminated the agent mid-task.
+        ``model.ainvoke`` — it never replaces the agent's task turn.
         """
         if not self._enabled:
             return await handler(request)
 
-        should_review = await self._should_review()
-
-        # The agent's real turn — always executed, always returned untouched.
+        should_review = await self._review.should_review()
         response = await handler(request)
 
         if should_review:
-            # Reset immediately so the next model call doesn't re-trigger while
-            # the review is in flight.
-            await self._reset_counter()
-            await self._emit_tui_event(
+            await self._tracker.reset_counter()
+            await self._review._set_review_just_completed(True)
+
+            from novacode_cli.hermes.review import _emit_event
+
+            _emit_event(
                 "nova_review_start",
                 "🔄 Nova review cycle starting...",
             )
-            # Run the review as a tracked background task so it never blocks the
-            # event stream. This lets the UI surface a live "reviewing…"
-            # indicator (drained between stream chunks) while the out-of-band
-            # review call is in flight, and the completion event fires when the
-            # task finishes.
-            task = asyncio.create_task(self._run_review_task(request))
-            self._refinement_tasks.add(task)
-            task.add_done_callback(self._refinement_tasks.discard)
+            task = asyncio.create_task(self._review.run_review_task(request))
+            self._skill_manager._refinement_tasks.add(task)
+            task.add_done_callback(self._skill_manager._refinement_tasks.discard)
 
         return response
-
-    async def _run_review_task(self, request: ModelRequest) -> None:
-        """Background wrapper around :meth:`_run_review`.
-
-        Emits the completion event in a ``finally`` so the live indicator is
-        always cleared/updated even if the review call fails.
-        """
-        try:
-            await self._run_review(request)
-        finally:
-            await self._emit_tui_event(
-                "nova_review_complete",
-                "✓ Nova review cycle complete",
-            )
-
-    # ------------------------------------------------------------------
-    # Utility
-    # ------------------------------------------------------------------
-
-    async def get_tool_history(self, limit: int = 50) -> list[dict[str, Any]]:
-        """Return the most recent tool usage history."""
-        try:
-            entry = await self._store.aget(("nova", "tool_history"), "history")
-            if entry and isinstance(entry.value, dict):
-                entries = entry.value.get("entries", [])
-                if isinstance(entries, list):
-                    return entries[-limit:]
-        except Exception:  # noqa: BLE001
-            logger.exception("Failed to get tool history")
-        return []
-
-    async def get_skill_stats(self) -> dict[str, dict[str, int]]:
-        """Return all tracked skill usage statistics."""
-        try:
-            results = await self._store.asearch(("nova", "skill_stats"))
-            stats: dict[str, dict[str, int]] = {}
-            for item in results:
-                if hasattr(item, "key") and hasattr(item, "value"):
-                    stats[item.key] = dict(item.value)  # type: ignore[arg-type]
-            return stats
-        except Exception:  # noqa: BLE001
-            logger.exception("Failed to get skill stats")
-        return {}

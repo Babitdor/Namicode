@@ -60,7 +60,7 @@ def _emit_tui_event(event_type: str, message: str) -> None:
     }
     config = event_config.get(event_type, {"icon": "•", "color": "cyan"})
     try:
-        from novacode_cli.hermes.middleware import nova_event_log
+        from novacode_cli.events import nova_event_log
 
         nova_event_log.append(
             (event_type, config["icon"], config["color"], message)
@@ -445,34 +445,42 @@ async def check_skill_effectiveness(
 ) -> list[tuple[str, str]]:
     """Check all tracked skills for effectiveness issues.
 
+    Reads the ``("nova", "skill_usage")`` namespace, which records actual
+    SKILL.md invocations and the outcomes attributed to them (see
+    ``ToolUsageTracker``). Earlier this read ``skill_stats`` keyed by *tool*
+    name, so it could never match a real skill — the refinement loop was inert.
+
     Returns a list of (skill_name, issue) tuples for skills needing attention.
 
     Issues detected:
-    - "high_failure" — success_rate < 0.6 with >5 uses
-    - "low_usage" — skill has <2 uses total
+    - "high_failure" — success_rate < 0.6 over >=5 attributed outcomes
+    - "low_usage" — skill invoked fewer than 2 times
     """
     issues: list[tuple[str, str]] = []
 
     try:
-        results = await store.asearch(("nova", "skill_stats"))
+        results = await store.asearch(("nova", "skill_usage"))
         for item in results:
             if not hasattr(item, "key") or not hasattr(item, "value"):
                 continue
-            # item.key is the store key, item.value is the stats dict
+            # item.key is the skill name, item.value is the usage dict
             value = item.value
             if not isinstance(value, dict):
                 continue
-            uses = value.get("uses", 0)
+            # New schema uses "invocations"; fall back to legacy "uses".
+            invocations = value.get("invocations", value.get("uses", 0))
             successes = value.get("successes", 0)
+            failures = value.get("failures", 0)
+            outcomes = successes + failures
 
-            # High failure rate
-            if uses >= 5:
-                success_rate = successes / uses if uses > 0 else 0.0
+            # High failure rate over a meaningful number of attributed outcomes.
+            if outcomes >= 5:
+                success_rate = successes / outcomes if outcomes > 0 else 0.0
                 if success_rate < 0.6:
                     issues.append((item.key, "high_failure"))
 
-            # Low usage (skill was created but barely used)
-            if uses < 2:
+            # Low usage (skill was created but barely invoked).
+            if invocations < 2:
                 issues.append((item.key, "low_usage"))
     except Exception:  # noqa: BLE001
         pass
@@ -484,46 +492,107 @@ async def refine_skill(
     skill_name: str,
     skills_dir: Path,
     issue: str,
+    *,
+    failure_samples: list[dict[str, Any]] | None = None,
 ) -> bool:
-    """Refine an existing skill based on detected issues.
+    """Refine an existing skill — **grounded in the actual failures**.
 
-    Re-runs skill generation with improvement context.
+    Unlike the old blind regenerate, this reads the current ``SKILL.md`` and
+    the captured ``failure_samples`` (tool + error excerpt) and asks the model
+    for a *targeted* improvement that addresses those specific failures. The
+    prior version is snapshotted first, so a bad refinement can be rolled back.
 
     Args:
         skill_name: Name of the skill to refine.
         skills_dir: Directory where skills are stored.
-        issue: The detected issue (e.g., "high_failure", "low_usage").
+        issue: The detected issue (``high_failure`` | ``low_usage``).
+        failure_samples: Recent per-skill failure excerpts (from ``skill_usage``).
 
     Returns:
-        True if refinement was successful, False otherwise.
+        True if a refinement was written, False otherwise.
     """
-    skill_path = skills_dir / skill_name / "SKILL.md"
+    skill_dir = skills_dir / skill_name
+    skill_path = skill_dir / "SKILL.md"
     if not skill_path.exists():
         _emit_tui_event(
             "nova_skill_error", f"Cannot refine '{skill_name}': SKILL.md not found"
         )
         return False
 
+    try:
+        current = skill_path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+
     issue_descriptions = {
-        "high_failure": "This skill has a high failure rate. Review and simplify the instructions to make them more reliable.",
-        "low_usage": "This skill has low usage. Consider whether the trigger pattern is too narrow or the instructions need clarification.",
+        "high_failure": (
+            "This skill has a high failure rate. Diagnose *why* it fails from the "
+            "failure samples below and revise the steps so the failures don't recur "
+            "(fix wrong commands/paths/assumptions; add missing prerequisites or "
+            "guardrails). Keep what works; change only what the evidence implicates."
+        ),
+        "low_usage": (
+            "This skill is rarely invoked. Sharpen the `description` (the trigger) "
+            "so it matches the situations it's meant for, and tighten the steps."
+        ),
     }
-    improvement_context = issue_descriptions.get(issue, f"Improvement needed: {issue}")
+    guidance = issue_descriptions.get(issue, f"Improvement needed: {issue}")
+
+    samples_text = ""
+    if failure_samples:
+        lines = [
+            f"- [{s.get('tool', '?')}] {s.get('excerpt', '').strip()}"
+            for s in failure_samples
+            if s.get("excerpt")
+        ]
+        if lines:
+            samples_text = "\n\nObserved failures while using this skill:\n" + "\n".join(lines)
+
+    prompt = (
+        "You are refining an existing agent skill (a SKILL.md playbook).\n\n"
+        f"{guidance}{samples_text}\n\n"
+        "Here is the current SKILL.md:\n\n"
+        f"{current}\n\n"
+        "Return the COMPLETE improved SKILL.md (YAML frontmatter + body). "
+        "Do not add commentary outside the file content."
+    )
 
     try:
-        from novacode_cli.skills.skill_creation import _generate_skill
+        from langchain_core.messages import SystemMessage
 
-        result = await _generate_skill(
-            skill_name,
-            skills_dir,
-            f"Refinement: {improvement_context}",
+        from novacode_cli.config.model_create import create_model
+        from novacode_cli.skills.skill_creation import (
+            _extract_skill_md_from_response,
         )
-        if result:
-            _emit_tui_event(
-                "nova_skill_refined", f"Nova refined skill: {skill_name} ({issue})"
-            )
-            return True
-    except Exception as exc:
+
+        model = create_model()
+        resp = await model.ainvoke(
+            [SystemMessage(content=prompt)],
+            config={
+                "run_name": "nova_skill_refine",
+                "tags": ["nova", "hermes", "skill-refine"],
+                "metadata": {"skill": skill_name, "issue": issue,
+                             "n_failure_samples": len(failure_samples or [])},
+            },
+        )
+        raw = getattr(resp, "content", "")
+        text = raw if isinstance(raw, str) else str(raw)
+        new_md = _extract_skill_md_from_response(text, skill_name) or (
+            text.strip() if text.strip().startswith("---") else None
+        )
+        if not new_md or new_md.strip() == current.strip():
+            return False
+
+        from novacode_cli.skills import versioning
+
+        versioning.snapshot(skill_dir, reason=f"refine:{issue}", source="refine")
+        skill_path.write_text(new_md.rstrip() + "\n", encoding="utf-8")
+        _emit_tui_event(
+            "nova_skill_refined",
+            f"Nova refined skill: {skill_name} ({issue}) — previous version saved",
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001
         _emit_tui_event(
             "nova_skill_error",
             f"Nova skill refinement failed for '{skill_name}': {exc}",

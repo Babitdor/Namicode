@@ -3,10 +3,10 @@
 import webbrowser
 from pathlib import Path
 from prompt_toolkit import PromptSession
-from rich.console import Console
 from rich.table import Table
-from rich.text import Text
 
+from novacode_cli.commands import CommandContext
+from novacode_cli.commands.menu_helper import MenuOption, run_interactive_menu
 from novacode_cli.config.config import COLORS, console
 from novacode_cli.process_manager import ProcessManager
 from novacode_cli.server_runner.dev_server import list_servers, stop_server
@@ -17,25 +17,13 @@ from novacode_cli.server_runner.test_runner import (
 )
 
 
-async def handle_servers_command(session_state) -> bool:
-    """Handle /servers - list and manage dev servers.
+async def handle_servers_command(ctx: CommandContext) -> bool:
+    """Handle /servers — show running servers table, then delegate to menu."""
 
-    Args:
-        session_state: Current session state
-
-    Returns:
-        True (command always handled)
-    """
-    ps = PromptSession()
-
-    console.print()
-    console.print("[bold]Dev Server Management[/bold]", style=COLORS["primary"])
-    console.print()
-
-    # Get running servers (including external servers not managed by CLI)
     servers = list_servers(include_external=True)
 
     if not servers:
+        console.print()
         console.print("[yellow]No dev servers running[/yellow]")
         console.print("[dim]Use the start_dev_server tool to start a server[/dim]")
         console.print()
@@ -49,7 +37,6 @@ async def handle_servers_command(session_state) -> bool:
     table.add_column("Status")
     table.add_column("Command", style="dim")
 
-    # Separate managed and external servers for display
     managed_servers = []
     external_servers = []
     for server in servers:
@@ -78,99 +65,102 @@ async def handle_servers_command(session_state) -> bool:
             "[dim](not managed by CLI)[/dim]",
         )
 
+    console.print()
     console.print(table)
     if external_servers:
         console.print("[dim]Note: External servers (marked 'external') were started outside this CLI and cannot be stopped here.[/dim]")
     console.print()
 
-    # Show menu
-    console.print("What would you like to do?", style=COLORS["primary"])
-    console.print("  1. Open server in browser")
-    console.print("  2. Stop a server (managed only)")
-    console.print("  3. Stop all servers (managed only)")
-    console.print("  4. Cancel")
-    console.print()
+    options = [
+        MenuOption("Open server in browser", _action_open_browser),
+        MenuOption("Stop a server (managed only)", _action_stop_server),
+        MenuOption("Stop all servers (managed only)", _action_stop_all),
+    ]
+    return await run_interactive_menu("Dev Server Management", options, ctx)
 
-    choice = (await ps.prompt_async("Choose (1-4): ")).strip()
 
-    if choice == "1":
-        # Open in browser
-        if len(servers) == 1:
-            webbrowser.open(servers[0].url)
-            console.print(f"[green]✓ Opened {servers[0].url} in browser[/green]")
+async def _action_open_browser(
+    ctx: CommandContext, session: PromptSession,
+) -> bool:
+    """Option 1: open a server in the browser."""
+    servers = list_servers(include_external=True)
+    if not servers:
+        console.print("[yellow]No dev servers running[/yellow]")
+        return True
+
+    if len(servers) == 1:
+        webbrowser.open(servers[0].url)
+        console.print(f"[green]✓ Opened {servers[0].url} in browser[/green]")
+    else:
+        console.print()
+        console.print("[bold]Select server to open:[/bold]", style=COLORS["primary"])
+        for i, server in enumerate(servers, 1):
+            console.print(f"  {i}. {server.name} ({server.url})")
+        console.print()
+        server_choice = (await session.prompt_async("Choose server number: ")).strip()
+        try:
+            idx = int(server_choice) - 1
+            if 0 <= idx < len(servers):
+                webbrowser.open(servers[idx].url)
+                console.print(f"[green]✓ Opened {servers[idx].url} in browser[/green]")
+            else:
+                console.print("[yellow]Invalid choice[/yellow]")
+        except ValueError:
+            console.print("[yellow]Invalid choice[/yellow]")
+    return True
+
+
+async def _action_stop_server(
+    ctx: CommandContext, session: PromptSession,
+) -> bool:
+    """Option 2: stop a managed server."""
+    servers = list_servers(include_external=True)
+    if not servers:
+        console.print("[yellow]No dev servers running[/yellow]")
+        return True
+
+    if len(servers) == 1:
+        result = await stop_server(pid=servers[0].pid)
+        if result:
+            console.print(f"[green]✓ Stopped server '{servers[0].name}' (PID: {servers[0].pid})[/green]")
+        else:
+            console.print("[red]Failed to stop server[/red]")
+    else:
+        stoppable_servers = [s for s in servers if s.pid > 0]
+        if not stoppable_servers:
+            console.print("[yellow]No managed servers to stop[/yellow]")
         else:
             console.print()
-            console.print(
-                "[bold]Select server to open:[/bold]", style=COLORS["primary"]
-            )
-            for i, server in enumerate(servers, 1):
-                console.print(f"  {i}. {server.name} ({server.url})")
+            console.print("[bold]Select server to stop:[/bold]", style=COLORS["primary"])
+            for i, server in enumerate(stoppable_servers, 1):
+                console.print(f"  {i}. {server.name} (PID: {server.pid})")
             console.print()
-            server_choice = (await ps.prompt_async("Choose server number: ")).strip()
+            server_choice = (await session.prompt_async("Choose server number: ")).strip()
             try:
                 idx = int(server_choice) - 1
-                if 0 <= idx < len(servers):
-                    webbrowser.open(servers[idx].url)
-                    console.print(
-                        f"[green]✓ Opened {servers[idx].url} in browser[/green]"
-                    )
+                if 0 <= idx < len(stoppable_servers):
+                    result = await stop_server(pid=stoppable_servers[idx].pid)
+                    if result:
+                        console.print(f"[green]✓ Stopped server '{stoppable_servers[idx].name}'[/green]")
+                    else:
+                        console.print("[red]Failed to stop server[/red]")
                 else:
                     console.print("[yellow]Invalid choice[/yellow]")
             except ValueError:
                 console.print("[yellow]Invalid choice[/yellow]")
+    return True
 
-    elif choice == "2":
-        # Stop a server
-        if len(servers) == 1:
-            result = await stop_server(pid=servers[0].pid)
-            if result:
-                console.print(
-                    f"[green]✓ Stopped server '{servers[0].name}' (PID: {servers[0].pid})[/green]"
-                )
-            else:
-                console.print("[red]Failed to stop server[/red]")
-        else:
-            # Only show managed servers for stopping
-            stoppable_servers = [s for s in servers if s.pid > 0]
-            if not stoppable_servers:
-                console.print("[yellow]No managed servers to stop[/yellow]")
-                console.print("[dim]External servers must be stopped manually[/dim]")
-            else:
-                console.print()
-                console.print(
-                    "[bold]Select server to stop:[/bold]", style=COLORS["primary"]
-                )
-                for i, server in enumerate(stoppable_servers, 1):
-                    console.print(f"  {i}. {server.name} (PID: {server.pid})")
-                console.print()
-                server_choice = (await ps.prompt_async("Choose server number: ")).strip()
-                try:
-                    idx = int(server_choice) - 1
-                    if 0 <= idx < len(stoppable_servers):
-                        result = await stop_server(pid=stoppable_servers[idx].pid)
-                        if result:
-                            console.print(
-                                f"[green]✓ Stopped server '{stoppable_servers[idx].name}'[/green]"
-                            )
-                        else:
-                            console.print("[red]Failed to stop server[/red]")
-                    else:
-                        console.print("[yellow]Invalid choice[/yellow]")
-                except ValueError:
-                    console.print("[yellow]Invalid choice[/yellow]")
 
-    elif choice == "3":
-        # Stop all managed servers
-        manager = ProcessManager.get_instance()
-        count = await manager.stop_all()
-        if count > 0:
-            console.print(f"[green]✓ Stopped {count} managed server(s)[/green]")
-        else:
-            console.print("[yellow]No managed servers to stop[/yellow]")
-        if external_servers:
-            console.print(f"[dim]Note: {len(external_servers)} external server(s) still running[/dim]")
-
-    console.print()
+async def _action_stop_all(
+    ctx: CommandContext, session: PromptSession,
+) -> bool:
+    """Option 3: stop all managed servers."""
+    manager = ProcessManager.get_instance()
+    count = await manager.stop_all()
+    if count > 0:
+        console.print(f"[green]✓ Stopped {count} managed server(s)[/green]")
+    else:
+        console.print("[yellow]No managed servers to stop[/yellow]")
     return True
 
 
@@ -369,7 +359,7 @@ def register_commands(registry) -> None:
     from novacode_cli.commands import CommandContext
 
     async def _handle_servers(ctx: CommandContext) -> bool:
-        return await handle_servers_command(ctx.session_state)
+        return await handle_servers_command(ctx)
 
     async def _handle_tests(ctx: CommandContext) -> bool:
         return await handle_tests_command(ctx.session_state, cmd_args=ctx.cmd_args)

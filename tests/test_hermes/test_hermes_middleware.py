@@ -92,7 +92,7 @@ class TestCounter:
 
     async def test_cap_at_max(self, middleware, mock_store):
         """Counter should be capped at _MAX_COUNTER."""
-        from novacode_cli.hermes.middleware import _MAX_COUNTER
+        from novacode_cli.hermes.tracker import _MAX_COUNTER
 
         mock_store.aget.return_value = MagicMock(value={"count": _MAX_COUNTER})
         # Set the persisted value

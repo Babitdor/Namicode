@@ -127,7 +127,7 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
     # activity) into proper ContextMessage events for both UIs.
     def _drain_nova_events() -> list[ev.ContextMessage]:
         try:
-            from novacode_cli.hermes.middleware import nova_event_log
+            from novacode_cli.events import nova_event_log
 
             events: list[ev.ContextMessage] = []
             while nova_event_log:

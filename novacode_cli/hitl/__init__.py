@@ -15,12 +15,8 @@ Usage:
     configs = get_interrupt_configs()
 """
 
-from novacode_cli.hitl.interrupts import (
-    get_interrupt_configs,
-    InterruptConfig,
-)
+from novacode_cli.hitl.interrupts import get_interrupt_configs
 
 __all__ = [
     "get_interrupt_configs",
-    "InterruptConfig",
 ]

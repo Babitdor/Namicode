@@ -39,7 +39,7 @@ logger = logging.getLogger("nova.security.middleware")
 def _emit_security_event(message: str) -> None:
     """Surface a security notice via the shared Nova event buffer (TUI-safe)."""
     try:
-        from novacode_cli.hermes.middleware import nova_event_log
+        from novacode_cli.events import nova_event_log
 
         nova_event_log.append(("nova_security", "🛡", "yellow", message))
     except Exception:  # noqa: BLE001

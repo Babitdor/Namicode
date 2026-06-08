@@ -2,9 +2,9 @@
 
 from pathlib import Path
 from prompt_toolkit import PromptSession
-from rich.console import Console
-from rich.text import Text
 
+from novacode_cli.commands import CommandContext
+from novacode_cli.commands.menu_helper import MenuOption, run_interactive_menu
 from novacode_cli.config.config import COLORS, Settings, console
 from novacode_cli.skills.skill_creation import (
     _generate_skill,
@@ -13,22 +13,13 @@ from novacode_cli.skills.skill_creation import (
 
 
 async def handle_skills_command(cmd_args: str | None, assistant_id: str) -> bool:
-    """Handle the /skills command with interactive menu.
-
-    Args:
-        cmd_args: Optional subcommand (create/list) or skill name
-        assistant_id: Agent identifier for skill storage
-
-    Returns:
-        True (command always handled)
-    """
+    """Handle the /skills command."""
     ps = PromptSession()
 
     console.print()
     console.print("[bold]Skills Manager[/bold]", style=COLORS["primary"])
     console.print()
 
-    # Check if a subcommand was provided
     action = None
     extra_args = None
 
@@ -42,38 +33,35 @@ async def handle_skills_command(cmd_args: str | None, assistant_id: str) -> bool
         elif first_arg in ("list", "ls", "show"):
             action = "list"
         else:
-            # Assume it's a skill name for creation
             action = "create"
             extra_args = cmd_args.strip()
 
-    # If no action, show menu
     if not action:
-        console.print("  1. Create a new skill")
-        console.print("  2. List available skills")
-        console.print()
+        ctx = CommandContext(cmd="skills", cmd_args=cmd_args,
+                             agent=None, token_tracker=None,
+                             session_state=None, assistant_id=assistant_id)
+        options = [
+            MenuOption("Create a new skill", _menu_create_skill),
+            MenuOption("List available skills", _menu_list_skills),
+        ]
+        return await run_interactive_menu("Skills Manager", options, ctx)
 
-        choice = (await ps.prompt_async("Choose (1-2, or 'cancel'): ")).strip()
-
-        if choice.lower() in ("cancel", "c", "q"):
-            console.print("[dim]Cancelled[/dim]")
-            console.print()
-            return True
-
-        if choice == "1":
-            action = "create"
-        elif choice == "2":
-            action = "list"
-        else:
-            console.print("[yellow]Invalid choice[/yellow]")
-            console.print()
-            return True
-
-    # Handle LIST action
     if action == "list":
         return await _skills_list_interactive(ps, Settings.from_environment(), assistant_id)
 
-    # Handle CREATE action
     return await _skills_create_interactive(ps, Settings.from_environment(), assistant_id, extra_args)
+
+
+async def _menu_create_skill(ctx: CommandContext, session: PromptSession) -> bool:
+    return await _skills_create_interactive(
+        session, Settings.from_environment(), ctx.assistant_id, None,
+    )
+
+
+async def _menu_list_skills(ctx: CommandContext, session: PromptSession) -> bool:
+    return await _skills_list_interactive(
+        session, Settings.from_environment(), ctx.assistant_id,
+    )
 
 
 async def _skills_list_interactive(ps, settings: Settings, assistant_id: str) -> bool:

@@ -1,172 +1,147 @@
 """Handler for the /model command for LLM provider management."""
 
 import os
-from typing import Any
 
 from prompt_toolkit import PromptSession
-from rich.console import Console
-from rich.text import Text
 
+from novacode_cli.commands import CommandContext
+from novacode_cli.commands.menu_helper import MenuOption, run_interactive_menu
 from novacode_cli.config.config import COLORS, console
 from novacode_cli.config.model_manager import MODEL_PRESETS, ModelManager, get_ollama_models
 from novacode_cli.config.model_create import create_model
 
 
-async def handle_model_command(session_state: Any | None = None) -> bool:
-    """Handle the /model command for LLM provider management.
-    
-    Args:
-        session_state: Optional session state for dynamic model switching
-        
-    Returns:
-        True (command always handled)
-    """
-    session = PromptSession()
+async def handle_model_command(ctx: CommandContext) -> bool:
+    """Handle the /model command — delegates to interactive menu."""
+    options = [
+        MenuOption("View available providers", _action_view_providers),
+        MenuOption("Switch provider", _action_switch_provider),
+        MenuOption("View current provider details", _action_view_details),
+    ]
+    return await run_interactive_menu("Model Provider Management", options, ctx)
+
+
+async def _action_view_providers(
+    ctx: CommandContext, session: PromptSession,
+) -> bool:
+    """Option 1: view available providers."""
     model_manager = ModelManager()
-
-    console.print()
-    console.print("[bold]Model Provider Management[/bold]", style=COLORS["primary"])
-    console.print()
-
-    # Show current model
     current = model_manager.get_current_provider()
-    if current:
-        provider_name, model_name = current
+    available = model_manager.get_available_providers()
+    console.print()
+    console.print("[bold]Available Providers:[/bold]", style=COLORS["primary"])
+    console.print()
+
+    if not available:
+        console.print("[yellow]No providers configured[/yellow]")
         console.print(
-            f"[bold]Current:[/bold] {provider_name} - {model_name}",
-            style=COLORS["primary"],
+            "[dim]Configure API keys in environment variables to enable providers[/dim]"
         )
         console.print()
-
-    # Show menu
-    console.print("What would you like to do?", style=COLORS["primary"])
-    console.print("  1. View available providers")
-    console.print("  2. Switch provider")
-    console.print("  3. View current provider details")
-    console.print("  4. Cancel")
-    console.print()
-
-    choice = (await session.prompt_async("Choose (1-4): ")).strip()
-
-    if choice == "1":
-        # List available providers
-        available = model_manager.get_available_providers()
-        console.print()
-        console.print("[bold]Available Providers:[/bold]", style=COLORS["primary"])
-        console.print()
-
-        if not available:
-            console.print("[yellow]No providers configured[/yellow]")
+        console.print("[bold]Required environment variables:[/bold]")
+        for provider_id, preset in MODEL_PRESETS.items():
+            if preset["requires_api_key"]:
+                console.print(f"  • {preset['name']}: {preset['api_key_var']}")
+    else:
+        for provider_id, preset in available:
+            icon = "✓" if current and preset["name"] == current[0] else " "
             console.print(
-                "[dim]Configure API keys in environment variables to enable providers[/dim]"
+                f"  {icon} [bold]{preset['name']}[/bold]", style=COLORS["primary"]
+            )
+            console.print(f"    {preset['description']}", style=COLORS["dim"])
+            console.print(
+                f"    Default model: {preset['default_model']}", style=COLORS["dim"]
             )
             console.print()
-            console.print("[bold]Required environment variables:[/bold]")
-            for provider_id, preset in MODEL_PRESETS.items():
+    return True
+
+
+async def _action_switch_provider(
+    ctx: CommandContext, session: PromptSession,
+) -> bool:
+    """Option 2: switch provider interactively."""
+    model_manager = ModelManager()
+    all_providers = list(MODEL_PRESETS.items())
+    configured = {pid for pid, _ in model_manager.get_available_providers()}
+
+    console.print()
+    console.print("[bold]Providers:[/bold]", style=COLORS["primary"])
+    for i, (provider_id, preset) in enumerate(all_providers, 1):
+        marker = (
+            "" if provider_id in configured else "  [dim](needs API key)[/dim]"
+        )
+        console.print(
+            f"  {i}. {preset['name']} ({preset['default_model']}){marker}"
+        )
+
+    console.print()
+    provider_choice = (
+        await session.prompt_async("Choose provider number (or 'cancel'): ")
+    ).strip()
+
+    if provider_choice.lower() != "cancel":
+        try:
+            provider_idx = int(provider_choice) - 1
+            if 0 <= provider_idx < len(all_providers):
+                provider_id, preset = all_providers[provider_idx]
+
                 if preset["requires_api_key"]:
-                    console.print(f"  • {preset['name']}: {preset['api_key_var']}")
-        else:
-            for provider_id, preset in available:
-                icon = "✓" if current and preset["name"] == current[0] else " "
-                console.print(
-                    f"  {icon} [bold]{preset['name']}[/bold]", style=COLORS["primary"]
-                )
-                console.print(f"    {preset['description']}", style=COLORS["dim"])
-                console.print(
-                    f"    Default model: {preset['default_model']}", style=COLORS["dim"]
-                )
-                console.print()
+                    from novacode_cli.onboarding import SecretManager
 
-    elif choice == "2":
-        # Switch provider. List *all* providers (not just configured ones) so the
-        # user can pick one without a key yet — they'll be prompted for it below.
-        all_providers = list(MODEL_PRESETS.items())
-        configured = {pid for pid, _ in model_manager.get_available_providers()}
+                    secret_manager = SecretManager()
+                    api_key_name = preset["api_key_var"].lower()
 
-        console.print()
-        console.print("[bold]Providers:[/bold]", style=COLORS["primary"])
-        for i, (provider_id, preset) in enumerate(all_providers, 1):
-            marker = (
-                "" if provider_id in configured else "  [dim](needs API key)[/dim]"
-            )
-            console.print(
-                f"  {i}. {preset['name']} ({preset['default_model']}){marker}"
-            )
+                    # Check if API key exists in keyring or environment
+                    api_key = secret_manager.get_secret(
+                        api_key_name
+                    ) or os.environ.get(preset["api_key_var"])
 
-        console.print()
-        provider_choice = (
-            await session.prompt_async("Choose provider number (or 'cancel'): ")
-        ).strip()
+                    if not api_key:
+                        # Prompt user to provide API key
+                        console.print()
+                        console.print(
+                            f"[yellow]⚠ {preset['name']} requires an API key to proceed[/yellow]"
+                        )
+                        console.print()
+                        console.print(
+                            f"[bold]Enter {preset['name']} API key:[/bold]"
+                        )
+                        console.print(
+                            "[dim]This will be stored securely in your system keychain[/dim]"
+                        )
+                        console.print()
 
-        if provider_choice.lower() != "cancel":
-            try:
-                provider_idx = int(provider_choice) - 1
-                if 0 <= provider_idx < len(all_providers):
-                    provider_id, preset = all_providers[provider_idx]
+                        new_api_key = (
+                            await session.prompt_async(
+                                f"{preset['api_key_var']}: ",
+                                is_password=True,
+                            )
+                        ).strip()
 
-                    # Validate API key for cloud providers
-                    if preset["requires_api_key"]:
-                        from novacode_cli.onboarding import SecretManager
-
-                        secret_manager = SecretManager()
-                        api_key_name = preset[
-                            "api_key_var"
-                        ].lower()  # e.g., OPENAI_API_KEY -> openai_api_key
-
-                        # Check if API key exists in keyring or environment
-                        api_key = secret_manager.get_secret(
-                            api_key_name
-                        ) or os.environ.get(preset["api_key_var"])
-
-                        if not api_key:
-                            # Prompt user to provide API key
+                        if not new_api_key:
                             console.print()
                             console.print(
-                                f"[yellow]⚠ {preset['name']} requires an API key to proceed[/yellow]"
+                                "[yellow]⚠ No API key provided, cancelled[/yellow]"
                             )
                             console.print()
+                            return True
+
+                        if secret_manager.store_secret(api_key_name, new_api_key):
+                            api_key = new_api_key
+                            console.print()
                             console.print(
-                                f"[bold]Enter {preset['name']} API key:[/bold]"
-                            )
-                            console.print(
-                                "[dim]This will be stored securely in your system keychain[/dim]"
+                                "[green]✓ API key saved to system keychain[/green]"
                             )
                             console.print()
+                        else:
+                            console.print()
+                            console.print("[red]✗ Failed to save API key[/red]")
+                            console.print()
+                            return True
 
-                            new_api_key = (
-                                await session.prompt_async(
-                                    f"{preset['api_key_var']}: ",
-                                    is_password=True,
-                                )
-                            ).strip()
-
-                            if not new_api_key:
-                                console.print()
-                                console.print(
-                                    "[yellow]⚠ No API key provided, cancelled[/yellow]"
-                                )
-                                console.print()
-                                return True
-
-                            # Store the API key
-                            if secret_manager.store_secret(api_key_name, new_api_key):
-                                api_key = new_api_key
-                                console.print()
-                                console.print(
-                                    "[green]✓ API key saved to system keychain[/green]"
-                                )
-                                console.print()
-                            else:
-                                console.print()
-                                console.print("[red]✗ Failed to save API key[/red]")
-                                console.print()
-                                return True
-
-                        # Export the resolved key (from keychain or just entered)
-                        # into the environment so create_model() — which reads
-                        # os.environ — can find it.
-                        if api_key:
-                            os.environ[preset["api_key_var"]] = api_key
+                    # Export the resolved key into the environment
+                    if api_key:
+                        os.environ[preset["api_key_var"]] = api_key
 
                     # Ask if user wants to specify a different model
                     console.print()
@@ -215,38 +190,40 @@ async def handle_model_command(session_state: Any | None = None) -> bool:
                                     f"[yellow]No model #{model_choice}; using default.[/yellow]"
                                 )
                         else:
-                            # Free-form model name (e.g. an OpenRouter slug not listed)
                             model_name = model_choice
 
-                    # Set the provider
+                    if not model_name:
+                        model_name = preset["default_model"]
+
+                    console.print()
+                    console.print(
+                        f"✓ Set model to [bold]{provider_id}:{model_name}[/bold]",
+                        style=COLORS["primary"],
+                    )
+
                     try:
-                        model_manager.set_provider(provider_id, model_name)  # type: ignore[arg-type]
-                        console.print()
-                        console.print(
-                            f"✓ Switched to {preset['name']}!",
-                            style=COLORS["primary"],
-                        )
+                        model_manager.set_provider(provider_id, model_name)
                         console.print()
                         console.print(
                             "[green]✓ Configuration saved to ~/.nova/Nova.config.json[/green]"
                         )
-                        
-                        # Attempt dynamic model switching if session state is available
+
+                        session_state = ctx.session_state
                         if session_state is not None:
                             try:
-                                # Create new model instance
                                 new_model = create_model()
-                                
-                                # Switch model dynamically (recreates agent with preserved state)
                                 await session_state.switch_model(new_model)
-                                
                                 console.print()
                                 console.print("[green]✓ Model switched dynamically![/green]")
                                 console.print("[dim]New model is active immediately[/dim]")
                             except Exception as e:
                                 console.print()
-                                console.print(f"[yellow]⚠ Could not switch model dynamically: {e}[/yellow]")
-                                console.print("[dim]Model change will take effect after restarting the CLI[/dim]")
+                                console.print(
+                                    f"[yellow]⚠ Could not switch model dynamically: {e}[/yellow]"
+                                )
+                                console.print(
+                                    "[dim]Model change will take effect after restarting the CLI[/dim]"
+                                )
                         else:
                             console.print()
                             console.print(
@@ -258,43 +235,46 @@ async def handle_model_command(session_state: Any | None = None) -> bool:
                     except ValueError as e:
                         console.print()
                         console.print(f"[bold red]Error:[/bold red] {e}")
-                else:
-                    console.print()
-                    console.print("[yellow]Invalid choice[/yellow]")
-            except (ValueError, IndexError):
+            else:
                 console.print()
                 console.print("[yellow]Invalid choice[/yellow]")
-
-    elif choice == "3":
-        # View current provider details
-        console.print()
-        if current:
-            provider_name, model_name = current
-            console.print(
-                f"[bold]Current Provider:[/bold] {provider_name}",
-                style=COLORS["primary"],
-            )
-            console.print(
-                f"[bold]Current Model:[/bold] {model_name}", style=COLORS["primary"]
-            )
+        except (ValueError, IndexError):
             console.print()
+            console.print("[yellow]Invalid choice[/yellow]")
+    return True
 
-            # Find preset info
-            for provider_id, preset in MODEL_PRESETS.items():
-                if preset["name"] == provider_name:
-                    console.print(f"[bold]Description:[/bold] {preset['description']}")
-                    console.print()
-                    console.print("[bold]Available models:[/bold]")
-                    for model in preset["models"]:
-                        current_marker = " (current)" if model == model_name else ""
-                        console.print(
-                            f"  • {model}{current_marker}", style=COLORS["dim"]
-                        )
-                    break
-        else:
-            console.print("[yellow]No provider currently active[/yellow]")
+
+async def _action_view_details(
+    ctx: CommandContext, session: PromptSession,
+) -> bool:
+    """Option 3: view current provider details."""
+    model_manager = ModelManager()
+    current = model_manager.get_current_provider()
+    console.print()
+    if current:
+        provider_name, model_name = current
+        console.print(
+            f"[bold]Current Provider:[/bold] {provider_name}",
+            style=COLORS["primary"],
+        )
+        console.print(
+            f"[bold]Current Model:[/bold] {model_name}", style=COLORS["primary"]
+        )
         console.print()
 
+        for provider_id, preset in MODEL_PRESETS.items():
+            if preset["name"] == provider_name:
+                console.print(f"[bold]Description:[/bold] {preset['description']}")
+                console.print()
+                console.print("[bold]Available models:[/bold]")
+                for model in preset["models"]:
+                    current_marker = " (current)" if model == model_name else ""
+                    console.print(
+                        f"  • {model}{current_marker}", style=COLORS["dim"]
+                    )
+                break
+    else:
+        console.print("[yellow]No provider currently active[/yellow]")
     console.print()
     return True
 
@@ -307,6 +287,6 @@ def register_commands(registry) -> None:
     from novacode_cli.commands import CommandContext
 
     async def _handle(ctx: CommandContext) -> bool:
-        return await handle_model_command(session_state=ctx.session_state)
+        return await handle_model_command(ctx)
 
     registry.register("model", _handle)

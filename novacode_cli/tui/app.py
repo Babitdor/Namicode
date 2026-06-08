@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -303,6 +304,11 @@ _DETAILED_TOOL_NAMES = frozenset(
 # Rare subcommands still delegated to handle_command (captured) from within the
 # native handlers (e.g. `/trace enable`, `/log show <id>`). Common forms native.
 _PASSTHROUGH_SLASH: set[str] = set()
+
+# The @mention token immediately before the cursor (start-of-line or after
+# whitespace, so emails like user@host don't match). Used to drive @file/@agent
+# autocomplete *anywhere* in the line, not just at the very start.
+_AT_FRAGMENT_RE = re.compile(r"(?:^|(?<=\s))@([^\s@]*)$")
 
 # Slash commands offered by the autocomplete dropdown.
 _TUI_SLASH_COMMANDS = [
@@ -3203,11 +3209,36 @@ class NovaApp(App):
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id != "prompt":
             return
-        self._update_palette(event.value)
+        self._update_palette(event.value, event.input.cursor_position)
         self._update_mode_badge(event.value)
 
-    def _palette_candidates(self, value: str) -> list[str]:
-        """Completion candidates for the current input, by trigger context."""
+    def _active_at_fragment(self, value: str, cursor: int) -> tuple[int, str] | None:
+        """The ``@token`` ending at the cursor, anywhere in the line.
+
+        Returns ``(start_index_of_@, fragment_after_@)`` or ``None``. The token
+        must be at the start of the line or preceded by whitespace, so emails
+        (``user@host``) and mid-word ``@`` don't trigger completion.
+        """
+        m = _AT_FRAGMENT_RE.search(value[: max(0, cursor)])
+        if not m:
+            return None
+        return m.start(), m.group(1)
+
+    def _palette_candidates(self, value: str, cursor: int | None = None) -> list[str]:
+        """Completion candidates for the current input, by trigger context.
+
+        ``@`` mentions are matched at the **cursor token anywhere** in the line;
+        ``/`` commands remain line-level (they only make sense at the start).
+        """
+        if cursor is None:
+            cursor = len(value)
+
+        # @<agent>/<file> — completes the @token under the cursor, ANYWHERE.
+        frag = self._active_at_fragment(value, cursor)
+        if frag is not None:
+            return self._at_candidates(frag[1])
+
+        # Slash contexts are line-level: a space means the token is complete.
         if " " in value or not value:
             return []
         v = value.lower()
@@ -3218,15 +3249,22 @@ class NovaApp(App):
                 for n in self._get_skill_names()
                 if f"/skill:{n}".lower().startswith(v)
             ]
-        # @<agent> — delegate to a subagent (or @file to inject content)
-        if value.startswith("@"):
-            candidates: list[str] = []
-            # Agent completions
-            for n in self._get_agent_names():
-                if f"@{n}".lower().startswith(v):
-                    candidates.append(f"@{n}")
-            # File completions — recursive match across the whole project tree
-            prefix = v.removeprefix("@")
+        # /<command>
+        if value.startswith("/"):
+            return [c for c in _TUI_SLASH_COMMANDS if c.startswith(v)]
+        return []
+
+    def _at_candidates(self, fragment: str) -> list[str]:
+        """Build @agent + @file completions for an ``@`` fragment (no leading @)."""
+        at_prefix = f"@{fragment}".lower()
+        candidates: list[str] = []
+        # Agent completions
+        for n in self._get_agent_names():
+            if f"@{n}".lower().startswith(at_prefix):
+                candidates.append(f"@{n}")
+        # File completions — recursive match across the whole project tree
+        if True:
+            prefix = fragment
             max_results = 50
             try:
                 cwd = Path.cwd()
@@ -3289,14 +3327,18 @@ class NovaApp(App):
             except Exception:
                 pass
             return candidates
-        # /<command>
-        if value.startswith("/"):
-            return [c for c in _TUI_SLASH_COMMANDS if c.startswith(v)]
-        return []
 
-    def _update_palette(self, value: str) -> None:
-        matches = self._palette_candidates(value)
-        show = bool(matches) and not (len(matches) == 1 and matches[0] == value.lower())
+    def _update_palette(self, value: str, cursor: int | None = None) -> None:
+        if cursor is None:
+            cursor = len(value)
+        matches = self._palette_candidates(value, cursor)
+        # No-op (don't show) when the only match already equals the current
+        # token — the @fragment under the cursor, or the whole line for slashes.
+        frag = self._active_at_fragment(value, cursor)
+        current_token = f"@{frag[1]}" if frag is not None else value
+        show = bool(matches) and not (
+            len(matches) == 1 and matches[0].lower() == current_token.lower()
+        )
         if not show:
             self._hide_palette()
             return
@@ -3330,8 +3372,21 @@ class NovaApp(App):
 
     def _accept_palette(self, command: str) -> None:
         inp = self.query_one("#prompt", Input)
-        inp.value = f"{command} "
-        inp.cursor_position = len(inp.value)
+        value = inp.value
+        cursor = inp.cursor_position
+        frag = self._active_at_fragment(value, cursor)
+        if frag is not None and command.startswith("@"):
+            # Replace only the @token under the cursor, preserving the rest of
+            # the line. Directories (trailing "/") get no space so the user can
+            # keep typing the path; everything else gets a trailing space.
+            start, _ = frag
+            trailing = "" if command.endswith("/") else " "
+            inp.value = value[:start] + command + trailing + value[cursor:]
+            inp.cursor_position = start + len(command) + len(trailing)
+        else:
+            # Slash command (line-level): replace the whole line.
+            inp.value = f"{command} "
+            inp.cursor_position = len(inp.value)
         self._hide_palette()
         inp.focus()
 

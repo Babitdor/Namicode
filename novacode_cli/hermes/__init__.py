@@ -12,15 +12,21 @@ from novacode_cli.hermes.memory_tiers import (
     update_user_memory,
 )
 from novacode_cli.hermes.middleware import NovaLearningMiddleware
+from novacode_cli.hermes.review import ReviewRunner
 from novacode_cli.hermes.skill_discovery import (
     analyze_tool_history,
     check_skill_effectiveness,
     create_skill_from_pattern,
     refine_skill,
 )
+from novacode_cli.hermes.skill_manager import SkillManager
+from novacode_cli.hermes.tracker import ToolUsageTracker
 
 __all__ = [
     "NovaLearningMiddleware",
+    "ReviewRunner",
+    "SkillManager",
+    "ToolUsageTracker",
     "ensure_memory_tiers",
     "compact_memory_file",
     "update_user_memory",

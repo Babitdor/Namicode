@@ -4,11 +4,17 @@ import os
 import shlex
 import string
 import time
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from pathlib import Path
 
-from deepagents.backends.protocol import SandboxBackendProtocol
+from deepagents.backends.protocol import (
+    ExecuteResponse,
+    FileDownloadResponse,
+    FileUploadResponse,
+    SandboxBackendProtocol,
+)
+from deepagents.backends.sandbox import BaseSandbox
 
 from novacode_cli.config.config import console
 
@@ -155,6 +161,44 @@ def _provision_sandbox_tools(backend: SandboxBackendProtocol) -> None:
         )
 
 
+def _await_sandbox_ready(
+    poll_fn: Callable[[], bool],
+    *,
+    timeout: float = 180.0,
+    interval: float = 2.0,
+    on_timeout: Callable[[], None] | None = None,
+) -> None:
+    """Poll until the sandbox is ready or a timeout elapses.
+
+    Args:
+        poll_fn: A callable that returns True when the sandbox is ready,
+            False if it's not ready yet. May raise RuntimeError for
+            terminal failures (e.g. sandbox terminated unexpectedly).
+        timeout: Maximum time in seconds to wait.
+        interval: Seconds between polls.
+        on_timeout: Optional cleanup callable invoked before raising
+            the timeout error (e.g. to terminate a half-started sandbox).
+
+    Raises:
+        RuntimeError: If the sandbox did not become ready within the timeout.
+    """
+    max_attempts = int(timeout / interval)
+    for _ in range(max_attempts):
+        try:
+            if poll_fn():
+                return
+        except RuntimeError:
+            raise  # Terminal failure — propagate immediately
+        except Exception:
+            pass  # Transient error — retry
+        time.sleep(interval)
+    # Timeout — run cleanup (if any) then raise
+    if on_timeout:
+        on_timeout()
+    msg = f"Sandbox failed to start within {timeout:.0f} seconds"
+    raise RuntimeError(msg)
+
+
 def _run_sandbox_setup(backend: SandboxBackendProtocol, setup_script_path: str) -> None:
     """Run users setup script in sandbox with env var expansion.
 
@@ -199,6 +243,19 @@ def _run_sandbox_setup(backend: SandboxBackendProtocol, setup_script_path: str) 
     console.print("[green]✓ Setup complete[/green]")
 
 
+def _modal_is_ready(sandbox) -> bool:
+    """Check if a Modal sandbox is ready to accept commands."""
+    if sandbox.poll() is not None:  # Sandbox terminated unexpectedly
+        msg = "Modal sandbox terminated unexpectedly during startup"
+        raise RuntimeError(msg)
+    try:
+        process = sandbox.exec("echo", "ready", timeout=5)
+        process.wait()
+        return process.returncode == 0
+    except Exception:
+        return False
+
+
 @contextmanager
 def create_modal_sandbox(
     *, sandbox_id: str | None = None, setup_script_path: str | None = None
@@ -235,27 +292,13 @@ def create_modal_sandbox(
             sandbox = modal.Sandbox.create(app=app, workdir="/workspace")
             should_cleanup = True
 
-            # Poll until running (Modal requires this)
-            for _ in range(90):  # 180s timeout (90 * 2s)
-                if sandbox.poll() is not None:  # Sandbox terminated unexpectedly
-                    msg = "Modal sandbox terminated unexpectedly during startup"
-                    raise RuntimeError(msg)
-                # Check if sandbox is ready by attempting a simple command
-                try:
-                    process = sandbox.exec("echo", "ready", timeout=5)
-                    process.wait()
-                    if process.returncode == 0:
-                        break
-                except Exception:
-                    pass
-                time.sleep(2)
-            else:
-                # Timeout - cleanup and fail
-                sandbox.terminate()
-                msg = "Modal sandbox failed to start within 180 seconds"
-                raise RuntimeError(msg)
+            # Poll until ready
+            _await_sandbox_ready(
+                lambda: _modal_is_ready(sandbox),
+                on_timeout=lambda: sandbox.terminate(),
+            )
 
-        backend = ModalBackend(sandbox)
+            backend = ModalBackend(sandbox)
         console.print(f"[green]✓ Modal sandbox ready: {backend.id}[/green]")
 
         # Run setup script if provided
@@ -273,6 +316,12 @@ def create_modal_sandbox(
                     console.print(f"[dim]✓ Modal sandbox {sandbox_id} terminated[/dim]")
                 except Exception as e:
                     console.print(f"[yellow]⚠ Cleanup failed: {e}[/yellow]")
+
+
+def _runloop_is_ready(client, devbox_id: str) -> bool:
+    """Check if a Runloop devbox is in 'running' status."""
+    status = client.devboxes.retrieve(id=devbox_id)
+    return status.status == "running"
 
 
 @contextmanager
@@ -317,16 +366,10 @@ def create_runloop_sandbox(
         should_cleanup = True
 
         # Poll until running (Runloop requires this)
-        for _ in range(90):  # 180s timeout (90 * 2s)
-            status = client.devboxes.retrieve(id=devbox.id)
-            if status.status == "running":
-                break
-            time.sleep(2)
-        else:
-            # Timeout - cleanup and fail
-            client.devboxes.shutdown(id=devbox.id)
-            msg = "Devbox failed to start within 180 seconds"
-            raise RuntimeError(msg)
+        _await_sandbox_ready(
+            lambda: _runloop_is_ready(client, sandbox_id),
+            on_timeout=lambda: client.devboxes.shutdown(id=sandbox_id),
+        )
 
     console.print(f"[green]✓ Runloop devbox ready: {sandbox_id}[/green]")
 
@@ -347,6 +390,15 @@ def create_runloop_sandbox(
                 console.print(f"[dim]✓ Runloop devbox {sandbox_id} terminated[/dim]")
             except Exception as e:
                 console.print(f"[yellow]⚠ Cleanup failed: {e}[/yellow]")
+
+
+def _daytona_is_ready(sandbox) -> bool:
+    """Check if a Daytona sandbox can execute commands."""
+    try:
+        result = sandbox.process.exec("echo ready", timeout=5)
+        return result.exit_code == 0
+    except Exception:
+        return False
 
 
 @contextmanager
@@ -389,22 +441,10 @@ def create_daytona_sandbox(
     sandbox_id = sandbox.id
 
     # Poll until running (Daytona requires this)
-    for _ in range(90):  # 180s timeout (90 * 2s)
-        # Check if sandbox is ready by attempting a simple command
-        try:
-            result = sandbox.process.exec("echo ready", timeout=5)
-            if result.exit_code == 0:
-                break
-        except Exception:
-            pass
-        time.sleep(2)
-    else:
-        try:
-            # Clean up if possible
-            sandbox.delete()
-        finally:
-            msg = "Daytona sandbox failed to start within 180 seconds"
-            raise RuntimeError(msg)
+    _await_sandbox_ready(
+        lambda: _daytona_is_ready(sandbox),
+        on_timeout=lambda: sandbox.delete(),
+    )
 
     backend = DaytonaBackend(sandbox)
     console.print(f"[green]✓ Daytona sandbox ready: {backend.id}[/green]")
@@ -732,6 +772,7 @@ _PROVIDER_TO_WORKING_DIR = {
     "daytona": "/home/daytona",
     "docker": "/workspace",
     "harbor": "/app",
+    "inmemory": "/workspace",
 }
 
 
@@ -830,8 +871,174 @@ def get_default_working_dir(provider: str) -> str:
     raise ValueError(msg)
 
 
+class InMemorySandbox(BaseSandbox):
+    """In-memory sandbox backend for testing.
+
+    Implements ``SandboxBackendProtocol`` entirely in-process — no Docker
+    daemon, Modal SDK, or network required. Stores uploaded files in a
+    dict and executes commands as local subprocesses (when a shell is
+    available) or returns canned responses.
+
+    This is the test adapter that creates a *real seam*: provisioning tests,
+    factory dispatch tests, and middleware tests can all run without any
+    cloud SDK installed.
+
+    Usage::
+
+        from novacode_cli.integrations.sandbox_factory import (
+            create_inmemory_sandbox,
+        )
+
+        with create_inmemory_sandbox() as backend:
+            result = backend.execute("echo hello")
+            assert result.exit_code == 0
+    """
+
+    def __init__(self) -> None:
+        """Initialize an empty in-memory sandbox."""
+        self._files: dict[str, bytes] = {}
+        self.uploaded: list[tuple[str, bytes]] = []
+        self.downloaded: list[str] = []
+
+    @property
+    def id(self) -> str:
+        return "inmemory"
+
+    def execute(
+        self,
+        command: str,
+        *,
+        timeout: int | None = None,
+    ) -> ExecuteResponse:
+        """Execute a command as a local subprocess.
+
+        When a shell is available (not Windows without PowerShell), runs the
+        command locally and captures output. Falls back to a canned response
+        when there is no shell.
+        """
+        import subprocess  # noqa: S404
+        import shlex
+
+        try:
+            result = subprocess.run(  # noqa: S602
+                command,
+                shell=True,
+                capture_output=True,
+                timeout=timeout or 30,
+            )
+            stdout = (result.stdout or b"").decode("utf-8", errors="replace")
+            stderr = (result.stderr or b"").decode("utf-8", errors="replace")
+            output = stdout
+            if stderr:
+                output = output + "\n" + stderr if output else stderr
+            return ExecuteResponse(
+                output=output,
+                exit_code=result.returncode,
+                truncated=False,
+            )
+        except FileNotFoundError:
+            return ExecuteResponse(
+                output="",
+                exit_code=127,
+                truncated=False,
+            )
+        except subprocess.TimeoutExpired:
+            return ExecuteResponse(
+                output="<timed out>",
+                exit_code=-1,
+                truncated=False,
+            )
+
+    async def aexecute(
+        self,
+        command: str,
+        *,
+        timeout: int | None = None,
+    ) -> ExecuteResponse:
+        """Async variant — delegates to :meth:`execute`."""
+        return self.execute(command, timeout=timeout)
+
+    def download_files(
+        self,
+        paths: list[str],
+    ) -> list[FileDownloadResponse]:
+        """Download previously-uploaded files from the in-memory store."""
+        self.downloaded.extend(paths)
+        responses: list[FileDownloadResponse] = []
+        for path in paths:
+            content = self._files.get(path)
+            if content is not None:
+                responses.append(
+                    FileDownloadResponse(path=path, content=content, error=None)
+                )
+            else:
+                responses.append(
+                    FileDownloadResponse(
+                        path=path,
+                        content=b"",
+                        error=f"File not found: {path}",
+                    )
+                )
+        return responses
+
+    async def adownload_files(
+        self,
+        paths: list[str],
+    ) -> list[FileDownloadResponse]:
+        """Async variant — delegates to :meth:`download_files`."""
+        return self.download_files(paths)
+
+    def upload_files(
+        self,
+        files: list[tuple[str, bytes]],
+    ) -> list[FileUploadResponse]:
+        """Store files in the in-memory dict."""
+        self.uploaded.extend(files)
+        responses: list[FileUploadResponse] = []
+        for path, content in files:
+            self._files[path] = content
+            responses.append(
+                FileUploadResponse(path=path, error=None, size=len(content))
+            )
+        return responses
+
+    async def aupload_files(
+        self,
+        files: list[tuple[str, bytes]],
+    ) -> list[FileUploadResponse]:
+        """Async variant — delegates to :meth:`upload_files`."""
+        return self.upload_files(files)
+
+
+@contextmanager
+def create_inmemory_sandbox(
+    *,
+    sandbox_id: str | None = None,
+    setup_script_path: str | None = None,
+) -> Generator[SandboxBackendProtocol, None, None]:
+    """Create an in-memory sandbox for testing.
+
+    Args:
+        sandbox_id: Ignored — included for protocol compatibility.
+        setup_script_path: Ignored — included for protocol compatibility.
+
+    Yields:
+        An ``InMemorySandbox`` instance.
+    """
+    backend = InMemorySandbox()
+    try:
+        yield backend
+    finally:
+        pass  # Nothing to clean up
+
+
+# Register in-memory provider
+_SANDBOX_PROVIDERS["inmemory"] = create_inmemory_sandbox
+
 __all__ = [
     "create_sandbox",
     "get_available_sandbox_types",
     "get_default_working_dir",
+    "InMemorySandbox",
+    "create_inmemory_sandbox",
 ]

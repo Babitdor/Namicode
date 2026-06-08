@@ -6,141 +6,125 @@ from prompt_toolkit import PromptSession
 from rich.console import Console
 from rich.text import Text
 
+from novacode_cli.commands import CommandContext
+from novacode_cli.commands.menu_helper import MenuOption, run_interactive_menu
 from novacode_cli.config.config import COLORS, console
 from novacode_cli.ui.ui_elements import TokenTracker
 
 
-async def handle_sessions_command(session_state) -> bool:
-    """Handle the /sessions command - list, select, delete sessions.
+async def handle_sessions_command(ctx: CommandContext) -> bool:
+    """Handle the /sessions command — delegates to interactive menu."""
+    options = [
+        MenuOption("List saved sessions", _action_list_sessions),
+        MenuOption("Delete a session", _action_delete_session),
+    ]
+    return await run_interactive_menu("Session Management", options, ctx)
 
-    Args:
-        session_state: Current session state
 
-    Returns:
-        True (command always handled)
-    """
+async def _action_list_sessions(
+    ctx: CommandContext, session: PromptSession,
+) -> bool:
+    """Option 1: list saved sessions."""
     from novacode_cli.session.session_persistence import SessionManager
     from novacode_cli.session.session_restore import format_session_age
 
-    ps = PromptSession()
+    session_state = ctx.session_state
     session_manager = SessionManager()
+    sessions = session_manager.list_sessions(limit=20)
 
     console.print()
-    console.print("[bold]Session Management[/bold]", style=COLORS["primary"])
-    console.print()
-
-    # Show current session if any
-    if session_state.session_id:
-        console.print(
-            f"[bold]Current session:[/bold] {session_state.session_id[:8]}...",
-            style=COLORS["primary"],
-        )
+    if sessions:
+        console.print("[bold]Saved Sessions:[/bold]", style=COLORS["primary"])
         console.print()
-
-    # Show menu
-    console.print("What would you like to do?", style=COLORS["primary"])
-    console.print("  1. List saved sessions")
-    console.print("  2. Delete a session")
-    console.print("  3. Cancel")
-    console.print()
-
-    choice = (await ps.prompt_async("Choose (1-3): ")).strip()
-
-    if choice == "1":
-        # List sessions
-        sessions = session_manager.list_sessions(limit=20)
-
-        console.print()
-        if sessions:
-            console.print("[bold]Saved Sessions:[/bold]", style=COLORS["primary"])
-            console.print()
-            for meta in sessions:
-                age = format_session_age(meta.last_active)
-                project = (
-                    Path(meta.project_root).name if meta.project_root else "no project"
-                )
-                model = meta.model_name or "unknown model"
-
-                # Mark current session
-                is_current = session_state.session_id == meta.session_id
-                marker = " ← current" if is_current else ""
-
-                console.print(
-                    f"  • [bold]{meta.session_id[:8]}[/bold]{marker}",
-                    style=COLORS["primary"],
-                )
-                console.print(
-                    f"    {project} ({model}), {meta.message_count} messages",
-                    style=COLORS["dim"],
-                )
-                console.print(f"    {age}", style=COLORS["dim"])
-                console.print()
-        else:
-            console.print("[yellow]No saved sessions found[/yellow]")
-            console.print("[dim]Sessions are saved automatically on exit[/dim]")
-
-    elif choice == "2":
-        # Delete session
-        sessions = session_manager.list_sessions(limit=20)
-
-        if not sessions:
-            console.print()
-            console.print("[yellow]No sessions to delete[/yellow]")
-            return True
-
-        console.print()
-        console.print("[bold]Select session to delete:[/bold]", style=COLORS["primary"])
-        for i, meta in enumerate(sessions, 1):
+        for meta in sessions:
             age = format_session_age(meta.last_active)
             project = (
                 Path(meta.project_root).name if meta.project_root else "no project"
             )
-            console.print(f"  {i}. {meta.session_id[:8]} - {project} ({age})")
+            model = meta.model_name or "unknown model"
+            is_current = session_state.session_id == meta.session_id
+            marker = " ← current" if is_current else ""
 
+            console.print(
+                f"  • [bold]{meta.session_id[:8]}[/bold]{marker}",
+                style=COLORS["primary"],
+            )
+            console.print(
+                f"    {project} ({model}), {meta.message_count} messages",
+                style=COLORS["dim"],
+            )
+            console.print(f"    {age}", style=COLORS["dim"])
+            console.print()
+    else:
+        console.print("[yellow]No saved sessions found[/yellow]")
+        console.print("[dim]Sessions are saved automatically on exit[/dim]")
+    return True
+
+
+async def _action_delete_session(
+    ctx: CommandContext, session: PromptSession,
+) -> bool:
+    """Option 2: delete a session."""
+    from novacode_cli.session.session_persistence import SessionManager
+    from novacode_cli.session.session_restore import format_session_age
+
+    session_manager = SessionManager()
+    sessions = session_manager.list_sessions(limit=20)
+
+    if not sessions:
         console.print()
-        delete_choice = (
-            await ps.prompt_async("Choose session number (or 'cancel'): ")
-        ).strip()
-
-        if delete_choice.lower() != "cancel":
-            try:
-                delete_idx = int(delete_choice) - 1
-                if 0 <= delete_idx < len(sessions):
-                    meta = sessions[delete_idx]
-
-                    # Confirm deletion
-                    confirm = (
-                        (
-                            await ps.prompt_async(
-                                f"Delete session {meta.session_id[:8]}? (y/N): ",
-                                default="n",
-                            )
-                        )
-                        .strip()
-                        .lower()
-                    )
-
-                    if confirm == "y":
-                        if session_manager.delete_session(meta.session_id):
-                            console.print()
-                            console.print(
-                                f"✓ Session {meta.session_id[:8]} deleted",
-                                style=COLORS["primary"],
-                            )
-                        else:
-                            console.print()
-                            console.print("[red]Failed to delete session[/red]")
-                    else:
-                        console.print()
-                        console.print("[yellow]Cancelled[/yellow]")
-                else:
-                    console.print()
-                    console.print("[yellow]Invalid choice[/yellow]")
-            except (ValueError, IndexError):
-                console.print()
-                console.print("[yellow]Invalid choice[/yellow]")
+        console.print("[yellow]No sessions to delete[/yellow]")
+        return True
 
     console.print()
+    console.print("[bold]Select session to delete:[/bold]", style=COLORS["primary"])
+    for i, meta in enumerate(sessions, 1):
+        age = format_session_age(meta.last_active)
+        project = (
+            Path(meta.project_root).name if meta.project_root else "no project"
+        )
+        console.print(f"  {i}. {meta.session_id[:8]} - {project} ({age})")
+
+    console.print()
+    delete_choice = (
+        await session.prompt_async("Choose session number (or 'cancel'): ")
+    ).strip()
+
+    if delete_choice.lower() != "cancel":
+        try:
+            delete_idx = int(delete_choice) - 1
+            if 0 <= delete_idx < len(sessions):
+                meta = sessions[delete_idx]
+                confirm = (
+                    (
+                        await session.prompt_async(
+                            f"Delete session {meta.session_id[:8]}? (y/N): ",
+                            default="n",
+                        )
+                    )
+                    .strip()
+                    .lower()
+                )
+
+                if confirm == "y":
+                    if session_manager.delete_session(meta.session_id):
+                        console.print()
+                        console.print(
+                            f"✓ Session {meta.session_id[:8]} deleted",
+                            style=COLORS["primary"],
+                        )
+                    else:
+                        console.print()
+                        console.print("[red]Failed to delete session[/red]")
+                else:
+                    console.print()
+                    console.print("[yellow]Cancelled[/yellow]")
+            else:
+                console.print()
+                console.print("[yellow]Invalid choice[/yellow]")
+        except (ValueError, IndexError):
+            console.print()
+            console.print("[yellow]Invalid choice[/yellow]")
     return True
 
 
@@ -295,7 +279,7 @@ def register_commands(registry) -> None:
     from novacode_cli.commands import CommandContext
 
     async def _handle_sessions(ctx: CommandContext) -> bool:
-        return await handle_sessions_command(ctx.session_state)
+        return await handle_sessions_command(ctx)
 
     async def _handle_save(ctx: CommandContext) -> bool:
         return await handle_save_command(

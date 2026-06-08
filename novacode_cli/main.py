@@ -191,6 +191,7 @@ from novacode_cli.tools import (
     recall,
     reddit_posts,
     remember,
+    skill_manage,
     think,
     web_search,
     write_memory,
@@ -1489,6 +1490,7 @@ async def _run_agent_session(
         # Utility tools
         package_info,
         think,
+        skill_manage,
         query_project_graph,
         # Web search (always available, no API key needed)
         duckduckgo_search,

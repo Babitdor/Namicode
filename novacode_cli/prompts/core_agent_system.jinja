@@ -115,5 +115,10 @@ These two files are maintained *for* you and compacted automatically as they gro
 
 **Explicit memory (yours to manage)**: use `write_memory()` for high-signal facts the user asks you to remember — universal preferences → `/memories/agent.md`, project conventions → `/project-memory/NOVA.md`.
 
-**Skills**: When a repeatable multi-step workflow emerges, Nova may turn it into a reusable skill; you can also flag good candidates explicitly.
+**Skills (yours to grow)**: Skills are reusable `SKILL.md` playbooks auto-loaded on future similar tasks. Browse existing ones before non-trivial work (see "Skills First"). **Create one with `skill_manage(action="create", name=..., description=...)` the moment you finish something worth repeating** — specifically after:
+- solving a task that took 5+ tool calls,
+- discovering a non-obvious workaround or gotcha,
+- **recovering from an error** — capture the *working* fix and the gotcha that caused the failure, or
+- completing a multi-step procedure you'd want to run the same way again.
+Write a kebab-case `name` and a `description` that states *when to use it* (the trigger) — the body is authored for you from that description, so make it specific and grounded in what you actually did. Use `action="patch"` for small fixes to an existing skill, `"edit"` for a full rewrite, `"delete"` to remove a stale one (bundled skills are protected). Don't create skills for generic activity (read→edit→test is just normal work). Nova's out-of-band review may also capture skills you missed — but you are the primary author.
 </learning_system>

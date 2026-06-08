@@ -8,6 +8,8 @@ from pathlib import Path
 from prompt_toolkit import PromptSession
 from rich.table import Table
 
+from novacode_cli.commands import CommandContext
+from novacode_cli.commands.menu_helper import MenuOption, run_interactive_menu
 from novacode_cli.config.config import COLORS, console
 from novacode_cli.hooks import (
     HOOKS_DIR,
@@ -19,17 +21,9 @@ from novacode_cli.hooks import (
 
 
 async def handle_hooks_command(cmd_args: str | None = None) -> bool:
-    """Handle the /hooks command for hook management.
-    
-    Args:
-        cmd_args: Optional command arguments (e.g., 'list', 'add', 'test')
-        
-    Returns:
-        True (command always handled)
-    """
+    """Handle the /hooks command for hook management."""
     session = PromptSession()
 
-    # Parse command arguments
     if cmd_args:
         args = cmd_args.strip().split()
         subcommand = args[0].lower() if args else None
@@ -38,7 +32,6 @@ async def handle_hooks_command(cmd_args: str | None = None) -> bool:
         subcommand = None
         subargs = []
 
-    # Handle subcommands
     if subcommand == "list":
         return _list_hooks()
     if subcommand == "add":
@@ -59,8 +52,57 @@ async def handle_hooks_command(cmd_args: str | None = None) -> bool:
         return _list_events()
     if subcommand == "help":
         return _show_help()
-    # Interactive menu
-    return await _interactive_menu(session)
+    # Interactive menu via shared helper
+    ctx = CommandContext(cmd="hooks", cmd_args=cmd_args, agent=None,  # type: ignore[arg-type]
+                         token_tracker=None, session_state=None,  # type: ignore[arg-type]
+                         assistant_id="")
+    options = [
+        MenuOption("List configured hooks", _menu_list_hooks),
+        MenuOption("Add a new hook", _menu_add_hook),
+        MenuOption("Remove a hook", _menu_remove_hook),
+        MenuOption("Enable/disable a hook", _menu_toggle_hook),
+        MenuOption("Test a hook", _menu_test_hook),
+        MenuOption("Reload configuration", _menu_reload_hooks),
+        MenuOption("View logs", _menu_view_logs),
+        MenuOption("List available events", _menu_list_events),
+    ]
+    return await run_interactive_menu("Hook Management", options, ctx)
+
+
+async def _menu_list_hooks(ctx: CommandContext, session: PromptSession) -> bool:
+    return _list_hooks()
+
+async def _menu_add_hook(ctx: CommandContext, session: PromptSession) -> bool:
+    return await _add_hook(session, [])
+
+async def _menu_remove_hook(ctx: CommandContext, session: PromptSession) -> bool:
+    return await _remove_hook(session, [])
+
+async def _menu_toggle_hook(ctx: CommandContext, session: PromptSession) -> bool:
+    console.print()
+    console.print("[bold]Toggle Hook[/bold]")
+    console.print("  1. Enable a hook")
+    console.print("  2. Disable a hook")
+    console.print()
+    toggle_choice = (await session.prompt_async("Choose (1-2): ")).strip()
+    if toggle_choice == "1":
+        return await _enable_hook(session, [])
+    if toggle_choice == "2":
+        return await _disable_hook(session, [])
+    console.print("[red]✗ Invalid choice[/red]")
+    return True
+
+async def _menu_test_hook(ctx: CommandContext, session: PromptSession) -> bool:
+    return await _test_hook(session, [])
+
+async def _menu_reload_hooks(ctx: CommandContext, session: PromptSession) -> bool:
+    return _reload_hooks()
+
+async def _menu_view_logs(ctx: CommandContext, session: PromptSession) -> bool:
+    return _view_logs([])
+
+async def _menu_list_events(ctx: CommandContext, session: PromptSession) -> bool:
+    return _list_events()
 
 
 def _list_hooks() -> bool:
@@ -497,61 +539,6 @@ def _show_help() -> bool:
     console.print(f"[dim]Logs directory: {HOOKS_DIR / 'logs'}[/dim]")
     console.print()
 
-    return True
-
-
-async def _interactive_menu(session: PromptSession) -> bool:
-    """Show interactive hooks menu."""
-    console.print()
-    console.print("[bold]Hook Management[/bold]", style=COLORS["primary"])
-    console.print()
-
-    console.print("What would you like to do?")
-    console.print("  1. List configured hooks")
-    console.print("  2. Add a new hook")
-    console.print("  3. Remove a hook")
-    console.print("  4. Enable/disable a hook")
-    console.print("  5. Test a hook")
-    console.print("  6. Reload configuration")
-    console.print("  7. View logs")
-    console.print("  8. List available events")
-    console.print("  9. Cancel")
-    console.print()
-
-    choice = (await session.prompt_async("Choose (1-9): ")).strip()
-
-    if choice == "1":
-        return _list_hooks()
-    if choice == "2":
-        return await _add_hook(session, [])
-    if choice == "3":
-        return await _remove_hook(session, [])
-    if choice == "4":
-        console.print()
-        console.print("[bold]Toggle Hook[/bold]")
-        console.print("  1. Enable a hook")
-        console.print("  2. Disable a hook")
-        console.print()
-        toggle_choice = (await session.prompt_async("Choose (1-2): ")).strip()
-
-        if toggle_choice == "1":
-            return await _enable_hook(session, [])
-        if toggle_choice == "2":
-            return await _disable_hook(session, [])
-        console.print("[red]✗ Invalid choice[/red]")
-        return True
-    if choice == "5":
-        return await _test_hook(session, [])
-    if choice == "6":
-        return _reload_hooks()
-    if choice == "7":
-        return _view_logs([])
-    if choice == "8":
-        return _list_events()
-    if choice == "9":
-        console.print("[dim]Cancelled[/dim]")
-        return True
-    console.print("[red]✗ Invalid choice[/red]")
     return True
 
 

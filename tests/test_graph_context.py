@@ -7,7 +7,7 @@ detail are intentionally NOT injected — they live behind ``query_project_graph
 
 from __future__ import annotations
 
-from novacode_cli.bootstrap.graph_context import _GraphSummary
+from novacode_cli.bootstrap.graph_reader import GraphSummary as _GraphSummary
 
 
 def _summary() -> _GraphSummary:

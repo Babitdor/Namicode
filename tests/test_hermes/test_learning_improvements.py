@@ -1,0 +1,341 @@
+"""Tests for the NovaLearningMiddleware 'smarter' improvements.
+
+Covers the four upgrades:
+1. Skill-effectiveness tracking (real SKILL.md invocation + outcome attribution)
+2. Signal-based review triggers (failure burst / substantive window / hard cap)
+3. Stronger success signal (content-based failure detection for shell/test)
+4. Review memory / no-repeat lessons (prior-lesson digest + MEMORY.md dedup)
+"""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
+
+from novacode_cli.hermes.tracker import ToolUsageTracker
+from novacode_cli.hermes.review import ReviewRunner
+from novacode_cli.hermes.skill_manager import SkillManager
+from novacode_cli.hermes.skill_discovery import check_skill_effectiveness
+
+
+class FakeStore:
+    """Minimal in-memory async store: (namespace, key) -> value dict."""
+
+    def __init__(self) -> None:
+        self.data: dict[tuple, dict] = {}
+
+    async def aget(self, namespace, key):
+        ns = self.data.get(tuple(namespace), {})
+        if key not in ns:
+            return None
+        return SimpleNamespace(value=dict(ns[key]))
+
+    async def aput(self, namespace, key, value):
+        self.data.setdefault(tuple(namespace), {})[key] = dict(value)
+
+    async def asearch(self, namespace):
+        ns = self.data.get(tuple(namespace), {})
+        return [SimpleNamespace(key=k, value=dict(v)) for k, v in ns.items()]
+
+
+@pytest.fixture
+def store():
+    return FakeStore()
+
+
+@pytest.fixture
+def tracker(store):
+    return ToolUsageTracker(store, enabled=True)
+
+
+# ── 1. Skill-effectiveness tracking ──────────────────────────────────────────
+
+
+class TestSkillInvocationDetection:
+    def test_detects_user_skill_read(self):
+        tc = {"name": "read_file", "args": {"file_path": "/skills/my-skill/SKILL.md"}}
+        assert ToolUsageTracker.skill_name_from_tool_call(tc) == "my-skill"
+
+    def test_detects_claude_skill_read(self):
+        tc = {"name": "read_file", "args": {"file_path": "/claude-skills/graphify/SKILL.md"}}
+        assert ToolUsageTracker.skill_name_from_tool_call(tc) == "graphify"
+
+    def test_detects_windows_path(self):
+        tc = {"name": "read_file", "args": {"file_path": "C:\\x\\skills\\foo\\SKILL.md"}}
+        assert ToolUsageTracker.skill_name_from_tool_call(tc) == "foo"
+
+    def test_non_skill_read_returns_none(self):
+        tc = {"name": "read_file", "args": {"file_path": "/src/main.py"}}
+        assert ToolUsageTracker.skill_name_from_tool_call(tc) is None
+
+    def test_non_read_tool_returns_none(self):
+        tc = {"name": "execute", "args": {"file_path": "/skills/x/SKILL.md"}}
+        assert ToolUsageTracker.skill_name_from_tool_call(tc) is None
+
+    def test_none_input(self):
+        assert ToolUsageTracker.skill_name_from_tool_call(None) is None
+
+
+class TestSkillUsageAttribution:
+    async def test_invocation_counted(self, tracker, store):
+        await tracker.record_tool_usage("read_file", True, skill_invoked="my-skill")
+        usage = await tracker.get_skill_usage()
+        assert usage["my-skill"]["invocations"] == 1
+
+    async def test_subsequent_outcomes_attributed(self, tracker, store):
+        await tracker.record_tool_usage("read_file", True, skill_invoked="my-skill")
+        await tracker.record_tool_usage("execute", True)
+        await tracker.record_tool_usage("execute", False)
+        usage = await tracker.get_skill_usage()
+        assert usage["my-skill"]["successes"] == 1
+        assert usage["my-skill"]["failures"] == 1
+
+    async def test_attribution_budget_expires(self, tracker, store):
+        await tracker.record_tool_usage("read_file", True, skill_invoked="my-skill")
+        # Exhaust the 15-call window, then one more that should NOT be attributed.
+        for _ in range(20):
+            await tracker.record_tool_usage("execute", False)
+        usage = await tracker.get_skill_usage()
+        # At most the budget (15) outcomes attributed, not all 20.
+        assert usage["my-skill"]["failures"] <= 15
+
+    async def test_tool_stats_separate_from_skill_usage(self, tracker, store):
+        # A non-builtin tool populates tool_stats, not skill_usage.
+        await tracker.record_tool_usage("query_project_graph", True)
+        assert ("nova", "tool_stats") in store.data
+        assert ("nova", "skill_usage") not in store.data
+
+
+class TestCheckSkillEffectivenessNewSchema:
+    async def test_low_usage_from_invocations(self, store):
+        await store.aput(
+            ("nova", "skill_usage"), "rare",
+            {"invocations": 1, "successes": 1, "failures": 0},
+        )
+        issues = await check_skill_effectiveness(store)
+        assert ("rare", "low_usage") in issues
+
+    async def test_high_failure_from_outcomes(self, store):
+        await store.aput(
+            ("nova", "skill_usage"), "bad",
+            {"invocations": 4, "successes": 1, "failures": 6},
+        )
+        issues = await check_skill_effectiveness(store)
+        assert ("bad", "high_failure") in issues
+
+    async def test_healthy_skill_not_flagged(self, store):
+        await store.aput(
+            ("nova", "skill_usage"), "good",
+            {"invocations": 5, "successes": 9, "failures": 1},
+        )
+        issues = await check_skill_effectiveness(store)
+        assert all(name != "good" for name, _ in issues)
+
+
+# ── 2. Signal-based review triggers ──────────────────────────────────────────
+
+
+def _make_review(store, threshold=4):
+    tracker = ToolUsageTracker(store, enabled=True)
+    sm = SkillManager(store, enabled=True)
+    return ReviewRunner(store, tracker, sm, review_threshold=threshold, enabled=True)
+
+
+async def _seed_window(store, entries):
+    await store.aput(("nova", "tool_history"), "history", {"entries": entries})
+    await store.aput(("nova", "tool_counter"), "counter", {"count": len(entries)})
+
+
+class TestSignalBasedTriggers:
+    async def test_all_trivial_window_defers(self, store):
+        review = _make_review(store, threshold=4)
+        await _seed_window(store, [{"tool": "read_file", "success": True}] * 4)
+        assert await review.should_review() is False
+
+    async def test_substantive_window_triggers(self, store):
+        review = _make_review(store, threshold=4)
+        window = [{"tool": "read_file", "success": True}] * 3 + [
+            {"tool": "edit_file", "success": True}
+        ]
+        await _seed_window(store, window)
+        assert await review.should_review() is True
+
+    async def test_failure_burst_triggers_early(self, store):
+        review = _make_review(store, threshold=10)
+        # Below threshold (10) but a burst of failures and above min_floor.
+        window = [{"tool": "execute", "success": False}] * 5
+        await _seed_window(store, window)
+        assert await review.should_review() is True
+
+    async def test_hard_cap_triggers_even_if_trivial(self, store):
+        review = _make_review(store, threshold=4)
+        # 2x threshold of pure reads — must not defer forever.
+        await _seed_window(store, [{"tool": "read_file", "success": True}] * 8)
+        assert await review.should_review() is True
+
+    async def test_below_floor_no_trigger(self, store):
+        review = _make_review(store, threshold=4)
+        await _seed_window(store, [{"tool": "edit_file", "success": True}] * 2)
+        assert await review.should_review() is False
+
+    async def test_just_completed_skips_one(self, store):
+        review = _make_review(store, threshold=4)
+        window = [{"tool": "edit_file", "success": True}] * 4
+        await _seed_window(store, window)
+        await store.aput(("nova", "meta"), "review_just_completed", {"value": True})
+        assert await review.should_review() is False  # skipped
+        assert await review.should_review() is True   # flag cleared
+
+
+# ── 3. Stronger success signal ───────────────────────────────────────────────
+
+
+class TestExecutionFailureDetection:
+    def test_traceback_is_failure(self):
+        from novacode_cli.hermes.middleware import _execution_failed
+
+        resp = SimpleNamespace(
+            content="Traceback (most recent call last):\n  ...\nValueError"
+        )
+        assert _execution_failed("execute", resp) is True
+
+    def test_clean_output_is_success(self):
+        from novacode_cli.hermes.middleware import _execution_failed
+
+        resp = SimpleNamespace(content="All 12 tests passed. 0 failed.")
+        assert _execution_failed("execute", resp) is False
+
+    def test_n_failed_is_failure(self):
+        from novacode_cli.hermes.middleware import _execution_failed
+
+        resp = SimpleNamespace(content="3 failed, 9 passed in 1.2s")
+        assert _execution_failed("execute", resp) is True
+
+    def test_non_execute_tool_ignored(self):
+        from novacode_cli.hermes.middleware import _execution_failed
+
+        resp = SimpleNamespace(content="Traceback (most recent call last):")
+        assert _execution_failed("read_file", resp) is False
+
+    def test_command_not_found(self):
+        from novacode_cli.hermes.middleware import _execution_failed
+
+        resp = SimpleNamespace(content="bash: foo: command not found")
+        assert _execution_failed("execute", resp) is True
+
+    def test_list_content_flattened(self):
+        from novacode_cli.hermes.middleware import _execution_failed
+
+        resp = SimpleNamespace(content=[{"type": "text", "text": "npm ERR! boom"}])
+        assert _execution_failed("execute", resp) is True
+
+
+# ── 4. Review memory / no-repeat lessons ─────────────────────────────────────
+
+
+class TestRecentLessons:
+    async def test_digest_orders_newest_first(self, store):
+        await store.aput(("nova", "reviews"), "r1", {"timestamp": 1.0, "content": "older"})
+        await store.aput(("nova", "reviews"), "r2", {"timestamp": 2.0, "content": "newer"})
+        review = _make_review(store)
+        digest = await review._recent_lessons()
+        assert digest.index("newer") < digest.index("older")
+
+    async def test_empty_when_no_reviews(self, store):
+        review = _make_review(store)
+        assert await review._recent_lessons() == ""
+
+
+class TestErrorRecoveryNudge:
+    def test_no_window_no_recovery(self):
+        from novacode_cli.hermes.review import _window_recovered
+
+        assert _window_recovered([]) is False
+
+    def test_all_success_no_recovery(self):
+        from novacode_cli.hermes.review import _window_recovered
+
+        w = [{"tool": "edit_file", "success": True}] * 3
+        assert _window_recovered(w) is False
+
+    def test_failure_then_substantive_success_is_recovery(self):
+        from novacode_cli.hermes.review import _window_recovered
+
+        w = [
+            {"tool": "execute", "success": False},
+            {"tool": "edit_file", "success": True},
+            {"tool": "execute", "success": True},
+        ]
+        assert _window_recovered(w) is True
+
+    def test_failure_then_only_trivial_is_not_recovery(self):
+        from novacode_cli.hermes.review import _window_recovered
+
+        w = [
+            {"tool": "execute", "success": False},
+            {"tool": "read_file", "success": True},
+        ]
+        assert _window_recovered(w) is False
+
+    def test_failure_last_is_not_recovery(self):
+        from novacode_cli.hermes.review import _window_recovered
+
+        w = [
+            {"tool": "edit_file", "success": True},
+            {"tool": "execute", "success": False},
+        ]
+        assert _window_recovered(w) is False
+
+    def test_review_prompt_includes_recovery_nudge(self):
+        from novacode_cli.prompts import render_template
+
+        out = render_template(
+            "nova_review.jinja",
+            tool_call_count=10,
+            prior_lessons="",
+            recovered_from_error=True,
+        )
+        assert "recovered from an error" in out
+
+    def test_review_prompt_omits_nudge_when_no_recovery(self):
+        from novacode_cli.prompts import render_template
+
+        out = render_template(
+            "nova_review.jinja",
+            tool_call_count=10,
+            prior_lessons="",
+            recovered_from_error=False,
+        )
+        assert "recovered from an error" not in out
+
+
+class TestMemoryDedup:
+    def test_dedup_drops_existing_bullet(self):
+        from novacode_cli.hermes.memory_tiers import _dedup_against
+
+        existing = "## Notes\n- Tests run with pytest -x\n"
+        block = "- Tests run with pytest -x\n- New fact about caching"
+        result = _dedup_against(existing, block)
+        assert "New fact about caching" in result
+        assert result.count("pytest -x") == 0
+
+    def test_dedup_keeps_headers_and_prose(self):
+        from novacode_cli.hermes.memory_tiers import _dedup_against
+
+        result = _dedup_against("- a", "## Header\nSome prose\n- a\n- b")
+        assert "## Header" in result
+        assert "Some prose" in result
+        assert "- b" in result
+
+    def test_update_from_review_skips_all_duplicates(self, tmp_path):
+        from novacode_cli.hermes.memory_tiers import update_from_review
+
+        agent_dir = tmp_path
+        (agent_dir / "MEMORY.md").write_text(
+            "# MEMORY.md\n\n## Key Facts Learned\n- alpha fact\n", encoding="utf-8"
+        )
+        update_from_review(agent_dir, "", "- alpha fact")
+        content = (agent_dir / "MEMORY.md").read_text(encoding="utf-8")
+        # No new "## Review" section appended because the only bullet was a dup.
+        assert "## Review" not in content

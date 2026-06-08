@@ -20,7 +20,7 @@ class _Req:
 
 
 def _drain_events() -> list[tuple]:
-    from novacode_cli.hermes.middleware import nova_event_log
+    from novacode_cli.events import nova_event_log
 
     events = list(nova_event_log)
     nova_event_log.clear()

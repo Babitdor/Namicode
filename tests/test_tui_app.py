@@ -391,16 +391,37 @@ async def _drive_skill_agent_autocomplete():
             str(pal.get_option_at_index(i).prompt) for i in range(pal.option_count)
         ] == ["/skill:code-review"]
 
-        inp.value = "@"
+        # @ mentions are token-aware: type so the cursor tracks the fragment
+        # (setting .value directly leaves the cursor stale).
+        inp.value = ""
+        await pilot.pause()
+        await pilot.press("@")
         await pilot.pause()
         agents = [str(pal.get_option_at_index(i).prompt) for i in range(pal.option_count)]
         assert pal.display and "@researcher" in agents and "@critic" in agents, agents
 
-        inp.value = "@cr"
+        await pilot.press("c", "r")
         await pilot.pause()
         assert [
             str(pal.get_option_at_index(i).prompt) for i in range(pal.option_count)
         ] == ["@critic"]
+
+        # @ mid-message also triggers completion (the bug this fixes).
+        inp.value = ""
+        await pilot.pause()
+        for ch in "fix the @cr":
+            await pilot.press("space" if ch == " " else ch)
+        await pilot.pause()
+        assert pal.display
+        assert [
+            str(pal.get_option_at_index(i).prompt) for i in range(pal.option_count)
+        ] == ["@critic"], "mid-message @ should complete the token at the cursor"
+
+        # Accepting replaces only the @token, preserving the rest of the line.
+        await pilot.press("enter")
+        await pilot.pause()
+        assert inp.value == "fix the @critic ", inp.value
+        assert not pal.display
 
 
 def test_tui_agents_skills_screens():

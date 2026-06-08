@@ -39,7 +39,7 @@ def _emit_memory_event(message: str, icon: str = "📝") -> None:
     never fail because its notice couldn't be shown.
     """
     try:
-        from novacode_cli.hermes.middleware import nova_event_log
+        from novacode_cli.events import nova_event_log
 
         nova_event_log.append(("nova_memory", icon, "dim", message))
     except Exception:  # noqa: BLE001
@@ -314,6 +314,34 @@ def parse_review_response(response_content: str) -> dict[str, str]:
     return result
 
 
+def _normalize_bullet(line: str) -> str:
+    """Canonicalize a bullet line for duplicate comparison."""
+    return re.sub(r"\s+", " ", line.lstrip("-*• ").strip().lower())
+
+
+def _dedup_against(existing: str, block: str) -> str:
+    """Drop bullet lines from ``block`` already present in ``existing``.
+
+    Compares normalized bullet text so trivial whitespace/case differences
+    don't slip a near-duplicate into MEMORY.md. Non-bullet lines (headers,
+    prose) are always kept.
+    """
+    known = {
+        _normalize_bullet(ln)
+        for ln in existing.splitlines()
+        if ln.lstrip().startswith(("-", "*", "•"))
+    }
+    kept: list[str] = []
+    for line in block.splitlines():
+        if line.lstrip().startswith(("-", "*", "•")):
+            norm = _normalize_bullet(line)
+            if norm and norm in known:
+                continue
+            known.add(norm)
+        kept.append(line)
+    return "\n".join(kept).strip()
+
+
 def update_from_review(agent_dir: Path, user_updates: str, session_memory: str) -> None:
     """Apply review learnings to USER.md and MEMORY.md.
 
@@ -331,6 +359,13 @@ def update_from_review(agent_dir: Path, user_updates: str, session_memory: str) 
             memory_md.write_text(DEFAULT_MEMORY_MD, encoding="utf-8")
 
         content = memory_md.read_text(encoding="utf-8")
+
+        # Drop bullets we've already recorded, so reviews don't pile up
+        # near-duplicate lessons in MEMORY.md.
+        session_memory = _dedup_against(content, session_memory)
+        if not session_memory:
+            _emit_memory_event("Review added no new memory (all duplicates)")
+            return
 
         # Insert after header
         header_end = content.find("\n## ")

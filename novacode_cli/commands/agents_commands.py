@@ -3,26 +3,18 @@
 import shutil
 from pathlib import Path
 from prompt_toolkit import PromptSession
-from rich.console import Console
-from rich.text import Text
 
+from novacode_cli.commands import CommandContext
+from novacode_cli.commands.menu_helper import MenuOption, run_interactive_menu
 from novacode_cli.config.config import COLORS, Settings, console
 from novacode_cli.prompts import render_template
 
 
 def extract_agent_description(agent_md: Path) -> str:
-    """Extract description from agent.md file.
-    
-    Args:
-        agent_md: Path to agent.md file
-        
-    Returns:
-        Description string or placeholder
-    """
+    """Extract description from agent.md file."""
     try:
         content = agent_md.read_text(encoding="utf-8")
 
-        # YAML front-matter
         if content.startswith("---"):
             parts = content.split("---", 2)
             if len(parts) >= 3:
@@ -32,7 +24,6 @@ def extract_agent_description(agent_md: Path) -> str:
                     if line.startswith("description:"):
                         return line.split(":", 1)[1].strip()[:80]
 
-        # Fallback: first non-empty, non-heading line
         for line in content.splitlines():
             line = line.strip()
             if line and not line.startswith("#"):
@@ -45,15 +36,7 @@ def extract_agent_description(agent_md: Path) -> str:
 
 
 async def handle_agents_command(cmd_args: str | None, assistant_id: str) -> bool:
-    """Handle the /agents command with interactive menu.
-
-    Args:
-        cmd_args: Optional subcommand (view/create/delete)
-        assistant_id: Agent identifier (unused but kept for consistency)
-
-    Returns:
-        True (command always handled)
-    """
+    """Handle the /agents command."""
     ps = PromptSession()
     settings = Settings.from_environment()
 
@@ -61,12 +44,10 @@ async def handle_agents_command(cmd_args: str | None, assistant_id: str) -> bool
     console.print("[bold]Agents Manager[/bold]", style=COLORS["primary"])
     console.print()
 
-    # Check if a subcommand was provided
     action = None
 
     if cmd_args:
         first_arg = cmd_args.strip().lower()
-
         if first_arg in ("view", "list", "ls", "show"):
             action = "view"
         elif first_arg in ("create", "new", "add"):
@@ -74,32 +55,17 @@ async def handle_agents_command(cmd_args: str | None, assistant_id: str) -> bool
         elif first_arg in ("delete", "remove", "rm"):
             action = "delete"
 
-    # If no action, show menu
     if not action:
-        console.print("  1. View agents")
-        console.print("  2. Create a new agent")
-        console.print("  3. Delete an agent")
-        console.print()
+        ctx = CommandContext(cmd="agents", cmd_args=cmd_args,
+                             agent=None, token_tracker=None,
+                             session_state=None, assistant_id=assistant_id)
+        options = [
+            MenuOption("View agents", _menu_view_agents),
+            MenuOption("Create a new agent", _menu_create_agent),
+            MenuOption("Delete an agent", _menu_delete_agent),
+        ]
+        return await run_interactive_menu("Agents Manager", options, ctx)
 
-        choice = (await ps.prompt_async("Choose (1-3, or 'cancel'): ")).strip()
-
-        if choice.lower() in ("cancel", "c", "q"):
-            console.print("[dim]Cancelled[/dim]")
-            console.print()
-            return True
-
-        if choice == "1":
-            action = "view"
-        elif choice == "2":
-            action = "create"
-        elif choice == "3":
-            action = "delete"
-        else:
-            console.print("[yellow]Invalid choice[/yellow]")
-            console.print()
-            return True
-
-    # Handle actions
     if action == "view":
         return await _agents_list(settings)
     if action == "create":
@@ -108,6 +74,16 @@ async def handle_agents_command(cmd_args: str | None, assistant_id: str) -> bool
         return await _agents_delete_interactive(ps, settings)
 
     return True
+
+
+async def _menu_view_agents(ctx: CommandContext, session: PromptSession) -> bool:
+    return await _agents_list(Settings.from_environment())
+
+async def _menu_create_agent(ctx: CommandContext, session: PromptSession) -> bool:
+    return await _agents_create_interactive(session, Settings.from_environment())
+
+async def _menu_delete_agent(ctx: CommandContext, session: PromptSession) -> bool:
+    return await _agents_delete_interactive(session, Settings.from_environment())
 
 
 async def _agents_list(settings: Settings) -> bool:
