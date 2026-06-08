@@ -55,6 +55,7 @@ from textual.css.query import NoMatches
 # Matrix rain — animated home screen banner
 # ---------------------------------------------------------------------------
 
+
 class MatrixRain(Static):
     """A matrix-style digital rain with the NOVA ASCII logo composited on top.
 
@@ -69,10 +70,7 @@ class MatrixRain(Static):
     with the width-1 ASCII art — full-width katakana would drift the columns.
     """
 
-    KATAKANA = (
-        "ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎ"
-        "ﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜｦﾝ0123456789ABCDEF"
-    )
+    KATAKANA = "ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎ" "ﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜｦﾝ0123456789ABCDEF"
 
     def __init__(self, art: str = "", width: int | None = None) -> None:
         super().__init__("", id="matrix-rain")
@@ -175,11 +173,13 @@ class MatrixRain(Static):
         self._columns = []
         span = self._row_count + 5
         for _ in range(self._col_count):
-            self._columns.append({
-                "pos": random.uniform(-span, 0),
-                "speed": random.uniform(0.25, 0.7),  # slower fall
-                "trail": random.randint(5, 14),
-            })
+            self._columns.append(
+                {
+                    "pos": random.uniform(-span, 0),
+                    "speed": random.uniform(0.25, 0.7),  # slower fall
+                    "trail": random.randint(5, 14),
+                }
+            )
 
     def _tick(self) -> None:
         """Advance one frame of the rain, then stamp the logo over it.
@@ -273,6 +273,7 @@ class MatrixRain(Static):
                 text.append("\n")
 
         self.update(text)
+
 
 # Transcript is pruned from the top once it exceeds this many widgets, down to
 # _TRANSCRIPT_LOW_WATER — keeps Textual's layout/scroll/repaint fast in long
@@ -1474,7 +1475,9 @@ class PluginsScreen(ModalScreen[None]):
         for name, spec in self._plugins:
             on = name in enabled
             opt = Text()
-            opt.append("✓ enabled  " if on else "○ disabled ", style="green" if on else "dim")
+            opt.append(
+                "✓ enabled  " if on else "○ disabled ", style="green" if on else "dim"
+            )
             opt.append(str(name), style="bold")
             desc = spec.get("description", "") if isinstance(spec, dict) else ""
             if desc:
@@ -2947,7 +2950,7 @@ class NovaApp(App):
             body = Static(body_text, classes="toolbody")
             # Start collapsed (like tool-call panels) so dispatching subagents
             # doesn't flood the transcript with expanded panels.
-            comp = Collapsible(body, title=title, collapsed=True)
+            comp = Collapsible(body, title=title, collapsed=True)  # type: ignore
             comp.add_class("subagent")
             await self._mount(comp)
             animate_entrance(comp, "fade")
@@ -3530,14 +3533,40 @@ class NovaApp(App):
             await self._run_slash(text)
             return
 
-        # @agent mention -> route through the main agent's task tool.
+        # @agent mention(s) -> delegate through the main agent's `task` tool.
         try:
             from novacode_cli.config.config import settings
-            from novacode_cli.input import parse_agent_mentions
+            from novacode_cli.input import (
+                parse_agent_mentions,
+                parse_agent_mentions_multi,
+            )
 
+            mentioned_agents = parse_agent_mentions_multi(text, settings)
             agent_name, query = parse_agent_mentions(text, settings)
         except Exception:  # noqa: BLE001
-            agent_name, query = None, text
+            mentioned_agents, agent_name, query = [], None, text
+
+        # Two or more agents (or an agent mentioned mid-message): hand the whole
+        # request to the main agent and let it orchestrate the named subagents in
+        # order via `task`. @file mentions are expanded by the normal turn path.
+        if len(mentioned_agents) >= 2 or (  # noqa: PLR2004
+            mentioned_agents and agent_name is None
+        ):
+            ordered = " → ".join(f"@{a}" for a in mentioned_agents)
+            await self._add_message(
+                Text(f"You → {ordered}", style="bold cyan"), "user", Text(text)
+            )
+            preamble = (
+                "This request references specialist subagents by @name. Delegate "
+                "each part of the work to the named agent using the `task` tool, "
+                "in the order implied by the request, passing results (e.g. edited "
+                "files) from one to the next. Referenced agents in order: "
+                f"{', '.join(mentioned_agents)}.\n\nRequest:\n{text}"
+            )
+            await self._stream_prompt(preamble)
+            return
+
+        # Single agent at the start: delegate directly to that one subagent.
         if agent_name:
             await self._add_message(
                 Text(f"You → @{agent_name}", style="bold cyan"), "user", Text(query)
@@ -3796,7 +3825,10 @@ class NovaApp(App):
                                 self._remote_stream_task.cancel()
                                 try:
                                     await self._remote_stream_task
-                                except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                                except (
+                                    asyncio.CancelledError,
+                                    Exception,
+                                ):  # noqa: BLE001
                                     pass
                                 self._remote_stream_task = None
                         post = await self.agent.aget_state(config)
@@ -4062,8 +4094,6 @@ class NovaApp(App):
             await self._run_reindex()
         elif cmd == "images":
             await self._run_images(text)
-        elif cmd == "vision":
-            await self._run_vision(text)
         elif cmd == "files":
             await self._run_files()
         elif cmd == "tests":
@@ -4120,7 +4150,7 @@ class NovaApp(App):
                 discover_enabled_plugins,
             )
 
-            cmds = collect_plugin_commands(discover_enabled_plugins())
+            cmds = collect_plugin_commands(discover_enabled_plugins()) # type: ignore
             self._plugin_commands = {
                 name: c["handler"] for name, c in cmds.items() if c.get("handler")
             }
@@ -4832,8 +4862,7 @@ class NovaApp(App):
             return
         self._log(
             Text(
-                "▌ Plan mode — investigation only (read-only tools); "
-                "you'll approve the plan before execution.",
+                "▌ Plan mode is Active",
                 style="cyan",
             )
         )
@@ -4921,8 +4950,16 @@ class NovaApp(App):
         """
         saved = self.session_manager is not None
         # Preserve the current conversation under its existing id, but mark it
-        # cleared so --continue won't auto-resume it (it stays in the picker).
+        # cleared so neither --continue nor the --resume picker brings it back.
         await self._save_session(cleared=True)
+        # Belt-and-suspenders: explicitly mark the session cleared even if the
+        # save above early-returned (e.g. the checkpointer read timed out or had
+        # no messages) but a prior /save had already written it as not-cleared.
+        if self.session_manager is not None:
+            try:
+                self.session_manager.mark_cleared(self.session_state.session_id)
+            except Exception:  # noqa: BLE001
+                pass
 
         # Total reset of session/conversation state: new thread+session id
         # (empty checkpointer state), cleared todos / steering / plan mode.
@@ -5156,19 +5193,35 @@ class NovaApp(App):
             )
 
     async def _run_dream(self) -> None:
-        """Run /dream: build the dream prompt from memories and stream it."""
+        """Run /dream: show a native memory-consolidation summary, then stream it."""
         from novacode_cli.commands.dream_handler import handle_dream_command
 
-        with _rich_console.capture() as cap:
-            result = await handle_dream_command(self.session_state)
-        notice = Text.from_ansi(cap.get()).plain.strip()
+        # Collect the handler's status lines and render them as ONE cohesive
+        # native block (blank separators are dropped — no empty log widgets).
+        status_lines: list[str] = []
+
+        def _emit(message: str = "") -> None:
+            if message:
+                status_lines.append(message)
+
+        result = await handle_dream_command(
+            self.session_state, self.assistant_id, emit=_emit
+        )
+
+        if status_lines:
+            block = Text()
+            for i, line in enumerate(status_lines):
+                try:
+                    block.append_text(Text.from_markup(line))
+                except Exception:  # noqa: BLE001 - bad markup: show literally
+                    block.append(line)
+                if i < len(status_lines) - 1:
+                    block.append("\n")
+            self._log(block)
+
         if isinstance(result, str) and result.strip():
             self._log(Text("💭 Dreaming over memories…", style="bold"))
             await self._stream_prompt(result)
-        elif notice:
-            self._log(Text(notice, style="dim"))
-        else:
-            self._log(Text("Nothing to dream about (no memories found).", style="dim"))
 
     async def _run_reindex(self) -> None:
         """Rebuild the semantic code-search index, with a native status."""
@@ -5917,7 +5970,12 @@ class NovaApp(App):
             return
 
         url = start_chat_server()
-        self._log(Text(f"Council UI started at {url} — present a topic to convene", style="bold green"))
+        self._log(
+            Text(
+                f"Council UI started at {url} — present a topic to convene",
+                style="bold green",
+            )
+        )
 
     async def _run_agents(self) -> None:
         """Show configured subagents (read-only)."""

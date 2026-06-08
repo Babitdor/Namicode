@@ -52,7 +52,9 @@ def _save_token_cache(agent_dir: Path, prompt_hash: str, tokens: int) -> None:
         pass
 
 
-def calculate_baseline_tokens(model, agent_dir: Path, system_prompt: str, assistant_id: str) -> int:
+def calculate_baseline_tokens(
+    model, agent_dir: Path, system_prompt: str, assistant_id: str
+) -> int:
     """Calculate baseline context tokens using the model's official tokenizer.
 
     This uses the model's get_num_tokens_from_messages() method to get
@@ -107,7 +109,9 @@ def calculate_baseline_tokens(model, agent_dir: Path, system_prompt: str, assist
         assistant_id, project_root, bool(project_memory)
     )
 
-    full_system_prompt = memory_section + "\n\n" + system_prompt + "\n\n" + memory_system_prompt
+    full_system_prompt = (
+        memory_section + "\n\n" + system_prompt + "\n\n" + memory_system_prompt
+    )
 
     # --- Cache check ---
     prompt_hash = _prompt_hash(full_system_prompt)
@@ -144,9 +148,14 @@ def _count_tokens_for_prompt(model, full_system_prompt: str) -> int:
     # Fallback 1: Anthropic SDK native token counter
     try:
         import anthropic
+
         client = anthropic.Anthropic()
-        response = client.messages.count_tokens(
-            model=getattr(model, "model_name", getattr(model, "model", "claude-3-5-sonnet-20241022")),
+        response = client.messages.count_tokens(  # type: ignore
+            model=getattr(
+                model,
+                "model_name",
+                getattr(model, "model", "claude-3-5-sonnet-20241022"),
+            ),
             system=full_system_prompt,
             messages=[],
         )
@@ -157,6 +166,7 @@ def _count_tokens_for_prompt(model, full_system_prompt: str) -> int:
     # Fallback 2: tiktoken cl100k_base
     try:
         import tiktoken
+
         enc = tiktoken.get_encoding("cl100k_base")
         return len(enc.encode(full_system_prompt))
     except Exception:
