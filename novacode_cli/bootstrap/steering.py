@@ -38,6 +38,7 @@ they act as persistent guardrails rather than one-off suggestions.
 
 from __future__ import annotations
 
+import itertools
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -47,12 +48,15 @@ from langchain.agents.middleware.types import (
     ModelRequest,
     ModelResponse,
 )
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 
 
 # ---------------------------------------------------------------------------
 # Steering instruction storage
 # ---------------------------------------------------------------------------
+
+
+_uid_counter = itertools.count()
 
 
 class SteeringInstruction:
@@ -61,13 +65,16 @@ class SteeringInstruction:
     Attributes:
         label: Short human-readable label (e.g., "focus", "constraint", "style").
         instruction: The full instruction text.
+        uid: Process-unique id, used to deliver each steer as a live message
+            exactly once (stable across GC, unlike ``id()``).
     """
 
-    __slots__ = ("label", "instruction")
+    __slots__ = ("label", "instruction", "uid")
 
     def __init__(self, label: str, instruction: str) -> None:
         self.label = label
         self.instruction = instruction
+        self.uid = next(_uid_counter)
 
     def __repr__(self) -> str:
         return f"SteeringInstruction({self.label!r}, {self.instruction!r})"
@@ -106,9 +113,22 @@ class SteeringMiddleware(AgentMiddleware):
         """
         self._enabled = enabled
         self._instructions: list[SteeringInstruction] = instructions if instructions is not None else []
+        # uids of instructions already surfaced as a live user message, so each
+        # new steer is delivered as an actionable message exactly once (then
+        # persists via the system prompt).
+        self._delivered: set[int] = set()
 
     def _inject(self, request: ModelRequest) -> ModelRequest:
-        """Inject steering instructions into the system prompt."""
+        """Inject steering instructions into this model call.
+
+        Two layers:
+        * a persistent block appended to the system prompt (standing guardrails
+          the agent must honor on every step), and
+        * for any *newly added* steer (e.g. typed while the agent was working),
+          a one-time HumanMessage so the agent actively reads and incorporates it
+          into the task in progress — a passive system-prompt line mid-tool-loop
+          is easy to overlook.
+        """
         if not self._enabled:
             return request
 
@@ -116,36 +136,40 @@ class SteeringMiddleware(AgentMiddleware):
         if not instructions:
             return request
 
-        # Debug: log that we're injecting steering
-        import sys
-        labels = [si.label for si in instructions]
-        print(f"\n[STEER DEBUG] Injecting {len(instructions)} instruction(s): {labels} (list id={id(instructions)})\n", file=sys.stderr, flush=True)
-
-        # Format the steering section
-        lines: list[str] = []
-        for si in instructions:
-            if si.label:
-                lines.append(f"- [{si.label}] {si.instruction}")
-            else:
-                lines.append(f"- {si.instruction}")
-
-        if not lines:
-            return request
-
-        block = "[Steering Instructions]\n" + "\n".join(lines) + "\n[/Steering Instructions]"
-
+        lines = [
+            f"- [{si.label}] {si.instruction}" if si.label else f"- {si.instruction}"
+            for si in instructions
+        ]
+        block = (
+            "[User Steering — standing instructions from the user that you MUST "
+            "follow on every step]\n" + "\n".join(lines) + "\n[/User Steering]"
+        )
         system_prompt = request.system_prompt
         new_prompt = (system_prompt + "\n\n" + block) if system_prompt else block
-        return request.override(system_message=SystemMessage(new_prompt))
+
+        overrides: dict[str, Any] = {"system_message": SystemMessage(new_prompt)}
+
+        # Deliver newly-added steers as a live user message (once).
+        new = [si for si in instructions if si.uid not in self._delivered]
+        if new:
+            for si in new:
+                self._delivered.add(si.uid)
+            nudge = "\n".join(f"- {si.instruction}" for si in new)
+            msg = HumanMessage(
+                "[The user added the following while you were working — "
+                "incorporate it into your current task now, in addition to what "
+                "you're already doing]\n" + nudge
+            )
+            overrides["messages"] = [*request.messages, msg]
+
+        return request.override(**overrides)
 
     def wrap_model_call(
         self,
         request: ModelRequest,
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> ModelResponse:
-        """Inject steering into the system prompt (sync)."""
-        import sys
-        print(f"\n[STEER DEBUG] wrap_model_call called, instructions={len(self._instructions)}, enabled={self._enabled}\n", file=sys.stderr, flush=True)
+        """Inject steering (sync)."""
         return handler(self._inject(request))
 
     async def awrap_model_call(
@@ -153,9 +177,7 @@ class SteeringMiddleware(AgentMiddleware):
         request: ModelRequest,
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
     ) -> ModelResponse:
-        """Inject steering into the system prompt (async)."""
-        import sys
-        print(f"\n[STEER DEBUG] awrap_model_call called, instructions={len(self._instructions)}, enabled={self._enabled}\n", file=sys.stderr, flush=True)
+        """Inject steering (async)."""
         return await handler(self._inject(request))
 
 

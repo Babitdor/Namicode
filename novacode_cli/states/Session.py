@@ -490,7 +490,13 @@ class SessionState:
         self.session_id = str(uuid.uuid4())
         self.is_continued = False
         self.todos = None
-        self.steering_instructions = []
+        # Clear in place — the agent's SteeringMiddleware holds a reference to
+        # THIS list, so reassigning (= []) would orphan it and silently break
+        # steering after /clear. Mutate the shared list instead.
+        if isinstance(self.steering_instructions, list):
+            self.steering_instructions.clear()
+        else:
+            self.steering_instructions = []
         # Plan mode: exit, drop cached plan agent + in-flight plan content, and
         # discard any approved-but-unconsumed plan.
         self.clear_plan_agent()
