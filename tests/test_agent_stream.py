@@ -175,6 +175,36 @@ def test_text_streams_as_deltas_then_commits():
     assert msg.text == "Hello"
 
 
+def test_usage_captured_from_empty_final_chunk():
+    """Providers attach usage_metadata to a final chunk with NO content blocks.
+
+    Regression: the usage capture used to run after an empty-blocks early-continue,
+    so those token counts were dropped and /context always showed 0.
+    """
+    class Agent:
+        async def aget_state(self, config):
+            return _State([])
+
+        async def astream(self, inp, **kw):
+            # Real text, but no usage on the content chunks...
+            yield ((), "messages", (_Chunk("m1", [{"type": "text", "text": "Hi"}], usage={}), {}))
+            # ...then a final, content-less chunk that carries the usage.
+            yield (
+                (),
+                "messages",
+                (_Chunk("m1", [], usage={"input_tokens": 4321, "output_tokens": 99}), {}),
+            )
+
+        async def aupdate_state(self, **kw):
+            pass
+
+    evts = _collect(Agent())
+    usage = next((e for e in evts if isinstance(e, ev.UsageUpdate)), None)
+    assert usage is not None, [type(e).__name__ for e in evts]
+    assert usage.input_tokens == 4321
+    assert usage.output_tokens == 99
+
+
 def test_cancellation_emits_cancelled():
     class Agent:
         async def aget_state(self, config):

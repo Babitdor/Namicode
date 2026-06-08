@@ -173,11 +173,26 @@ async def compact_conversation(
             content=f"[Conversation context — previous session summarized]\n\n{summary}"
         )
         remove_ops = [RemoveMessage(id=msg.id) for msg in messages if msg.id]
-        await agent.aupdate_state(
-            config=config,
-            values={"messages": remove_ops + [summary_message]},
-            as_node="model",
-        )
+        # Also clear any prior auto-summarization event. deepagents'
+        # SummarizationMiddleware reconstructs the effective message list from
+        # `_summarization_event` (a cutoff index into the OLD message list); if we
+        # rewrite messages without clearing it, the next turn would slice the new
+        # list at a stale index and corrupt context. Resetting it makes the fresh
+        # summary the whole context.
+        update_values: dict[str, Any] = {
+            "messages": remove_ops + [summary_message],
+            "_summarization_event": None,
+        }
+        try:
+            await agent.aupdate_state(config=config, values=update_values, as_node="model")
+        except Exception:
+            # Older graphs without the summarization state key reject the extra
+            # field; retry with just the message rewrite.
+            await agent.aupdate_state(
+                config=config,
+                values={"messages": remove_ops + [summary_message]},
+                as_node="model",
+            )
 
         # Count new tokens using the model's tokenizer when available.
         try:

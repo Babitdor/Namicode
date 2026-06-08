@@ -377,12 +377,12 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
                             if isinstance(tc, dict):
                                 blocks.append({"type": "tool_call_chunk", **tc})
 
-                    if not blocks:
-                        continue
-
-                    # usage capture (main agent)
-                    if is_main_agent and hasattr(message, "usage_metadata"):
-                        usage = message.usage_metadata
+                    # Usage capture (main agent). MUST run before the empty-blocks
+                    # early-continue below: providers (Ollama, OpenAI, Anthropic)
+                    # attach usage_metadata to a *final chunk with empty content*,
+                    # which has no blocks — skipping it here lost all token counts.
+                    if is_main_agent:
+                        usage = getattr(message, "usage_metadata", None)
                         if usage:
                             cache_read = usage.get("cache_read_input_tokens", 0)
                             cache_create = usage.get("cache_creation_input_tokens", 0)
@@ -403,6 +403,9 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
                                 captured.cache_creation_tokens = max(
                                     captured.cache_creation_tokens, cache_create
                                 )
+
+                    if not blocks:
+                        continue
 
                     _is_completed_msg = type(message).__name__ == "AIMessage"
 

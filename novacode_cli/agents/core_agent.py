@@ -60,6 +60,38 @@ def _patched_validate_path(path: str, allowed_prefixes=None) -> str:
 _dab_utils.validate_path = _patched_validate_path
 # ────────────────────────────────────────────────────────────────────────────
 
+# ── Patch deepagents string replacement to tolerate a UTF-8 BOM ─────────────
+# edit_file matches the model's `old_string` against the file content read in
+# text mode. On Windows, files authored by some editors carry a leading UTF-8
+# BOM (U+FEFF) that the read keeps but the model's `old_string` never includes,
+# so the very first edit of such a file fails with "string not found" — what
+# looks like an inexplicable whitespace/encoding mismatch. Stripping a leading
+# BOM from the content before matching is semantically safe (the BOM is not real
+# text) and fixes those edits. Patched at every import site since the symbol is
+# bound by-name at module load.
+_BOM = "﻿"  # U+FEFF byte-order mark
+_original_psr = _dab_utils.perform_string_replacement
+
+
+def _patched_perform_string_replacement(content, old_string, new_string, replace_all=False):  # noqa: ANN001, ANN201, FBT002
+    if content.startswith(_BOM) and not old_string.startswith(_BOM):
+        content = content.lstrip(_BOM)
+    return _original_psr(content, old_string, new_string, replace_all)
+
+
+_dab_utils.perform_string_replacement = _patched_perform_string_replacement
+for _mod_name in (
+    "deepagents.backends.filesystem",
+    "deepagents.backends.state",
+):
+    try:
+        _m = __import__(_mod_name, fromlist=["perform_string_replacement"])
+        if hasattr(_m, "perform_string_replacement"):
+            _m.perform_string_replacement = _patched_perform_string_replacement
+    except Exception:  # noqa: BLE001 - best-effort; never block import
+        pass
+# ────────────────────────────────────────────────────────────────────────────
+
 from langchain.tools import BaseTool
 from langchain_core.language_models import BaseChatModel
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -104,7 +136,7 @@ def get_shared_store() -> "BaseStore":
     """
     from novacode_cli.memory.store import get_durable_store
 
-    return get_durable_store()
+    return get_durable_store()  # type: ignore
 
 
 def _extract_agent_description(agent_md_content: str) -> str:
@@ -509,6 +541,38 @@ def _harden_subagent_specs(specs: list) -> list:
     return out
 
 
+def _seed_summarization_profile(model: object, model_name: str) -> None:
+    """Seed ``model.profile['max_input_tokens']`` so deepagents' built-in
+    ``SummarizationMiddleware`` triggers on OUR context budget.
+
+    deepagents auto-computes the summarization trigger from the model profile:
+    with a profile exposing ``max_input_tokens`` it summarizes at 85% of the
+    window (keeping the last ~10%); WITHOUT one it falls back to a fixed
+    170k-token trigger — which never fires for local/Ollama models whose real
+    window is far smaller (the model just overflows). Seeding the profile from
+    the same window Nova uses for ``/context`` ties the summarization trigger to
+    the displayed ctx %.
+
+    No-op when the model already exposes a profile (cloud models often ship one)
+    or isn't a chat-model instance. Never raises — it's a pure optimization.
+    """
+    try:
+        if (
+            not isinstance(model, BaseChatModel)
+            or getattr(model, "profile", None) is not None
+        ):
+            return
+        from novacode_cli.context import ContextManager
+
+        window = ContextManager(model_name).window_size()
+        if window and window > 0:
+            model.profile = {"max_input_tokens": int(window)}  # type: ignore[assignment]
+    except Exception:  # noqa: BLE001 - never block agent build on a profile hint
+        __import__("logging").getLogger(__name__).debug(
+            "Could not seed model profile for summarization", exc_info=True
+        )
+
+
 def create_agent_with_config(
     model: str | BaseChatModel,
     assistant_id: str,
@@ -839,7 +903,7 @@ This file stores your preferences and context that persist across sessions.
         # inflate the counter, but before other middleware so learning data
         # is collected for all downstream operations.
         NovaLearningMiddleware(
-            store=store,
+            store=store,  # type: ignore
             skills_dir=skills_dir,
             agent_dir=agent_dir,
         ),
@@ -905,7 +969,9 @@ This file stores your preferences and context that persist across sessions.
                         asyncio.create_task(_before())
                     except Exception:
                         logger = __import__("logging").getLogger("nova.plugins")
-                        logger.exception("Plugin '%s' before_agent_setup hook failed", _pkg_name)
+                        logger.exception(
+                            "Plugin '%s' before_agent_setup hook failed", _pkg_name
+                        )
     except Exception:
         pass
 
@@ -1009,6 +1075,10 @@ This file stores your preferences and context that persist across sessions.
     # mutates the cached specs, which would accumulate middleware across builds).
     Nova_SubAgent = _harden_subagent_specs(Nova_SubAgent)
 
+    # Make deepagents' built-in SummarizationMiddleware actually fire on OUR
+    # context budget (see _seed_summarization_profile).
+    _seed_summarization_profile(wrapped_model, _model_name)
+
     # Pass named_subagents directly to create_deep_agent
     # It will create the SubAgentMiddleware internally
     # Use provided checkpointer or fallback to InMemorySaver
@@ -1041,7 +1111,7 @@ This file stores your preferences and context that persist across sessions.
                 try:
                     import asyncio
 
-                    asyncio.create_task(_after(agent))
+                    asyncio.create_task(_after(agent))  # type: ignore
                 except Exception:
                     _log = __import__("logging").getLogger("nova.plugins")
                     _log.exception(
