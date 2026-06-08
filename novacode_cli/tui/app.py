@@ -334,6 +334,7 @@ _TUI_SLASH_COMMANDS = [
     "/browser-use",
     "/ralph",
     "/trello",
+    "/council",
     "/chat",
     "/clear",
     "/tokens",
@@ -4112,7 +4113,7 @@ class NovaApp(App):
             await self._run_ralph(text)
         elif cmd == "trello":
             await self._run_trello(text)
-        elif cmd == "chat":
+        elif cmd in ("council", "chat"):
             await self._run_chat(text)
         elif cmd in ("plugins", "plugin"):
             await self.push_screen_wait(PluginsScreen())

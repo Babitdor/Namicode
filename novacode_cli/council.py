@@ -1,13 +1,13 @@
-"""Council of agents — a multi-persona debate with peer voting.
+"""Council of agents — independent answers + democratic voting.
 
-A *council* takes a single topic and runs it past five distinct personas, each
-backed by the session's configured model but given its own personality. They
-speak **in sequence, chatroom-style** — every persona sees what the previous
-ones said and can react. Once everyone has spoken, each persona **scores the
-others' answers** (1–10); the highest total wins and its answer is the verdict.
+A *council* takes a single question and runs it past five distinct personas,
+each backed by the session's configured model but given its own personality.
+Every member answers **independently** (it cannot see the others' answers), then
+each casts a **single democratic vote** for the best answer (never its own). The
+**majority** answer is the verdict.
 
 :func:`run_council` is a pure async generator yielding plain ``dict`` events, so
-it can be unit-tested without HTTP and rendered by the ``/chat`` web server as
+it can be unit-tested without HTTP and rendered by the ``/council`` web server as
 Server-Sent Events (see :mod:`novacode_cli.commands.chat_handler`).
 """
 
@@ -140,18 +140,19 @@ PERSONAS: list[Persona] = [
 ]
 
 _RESPONSE_GUIDE = (
-    " You are one of five advisors in a council debating a topic. Stay in "
-    "character, speak in the first person, and be technically substantive. Keep "
-    "it focused — under ~160 words. React to earlier advisors when relevant, but "
-    "make your own distinct point rather than echoing them. If you need current "
-    "or factual information, you may call the web search tool first, then answer."
+    " You are one member of a council of advisors. Independently analyze the "
+    "question and give your OWN best answer — you cannot see the other members' "
+    "answers. Stay in character, speak in the first person, be technically "
+    "substantive, and keep it focused (~160 words). If you need current or "
+    "factual information, call the web search tool first, then answer."
 )
 
 _VOTE_GUIDE = (
-    " You are scoring the OTHER advisors' answers as yourself, in character. "
-    "Judge usefulness and correctness. Respond with ONLY a JSON object of the "
-    'form {"scores":[{"agent":"<exact name>","score":<integer 1-10>,'
-    '"reason":"<one short sentence>"}]} and nothing else.'
+    " The council has answered independently. You have read every answer "
+    "(yours is among them, unlabeled). Vote for the SINGLE best answer on merit "
+    "— you may NOT vote for your own. Respond with ONLY a JSON object of the "
+    'form {"choice":"<exact advisor name>","reason":"<one short sentence>"} '
+    "and nothing else."
 )
 
 
@@ -241,6 +242,28 @@ def _parse_scores(raw: str, valid_names: set[str]) -> list[tuple[str, int, str]]
     return out
 
 
+def _parse_vote(raw: str, valid_names: set[str]) -> tuple[str | None, str]:
+    """Parse a single-choice ballot: ``{"choice": name, "reason": ...}``.
+
+    Returns ``(choice_name, reason)`` where ``choice_name`` is None if the model
+    didn't pick a valid (non-self) advisor. Tolerant of code fences / prose.
+    """
+    match = re.search(r"\{.*\}", raw, re.DOTALL)
+    if not match:
+        return None, ""
+    try:
+        data = json.loads(match.group(0))
+    except (json.JSONDecodeError, ValueError):
+        return None, ""
+    if not isinstance(data, dict):
+        return None, ""
+    choice = str(data.get("choice", "")).strip()
+    reason = str(data.get("reason", "")).strip()
+    if choice not in valid_names:
+        return None, reason
+    return choice, reason
+
+
 def get_council_model() -> Any:
     """Build a chat model for the council from the session's configured provider.
 
@@ -305,7 +328,7 @@ async def _stream_persona_turn(
                     gathered = chunk if gathered is None else gathered + chunk
                 except (
                     Exception
-                ):  # noqa: BLE001 - chunk not addable; skip tool detection
+                ):
                     gathered = None
             piece = _content_text(chunk)
             if piece:
@@ -342,6 +365,10 @@ async def run_council(
     *history* carries prior rounds of the same session so the advisors can build
     on an earlier discussion (follow-up questions).
 
+    Flow: every member answers the topic **independently** (no peer context),
+    then each casts a **single democratic vote** for the best answer (never its
+    own); the **majority** answer is the verdict.
+
     Event ``type``s, in order:
       ``council_start`` -> for each persona ``agent_start`` / ``agent_delta``* /
       ``agent_done`` -> ``vote_start`` -> for each persona ``vote`` ->
@@ -349,6 +376,7 @@ async def run_council(
     """
     members = personas or PERSONAS
     name_to_id = {p.name: p.id for p in members}
+    id_to_name = {p.id: p.name for p in members}
     history_block = _format_history(history)
 
     yield {
@@ -360,8 +388,9 @@ async def run_council(
         ],
     }
 
-    # --- Phase 1: sequential chatroom -------------------------------------
-    transcript: list[tuple[str, str]] = []
+    # --- Phase 1: independent answers ------------------------------------
+    # Each member analyzes the topic on its own; it does NOT see the others'
+    # answers (only prior-round history, for follow-ups).
     answers: dict[str, str] = {}
     for persona in members:
         yield {
@@ -375,12 +404,8 @@ async def run_council(
         convo = ""
         if history_block:
             convo += history_block + "\n\n"
-        convo += f"The topic before the council:\n\n{topic}\n\n"
-        if transcript:
-            convo += "What other advisors have said so far:\n\n"
-            convo += "\n\n".join(f"{n}: {t}" for n, t in transcript)
-            convo += "\n\n"
-        convo += "Now give your perspective."
+        convo += f"The question before the council:\n\n{topic}\n\n"
+        convo += "Give your own independent answer."
 
         full = ""
         async for event in _stream_persona_turn(persona, convo, model):
@@ -390,62 +415,56 @@ async def run_council(
             else:  # ("tool", query)
                 yield {"type": "agent_tool", "id": persona.id, "query": event[1]}
 
-        full = full.strip()
-        transcript.append((persona.name, full))
-        answers[persona.id] = full
-        yield {"type": "agent_done", "id": persona.id, "text": full}
+        answers[persona.id] = full.strip()
+        yield {"type": "agent_done", "id": persona.id, "text": answers[persona.id]}
 
-    # --- Phase 2: peer voting --------------------------------------------
+    # --- Phase 2: democratic voting (one vote each) ----------------------
     yield {"type": "vote_start"}
-    totals: dict[str, int] = {p.id: 0 for p in members}
+    tally: dict[str, int] = {p.id: 0 for p in members}
 
     for voter in members:
         others = [p for p in members if p.id != voter.id]
         valid_names = {p.name for p in others}
 
-        ballot = (
-            f"The topic was:\n\n{topic}\n\n"
-            "Here are the other advisors' answers. Score each one.\n\n"
-        )
+        ballot = f"The question was:\n\n{topic}\n\nThe answers:\n\n"
         for p in others:
             ballot += f"=== {p.name} ===\n{answers.get(p.id, '')}\n\n"
+        ballot += "Vote for the single best answer."
 
         try:
             resp = await model.ainvoke(
                 [("system", voter.system + _VOTE_GUIDE), ("human", ballot)]
             )
-            scores = _parse_scores(_content_text(resp), valid_names)
+            choice_name, reason = _parse_vote(_content_text(resp), valid_names)
         except Exception:  # noqa: BLE001 — a bad ballot must not kill the run
-            scores = []
+            choice_name, reason = None, ""
 
-        detail: list[dict[str, Any]] = []
-        for name, score, reason in scores:
-            target_id = name_to_id[name]
-            totals[target_id] += score
-            detail.append(
-                {
-                    "target": target_id,
-                    "target_name": name,
-                    "score": score,
-                    "reason": reason,
-                }
-            )
+        choice_id = name_to_id.get(choice_name) if choice_name else None
+        if choice_id is not None:
+            tally[choice_id] += 1
 
         yield {
             "type": "vote",
             "voter": voter.id,
             "voter_name": voter.name,
-            "scores": detail,
+            "choice": choice_id,
+            "choice_name": choice_name or "",
+            "reason": reason,
         }
 
-    # --- Phase 3: verdict -------------------------------------------------
-    id_to_name = {p.id: p.name for p in members}
-    winner_id = max(totals, key=lambda k: totals[k]) if totals else None
+    # --- Phase 3: majority verdict ---------------------------------------
+    # Winner = most votes; ties broken by council order (first member wins).
+    winner_id = (
+        max(members, key=lambda p: (tally[p.id], -members.index(p))).id
+        if any(tally.values())
+        else (members[0].id if members else None)
+    )
     yield {
         "type": "verdict",
         "winner_id": winner_id,
         "winner_name": id_to_name.get(winner_id, "") if winner_id else "",
-        "totals": totals,
+        "tally": tally,
+        "votes": sum(tally.values()),
         "answer": answers.get(winner_id, "") if winner_id else "",
     }
     yield {"type": "done"}

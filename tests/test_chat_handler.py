@@ -27,19 +27,16 @@ class _Chunk:
 
 
 class FakeModel:
-    """Streams two tokens per answer; votes everyone's favourite = The Architect."""
+    """Streams two tokens per answer; every member votes for The Architect."""
 
     async def astream(self, messages):
         for tok in ["Hel", "lo"]:
             yield _Chunk(tok)
 
     async def ainvoke(self, messages):
-        # Score every known persona; the parser filters out self + unknowns.
-        scores = [
-            {"agent": p.name, "score": 9 if p.id == "architect" else 5, "reason": "ok"}
-            for p in council.PERSONAS
-        ]
-        return _Chunk(json.dumps({"scores": scores}))
+        # Single-choice ballot. The Architect is everyone's pick (parser drops a
+        # self-vote, so The Architect's own ballot just doesn't count for itself).
+        return _Chunk(json.dumps({"choice": "The Architect", "reason": "clearest"}))
 
 
 # ---------------------------------------------------------------------------
@@ -70,6 +67,21 @@ def test_parse_scores_handles_fenced_json():
 
 def test_parse_scores_returns_empty_on_garbage():
     assert council._parse_scores("no json here", {"The Architect"}) == []
+
+
+def test_parse_vote_picks_valid_choice():
+    valid = {"The Architect", "The Skeptic"}
+    assert council._parse_vote(
+        '{"choice":"The Skeptic","reason":"sharpest"}', valid
+    ) == ("The Skeptic", "sharpest")
+
+
+def test_parse_vote_handles_fences_and_rejects_self_or_unknown():
+    raw = '```json\n{"choice":"The Architect"}\n```'
+    assert council._parse_vote(raw, {"The Architect"}) == ("The Architect", "")
+    # Choice not in the allowed (non-self) set -> no vote.
+    assert council._parse_vote('{"choice":"Me"}', {"The Architect"}) == (None, "")
+    assert council._parse_vote("no json", {"The Architect"}) == (None, "")
 
 
 def test_content_text_handles_block_lists():
@@ -171,8 +183,7 @@ async def test_council_persona_can_web_search(monkeypatch):
                     yield _ToolChunk(content=tok)
 
         async def ainvoke(self, messages):
-            scores = [{"agent": p.name, "score": 5, "reason": "ok"} for p in council.PERSONAS]
-            return _ToolChunk(content=json.dumps({"scores": scores}))
+            return _ToolChunk(content=json.dumps({"choice": "The Architect", "reason": "ok"}))
 
     events = [e async for e in council.run_council("topic", ToolModel())]
     types = [e["type"] for e in events]
@@ -198,16 +209,19 @@ async def test_run_council_event_sequence_and_verdict():
     assert types[-2] == "verdict"
     assert types[-1] == "done"
 
-    # Each agent streamed "Hel" + "lo" -> "Hello"
+    # Each agent answered independently, streaming "Hel" + "lo" -> "Hello"
     done = [e for e in events if e["type"] == "agent_done"]
     assert all(e["text"] == "Hello" for e in done)
 
-    # The Architect was scored 9 by the other four voters -> clear winner.
+    # Every other member voted for The Architect (its own self-vote is dropped),
+    # so it wins the majority with n-1 votes.
     verdict = next(e for e in events if e["type"] == "verdict")
     assert verdict["winner_id"] == "architect"
-    assert verdict["totals"]["architect"] == 9 * (n - 1)
-    # No one scores themselves.
-    assert verdict["totals"]["pragmatist"] == 5 * (n - 1)
+    assert verdict["tally"]["architect"] == n - 1
+    assert verdict["votes"] == n - 1
+    # A single vote per member is cast.
+    votes = [e for e in events if e["type"] == "vote"]
+    assert all("choice" in v for v in votes)
 
 
 # ---------------------------------------------------------------------------

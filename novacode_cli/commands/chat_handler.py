@@ -97,26 +97,90 @@ def _make_chat_html() -> str:
       repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.007) 2px, rgba(255,255,255,0.007) 4px);
   }
   header {
-    padding: 20px 32px 16px;
-    display: flex; align-items: baseline; gap: 14px;
+    padding: 18px 32px 16px;
+    display: flex; align-items: center; gap: 14px;
     flex-shrink: 0;
     border-bottom: 1px solid var(--charcoal-3);
     position: relative;
+    background: linear-gradient(180deg, rgba(162,28,48,0.06), transparent);
   }
   header::after {
     content: ''; position: absolute; bottom: -1px; left: 32px;
     width: 60px; height: 2px; background: var(--crimson);
   }
+  header .seal {
+    font-size: 26px; line-height: 1;
+    width: 44px; height: 44px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    border: 1px solid var(--crimson); color: var(--crimson-light);
+    background: radial-gradient(circle at 50% 40%, rgba(162,28,48,0.18), transparent 70%);
+    box-shadow: 0 0 0 4px rgba(162,28,48,0.05);
+  }
+  header .brand { display: flex; flex-direction: column; gap: 2px; }
   header h1 {
     font-family: 'Playfair Display', serif;
-    font-weight: 700; font-size: 20px; font-style: italic;
-    color: var(--cream); letter-spacing: 0.02em;
+    font-weight: 700; font-size: 21px; font-style: italic;
+    color: var(--cream); letter-spacing: 0.02em; line-height: 1.1;
   }
-  header span {
-    font-size: 12px; color: var(--cream-dim);
-    text-transform: uppercase; letter-spacing: 0.15em;
+  header .brand span {
+    font-size: 10.5px; color: var(--cream-dim);
+    text-transform: uppercase; letter-spacing: 0.13em;
   }
   header .spacer { flex: 1; }
+
+  /* The bench — advisor seats with live state + vote tally */
+  #bench {
+    display: none; flex-shrink: 0;
+    gap: 10px; padding: 14px 32px;
+    border-bottom: 1px solid var(--charcoal-3);
+    background: var(--charcoal-2);
+    overflow-x: auto;
+  }
+  #bench.active { display: flex; }
+  #bench .seat {
+    flex: 1 1 0; min-width: 96px;
+    display: flex; flex-direction: column; align-items: center; gap: 5px;
+    padding: 10px 6px; border-radius: 8px;
+    border: 1px solid var(--charcoal-3);
+    background: var(--charcoal);
+    transition: border-color 0.3s, box-shadow 0.3s, opacity 0.3s, transform 0.2s;
+    opacity: 0.5;
+  }
+  #bench .seat-av {
+    position: relative; font-size: 22px;
+    width: 40px; height: 40px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    border: 2px solid var(--seat); background: var(--charcoal-2);
+  }
+  #bench .seat-badge {
+    position: absolute; top: -6px; right: -8px;
+    min-width: 18px; height: 18px; padding: 0 4px; border-radius: 9px;
+    font-size: 11px; font-weight: 700; line-height: 18px; text-align: center;
+    background: var(--charcoal-3); color: var(--cream-dim);
+    font-family: 'DM Sans', sans-serif; opacity: 0; transform: scale(0.6);
+    transition: opacity 0.25s, transform 0.25s, background 0.25s, color 0.25s;
+  }
+  #bench .seat-badge.has { opacity: 1; transform: scale(1); background: var(--gold); color: #1a1410; }
+  #bench .seat-name {
+    font-size: 11.5px; font-weight: 600; color: var(--cream-muted); text-align: center;
+  }
+  #bench .seat-state {
+    font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--cream-dim);
+  }
+  #bench .seat[data-state="speaking"] { opacity: 1; border-color: var(--seat); box-shadow: 0 0 0 1px var(--seat); }
+  #bench .seat[data-state="speaking"] .seat-av { animation: pulse 1.3s ease-in-out infinite; }
+  #bench .seat[data-state="answered"] { opacity: 1; }
+  #bench .seat[data-state="answered"] .seat-state { color: var(--seat); }
+  #bench .seat[data-state="voting"] { opacity: 1; }
+  #bench .seat[data-state="voting"] .seat-state { color: var(--gold); }
+  #bench .seat[data-state="winner"] {
+    opacity: 1; border-color: var(--gold);
+    box-shadow: 0 0 0 1px var(--gold), 0 0 22px rgba(184,134,11,0.25);
+    transform: translateY(-2px);
+  }
+  #bench .seat[data-state="winner"] .seat-state { color: var(--gold); font-weight: 700; }
+  @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 var(--seat); } 50% { box-shadow: 0 0 0 4px transparent; } }
   #new-thread {
     background: transparent; color: var(--cream-muted);
     border: 1px solid var(--charcoal-3); border-radius: 4px;
@@ -277,20 +341,59 @@ def _make_chat_html() -> str:
   .welcome p { font-size: 13.5px; line-height: 1.7; color: var(--cream-muted); margin-bottom: 8px; }
   .welcome .seats { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 16px; }
   .welcome .seat { font-size: 12px; padding: 4px 10px; border: 1px solid var(--charcoal-3); border-radius: 20px; color: var(--cream-muted); }
+
+  /* "independent answer" tag on each advisor card */
+  .agent .who-tag {
+    margin-left: auto; font-size: 9.5px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--cream-dim); border: 1px solid var(--charcoal-3);
+    padding: 2px 7px; border-radius: 10px;
+  }
+  /* phase divider title/subtitle */
+  .phase-title { }
+  .phase-sub {
+    text-transform: none; letter-spacing: 0; font-weight: 400;
+    color: var(--cream-dim); font-size: 11px; margin-left: 10px;
+  }
+  /* one-line democratic votes */
+  .vote-row {
+    align-self: stretch; max-width: 82%;
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px;
+    padding: 7px 14px; font-size: 13px;
+    border-left: 2px solid var(--seat, var(--crimson));
+    background: var(--charcoal-2); border-radius: 0 4px 4px 0;
+    animation: msgIn 0.25s ease-out both;
+  }
+  .vote-row .v-voter { font-weight: 600; color: var(--seat, var(--cream)); }
+  .vote-row .v-arrow { color: var(--cream-dim); }
+  .vote-row .v-choice { font-weight: 600; }
+  .vote-row .v-choice.muted { color: var(--cream-dim); font-weight: 400; font-style: italic; }
+  .vote-row .v-why { flex-basis: 100%; color: var(--cream-dim); font-size: 11.5px; }
+  /* verdict extras */
+  .verdict-sub { color: var(--gold); font-size: 12px; margin: -6px 0 12px; letter-spacing: 0.03em; }
+  .verdict h3 .w-name { color: var(--cream); }
+  .winner-label {
+    margin-top: 4px; font-size: 10.5px; text-transform: uppercase;
+    letter-spacing: 0.12em; color: var(--cream-dim);
+  }
 </style>
 </head>
 <body>
 <header>
-  <h1>Nova</h1>
-  <span>Council of Agents</span>
+  <div class="seal">⚖</div>
+  <div class="brand">
+    <h1>The Council</h1>
+    <span>Independent answers · Democratic vote · Majority rules</span>
+  </div>
   <div class="spacer"></div>
-  <button id="new-thread" title="Forget the prior discussion and start fresh">⟲ New thread</button>
+  <button id="new-thread" title="Clear the prior session and start fresh">⟲ New session</button>
 </header>
+<div id="bench"></div>
 <div id="messages">
   <div class="welcome">
     <h2>The Council Awaits</h2>
     <div class="divider"></div>
-    <p>Present a topic and five advisors will debate it in turn — each reading the others — then score one another. The highest-scored answer becomes the verdict. Ask follow-ups and they'll remember the discussion; hit <b>New thread</b> to start fresh.</p>
+    <p>Pose a question. Five advisors each answer it <b>independently</b>, then cast a single <b>democratic vote</b> for the best answer. The <b>majority</b> choice becomes the verdict. Follow-ups remember the session; <b>New session</b> starts fresh.</p>
     <div class="seats">
       <span class="seat">🏛️ Architect</span>
       <span class="seat">🛠️ Pragmatist</span>
@@ -301,7 +404,7 @@ def _make_chat_html() -> str:
   </div>
 </div>
 <div id="input-area">
-  <textarea id="input" rows="1" placeholder="Present a topic to the council…" autofocus></textarea>
+  <textarea id="input" rows="1" placeholder="Pose a question to the council…" autofocus></textarea>
   <button id="send-btn">Convene</button>
 </div>
 <div id="status-bar">ready</div>
@@ -313,9 +416,11 @@ const input = $('input');
 const sendBtn = $('send-btn');
 const statusBar = $('status-bar');
 
+const bench = $('bench');
 let es = null;
-const agentEls = {};   // id -> {wrap, body, buf}
-let agentMeta = {};    // id -> {name, avatar, color}
+const agentEls = {};    // id -> {wrap, body, buf}
+const benchSeats = {};  // id -> {seat, badge, votes}
+let agentMeta = {};     // id -> {name, avatar, color}
 
 function setStatus(m) { statusBar.textContent = m; }
 function atBottom() { return messages.scrollHeight - messages.scrollTop - messages.clientHeight < 100; }
@@ -329,9 +434,40 @@ function addError(text) {
   const e = el('div', 'error-msg'); e.textContent = text;
   messages.appendChild(e); scrollDown(true);
 }
-function addPhase(text) {
-  const e = el('div', 'phase'); e.textContent = text;
+function addPhase(text, sub) {
+  const e = el('div', 'phase');
+  const t = el('span', 'phase-title'); t.textContent = text; e.appendChild(t);
+  if (sub) { const s = el('span', 'phase-sub'); s.textContent = sub; e.appendChild(s); }
   messages.appendChild(e); scrollDown(true);
+}
+
+// --- The bench: the row of advisor seats at the top of the chamber ---------
+function buildBench(agents) {
+  bench.innerHTML = '';
+  for (const k in benchSeats) delete benchSeats[k];
+  agents.forEach(a => {
+    agentMeta[a.id] = a;
+    const seat = el('div', 'seat'); seat.dataset.state = 'idle';
+    seat.style.setProperty('--seat', a.color || 'var(--crimson)');
+    const av = el('div', 'seat-av'); av.textContent = a.avatar || '•';
+    const badge = el('div', 'seat-badge'); badge.textContent = '0'; badge.title = 'votes';
+    av.appendChild(badge);
+    const nm = el('div', 'seat-name'); nm.textContent = a.name || a.id;
+    const st = el('div', 'seat-state'); st.textContent = 'waiting';
+    seat.appendChild(av); seat.appendChild(nm); seat.appendChild(st);
+    bench.appendChild(seat);
+    benchSeats[a.id] = { seat, badge, state: st, votes: 0 };
+  });
+  bench.classList.add('active');
+}
+function seatState(id, state, label) {
+  const s = benchSeats[id]; if (!s) return;
+  s.seat.dataset.state = state;
+  if (label) s.state.textContent = label;
+}
+function bumpSeatVote(id) {
+  const s = benchSeats[id]; if (!s) return;
+  s.votes += 1; s.badge.textContent = s.votes; s.badge.classList.add('has');
 }
 
 function startAgent(meta) {
@@ -341,11 +477,13 @@ function startAgent(meta) {
   const who = el('div', 'who');
   const av = el('span', 'avatar'); av.textContent = meta.avatar || '•';
   const nm = el('span'); nm.textContent = meta.name || meta.id;
-  who.appendChild(av); who.appendChild(nm);
+  const tag = el('span', 'who-tag'); tag.textContent = 'independent answer';
+  who.appendChild(av); who.appendChild(nm); who.appendChild(tag);
   const body = el('div', 'body');
   wrap.appendChild(who); wrap.appendChild(body);
   messages.appendChild(wrap);
   agentEls[meta.id] = { wrap, body, buf: '' };
+  seatState(meta.id, 'speaking', 'answering…');
   scrollDown(true);
 }
 
@@ -361,6 +499,7 @@ function finishAgent(id, text) {
   const a = agentEls[id]; if (!a) return;
   a.wrap.classList.remove('streaming');
   if (text) { a.body.innerHTML = marked.parse(text); highlight(a.body); }
+  seatState(id, 'answered', 'answered');
   scrollDown();
 }
 
@@ -372,58 +511,72 @@ function agentSearch(id, query) {
   scrollDown();
 }
 
+// Each member casts ONE vote for the best (non-self) answer.
 function renderVote(ev) {
-  const card = el('div', 'vote-card');
-  const meta = agentMeta[ev.voter] || {};
-  card.style.setProperty('--seat', meta.color || 'var(--crimson)');
-  const voter = el('div', 'voter');
-  voter.textContent = (meta.avatar ? meta.avatar + ' ' : '') + (ev.voter_name || ev.voter) + ' scores:';
-  card.appendChild(voter);
-  if (!ev.scores || !ev.scores.length) {
-    const b = el('div', 'ballot'); b.textContent = '(abstained)'; card.appendChild(b);
+  const vm = agentMeta[ev.voter] || {};
+  const cm = ev.choice ? (agentMeta[ev.choice] || {}) : {};
+  const row = el('div', 'vote-row');
+  row.style.setProperty('--seat', vm.color || 'var(--crimson)');
+  const voter = el('span', 'v-voter');
+  voter.textContent = (vm.avatar ? vm.avatar + ' ' : '') + (ev.voter_name || ev.voter);
+  const arrow = el('span', 'v-arrow'); arrow.textContent = '→';
+  const choice = el('span', 'v-choice');
+  if (ev.choice) {
+    choice.style.color = cm.color || 'var(--cream)';
+    choice.textContent = (cm.avatar ? cm.avatar + ' ' : '') + (ev.choice_name || '');
+    bumpSeatVote(ev.choice);
+  } else {
+    choice.textContent = '(abstained)';
+    choice.classList.add('muted');
   }
-  (ev.scores || []).forEach(s => {
-    const row = el('div', 'ballot');
-    const left = el('div');
-    const nm = el('span'); nm.textContent = s.target_name;
-    const why = el('div', 'why'); why.textContent = s.reason || '';
-    left.appendChild(nm); left.appendChild(why);
-    const pts = el('div', 'pts'); pts.textContent = s.score + '/10';
-    row.appendChild(left); row.appendChild(pts);
-    card.appendChild(row);
-  });
-  messages.appendChild(card);
+  row.appendChild(voter); row.appendChild(arrow); row.appendChild(choice);
+  if (ev.reason) { const why = el('div', 'v-why'); why.textContent = ev.reason; row.appendChild(why); }
+  messages.appendChild(row);
   scrollDown();
 }
 
 function renderVerdict(ev) {
-  const card = el('div', 'verdict');
-  const h = el('h3');
   const wm = agentMeta[ev.winner_id] || {};
-  h.textContent = '🏆 Verdict — ' + (wm.avatar ? wm.avatar + ' ' : '') + (ev.winner_name || '');
+  const card = el('div', 'verdict');
+  card.style.setProperty('--seat', wm.color || 'var(--crimson)');
+  if (ev.winner_id && benchSeats[ev.winner_id]) {
+    seatState(ev.winner_id, 'winner', 'chosen');
+  }
+
+  const h = el('h3');
+  h.innerHTML = '👑 The council chose ' +
+    '<span class="w-name">' + (wm.avatar ? wm.avatar + ' ' : '') +
+    (ev.winner_name || '') + '</span>';
   card.appendChild(h);
 
-  const totals = ev.totals || {};
-  const max = Math.max(1, ...Object.values(totals));
+  const sub = el('div', 'verdict-sub');
+  sub.textContent = 'by majority vote (' + (ev.tally ? (ev.tally[ev.winner_id] || 0) : 0) +
+    ' of ' + (ev.votes || 0) + ' votes)';
+  card.appendChild(sub);
+
+  // Tally bars by vote count.
+  const tally = ev.tally || {};
+  const max = Math.max(1, ...Object.values(tally));
   const board = el('div', 'leaderboard');
-  Object.keys(totals).sort((a, b) => totals[b] - totals[a]).forEach(id => {
+  Object.keys(tally).sort((a, b) => tally[b] - tally[a]).forEach(id => {
     const m = agentMeta[id] || {};
-    const row = el('div', 'lb-row' + (id === ev.winner_id ? ' win' : ''));
-    row.style.setProperty('--seat', m.color || 'var(--crimson)');
+    const r = el('div', 'lb-row' + (id === ev.winner_id ? ' win' : ''));
+    r.style.setProperty('--seat', m.color || 'var(--crimson)');
     const name = el('div', 'lb-name'); name.textContent = (m.avatar ? m.avatar + ' ' : '') + (m.name || id);
     const bar = el('div', 'lb-bar'); const fill = el('div', 'lb-fill');
-    fill.style.width = Math.round((totals[id] / max) * 100) + '%';
+    fill.style.width = Math.round((tally[id] / max) * 100) + '%';
     bar.appendChild(fill);
-    const pts = el('div', 'lb-pts'); pts.textContent = totals[id];
-    row.appendChild(name); row.appendChild(bar); row.appendChild(pts);
-    board.appendChild(row);
+    const pts = el('div', 'lb-pts'); pts.textContent = tally[id] + (tally[id] === 1 ? ' vote' : ' votes');
+    r.appendChild(name); r.appendChild(bar); r.appendChild(pts);
+    board.appendChild(r);
   });
   card.appendChild(board);
 
   if (ev.answer) {
+    const lbl = el('div', 'winner-label'); lbl.textContent = 'Winning answer';
     const ans = el('div', 'winner-answer');
     ans.innerHTML = marked.parse(ev.answer); highlight(ans);
-    card.appendChild(ans);
+    card.appendChild(lbl); card.appendChild(ans);
   }
   messages.appendChild(card);
   scrollDown(true);
@@ -440,33 +593,37 @@ function convene() {
   input.value = ''; input.style.height = 'auto';
   input.disabled = true; sendBtn.disabled = true;
 
-  // fresh transcript per topic
+  // fresh round
   for (const k in agentEls) delete agentEls[k];
   agentMeta = {};
 
   dropWelcome();
   const banner = el('div', 'topic-banner'); banner.textContent = '“' + topic + '”';
   messages.appendChild(banner);
-  setStatus('convening…'); scrollDown(true);
+  setStatus('convening the council…'); scrollDown(true);
 
   es = new EventSource('/api/council?topic=' + encodeURIComponent(topic));
 
   es.addEventListener('council_start', e => {
     const d = JSON.parse(e.data);
-    (d.agents || []).forEach(a => { agentMeta[a.id] = a; });
-    setStatus('the council is deliberating…');
+    buildBench(d.agents || []);
+    setStatus('the council deliberates independently…');
   });
   es.addEventListener('agent_start', e => {
     const d = JSON.parse(e.data);
     agentMeta[d.id] = d; startAgent(d);
-    setStatus((d.name || 'an advisor') + ' is speaking…');
+    setStatus((d.name || 'an advisor') + ' is forming an answer…');
   });
   es.addEventListener('agent_delta', e => { const d = JSON.parse(e.data); deltaAgent(d.id, d.text); });
   es.addEventListener('agent_tool', e => { const d = JSON.parse(e.data); agentSearch(d.id, d.query); });
   es.addEventListener('agent_done', e => { const d = JSON.parse(e.data); finishAgent(d.id, d.text); });
-  es.addEventListener('vote_start', e => { addPhase('The Vote'); setStatus('the advisors are scoring each other…'); });
+  es.addEventListener('vote_start', e => {
+    addPhase('The Vote', 'each advisor casts one vote for the best answer');
+    Object.keys(benchSeats).forEach(id => seatState(id, 'voting', 'voting…'));
+    setStatus('the council is voting…');
+  });
   es.addEventListener('vote', e => { renderVote(JSON.parse(e.data)); });
-  es.addEventListener('verdict', e => { renderVerdict(JSON.parse(e.data)); });
+  es.addEventListener('verdict', e => { addPhase('The Verdict'); renderVerdict(JSON.parse(e.data)); });
   es.addEventListener('council_error', e => {
     let m = 'The council failed.';
     try { m = JSON.parse(e.data).message || m; } catch (_) {}
@@ -494,11 +651,13 @@ function newThread() {
   if (es) return;  // don't reset mid-run
   fetch('/api/council/reset').catch(() => {});
   messages.innerHTML = '';
+  bench.innerHTML = ''; bench.classList.remove('active');
   for (const k in agentEls) delete agentEls[k];
+  for (const k in benchSeats) delete benchSeats[k];
   agentMeta = {};
   const w = el('div', 'welcome');
   w.innerHTML = '<h2>Fresh Council</h2><div class="divider"></div>' +
-    '<p>Prior discussion cleared. Present a new topic to convene the council.</p>';
+    '<p>Prior session cleared. Pose a new question to convene the council.</p>';
   messages.appendChild(w);
   setStatus('ready');
   input.focus();
@@ -831,7 +990,7 @@ async def handle_chat_stop_command() -> bool:
 # ---------------------------------------------------------------------------
 
 def register_commands(registry) -> None:
-    """Register the /chat command."""
+    """Register the /council command (with /chat kept as a back-compat alias)."""
     from novacode_cli.commands import CommandContext
 
     async def _handle(ctx: CommandContext) -> bool:
@@ -847,4 +1006,5 @@ def register_commands(registry) -> None:
             return await handle_chat_stop_command()
         return await handle_chat_command()
 
-    registry.register("chat", _handle)
+    registry.register("council", _handle)
+    registry.register("chat", _handle)  # back-compat alias
