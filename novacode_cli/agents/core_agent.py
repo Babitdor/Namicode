@@ -936,7 +936,13 @@ This file stores your preferences and context that persist across sessions.
         AgentMemoryMiddleware(
             settings=settings,
             assistant_id=assistant_id,
-            skip_project_memory=is_continuation,
+            # Always load project memory (NOVA.md/CLAUDE.md) into <project_memory>,
+            # even on resume. It's standing project config that must be present in
+            # the system prompt EVERY turn (and hot-reloaded). The continuation
+            # prompt no longer carries NOVA.md, so there's nothing to duplicate —
+            # and unlike a seeded message, the system-prompt copy survives
+            # summarization/compaction.
+            skip_project_memory=False,
             backend=composite_backend,  # Route through CompositeBackend for /memories/ etc.
         ),
     ]

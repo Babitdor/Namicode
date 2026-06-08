@@ -72,9 +72,12 @@ def build_continuation_prompt(
     # 1. Static system instructions
     system_parts.append(system_prompt)
 
-    # 2. NOVA.md contents (project rules - AUTHORITATIVE)
-    if NOVA_md_content:
-        system_parts.append("\n\n## Project Rules (NOVA.md)\n\n" + NOVA_md_content)
+    # 2. NOVA.md is intentionally NOT injected here. AgentMemoryMiddleware now
+    # loads project memory into the <project_memory> section of the system prompt
+    # every turn (and hot-reloads it), so a resumed session keeps the project
+    # rules persistently — instead of only in this one seeded message, which
+    # summarization would eventually evict. (NOVA_md_content is accepted for
+    # backward compatibility but no longer embedded to avoid duplication.)
 
     # 3. memory.md contents (session memory - declarative facts)
     if session_data.memory:
