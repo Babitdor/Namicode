@@ -31,6 +31,10 @@ AT_MENTION_RE = re.compile(r"@(?P<path>(?:[^\s@]|(?<=\\)\s)*)$")
 SLASH_COMMAND_RE = re.compile(r"^/(?P<command>[a-z][a-z0-9:-]*)$")
 # Pattern for @agent_name with optional query at start of input
 AGENT_MENTION_RE = re.compile(r"^@([a-zA-Z0-9_-]+)(?:\s+(.+))?$", re.DOTALL)
+# Pattern for an @name token ANYWHERE in the text (used to find multiple agent
+# mentions). The (?<![^\s(]) guard avoids matching mid-word like "foo@bar" or
+# an email's "@domain", while still allowing a leading "(@name".
+ANY_MENTION_RE = re.compile(r"(?<![^\s(])@([a-zA-Z0-9_-]+)")
 
 EXIT_CONFIRM_WINDOW = 3.0
 
@@ -596,6 +600,37 @@ def parse_agent_mentions(text: str, settings: Settings | None = None) -> tuple[s
         return agent_name, query
 
     return None, text  # Agent not found, treat as regular input
+
+
+def parse_agent_mentions_multi(
+    text: str, settings: Settings | None = None
+) -> list[str]:
+    """Find every ``@name`` in *text* that resolves to a known agent.
+
+    Unlike :func:`parse_agent_mentions` (which only matches a single agent at the
+    very start), this scans the whole message so a request like
+    ``"@dev-agent fix @app.py then hand to @test-agent"`` yields
+    ``["dev-agent", "test-agent"]`` in order. ``@file`` mentions and unknown
+    ``@words`` are ignored (only names matching a core subagent or a user-created
+    agent count). Order-preserving and de-duplicated.
+    """
+    if settings is None:
+        settings = Settings.from_environment()
+
+    from novacode_cli.agents.default_subagents.subagents import retrieve_core_subagents
+
+    core_names = {s["name"] for s in retrieve_core_subagents()}
+
+    found: list[str] = []
+    seen: set[str] = set()
+    for match in ANY_MENTION_RE.finditer(text):
+        name = match.group(1)
+        if name in seen:
+            continue
+        if name in core_names or settings.find_agent(name) is not None:
+            found.append(name)
+            seen.add(name)
+    return found
 
 
 def get_bottom_toolbar(

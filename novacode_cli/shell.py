@@ -532,8 +532,7 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
             f"piped stdin cannot support TUI navigation."
         )
 
-        @tool(self._tool_name, description=description)
-        def shell_tool(
+        def _shell_impl(
             command: str,
             runtime: ToolRuntime[None, AgentState],
             interactive: bool = False,  # noqa: FBT001, FBT002
@@ -566,8 +565,19 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
                 )
             return self._run_shell_command(command, tool_call_id=runtime.tool_call_id)
 
-        self._shell_tool = shell_tool
+        self._shell_tool = tool(self._tool_name, description=description)(_shell_impl)
+
+        # Alias: Claude-family models habitually call `bash` (a reflex from
+        # Claude Code's Bash tool), which otherwise errors with "bash is not a
+        # valid tool". Register a same-behavior `bash` alias so those calls
+        # resolve. (We intentionally do NOT alias `execute` — deepagents already
+        # registers an `execute` tool and a duplicate name would break the build.)
         self.tools = [self._shell_tool]
+        if self._tool_name != "bash":
+            self._bash_alias = tool(
+                "bash", description=f"Alias for `{self._tool_name}`. {description}"
+            )(_shell_impl)
+            self.tools.append(self._bash_alias)
 
     def _cleanup_background_processes(self) -> None:
         """Clean up background processes before exit to prevent asyncio errors."""

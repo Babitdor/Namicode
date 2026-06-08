@@ -259,8 +259,15 @@ async def select_session_interactive(
     if session_manager is None:
         session_manager = SessionManager()
 
-    # Load sessions
-    sessions = session_manager.list_sessions(limit=20)
+    # Load sessions, excluding ones the user /clear-ed — a cleared conversation
+    # should not reappear in the resume picker (it stays on disk and can still be
+    # recovered explicitly via `nova --continue <id>`). This mirrors the
+    # --continue auto-resume filter in get_latest_session().
+    sessions = [
+        s
+        for s in session_manager.list_sessions(limit=50)
+        if not getattr(s, "cleared", False)
+    ][:20]
 
     if not sessions:
         console.print()
