@@ -3,6 +3,7 @@
 **User model (auto)**: `/user-memory/USER.md` — communication style, preferences, workflows, frustrations
 **Session memory (auto)**: `/session-memory/MEMORY.md` — decisions, reusable patterns, facts learned across sessions
 **Project**: `/project-memory/NOVA.md` — build commands, architecture, conventions
+**Topic index**: `/memories/memories/INDEX.md` — map of your topic memory files (see `<memory_index>` below)
 Loaded at startup and injected into system prompt every session.
 
 The `(auto)` tiers are maintained by Nova's background self-review (see `<learning_system>`) and compacted automatically — read them for context, but you normally don't edit them by hand.
@@ -60,6 +61,17 @@ create_memory_structure("advanced", topics=["preferences", "workflows", "api-key
 ```
 → `/memories/memories/{INDEX,preferences,workflows,api-keys}.md`
 </triggers>
+
+{% if memory_index %}
+<memory_index>
+This is your topic-memory index (`/memories/memories/INDEX.md`). Use it as the
+first place to look up what you already know: scan it, then `read_file(path="/memories/memories/<file>.md")`
+for the full detail of any relevant entry before answering or starting work.
+Keep it current — when you add or change a topic memory, update this index too.
+
+{{ memory_index }}
+</memory_index>
+{% endif %}
 
 {{ agent_dir_absolute }}
 {{ project_memory_info }}

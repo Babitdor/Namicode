@@ -37,6 +37,9 @@ class AgentMemoryState(AgentState):
     project_memory: NotRequired[str]
     """Project-specific context (combined from all found memory files)."""
 
+    memory_index: NotRequired[str]
+    """The topic-memory index (~/.nova/{agent}/memories/INDEX.md), if present."""
+
 
 class AgentMemoryStateUpdate(TypedDict):
     """A state update for the agent memory middleware."""
@@ -46,6 +49,9 @@ class AgentMemoryStateUpdate(TypedDict):
 
     project_memory: NotRequired[str]
     """Project-specific context (combined from all found memory files)."""
+
+    memory_index: NotRequired[str]
+    """The topic-memory index (~/.nova/{agent}/memories/INDEX.md), if present."""
 
 
 # Long-term Memory Documentation
@@ -130,6 +136,7 @@ class AgentMemoryMiddleware(AgentMiddleware):
         # Cache for loaded memory content
         self._cached_user_memory: str | None = None
         self._cached_project_memory: str | None = None
+        self._cached_memory_index: str | None = None
         # Cache for rendered memory section to avoid re-rendering on every request
         self._memory_section_cache: str | None = None
         self._memory_section_cache_time: float = 0
@@ -324,8 +331,9 @@ class AgentMemoryMiddleware(AgentMiddleware):
 
         # Gather all memory file paths to check for changes
         user_path = self.settings.get_user_agent_md_path(self.assistant_id)
+        index_path = self.agent_dir / "memories" / "INDEX.md"
         project_paths = self.settings.get_project_agent_md_paths() if not self.skip_project_memory else []
-        all_paths = [user_path] + list(project_paths)
+        all_paths = [user_path, index_path] + list(project_paths)
 
         # Check if any files have changed (hot-reload) - only for local filesystem
         # In sandbox mode, we always reload since we can't track mtimes
@@ -340,6 +348,16 @@ class AgentMemoryMiddleware(AgentMiddleware):
                 if len(content) > MAX_MEMORY_CHARS:
                     content = content[:MAX_MEMORY_CHARS] + _MEMORY_TRUNCATION_NOTICE
                 result["user_memory"] = content
+
+        # Load the topic-memory index (memories/INDEX.md). It's a compact pointer
+        # list, so injecting it gives the agent a live map of what it already
+        # knows; it then reads the referenced topic files on demand.
+        if needs_reload or "memory_index" not in state:
+            index_content = self._read_file(index_path)
+            if index_content is not None and index_content.strip():
+                if len(index_content) > MAX_MEMORY_CHARS:
+                    index_content = index_content[:MAX_MEMORY_CHARS] + _MEMORY_TRUNCATION_NOTICE
+                result["memory_index"] = index_content
 
         # Load project memory from ALL available sources if not in state or if files changed
         # Project memory is read from sandbox when available, local otherwise
@@ -385,18 +403,20 @@ class AgentMemoryMiddleware(AgentMiddleware):
         state = cast("AgentMemoryState", request.state)
         user_memory = state.get("user_memory")
         project_memory = state.get("project_memory")
+        memory_index = state.get("memory_index")
         base_system_prompt = request.system_prompt
-        
+
         current_time = time.time()
-        
+
         # Check if we can use cached memory section (sliding window)
         # Cache is valid if: TTL not expired AND memory content hasn't changed
-        memory_content = (user_memory or "", project_memory or "")
+        memory_content = (user_memory or "", project_memory or "", memory_index or "")
         can_use_cache = (
             self._memory_section_cache is not None
             and current_time - self._memory_section_cache_time < self._memory_section_cache_ttl
             and (self._cached_user_memory or "") == memory_content[0]
             and (self._cached_project_memory or "") == memory_content[1]
+            and (self._cached_memory_index or "") == memory_content[2]
         )
         
         if can_use_cache:
@@ -431,13 +451,15 @@ class AgentMemoryMiddleware(AgentMiddleware):
                 agent_dir_display=self.agent_dir_display,
                 project_memory_info=project_memory_info,
                 project_deepagents_dir=project_deepagents_dir,
+                memory_index=memory_index,
             )
-            
+
             # Cache the result
             self._memory_section_cache = memory_section
             self._memory_section_cache_time = current_time
             self._cached_user_memory = memory_content[0]
             self._cached_project_memory = memory_content[1]
+            self._cached_memory_index = memory_content[2]
 
         # memory_section is guaranteed to be set at this point
         assert memory_section is not None

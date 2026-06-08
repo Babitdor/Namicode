@@ -4,142 +4,126 @@ This module provides the handle_dream_command function that runs
 a memory consolidation pass to organize and clean up memory files.
 """
 
+from collections.abc import Callable
 from pathlib import Path
 
 from novacode_cli.config.config import COLORS, console
 from novacode_cli.prompts import render_template
 
+# A UI sink: called with one Rich-markup string per line ("" = blank line).
+EmitFn = Callable[[str], None]
+
+
+def _console_emit(message: str = "") -> None:
+    """Default emitter (CLI): render a Rich-markup string to the console."""
+    console.print(message)
+
 
 async def handle_dream_command(
     session_state,
+    assistant_id: str | None = None,
     agent_dir: Path | None = None,
-) -> bool:
+    emit: EmitFn | None = None,
+) -> bool | str:
     """Handle the /dream command - run memory consolidation.
 
-    This command performs a multi-phase memory consolidation pass:
-    1. Orient - Review existing memory files
-    2. Gather - Collect recent signal from logs/transcripts
-    3. Consolidate - Merge updates into topic files
-    4. Prune - Clean up the index
+    Performs a multi-phase memory consolidation pass over the agent's *real*
+    memory directory (``~/.nova/agents/{assistant_id}/``): agent.md (preferences),
+    USER.md (user model), MEMORY.md (cross-session memory), and any topic files
+    under ``memories/``.
+
+    Returns the consolidation prompt (a ``str``) for the caller to stream to the
+    agent when memory exists, or ``True`` (handled, nothing to do) when it does
+    not. The agent acts on the **virtual** ``/memories/`` route — which maps to
+    this directory — so its read/edit tools work regardless of OS path form.
 
     Args:
-        session_state: Current session state
-        agent_dir: Optional agent directory path (defaults to ~/.nova/)
+        session_state: Current session state.
+        assistant_id: The active agent id (defaults to the main agent).
+        agent_dir: Optional explicit agent directory (overrides the resolved one).
 
     Returns:
-        True (command always handled)
+        The consolidation prompt string, or True if there is nothing to consolidate.
     """
-    from novacode_cli.memory.agent_memory import AgentMemoryMiddleware
+    from novacode_cli.config.config import MAIN_AGENT_ID, settings
 
-    # Determine agent directory
+    if emit is None:
+        emit = _console_emit
+
+    # Resolve the REAL memory directory (the one Nova actually writes to).
     if agent_dir is None:
-        agent_dir = Path.home() / ".nova"
+        try:
+            agent_dir = settings.get_agent_dir(assistant_id or MAIN_AGENT_ID)
+        except Exception:  # noqa: BLE001 - bad agent id, fall back to main
+            agent_dir = settings.get_agent_dir(MAIN_AGENT_ID)
 
-    # Check for memory structures (support both simple and advanced)
-    # Simple: agent.md file in agent directory
-    # Advanced: memories/ directory with topic files
-    agent_md = agent_dir / "agent.md"
-    memory_dir = agent_dir / "memories"
-    
-    has_simple_memory = agent_md.exists()
-    has_advanced_memory = memory_dir.exists()
-    
-    if not has_simple_memory and not has_advanced_memory:
-        console.print()
-        console.print("[yellow]No memory files found.[/yellow]")
-        console.print(f"[dim]Expected: {agent_md} or {memory_dir}[/dim]")
-        console.print()
-        console.print("[dim]Memory files are created when you use the memory system.[/dim]")
-        console.print("[dim]Try asking the agent to remember something first.[/dim]")
-        console.print()
-        console.print("[dim]Quick start: Ask me to 'save this to memory' or 'remember this for next time'[/dim]")
-        console.print()
+    # Nova's memory tiers (all in agent_dir) + optional topic files under memories/.
+    tier_files = {
+        "agent.md": "preferences & general notes",
+        "USER.md": "user model (who the user is, how they work)",
+        "MEMORY.md": "cross-session memory (decisions, facts, patterns)",
+    }
+    memories_dir = agent_dir / "memories"
+
+    present = [(name, role) for name, role in tier_files.items() if (agent_dir / name).exists()]
+    topic_files = sorted(memories_dir.glob("*.md")) if memories_dir.exists() else []
+
+    if not present and not topic_files:
+        emit("")
+        emit("[yellow]No memory files found yet.[/yellow]")
+        emit(f"[dim]Looked in: {agent_dir}[/dim]")
+        emit(
+            "[dim]Ask me to 'remember this' during a session and the memory tiers"
+            " fill in; then /dream consolidates them.[/dim]"
+        )
+        emit("")
         return True
 
-    # Determine which memory structure to use
-    if has_advanced_memory:
-        # Advanced: memories/ directory with topic files
-        memory_path = memory_dir
-        index_file = memory_dir / "INDEX.md"
-        memory_type = "advanced"
-    else:
-        # Simple: agent.md file
-        memory_path = agent_dir
-        index_file = agent_md
-        memory_type = "simple"
-    
     transcripts_dir = agent_dir / "transcripts"
 
-    console.print()
-    console.print("[bold]Memory Consolidation (Dream)[/bold]", style=COLORS["primary"])
-    console.print()
-    console.print(f"[dim]Memory type: {memory_type}[/dim]")
-    console.print(f"[dim]Memory path: {memory_path}[/dim]")
-    console.print("[dim]Running multi-phase memory consolidation...[/dim]")
-    console.print()
+    # Describe Nova's concrete memory layout so the agent consolidates the right
+    # files. Use the VIRTUAL /memories/ route — the agent's file tools resolve it
+    # to the real agent dir; passing the raw OS path would be rejected by the
+    # virtual-mode filesystem backend.
+    lines = ["These memory files exist (operate on them under `/memories/`):"]
+    for name, role in present:
+        lines.append(f"- `/memories/{name}` — {role}")
+    if topic_files:
+        lines.append(
+            f"- `/memories/memories/` — {len(topic_files)} topic file(s): "
+            + ", ".join(f.name for f in topic_files[:8])
+            + ("…" if len(topic_files) > 8 else "")
+        )
+    memory_dir_context = "\n".join(lines)
 
-    # Render the consolidation prompt
-    prompt = render_template(
+    # Pick the index target the agent should keep tidy, as a full virtual path
+    # the agent's file tools accept: the topic INDEX.md under memories/ if it
+    # exists, else Nova's cross-session MEMORY.md.
+    index_file = (
+        "/memories/memories/INDEX.md"
+        if (memories_dir / "INDEX.md").exists()
+        else "/memories/MEMORY.md"
+    )
+
+    emit("")
+    emit(f"[bold {COLORS['primary']}]💭 Memory Consolidation (Dream)[/bold {COLORS['primary']}]")
+    for name, role in present:
+        emit(f"  [cyan]{name}[/cyan] [dim]— {role}[/dim]")
+    if topic_files:
+        names = ", ".join(f.name for f in topic_files[:6]) + (
+            "…" if len(topic_files) > 6 else ""
+        )
+        emit(f"  [cyan]memories/[/cyan] [dim]— {len(topic_files)} topic file(s): {names}[/dim]")
+    emit("")
+
+    return render_template(
         "memory_consolidation.jinja",
-        memory_dir=str(memory_path),
-        memory_dir_context=f"Memory files are stored in {memory_path}" + 
-                          (f" (single file: {agent_md.name})" if memory_type == "simple" else ""),
-        index_file=index_file.name if memory_type == "advanced" else "agent.md",
+        memory_dir="/memories/",
+        memory_dir_context=memory_dir_context,
+        index_file=index_file,
         index_max_lines=100,
         transcripts_dir=str(transcripts_dir) if transcripts_dir.exists() else None,
     )
-
-    console.print("[bold]Phase 1: Orient[/bold]", style=COLORS["primary"])
-    console.print(f"[dim]  Memory path: {memory_path}[/dim]")
-    console.print(f"[dim]  Index file: {index_file}[/dim]")
-
-    # List existing memory files
-    if memory_type == "advanced":
-        memory_files = list(memory_dir.glob("*.md"))
-    else:
-        memory_files = [agent_md] if agent_md.exists() else []
-    
-    if memory_files:
-        console.print(f"[dim]  Found {len(memory_files)} memory file(s)[/dim]")
-        for mf in sorted(memory_files)[:5]:  # Show first 5
-            console.print(f"[dim]    - {mf.name}[/dim]")
-        if len(memory_files) > 5:
-            console.print(f"[dim]    ... and {len(memory_files) - 5} more[/dim]")
-    else:
-        console.print("[dim]  No memory files found[/dim]")
-
-    console.print()
-    console.print("[bold]Phase 2: Gather[/bold]", style=COLORS["primary"])
-
-    # Check for transcripts
-    if transcripts_dir.exists():
-        transcript_files = list(transcripts_dir.glob("*.jsonl"))
-        console.print(f"[dim]  Found {len(transcript_files)} transcript files[/dim]")
-    else:
-        console.print("[dim]  No transcripts directory[/dim]")
-
-    console.print()
-    console.print("[bold]Phase 3: Consolidate[/bold]", style=COLORS["primary"])
-    console.print("[dim]  Merging new signal into existing topic files...[/dim]")
-
-    console.print()
-    console.print("[bold]Phase 4: Prune[/bold]", style=COLORS["primary"])
-    console.print(f"[dim]  Updating index: {index_file}[/dim]")
-
-    console.print()
-    console.print("[bold]Consolidation Prompt Generated[/bold]", style=COLORS["primary"])
-    console.print()
-    console.print("[dim]The consolidation prompt is ready to be sent to the model.[/dim]")
-    console.print("[dim]To complete consolidation, the agent will:[/dim]")
-    console.print("[dim]  1. Review all memory files[/dim]")
-    console.print("[dim]  2. Identify outdated or duplicate information[/dim]")
-    console.print("[dim]  3. Merge related memories[/dim]")
-    console.print("[dim]  4. Update the index file[/dim]")
-    console.print()
-
-    # Return the prompt for the agent to process
-    # The caller should send this prompt to the model
-    return prompt
 
 
 def get_dream_prompt(
@@ -177,6 +161,19 @@ def register_commands(registry) -> None:
     from novacode_cli.commands import CommandContext
 
     async def _handle(ctx: CommandContext) -> bool:
-        return await handle_dream_command(ctx.session_state)
+        result = await handle_dream_command(ctx.session_state, ctx.assistant_id)
+        # When memory exists, the handler returns a consolidation prompt to run.
+        if isinstance(result, str) and result.strip() and ctx.agent is not None:
+            from novacode_cli.ui.execution import execute_task
+
+            console.print("[dim]💭 Dreaming over memories…[/dim]")
+            await execute_task(
+                result,
+                ctx.agent,
+                ctx.assistant_id,
+                ctx.session_state,
+                ctx.token_tracker,
+            )
+        return True
 
     registry.register("dream", _handle)
