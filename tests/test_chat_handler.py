@@ -157,7 +157,9 @@ async def test_council_persona_can_web_search(monkeypatch):
             return self
 
         async def astream(self, messages):
-            has_result = any(type(m).__name__ == "ToolMessage" for m in messages)
+            has_result = any(
+                isinstance(m, dict) and m.get("role") == "tool" for m in messages
+            )
             if not has_result:
                 yield _ToolChunk(
                     tool_calls=[

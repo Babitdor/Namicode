@@ -14,7 +14,6 @@ Server-Sent Events (see :mod:`novacode_cli.commands.chat_handler`).
 from __future__ import annotations
 
 import json
-import logging
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -22,26 +21,43 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-logger = logging.getLogger(__name__)
-
 # Max web searches a single persona may run before it must answer.
 _MAX_TOOL_ROUNDS = 2
 
-try:
-    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
-    from langchain_core.tools import tool
+# Tool offered to each persona, as a plain OpenAI-style schema dict. Passing a
+# dict (rather than a LangChain ``@tool``) keeps this module import-light — it
+# avoids importing ``langchain_core`` (which pulls in transformers) at import
+# time; the configured model already brings LangChain with it at run time.
+_SEARCH_TOOL_NAME = "council_web_search"
+_SEARCH_TOOL_SCHEMA: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": _SEARCH_TOOL_NAME,
+        "description": (
+            "Search the web (DuckDuckGo) for current, factual information. Use a "
+            "focused query. Call this only when you genuinely need up-to-date or "
+            "factual grounding for your perspective."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "The search query."}
+            },
+            "required": ["query"],
+        },
+    },
+}
 
-    @tool
-    def council_web_search(query: str) -> str:
-        """Search the web (DuckDuckGo) for current, factual information.
 
-        Use a focused query. Returns a short list of result titles, snippets,
-        and URLs. Call this only when you genuinely need up-to-date or factual
-        grounding for your perspective.
-        """
+def _run_council_tool(name: str, args: dict[str, Any]) -> str:
+    """Execute a council tool call by name and return its string result."""
+    if name == _SEARCH_TOOL_NAME:
         from novacode_cli.tools.web_tools import duckduckgo_search
 
-        res = duckduckgo_search(query, max_results=4)
+        try:
+            res = duckduckgo_search(str(args.get("query", "")), max_results=4)  # type: ignore
+        except Exception as exc:  # noqa: BLE001
+            return f"(search error: {exc})"
         if not res.get("success"):
             return f"(search failed: {res.get('error', 'unknown error')})"
         results = res.get("results", [])
@@ -51,20 +67,6 @@ try:
             f"- {r.get('title', '')}: {r.get('body', '')} ({r.get('url', '')})"
             for r in results
         )
-
-    _TOOLS_AVAILABLE = True
-except Exception:  # noqa: BLE001 - tools are optional; degrade to plain streaming
-    _TOOLS_AVAILABLE = False
-    council_web_search = None  # type: ignore[assignment]
-
-
-def _run_council_tool(name: str, args: dict[str, Any]) -> str:
-    """Execute a council tool call by name and return its string result."""
-    if name == "council_web_search" and council_web_search is not None:
-        try:
-            return council_web_search.invoke({"query": args.get("query", "")})
-        except Exception as exc:  # noqa: BLE001
-            return f"(search error: {exc})"
     return f"(unknown tool: {name})"
 
 
@@ -206,9 +208,7 @@ def _content_text(message: Any) -> str:
     return str(content) if content is not None else ""
 
 
-def _parse_scores(
-    raw: str, valid_names: set[str]
-) -> list[tuple[str, int, str]]:
+def _parse_scores(raw: str, valid_names: set[str]) -> list[tuple[str, int, str]]:
     """Parse a voter's JSON scorecard, keeping only entries for *valid_names*.
 
     Tolerant of code fences / surrounding prose: extracts the first JSON object.
@@ -275,9 +275,9 @@ async def _stream_persona_turn(
     system_text = persona.system + _RESPONSE_GUIDE
 
     model_tools = None
-    if _TOOLS_AVAILABLE and hasattr(model, "bind_tools"):
+    if hasattr(model, "bind_tools"):
         try:
-            model_tools = model.bind_tools([council_web_search])
+            model_tools = model.bind_tools([_SEARCH_TOOL_SCHEMA])
         except Exception:  # noqa: BLE001 - provider may not support tools
             model_tools = None
 
@@ -288,7 +288,13 @@ async def _stream_persona_turn(
                 yield ("delta", piece)
         return
 
-    messages: list[Any] = [SystemMessage(system_text), HumanMessage(convo)]
+    # Dict-form messages so we don't import langchain_core.messages here; the
+    # model converts them. The model's own tool-call message (``gathered``) is
+    # appended as returned.
+    messages: list[Any] = [
+        {"role": "system", "content": system_text},
+        {"role": "user", "content": convo},
+    ]
     rounds = 0
     while True:
         use_tools = rounds < _MAX_TOOL_ROUNDS
@@ -297,14 +303,18 @@ async def _stream_persona_turn(
             if use_tools:
                 try:
                     gathered = chunk if gathered is None else gathered + chunk
-                except Exception:  # noqa: BLE001 - chunk not addable; skip tool detection
+                except (
+                    Exception
+                ):  # noqa: BLE001 - chunk not addable; skip tool detection
                     gathered = None
             piece = _content_text(chunk)
             if piece:
                 yield ("delta", piece)
 
         tool_calls = (
-            list(getattr(gathered, "tool_calls", None) or []) if gathered is not None else []
+            list(getattr(gathered, "tool_calls", None) or [])
+            if gathered is not None
+            else []
         )
         if not tool_calls:
             return
@@ -315,7 +325,9 @@ async def _stream_persona_turn(
             query = str(args.get("query", "")).strip()
             yield ("tool", query)
             result = _run_council_tool(call.get("name", ""), args)
-            messages.append(ToolMessage(content=result, tool_call_id=call.get("id", "")))
+            messages.append(
+                {"role": "tool", "content": result, "tool_call_id": call.get("id", "")}
+            )
         rounds += 1
 
 
