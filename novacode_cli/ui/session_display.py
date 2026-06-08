@@ -92,7 +92,7 @@ def display_restored_session(
         console.print()
         for warning in warnings:
             # Color code warnings by severity
-            if "Nova.md" in warning or "changed" in warning.lower():
+            if "NOVA.md" in warning or "changed" in warning.lower():
                 console.print(f"  [yellow]⚠ {warning}[/yellow]")
             elif "uncommitted" in warning.lower():
                 console.print(f"  [blue]ℹ {warning}[/blue]")

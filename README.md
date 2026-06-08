@@ -24,7 +24,7 @@ An open-source terminal-based AI coding assistant that runs in your terminal, si
 - **LSP Integration**: Language Server Protocol support for go-to-definition, find references, rename, diagnostics, and more
 - **Semantic Code Search**: Find code by description or meaning, not just exact text matches
 - **Web Scraping**: Built-in tools for GitHub trending repos, Hacker News headlines, LinkedIn jobs, Reddit posts, and Twitter/X trends — no external API keys required
-- **Async Subagents**: Background task execution on remote LangGraph servers
+- **Async Subagents**: Background task execution on remote LangGraph servers. Includes specialized agents like the **Documentation Update Agent** which automatically synchronizes project docs and changelogs with git commits.
 - **Remote Bridges**: Discord and Telegram integration for remote agent interaction
 - **Onboarding System**: Interactive first-run setup with API key management and model selection
 - **Doctor Command**: System diagnostics to verify your environment
@@ -40,7 +40,7 @@ An open-source terminal-based AI coding assistant that runs in your terminal, si
 
 - **Python 3.11 or higher** (Python 3.12 recommended)
 - **Git** for cloning the repository
-- **[uv](https://docs.astral.sh/uv/)** (recommended) or pip for package management
+- **[uv](https://docs.astral.sh/uv/)** (required for dependency management) or pip for package management
 
 ### Step-by-Step Installation
 

@@ -34,7 +34,7 @@ class SessionMeta:
         last_active: ISO timestamp of last activity
         project_root: Path to project root (if in a git project)
         repo_hash: Hash of git HEAD for compatibility checking
-        Nova_md_checksum: Checksum of Nova.md for change detection
+        Nova_md_checksum: Checksum of NOVA.md for change detection
         model_name: Name of the model used
         assistant_id: Agent identifier
         message_count: Number of messages in conversation
@@ -788,18 +788,18 @@ class SessionManager:
             return None
 
     def _compute_Nova_md_checksum(self, project_root: Path) -> str | None:
-        """Compute checksum of Nova.md for change detection.
+        """Compute checksum of NOVA.md for change detection.
 
         Args:
             project_root: Path to the project root
 
         Returns:
-            MD5 checksum of Nova.md or None if not found
+            MD5 checksum of NOVA.md or None if not found
         """
-        # Check both Nova.md and .nova/agent.md
+        # Check both NOVA.md and .nova/NOVA.md
         Nova_md_paths = [
-            project_root / "Nova.md",
-            project_root / ".nova" / "Nova.md",
+            project_root / "NOVA.md",
+            project_root / ".nova" / "NOVA.md",
         ]
 
         for path in Nova_md_paths:

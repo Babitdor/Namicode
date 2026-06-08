@@ -457,7 +457,7 @@ def get_system_prompt(assistant_id: str, sandbox_type: str | None = None) -> str
                      If None, agent is operating in local mode.
 
     Returns:
-        The system prompt string (without Nova.md content)
+        The system prompt string (without NOVA.md content)
     """
     agent_dir_path = f"~/.nova/{assistant_id}"
 
@@ -599,7 +599,7 @@ def create_agent_with_config(
         store: Optional durable store (BaseStore). If None, the caller is
                expected to pass the shared store from get_shared_store() so
                subagents can also access it.
-        is_continuation: If True, skip project memory paths (Nova.md/CLAUDE.md)
+        is_continuation: If True, skip project memory paths (NOVA.md/CLAUDE.md)
                from AgentMemoryMiddleware since they're already in the continuation prompt.
 
     Returns:
@@ -800,8 +800,8 @@ This file stores your preferences and context that persist across sessions.
     # Add /memories/ route for agent directory (~/.nova/<agent>/).
     # Per deepagents docs, /memories/ is the canonical route for persistent
     # agent memory. This allows the agent's read_file tool to access
-    # memory files (Nova.md, CLAUDE.md) via virtual paths like
-    # /memories/Nova.md. AgentMemoryMiddleware reads these files directly
+    # memory files (NOVA.md, CLAUDE.md) via virtual paths like
+    # /memories/NOVA.md. AgentMemoryMiddleware reads these files directly
     # from the filesystem at startup, but the /memories/ route enables
     # the agent to re-read them during execution.
     if agent_dir:

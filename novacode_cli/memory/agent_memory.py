@@ -23,7 +23,7 @@ from novacode_cli.config.config import Settings
 from novacode_cli.prompts import render_template
 
 # Maximum characters to inject per memory source (~3,000 tokens at 4 chars/token).
-# Prevents unbounded prompt growth from large CLAUDE.md / Nova.md files.
+# Prevents unbounded prompt growth from large CLAUDE.md / NOVA.md files.
 MAX_MEMORY_CHARS = 12_000
 _MEMORY_TRUNCATION_NOTICE = "\n\n... [memory truncated — use read_file for full content]"
 
@@ -77,7 +77,7 @@ class AgentMemoryMiddleware(AgentMiddleware):
     """Middleware for loading agent-specific long-term memory.
 
     This middleware loads the agent's long-term memory from files (CLAUDE.md,
-    Nova.md) and injects them into the system prompt. Memory is loaded once
+    NOVA.md) and injects them into the system prompt. Memory is loaded once
     at the start of the conversation and stored in state.
 
     Supports loading from multiple project memory files and combining them.
@@ -105,7 +105,7 @@ class AgentMemoryMiddleware(AgentMiddleware):
             system_prompt_template: Optional custom template for injecting
                 agent memory into system prompt.
             skip_project_memory: If True, skip loading project memory files
-                (Nova.md/CLAUDE.md). Use on session continuation to avoid
+                (NOVA.md/CLAUDE.md). Use on session continuation to avoid
                 duplicate context.
             backend: Optional sandbox backend for reading files from sandbox.
                 When provided, memory files are read from the sandbox instead
@@ -309,7 +309,7 @@ class AgentMemoryMiddleware(AgentMiddleware):
         """Load agent memory from file before agent execution.
 
         Loads both user agent.md and project-specific memory files if available.
-        Project memory is combined from multiple sources (CLAUDE.md, Nova.md).
+        Project memory is combined from multiple sources (CLAUDE.md, NOVA.md).
 
         Hot-reload: Automatically reloads memory files when they change on disk.
         Tracks modification times and reloads when files are updated.
@@ -429,7 +429,7 @@ class AgentMemoryMiddleware(AgentMiddleware):
                 sources_list = ", ".join(self.loaded_project_memory_sources)
                 project_memory_info = f"`{self.project_root}` (loaded: {sources_list})"
             elif self.project_root:
-                project_memory_info = f"`{self.project_root}` (no CLAUDE.md or Nova.md found)"
+                project_memory_info = f"`{self.project_root}` (no CLAUDE.md or NOVA.md found)"
             else:
                 project_memory_info = "None (not in a git project)"
 
@@ -440,7 +440,7 @@ class AgentMemoryMiddleware(AgentMiddleware):
             memory_section = self.system_prompt_template.format(
                 user_memory=user_memory if user_memory else "(No user agent.md)",
                 project_memory=(
-                    project_memory if project_memory else "(No project CLAUDE.md or Nova.md)"
+                    project_memory if project_memory else "(No project CLAUDE.md or NOVA.md)"
                 ),
             )
             

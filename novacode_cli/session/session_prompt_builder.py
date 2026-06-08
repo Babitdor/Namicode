@@ -2,7 +2,7 @@
 
 This module builds prompts in the correct order as specified in Task.md:
 1. Static system instructions
-2. Nova.md contents
+2. NOVA.md contents
 3. memory.md contents
 4. Workspace state (git + FS)
 5. Messages from recent.jsonl
@@ -20,15 +20,15 @@ from novacode_cli.tracking.workspace_anchoring import format_workspace_state_for
 CONTINUATION_INSTRUCTION = """## Continuation Mode
 
 You are continuing from a previous session. The information above represents the current state:
-- Nova.md contains the authoritative project rules (ALWAYS follow these)
+- NOVA.md contains the authoritative project rules (ALWAYS follow these)
 - Session memory contains what was accomplished and learned
 - Workspace state shows the CURRENT filesystem and git status
 - Recent messages show the last few turns of conversation
 
 **Important:**
 - The filesystem has been re-scanned and reflects CURRENT reality
-- Nova.md rules are AUTHORITATIVE - they override session memory
-- If Nova.md has changed, use the NEW rules
+- NOVA.md rules are AUTHORITATIVE - they override session memory
+- If NOVA.md has changed, use the NEW rules
 - Do not hallucinate file contents or git state - rely on what's shown above
 
 **Your task:**
@@ -44,14 +44,14 @@ Continue working on the task from the current state."""
 def build_continuation_prompt(
     session_data: SessionData,
     system_prompt: str,
-    Nova_md_content: str | None = None,
+    NOVA_md_content: str | None = None,
     workspace_state: dict[str, Any] | None = None,
 ) -> list[BaseMessage]:
     """Build a complete continuation prompt in the correct order.
 
     Order per Task.md:
     1. Static system instructions
-    2. Nova.md contents
+    2. NOVA.md contents
     3. memory.md contents
     4. Workspace state (git + FS)
     5. Messages from recent.jsonl
@@ -60,7 +60,7 @@ def build_continuation_prompt(
     Args:
         session_data: Loaded session data
         system_prompt: Base system prompt (static instructions)
-        Nova_md_content: Content of Nova.md (if available)
+        NOVA_md_content: Content of NOVA.md (if available)
         workspace_state: Current workspace state from scan_workspace()
 
     Returns:
@@ -72,9 +72,9 @@ def build_continuation_prompt(
     # 1. Static system instructions
     system_parts.append(system_prompt)
 
-    # 2. Nova.md contents (project rules - AUTHORITATIVE)
-    if Nova_md_content:
-        system_parts.append("\n\n## Project Rules (Nova.md)\n\n" + Nova_md_content)
+    # 2. NOVA.md contents (project rules - AUTHORITATIVE)
+    if NOVA_md_content:
+        system_parts.append("\n\n## Project Rules (NOVA.md)\n\n" + NOVA_md_content)
 
     # 3. memory.md contents (session memory - declarative facts)
     if session_data.memory:
@@ -107,7 +107,9 @@ def build_continuation_prompt(
     # Apply a token-budget guard to avoid exceeding context limits when tool outputs
     # or file reads are large — always prefer the most recent messages.
     MAX_RECENT_TOKENS = 30_000
-    non_system = [msg for msg in session_data.messages if not isinstance(msg, SystemMessage)]
+    non_system = [
+        msg for msg in session_data.messages if not isinstance(msg, SystemMessage)
+    ]
     budget_messages: list[BaseMessage] = []
     token_count = 0
     for msg in reversed(non_system):
@@ -205,26 +207,26 @@ def _format_task_state(session_data: SessionData) -> str:
     return "\n".join(lines)
 
 
-def load_Nova_md(project_root: Path | None) -> str | None:
-    """Load Nova.md or .nova/agent.md from project root.
+def load_NOVA_md(project_root: Path | None) -> str | None:
+    """Load NOVA.md or .nova/NOVA.md from project root.
 
     Args:
         project_root: Path to project root
 
     Returns:
-        Nova.md content or None if not found
+        NOVA.md content or None if not found
     """
     if not project_root:
         return None
 
-    Nova_md_paths = [
+    NOVA_md_paths = [
         project_root / "NOVA.md",
         project_root / ".nova" / "NOVA.md",
         project_root / "CLAUDE.md",
         project_root / ".claude" / "CLAUDE.md",
     ]
 
-    for path in Nova_md_paths:
+    for path in NOVA_md_paths:
         if path.exists():
             try:
                 return path.read_text(encoding="utf-8")

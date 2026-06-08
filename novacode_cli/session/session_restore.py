@@ -50,13 +50,13 @@ def validate_session_compatibility(
                 "Some file references may be outdated."
             )
 
-    # Check Nova.md checksum - only warn
+    # Check NOVA.md checksum - only warn
     if meta.project_root and meta.Nova_md_checksum and current_project_root:
         manager = SessionManager()
         current_checksum = manager._compute_Nova_md_checksum(current_project_root)
         if current_checksum and current_checksum != meta.Nova_md_checksum:
             warnings.append(
-                "Nova.md / agent.md has changed since session was saved. "
+                "NOVA.md / agent.md has changed since session was saved. "
                 "New instructions will be used."
             )
 

@@ -49,7 +49,7 @@ class LegacyInitRenderer:
 
         header = Text()
         header.append("🔍 ", style="bold")
-        header.append("Nova.md Initialization", style=f"bold {COLORS['primary']}")
+        header.append("NOVA.md Initialization", style=f"bold {COLORS['primary']}")
 
         c.print(
             Panel(

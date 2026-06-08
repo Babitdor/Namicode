@@ -53,6 +53,9 @@ coverage.xml
 *.mo
 *.pot
 
+# LangGraph dev server runtime state (checkpoints/ops pickles — not source)
+.langgraph_api/
+
 # Environments
 .env
 .venv/

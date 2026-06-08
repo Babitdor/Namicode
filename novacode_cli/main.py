@@ -1933,7 +1933,7 @@ async def main(
     if continue_session:
         from novacode_cli.session.session_prompt_builder import (
             build_continuation_prompt,
-            load_Nova_md,
+            load_NOVA_md,
         )
         from novacode_cli.tracking.workspace_anchoring import (
             detect_drift,
@@ -1958,7 +1958,7 @@ async def main(
                     session_manager.load_recent_messages, session_data.meta.session_id
                 ),
                 asyncio.to_thread(scan_workspace, project_root),
-                asyncio.to_thread(load_Nova_md, project_root),
+                asyncio.to_thread(load_NOVA_md, project_root),
             )
 
             if session_data.workspace_state:
@@ -1980,7 +1980,7 @@ async def main(
             initial_messages = build_continuation_prompt(
                 session_data=session_data,
                 system_prompt=base_system_prompt,
-                Nova_md_content=nova_md_content,
+                NOVA_md_content=nova_md_content,
                 workspace_state=current_workspace,
             )
 

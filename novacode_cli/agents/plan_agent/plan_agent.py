@@ -196,8 +196,8 @@ def create_plan_agent_with_config(
     # Add /memories/ route for agent directory (~/.nova/<agent>/).
     # Per deepagents docs, /memories/ is the canonical route for persistent
     # agent memory. This allows the agent's read_file tool to access
-    # memory files (Nova.md, CLAUDE.md) via virtual paths like
-    # /memories/Nova.md. AgentMemoryMiddleware reads these files directly
+    # memory files (NOVA.md, CLAUDE.md) via virtual paths like
+    # /memories/NOVA.md. AgentMemoryMiddleware reads these files directly
     # from the filesystem at startup, but the /memories/ route enables
     # the agent to re-read them during execution.
     agent_dir = settings.get_agent_dir(assistant_id)
