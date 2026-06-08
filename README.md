@@ -3,44 +3,67 @@
 
 # NOVA : Agentic Coding Tool
 
-[![Version](https://img.shields.io/badge/version-0.0.19-blue)](https://github.com/Babitdor/NovaCode)
+[![Version](https://img.shields.io/badge/version-1.0.0-blue)](https://github.com/Babitdor/NovaCode)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://opensource.org/licenses/MIT)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
 
-An open-source terminal-based AI coding assistant that runs in your terminal, similar to Claude Code. Built on top of the `deepagents` library which provides the core agent architecture.
+An open-source, terminal-based AI coding assistant built on LangGraph and the `deepagents` framework. NOVA runs entirely in your terminal with both a Rich console REPL and a Textual TUI — similar to Claude Code, but extensible and transparent.
 
 ## Features
 
+### Core Intelligence
+- **LangGraph Agent Loop**: Deep agent architecture with planning, subagents, filesystem access, and tool-calling — all orchestrated through a shared async event loop
+- **Multi-Provider LLM Support**: OpenAI, Anthropic, Ollama, Google Gemini — configure any provider via environment variables or the onboarding wizard
 - **Autonomous Learning System (Hermes)**: Periodically reviews tool usage patterns, extracts lessons, and autonomously creates reusable skills — the agent improves itself over time without user intervention
-- **Built-in Tools**: 25+ tools including file operations, shell commands, web search, subagent delegation, semantic code search, and web scraping (GitHub trending, Hacker News, LinkedIn, Reddit)
-- **Customizable Skills**: Add domain-specific capabilities through a progressive disclosure skill system (50+ built-in skills)
-- **Durable Memory**: Two-tier memory system — persistent markdown files (`USER.md`/`MEMORY.md`) auto-maintained by the learning system, plus a LangGraph key/value store (`remember`/`recall`) for cross-session facts
-- **Project-Aware**: Automatically detects project roots and loads project-specific configurations
-- **Project Graph**: Visualize and query your codebase architecture with community detection and dependency analysis
-- **MCP Support**: Extend capabilities with Model Context Protocol servers (12+ presets available) — tools are eagerly discovered before graph build with server-prefixed names to avoid collisions
-- **Sandbox Execution**: Run code safely in remote sandboxes (Modal, Runloop, Daytona, Docker, E2B)
-- **Plan Mode**: Structured planning phase before implementation with plan approval workflow
+- **Memory System**: Two-tier persistent memory — auto-maintained markdown files (`USER.md`/`MEMORY.md`) plus a LangGraph key/value store (`remember`/`recall`) for cross-session facts
+- **Steering Instructions**: Persistent user-defined directives injected into every model call — set once, always respected
+
+### UI & Interaction
+- **Rich Console REPL**: Full-featured interactive shell with `prompt-toolkit` — syntax highlighting, tab completion, command history
+- **Textual TUI**: Modern terminal UI with chat messages, modals, animations, keyboard shortcuts, condensed tool groups, and click-to-copy
+- **Condensed Tool UI**: Consecutive tool calls grouped into collapsible sections — full diffs shown for code edits; reads, searches, and other calls stay compact
+- **Modal Animations**: Entrance effects (fade/slide/zoom) for all modal dialogs, pulsing borders, and a shimmer status bar
 - **Web Chat UI**: Launch a local browser-based chat interface via `/chat` — dark-themed, Claude-inspired, with Markdown rendering and code highlighting
-- **Voice Agent**: Hands-free coding with wake-word detection, STT/TTS providers, and voice-driven file operations
-- **Graphify Integration**: Generate interactive visualizations and knowledge graphs from codebases
+
+### Tools & Capabilities
+- **25+ Built-in Tools**: File operations, shell commands, web search (Tavily + DuckDuckGo), docs search, HTTP fetch, subagent delegation, semantic code search, project graph queries, and more
+- **Web Scraping**: GitHub trending repos, Hacker News headlines, LinkedIn jobs, Reddit posts — no external API keys required
+- **Semantic Code Search**: Find code by description or meaning, not just exact text matches (`code_search`, `find_related_code`)
 - **LSP Integration**: Language Server Protocol support for go-to-definition, find references, rename, diagnostics, and more
-- **Semantic Code Search**: Find code by description or meaning, not just exact text matches
-- **Web Scraping**: Built-in tools for GitHub trending repos, Hacker News headlines, LinkedIn jobs, Reddit posts, and Twitter/X trends — no external API keys required
-- **Async Subagents**: Background task execution on remote LangGraph servers. Includes specialized agents like the **Documentation Update Agent** which automatically synchronizes project docs and changelogs with git commits.
+- **Project Graph**: Visualize and query your codebase architecture — 5000+ nodes, community detection, dependency analysis, blast radius tracking
+
+### Extensibility
+- **MCP Support**: Extend capabilities with Model Context Protocol servers (12+ presets) — tools eagerly discovered with server-prefixed names to avoid collisions
+- **Skills System**: 50+ built-in skills with progressive disclosure — domain-specific workflows loaded on demand. Install skills from any public GitHub repo
+- **Plugin System**: Python entry-point based plugins that can register slash commands, add middleware at defined slots, and extend the agent
+- **Custom Subagents**: 20+ built-in specialized subagents (code review, security audit, refactoring, testing, research swarm, browser automation, frontend/backend/docker engineering, and more)
+- **Async Subagents**: Background task execution on remote LangGraph servers — documentation updates, code reviews, test generation, dependency audits, refactoring
+
+### Sandbox & Safety
+- **Sandbox Execution**: Run code safely in remote sandboxes — Modal, Runloop, Daytona, Docker, E2B. Default Docker sandbox with workspace binding
+- **Security-First**: Automatic `.gitignore` enforcement, command injection detection, URL sanitization, and input validation
+- **File Recovery**: Automatic snapshots before destructive operations — restore deleted or overwritten files via `/restore` or agent tools (`list_trash`, `restore_file`)
+- **Human-in-the-Loop (HITL)**: Configurable interrupt system requiring user approval before destructive or external operations
+- **Path Approval**: Path-based operation approval for filesystem access outside the project root
+
+### Infrastructure
+- **Session Management**: Save, restore, auto-save, and resume sessions. Compact conversation history via `/compact`
 - **Remote Bridges**: Discord and Telegram integration for remote agent interaction
-- **Onboarding System**: Interactive first-run setup with API key management and model selection
-- **Doctor Command**: System diagnostics to verify your environment
-- **Default Subagents**: 20+ built-in specialized agents with skill-aware prompts — each subagent auto-loads relevant skills for its domain
-- **Security-First**: Automatic .gitignore enforcement, command injection detection, and input validation
-- **File Recovery**: Automatic snapshots before destructive operations — restore deleted or overwritten files via `/restore` or agent tools
-- **Condensed Tool UI**: Consecutive tool calls are grouped into collapsible sections — full diffs shown for code edits; reads, searches, and other calls stay compact
-- **Modal Animations**: Entrance animations (fade/slide) for all modal dialogs, pulsing borders, and a shimmer status bar
+- **Vixie Desktop Companion**: Background server for desktop notifications and system tray integration
+- **Hooks System**: Lifecycle hooks at key points (pre/post tool call, on message, on error) — shell commands or Python scripts
+- **Process Manager**: Subprocess lifecycle, health checks, and cleanup for dev servers and background tasks
+- **LangSmith Tracing**: Built-in LangSmith integration for debugging, monitoring, and evaluating agent runs
+- **Doctor Command**: System diagnostics to verify your environment, API keys, and dependencies
+- **Onboarding System**: Interactive first-run setup with secure API key management via OS keychain
+- **Configuration Migration**: Migrate from legacy directory structure to Claude Code-compatible layout
 
 ## Installation
 
 ### Prerequisites
 
-- **Python 3.11 or higher** (Python 3.12 recommended)
+- **Python 3.11 or higher**
 - **Git** for cloning the repository
-- **[uv](https://docs.astral.sh/uv/)** (required for dependency management) or pip for package management
+- **[uv](https://docs.astral.sh/uv/)** (recommended) or pip for package management
 
 ### Step-by-Step Installation
 
@@ -135,64 +158,25 @@ ANTHROPIC_API_KEY=your-anthropic-api-key
 TAVILY_API_KEY=your-tavily-api-key
 ```
 
-#### Option 3: Configuration File
+#### Option 3: Configuration File (Secure Keychain)
 
-Create `~/.nova/config.json`:
-
-```json
-{
-  "api_keys": {
-    "openai": "your-openai-api-key",
-    "anthropic": "your-anthropic-api-key",
-    "tavily": "your-tavily-api-key"
-  }
-}
+```bash
+# Store keys securely via OS keychain
+nova secrets set openai_api_key
+nova secrets set anthropic_api_key
 ```
 
 ### Troubleshooting
 
-#### Common Issues
-
-**1. Python version mismatch**
-```bash
-# Check Python version
-python --version
-
-# If you have multiple Python versions, specify the version
-uv venv --python 3.11
-```
-
-**2. Virtual environment not activating**
-```bash
-# On Windows, you may need to enable script execution
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-
-# Then activate
-.venv\Scripts\Activate.ps1
-```
-
-**3. Package installation fails**
-```bash
-# Clear uv cache and reinstall
-uv cache clean
-uv sync --reinstall
-```
-
-**4. Missing dependencies**
-```bash
-# Install all dependencies including dev dependencies
-uv sync --all-extras
-```
-
-**5. Import errors**
-```bash
-# Reinstall in editable mode
-uv pip install -e . --force-reinstall
-```
+| Issue | Solution |
+|-------|----------|
+| **Python version mismatch** | `python --version` → specify version: `uv venv --python 3.11` |
+| **Virtual env not activating (Windows)** | `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser` then retry |
+| **Package installation fails** | `uv cache clean && uv sync --reinstall` |
+| **Missing dependencies** | `uv sync --all-extras` |
+| **Import errors** | `uv pip install -e . --force-reinstall` |
 
 ### Development Setup
-
-For development work:
 
 ```bash
 # Install development dependencies
@@ -206,8 +190,6 @@ make format
 make lint
 
 # Type checking
-make lint  # ruff includes type-aware checks
-# or manually:
 mypy novacode_cli/
 ```
 
@@ -220,18 +202,114 @@ nova
 # Use a specific agent configuration
 nova --agent mybot
 
-# Auto-approve tool usage (skip approval prompts)
+# Auto-approve tool usage (skip HITL prompts)
 nova --auto-approve
 
 # Execute in a remote sandbox
 nova --sandbox modal
-nova --sandbox daytona
-nova --sandbox runloop
-nova --sandbox docker
+
+# Use the classic Rich REPL (instead of Textual TUI)
+nova --legacy-ui
+
+# Skip the splash screen
+nova --no-splash
+
+# Continue from a previous session
+nova --continue
+nova --continue <session-id>
+
+# Interactively select a session to resume
+nova --resume
+
+# Force local execution (disable default Docker sandbox)
+nova --no-sandbox
+
+# Docker sandbox with port forwarding
+nova --sandbox docker --ports 8080:8080,3000:3000
 
 # Run system diagnostics
 nova doctor
 ```
+
+## CLI Reference
+
+### Top-Level Subcommands
+
+| Command | Description |
+|---------|-------------|
+| `nova init` | Initialize project or global configuration |
+| `nova list` | List all available agents |
+| `nova help` | Show help information |
+| `nova reset --agent <name>` | Reset an agent's memory/store |
+| `nova skills` | Manage agent skills (list, create, add, remove, find, update) |
+| `nova mcp` | Manage MCP servers (add, remove, list, install) |
+| `nova config` | View or edit configuration (show, set, get) |
+| `nova secrets` | Manage API keys securely (set, list, delete) |
+| `nova doctor` | Validate configuration and connections |
+| `nova paths` | Manage approved file system paths (list, revoke, clear) |
+| `nova migrate` | Migrate to new directory structure |
+
+### Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--agent` | `"nova-agent"` | Agent identifier for separate memory stores |
+| `--auto-approve` | off | Auto-approve tool usage (disables HITL) |
+| `--sandbox` | `none` | Sandbox provider: `none`, `modal`, `daytona`, `runloop`, `docker` |
+| `--no-sandbox` | off | Force local execution (disables default Docker sandbox) |
+| `--sandbox-id` | `None` | Reuse an existing sandbox (skips create/cleanup) |
+| `--sandbox-setup` | `None` | Path to setup script to run in sandbox after creation |
+| `--ports` | `None` | Port forwarding for Docker sandbox (comma-separated) |
+| `--no-splash` | off | Disable the startup splash screen |
+| `--tui` / `--legacy-ui` | off | Use classic Rich REPL instead of Textual TUI |
+| `--continue` / `-c` | off | Continue last session (optionally specify session ID) |
+| `--resume` / `-r` | off | Interactively select and resume a session |
+| `--version` | — | Show version number and exit |
+
+### Interactive Slash Commands
+
+| Command | Description |
+|---------|-------------|
+| `/help` | Show interactive help |
+| `/exit` / `/quit` / `/q` | Exit the CLI |
+| `/clear` | Clear conversation history and reset session |
+| `/tokens` | Display token usage for the session |
+| `/context` | Display current context window status |
+| `/verbose` | Toggle verbose mode (show internal agent context) |
+| `/steer` | Set persistent steering instructions for the agent |
+| `/save` | Save current session |
+| `/compact` | Compact conversation history with optional focus |
+| `/sessions` | List, select, or delete saved sessions |
+| `/restore` | Restore a previous file version from snapshots |
+
+| Command | Description |
+|---------|-------------|
+| `/init` | Generate/update project documentation and graph |
+| `/mcp` | Interactive MCP server management menu |
+| `/model` | Display current model configuration |
+| `/hooks` | Manage lifecycle hooks (list, add, remove, enable, disable) |
+| `/skills` | Interactive skills manager |
+| `/agents` | Custom agent management (view, create, delete) |
+| `/plugins` / `/plugin` | Nova plugin management (list, enable, disable) |
+| `/plan` | Invoke plan-mode agent for investigation & approval |
+| `/trace` | LangSmith tracing management (status, enable, projects) |
+| `/ralph` | Autonomous looping mode (background task execution) |
+| `/council` | Launch local Council web UI (multi-agent debate) |
+| `/chat` | Launch local browser-based chat UI |
+| `/trello` | Browser-based task board server |
+| `/research` | Multi-agent research swarm (academic/market/stocks/technical/general) |
+| `/dream` | Run memory consolidation |
+| `/browser-use` | AI-powered browser automation |
+| `/servers` | Show active server processes |
+| `/tests` | Run test suites |
+| `/kill` | Kill a process by PID |
+| `/files` | Show file operation summary for the session |
+| `/images` | Manage tracked image references |
+| `/notifications` | Review and manage notifications |
+| `/log` | Show workspace log files |
+| `/skill:<name>` | Directly invoke a skill by name (e.g., `/skill:api-testing`) |
+| `/remote` | Manage remote sandbox connections |
+| `/reindex` | Rebuild semantic code search index |
 
 ## Built-in Tools
 
@@ -275,9 +353,7 @@ nova doctor
 
 ## Trello Task Board
 
-NOVA includes a browser-based task board for managing and processing tasks visually. Start it with the `/trello` slash command — it opens a self-contained HTML page served from a local HTTP server.
-
-### Usage
+NOVA includes a browser-based task board for managing and processing tasks visually. Start it with `/trello`.
 
 ```
 /trello              Start the task board server and open browser
@@ -285,39 +361,17 @@ NOVA includes a browser-based task board for managing and processing tasks visua
 /trello status       Show current task board state
 ```
 
-### How It Works
-
-1. Run `/trello` — a local HTTP server starts and opens the task board in your browser
-2. Add tasks via the web UI (description, priority, etc.)
-3. Tasks are automatically picked up and processed by the agent one at a time
-4. Completed tasks are marked "Done" in the board
-
 ### Task Lifecycle
 
 | Status | Description |
 |--------|-------------|
-| **Loaded** | Task has been added to the board, waiting to be processed |
+| **Loaded** | Task added, waiting to be processed |
 | **Processing** | Agent is currently working on the task |
-| **Done** | Task has been completed by the agent |
-
-Tasks move through the lifecycle automatically — no manual intervention needed. You can also click **"Start"** in the web UI to explicitly move a task to processing.
-
-### Example
-
-```bash
-# Start the task board
-/trello
-
-# Check status
-/trello status
-
-# Stop the server
-/trello stop
-```
+| **Done** | Task completed by the agent |
 
 ## Web Chat UI
 
-NOVA includes a `/chat` command that launches a local browser-based chat interface:
+Launch a local browser-based chat interface with `/chat`:
 
 ```
 /chat              Start the chat server and open browser
@@ -325,43 +379,23 @@ NOVA includes a `/chat` command that launches a local browser-based chat interfa
 /chat status       Show chat server status
 ```
 
-### Features
-
-- **Dark-themed UI**: Claude-inspired design with red accent colors
-- **Markdown Rendering**: Messages rendered with full Markdown support and code syntax highlighting (via `marked` + `highlight.js`)
+- **Dark-themed UI**: Claude-inspired design with red accents
+- **Markdown Rendering**: Full Markdown + syntax highlighting via `marked` + `highlight.js`
 - **Typing Indicator**: Animated bouncing dots while the agent responds
-- **Same Agent**: Connects to the same LangGraph agent from your CLI session — no separate configuration needed
-- **Auto-open**: Browser opens automatically on launch
-
-### How It Works
-
-The `/chat` command starts a `ThreadingHTTPServer` in a background thread. The server communicates with the main agent loop via `asyncio.run_coroutine_threadsafe`, sharing the same session state and agent configuration.
+- **Same Agent**: Connects to the same LangGraph agent — no separate config
 
 ## Web Scraping Tools
 
-NOVA includes built-in web scraping tools that work with public data — no API keys required:
+Built-in tools that work with public data — no API keys required:
 
-| Tool | Data Source | No API Key? |
-|------|-------------|-------------|
-| `github_trending` | GitHub trending repositories (filter by language/time) | ✅ |
-| `hacker_news` | Hacker News front page headlines | ✅ |
-| `linkedin_jobs` | LinkedIn job listings (Playwright-based) | ✅ |
-| `reddit_posts` | Reddit posts by subreddit, user, or search | ✅ |
+| Tool | Data Source |
+|------|-------------|
+| `github_trending` | GitHub trending repositories |
+| `hacker_news` | Hacker News front page |
+| `linkedin_jobs` | LinkedIn job listings (Playwright) |
+| `reddit_posts` | Reddit posts by subreddit/user/search |
 
-These tools use `requests` + `BeautifulSoup` (or `playwright` for LinkedIn) to scrape publicly available data and return structured results.
-
-### Standalone CLI Scripts
-
-The scraping logic is also available as standalone scripts in `scripts/scraper/`:
-
-```
-scripts/scraper/
-├── gh_trending.py          # GitHub trending scraper
-├── hn_scraper.py           # Hacker News scraper
-├── linkedin_job_scraper.py # LinkedIn job scraper (Playwright)
-├── reddit_scraper.py       # Reddit scraper
-└── inline_json.py          # JSON extraction utility
-```
+Standalone CLI scripts also available in `scripts/scraper/`.
 
 ## Autonomous Learning System (Hermes)
 
@@ -373,9 +407,33 @@ NOVA includes **Hermes**, an autonomous learning system that runs in the backgro
   - `MEMORY.md` — Cross-session memory: architecture decisions, reusable patterns, key facts
 - **Skill Creation**: Analyzes repeated successful tool sequences and autonomously creates reusable skills with deterministic naming and refinement
 - **No Interruption**: Reviews run out-of-band in the background — no pause in agent operation
-- **Live Indicator**: A visible indicator in the TUI status line shows when Hermes is reviewing
+- **Live Indicator**: Visible indicator in the TUI status line when Hermes is reviewing
 
-The system is always active and designed to require zero user configuration. Lessons are compacted automatically as they grow.
+## Middleware Stack
+
+Every model call passes through this middleware chain (in order):
+
+| Layer | Module | Purpose |
+|-------|--------|---------|
+| `SteeringMiddleware` | `bootstrap/steering.py` | Injects persistent user instructions |
+| `GraphContextMiddleware` | `bootstrap/graph_context.py` | Injects project graph legend summary |
+| `ShellMiddleware` | `shell.py` | Shell tool + interactive prompt detection |
+| `AgentMemoryMiddleware` | `memory/` | Agent memory loading |
+| `SecurityMiddleware` | `security/` | URL sanitization, unicode attack prevention |
+| `FileTrackerMiddleware` | `tracking/` | Read-before-edit enforcement |
+| `MCPMiddleware` | `mcp/middleware.py` | MCP tool provisioning |
+| `NovaLearningMiddleware` | `hermes/middleware.py` | Hermes learning system — tool call review |
+
+## Project Graph
+
+The project graph (`.nova/project-graph.json`, ~5000 nodes, ~13000 edges) is built by the `/init` pipeline. It provides:
+
+- **Community Detection**: Tightly coupled module clusters identified via graph analysis
+- **Central Hubs**: High-degree nodes — files with wide blast radius (e.g., `Settings` with 502 connections)
+- **Dependency Analysis**: Cross-module connections and architectural seams
+- **Queryable**: Ask the agent `query_project_graph("Settings")` to find connected modules and community structure
+
+Refresh with `/init` (full rebuild) or `/init --update` (incremental).
 
 ## Configuration
 
@@ -384,13 +442,16 @@ The system is always active and designed to require zero user configuration. Les
 **Global Configuration** (`~/.nova/`):
 ```
 ~/.nova/
-├── agents/           # Agent configurations
+├── agents/
 │   └── default/
 │       └── agent.md
-├── skills/           # Global skills (shared across all agents)
+├── skills/
 │   └── web-research/
 │       └── SKILL.md
-└── trash/            # File recovery snapshots (auto-created)
+├── hooks/
+│   ├── pre_tool_call.py
+│   └── post_tool_call.sh
+└── trash/
     └── <session-id>/
         ├── manifest.json
         └── <snapshots>
@@ -400,23 +461,22 @@ The system is always active and designed to require zero user configuration. Les
 ```
 my-project/
 ├── .nova/
-│   ├── agent.md     # Project-specific instructions
-│   └── skills/      # Project-specific skills
-└── .claude/         # Also supported (Claude Code compatible)
+│   ├── NOVA.md        # Project-specific context and conventions
+│   ├── config.json    # Project configuration
+│   ├── hooks.json     # Project-specific hooks
+│   └── skills/        # Project-specific skills
+├── .claude/           # Also supported (Claude Code compatible)
+└── .nova.config.json  # Project-level config (scoped)
 ```
 
 ### Agent Memory
 
-The `agent.md` file provides persistent memory loaded at every session start:
-
 - **Global** (`~/.nova/agents/default/agent.md`): Your personality, style, and universal preferences
 - **Project** (`.nova/NOVA.md`): Project-specific context, conventions, and architecture
 
-The agent automatically updates these files when you describe preferences or give feedback.
-
 ### Skills
 
-Skills provide specialized workflows and domain knowledge. Manage skills with:
+Manage skills with:
 
 ```bash
 # List all skills
@@ -432,11 +492,7 @@ nova skills create my-skill --project
 nova skills info web-research
 ```
 
-Skills follow [Anthropic's progressive disclosure pattern](https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills) - the agent knows skills exist but only loads full instructions when needed.
-
 #### Installing Skills from GitHub
-
-You can install skills directly from any public GitHub repository using `nova skills add`:
 
 ```bash
 # Install a skill from a GitHub repo
@@ -448,7 +504,7 @@ nova skills add https://github.com/livekit/agent-skills --skill livekit-agents
 # Install from a specific branch
 nova skills add https://github.com/owner/repo/tree/main/my-skill
 
-# Install as a project-scoped skill (only available in this project)
+# Install as project-scoped
 nova skills add https://github.com/owner/repo --project
 
 # Overwrite an existing skill
@@ -456,8 +512,6 @@ nova skills add https://github.com/owner/repo --skill my-skill --force
 ```
 
 **What gets installed:**
-
-Nova fetches the `SKILL.md` file and all supporting files in recognized subdirectories alongside it:
 
 | Directory | Contents |
 |-----------|----------|
@@ -469,81 +523,79 @@ Nova fetches the `SKILL.md` file and all supporting files in recognized subdirec
 | `templates/` | Code or file templates |
 | `data/` | Data files used by the skill |
 
-If the repository has no `SKILL.md`, Nova auto-generates one from the repo's README using the LLM.
+If the repository has no `SKILL.md`, Nova auto-generates one from the repo's README.
 
-**Example — Install the LiveKit Agents skill:**
+## Built-in Subagents
 
-```bash
-nova skills add https://github.com/livekit/agent-skills --skill livekit-agents
-```
+NOVA includes 20+ specialized subagents, each loaded with domain-relevant skills:
 
-This installs the `livekit-agents` skill along with its scripts, examples, and any other supporting files — giving Nova full context to help you build LiveKit voice and video agents.
-
-### Default Subagents
-
-NOVA includes 20+ built-in specialized subagents, each loaded with domain-relevant skills via `SkillsMiddleware`:
-
-#### Code Quality Agents
+### Code Quality Agents
 
 | Subagent | Description | Auto-loaded Skills |
 |----------|-------------|-------------------|
-| `code-explorer` | Navigate, understand, and query large codebases efficiently | `codebase-explorer/`, `graphify/` |
-| `code-doc-Agent` | Generate README, API docs, and docstrings from structured inputs | `code-documentation/` |
-| `code-simplifier-agent` | Simplify and refine code for clarity and maintainability | `code-review-expert/` |
-| `reviewer-agent` | Code review for correctness, security, performance, and SOLID violations | `code-review-expert/` |
-| `security-auditor-agent` | OWASP Top 10 audit, secrets detection, dependency vuln scanning | `web-research/` |
-| `refactoring-specialist-agent` | Identify code smells, prioritize technical debt, apply design patterns | `improve-codebase-architecture/` |
-| `bug-fix-agent` | Systematic bug reproduction, root-cause analysis, minimal fix + regression tests | `systematic-debugging/` |
+| `code-explorer` | Navigate, understand, and query large codebases | `codebase-explorer/`, `graphify/` |
+| `code-doc-Agent` | Generate README, API docs, docstrings | `code-documentation/` |
+| `code-simplifier-agent` | Simplify and refine code for clarity | `code-review-expert/` |
+| `reviewer-agent` | Code review for correctness, security, SOLID | `code-review-expert/` |
+| `security-auditor-agent` | OWASP Top 10, secrets, dependency vulns | `web-research/` |
+| `refactoring-specialist-agent` | Code smells, technical debt, design patterns | `improve-codebase-architecture/` |
+| `bug-fix-agent` | Systematic bug diagnosis and fix | `systematic-debugging/` |
 
-#### Test Agents
-
-| Subagent | Description | Auto-loaded Skills |
-|----------|-------------|-------------------|
-| `test-writer-agent` | Create comprehensive tests (happy-path, edge-case, error-case) | `test-driven-development/` |
-| `testing-agent` | Execute tests in isolated sandboxes, detect frameworks, report failures | `testing-skills/`, `webapp-testing/` |
-
-#### Browser Automation Agent
+### Test Agents
 
 | Subagent | Description | Auto-loaded Skills |
 |----------|-------------|-------------------|
-| `browser-automation-agent` | Web testing, form filling, screenshots, data extraction, console capture | `agent-browser/`, `browser-use/` |
+| `test-writer-agent` | Comprehensive tests (happy, edge, error) | `test-driven-development/` |
+| `testing-agent` | Execute tests in sandboxes, report failures | `testing-skills/`, `webapp-testing/` |
 
-#### Domain-Specific Engineering Agents
+### Browser Automation
 
 | Subagent | Description | Auto-loaded Skills |
 |----------|-------------|-------------------|
-| `frontend-agent` | React, HTML/CSS, design systems, animations, production-grade UI | `frontend-design/`, `expert-css-skills/` |
-| `backend-agent` | API design, databases, auth, async patterns, server-side systems | `backend-dev-guidelines/`, `async-python-patterns/` |
-| `docker-agent` | Containerization, optimized Dockerfiles, multi-service Compose stacks | `docker-deploy/` |
+| `browser-automation-agent` | Web testing, forms, screenshots, data extraction | `agent-browser/`, `browser-use/` |
 
-#### Research Swarm Agents
+### Engineering Agents
+
+| Subagent | Description | Auto-loaded Skills |
+|----------|-------------|-------------------|
+| `frontend-agent` | React, HTML/CSS, design systems, animations | `frontend-design/`, `expert-css-skills/` |
+| `backend-agent` | API design, databases, auth, async patterns | `backend-dev-guidelines/`, `async-python-patterns/` |
+| `docker-agent` | Optimized Dockerfiles, Compose stacks | `docker-deploy/` |
+
+### Research Swarm Agents
 
 | Subagent | Description | Auto-loaded Skills |
 |----------|-------------|-------------------|
 | `web-researcher` | General web research — search, fetch, synthesize | `web-research/`, `arxiv-search/` |
-| `fact-checker` | Verify critical claims using web search snippets | `web-research/` |
-| `research-synthesizer` | Synthesize findings + QA report into final coherent report | — (inline only) |
-| `literature-reviewer` | Academic search (arXiv, Google Scholar, Semantic Scholar, PubMed) | `arxiv-search/`, `web-research/` |
-| `market-analyst` | Market sizing, growth rates, competitive landscape research | `web-research/` |
-| `financial-analyst` | Financial statements, earnings data, SEC filings, risk analysis | `web-research/`, `xlsx/` |
-| `technical-researcher` | Official docs, GitHub repos, RFCs, version-accurate technical research | `web-research/`, `codebase-explorer/` |
+| `fact-checker` | Verify critical claims via web search | `web-research/` |
+| `research-synthesizer` | Synthesize findings into final report | — (inline only) |
+| `literature-reviewer` | Academic search (arXiv, Scholar, PubMed) | `arxiv-search/`, `web-research/` |
+| `market-analyst` | Market sizing, competitive landscape | `web-research/` |
+| `financial-analyst` | Financial statements, SEC filings, risk | `web-research/`, `xlsx/` |
+| `technical-researcher` | Docs, GitHub repos, RFCs, version-accurate | `web-research/`, `codebase-explorer/` |
 
-Subagents are invoked via the `task` tool for parallel, focused work. Skills are loaded on-demand when the subagent is instantiated — agents without skill assignments skip `SkillsMiddleware` overhead entirely.
+### Async Background Agents (Remote LangGraph)
 
-### Hooks System
+| Subagent | Description |
+|----------|-------------|
+| `documentation-update-agent` | Auto-synchronize project docs and changelogs with git commits |
+| `code-review-agent` | Review uncommitted/recent changes asynchronously |
+| `test-generation-agent` | Generate/maintain test suites in the background |
+| `dependency-audit-agent` | Audit dependencies for updates and security vulnerabilities |
+| `refactoring-agent` | Analyze and improve code quality in the background |
 
-NOVA provides a powerful hooks system for customizing agent behavior at key lifecycle points:
+Start any with `start_async_task()`, check status with `check_async_task()`.
 
-**Hook Types:**
+## Hooks System
+
+Lifecycle hooks for customizing agent behavior:
 
 | Hook | When It Fires | Use Case |
 |------|---------------|----------|
-| `pre_tool_call` | Before a tool is executed | Validate inputs, log actions, modify parameters |
-| `post_tool_call` | After a tool completes | Process results, log outcomes, trigger notifications |
-| `on_message` | When a message is received | Filter content, add context, track conversations |
-| `on_error` | When an error occurs | Custom error handling, logging, recovery actions |
-
-**Managing Hooks:**
+| `pre_tool_call` | Before a tool is executed | Validate inputs, log, modify params |
+| `post_tool_call` | After a tool completes | Process results, log, trigger notifications |
+| `on_message` | When a message is received | Filter content, add context |
+| `on_error` | When an error occurs | Custom error handling, recovery |
 
 ```bash
 # List all hooks
@@ -558,153 +610,91 @@ NOVA provides a powerful hooks system for customizing agent behavior at key life
 # Enable/disable hooks
 /hooks enable my_hook
 /hooks disable my_hook
-
-# View hook details
-/hooks info my_hook
-
-# Remove a hook
-/hooks remove my_hook
 ```
 
-**Hook Configuration:**
+Hooks can be **Python scripts** (full access to internals), **shell commands**, or any executable.
 
-Hooks are stored in `~/.nova/hooks/` and can be:
-- **Python scripts**: Full access to NOVA's internals
-- **Shell commands**: Quick one-liners for simple tasks
-- **Executable files**: Any executable for custom logic
+## MCP Integration
 
-**Example Hook (Python):**
-
-```python
-# ~/.nova/hooks/pre_tool_call.py
-def hook(tool_name: str, args: dict) -> dict:
-    """Log tool calls before execution."""
-    print(f"[HOOK] Tool called: {tool_name}")
-    print(f"[HOOK] Arguments: {args}")
-    
-    # Modify arguments if needed
-    if tool_name == "write_file":
-        args["content"] = args["content"].rstrip() + "\n"
-    
-    return args
-```
-
-**Example Hook (Shell):**
+Extend the agent with Model Context Protocol servers:
 
 ```bash
-# ~/.nova/hooks/post_tool_call.sh
-#!/bin/bash
-echo "Tool completed: $TOOL_NAME"
-echo "Result: $RESULT"
-```
-
-**Hook Use Cases:**
-
-- **Logging**: Track all tool calls for debugging
-- **Validation**: Ensure file paths are within project boundaries
-- **Notifications**: Send alerts when tasks complete
-- **Custom Behavior**: Add project-specific logic
-- **Security**: Prevent certain operations
-- **Integration**: Connect to external services
-
-**Hook Priority:**
-
-Hooks execute in priority order (lower number = higher priority):
-1. System hooks (priority 0-99)
-2. User hooks (priority 100-199)
-3. Project hooks (priority 200-299)
-
-### MCP Integration
-
-Extend the agent with Model Context Protocol servers for specialized capabilities:
-
-**Available Presets:**
-
-```bash
-# Add Brave Search MCP server (preset)
+# Add from preset
 nova mcp add brave-search --preset brave-search
-
-# Add PostgreSQL MCP server (preset)
 nova mcp add postgres --preset postgres
-
-# Add Playwright MCP server (preset)
 nova mcp add playwright --preset playwright
 
-# Add Google Drive MCP server (preset)
-nova mcp add google-drive --preset google-drive
+# Custom HTTP transport
+nova mcp add my-server --transport http --url https://example.com/mcp
+
+# Custom stdio transport
+nova mcp add my-server --transport stdio --command "python -m my_mcp_server"
 ```
 
 **Available Presets:** `brave-search`, `memory`, `postgres`, `google-drive`, `playwright`, `fetch`, `time`, `sqlite`, `stripe`, `everything`, `serena`, `context7`
 
-**Custom MCP Servers:**
-
-```bash
-# HTTP transport
-nova mcp add custom-server --transport http --url https://example.com/mcp
-
-# Stdio transport (local process)
-nova mcp add my-server --transport stdio --command "python -m my_mcp_server"
-
-# Stdio with arguments
-nova mcp add fetch-server --transport stdio --command "npx" --args "-y", "@modelcontextprotocol/server-fetch"
-```
-
 **MCP Management:**
+```bash
+nova mcp list              # List all configured servers
+nova mcp remove my-server  # Remove a server
+```
+
+## Sandbox Execution
+
+NOVA supports multiple sandbox providers for safe code execution:
 
 ```bash
-# List all configured MCP servers
-nova mcp list
+# Docker (default, with workspace binding)
+nova --sandbox docker
 
-# Remove an MCP server
-nova mcp remove my-server
+# Modal (cloud)
+nova --sandbox modal
 
-# View MCP server details
-nova mcp info my-server
+# Runloop (cloud)
+nova --sandbox runloop
+
+# Daytona (cloud)
+nova --sandbox daytona
+
+# Force local execution
+nova --no-sandbox
+
+# Reuse an existing sandbox
+nova --sandbox-id <id>
+
+# Port forwarding (Docker)
+nova --sandbox docker --ports 8080:8080
 ```
 
-**Environment Variables for MCP:**
+The default sandbox image is `python:3.11-slim`.
+
+## Plugin System
+
+NOVA supports Python entry-point based plugins that can register slash commands and add middleware at defined slots. Plugins are discovered via the `nova.plugins` entry point group and can contribute:
+
+- **Slash Commands**: Custom interactive commands
+- **Middleware**: Add behavior at named slots in the middleware stack
+- **Skills**: Domain-specific workflows
 
 ```bash
-# Some MCP servers require additional configuration
-export GITHUB_API_KEY="your-github-token"
-export DATABASE_URL="postgresql://user:pass@localhost:5432/db"
+# List plugins
+/plugins
+
+# Enable/disable a plugin
+/plugins enable my-plugin
+/plugins disable my-plugin
 ```
 
-### E2B Cloud Sandbox
+## File Recovery
 
-E2B provides secure cloud sandbox execution via the `execute_in_e2b` tool:
+NOVA automatically snapshots files before destructive operations:
 
-```python
-# Run code in E2B cloud sandbox
-execute_in_e2b(
-    code="print('Hello from E2B!')",
-    language="python"
-)
-```
-
-**Setup:**
-```bash
-# Get your E2B API key from https://e2b.dev/
-export E2B_API_KEY="your-e2b-api-key"
-```
-
-E2B sandboxes are ideal for:
-- Running untrusted code safely
-- Testing code in clean, isolated environments
-- Executing code that requires specific dependencies
-
-### File Recovery
-
-NOVA automatically snapshots files before any destructive operation, so you can always recover from mistakes.
-
-**What gets snapshotted:**
 - Files targeted by `rm` shell commands — captured before deletion
 - Files overwritten by `write_file` — previous content saved
 - Files modified by `edit_file` — pre-edit content saved
 
-**Restoring files (human):**
 ```bash
-# Show all recent snapshots interactively
+# Interactive restore
 /restore
 
 # Restore by index
@@ -714,61 +704,19 @@ NOVA automatically snapshots files before any destructive operation, so you can 
 /restore src/utils.py
 ```
 
-**Restoring files (agent):**
+Agent tools: `list_trash()` to see snapshots, `restore_file("path")` to restore.
 
-The agent can also self-recover autonomously using its built-in tools:
-- `list_trash()` — see what snapshots are available
-- `restore_file("src/utils.py")` — restore the most recent snapshot for that path
+Snapshots stored in `~/.nova/trash/<session-id>/`. Files over 10 MB skipped.
 
-Snapshots are stored in `~/.nova/trash/<session-id>/` and are available across session restarts. Files larger than 10 MB are skipped.
+## Vixie Desktop Companion
 
-### Doctor Command
+NOVA includes **Vixie**, a background desktop companion server:
 
-Run system diagnostics to verify your environment:
+- **Desktop Notifications**: Task completion and status alerts
+- **System Tray Integration**: Quick access to Nova status
+- **WebSocket Server**: Real-time event streaming
 
-```bash
-nova doctor
-```
-
-The `doctor` command checks:
-- Python version and environment
-- Required dependencies
-- API key configurations
-- Sandbox connectivity
-- Project configuration
-
-### Onboarding System
-
-On first run, NOVA guides you through an interactive setup:
-
-```bash
-# First run - launches onboarding wizard
-nova
-```
-
-The onboarding process includes:
-- **API Key Setup**: Securely store your LLM provider API keys
-- **Model Selection**: Choose your preferred model and provider
-- **Environment Verification**: System checks for dependencies
-- **Secret Management**: Keys stored securely via OS keychain
-
-**Manual Configuration:**
-You can also set API keys manually via environment variables or the `.env` file:
-
-```bash
-# OpenAI (default)
-export OPENAI_API_KEY="your-openai-api-key"
-
-# Anthropic
-export ANTHROPIC_API_KEY="your-anthropic-api-key"
-
-# E2B (for cloud sandbox)
-export E2B_API_KEY="your-e2b-api-key"
-```
-
-### Testing
-
-Run the test suite with:
+## Testing
 
 ```bash
 # Run unit tests
@@ -782,166 +730,176 @@ make test_cov
 
 # Run specific test file
 make test TEST_FILE=tests/unit_tests/test_specific.py
+
+# Watch mode
+make test_watch
 ```
 
 **Test suite includes:**
 
 | Directory | What it tests |
 |-----------|---------------|
-| `tests/test_hermes/` | Hermes learning system — middleware, memory tiers, skill discovery |
-| `tests/test_tui_app.py` | Textual TUI — animations, chat messages, modals, tool groups |
-| `tests/test_workdir_grep.py` | Sandbox-backed grep tool with path-rebased execution |
+| `tests/test_hermes/` | Hermes learning system — middleware, memory, skill discovery |
+| `tests/test_tui_app.py` | Textual TUI — animations, chat, modals, tool groups |
+| `tests/test_workdir_grep.py` | Sandbox-backed grep path-rebased execution |
 | `tests/test_notifications.py` | Notification system integration |
 | `tests/test_context_breakdown_tokens.py` | Token budget and context optimization |
 
-## Development
+## Makefile Commands
 
-### Setup Development Environment
-
-```bash
-# Clone the repository
-git clone https://github.com/Babitdor/NovaCode.git
-cd NovaCode
-
-# Install dependencies
-uv sync --all-groups
-
-# Run during development
-uv run nova
-```
-
-### Running Tests
-
-```bash
-# Run unit tests
-make test
-
-# Run specific test file
-make test TEST_FILE=tests/unit_tests/test_specific.py
-
-# Run integration tests
-make test_integration
-```
-
-### Code Quality
-
-```bash
-# Format code
-make format
-
-# Check linting
-make lint
-```
+| Command | Description |
+|---------|-------------|
+| `make test` | Run unit tests |
+| `make test_integration` | Run integration tests |
+| `make test_all` | Run all tests |
+| `make test_watch` | Watch mode testing |
+| `make test_cov` | Run tests with coverage |
+| `make run` | Run `uv run nova` |
+| `make sync` | Sync dependencies |
+| `make lock` | Lock dependencies |
+| `make tree` | Show dependency tree |
+| `make outdated` | Show outdated packages |
+| `make add PACKAGE=<name>` | Add a dependency |
+| `make add-dev PACKAGE=<name>` | Add a dev dependency |
+| `make remove PACKAGE=<name>` | Remove a dependency |
+| `make reinstall` | Full reinstall of novacode-cli + deepagents |
+| `make run_reinstall` | Reinstall then run nova |
+| `make lint` | Check formatting and linting |
+| `make format` | Auto-format code |
+| `make clean` | Clean caches |
 
 ## Architecture
 
-The CLI implements a "Deep Agent" architecture with four key components:
+```
+User Input → CLI Entry (main.py) → Agent Loop (core/agent_loop.py) → UI Renderer
+```
 
-1. **Planning tool** (`write_todos`) for task management
-2. **Sub-agents** (`task` tool) for parallel delegation
-3. **File system access** via multiple backends (local, sandbox)
-4. **Detailed prompts** with memory and skills systems
+### Core Flow
+
+1. **CLI Entry** (`main.py` → `cli_main()`) — parses args, initializes `SessionState`, runs optional onboarding, enters interactive REPL
+2. **Agent Loop** (`core/agent_loop.py` → `iterate_agent_events()`) — the single canonical async generator driving the LangGraph agent stream
+3. **UI Events** (`ui_events.py`) — dataclass instances decoupled from rendering; both Rich console and Textual TUI consume the same event types
+4. **Middleware Stack** — wraps every model call (Steering → GraphContext → Shell → AgentMemory → Security → FileTracker → MCP → NovaLearning)
 
 ### Module Structure
 
 **Core:**
-- `main.py` - Entry point, CLI loop, and argument parsing
-- `cli_session.py` - Session management, auto-save, and display helpers
-- `input.py` - prompt_toolkit input handling, completers, image paste, keybindings
+- `main.py` — Entry point, CLI loop, argument parsing
+- `cli_session.py` — Session management, auto-save, display helpers
+- `input.py` — prompt_toolkit input handling, completers, image paste, keybindings
 
 **Agent:**
-- `agents/core_agent.py` - Agent creation, configuration, and middleware wiring
-- `agents/default_subagents/` - 20+ built-in specialized subagents with skill-aware prompts (code explorer, docs, simplifier, reviewer, security, refactoring, bug fix, test writer, testing, browser automation, frontend, backend, docker, research swarm, changelogger)
-- `agents/plan_agent/` - Plan mode agent with planning middleware
+- `agents/core_agent.py` — Agent creation, configuration, middleware wiring
+- `agents/default_subagents/` — 20+ built-in specialized subagents
+- `agents/plan_agent/` — Plan mode agent with planning middleware
 
 **Commands:**
-- `commands/` - 18+ CLI command handlers (`/model`, `/mcp`, `/skills`, `/plan`, `/browser`, `/chat`, etc.)
-- `commands/chat_handler.py` - `/chat` command — launches a local web chat UI with a background HTTP server that connects to the same LangGraph agent
+- `commands/` — 20+ CLI command handlers (`commands/__init__.py` aggregates via `CommandRegistry`)
+- `commands/chat_handler.py` — `/chat` command — local web chat UI
 
 **Configuration:**
-- `config/config.py` - Settings, color scheme, model factory, project root detection
-- `config/nova_config.py` - Persistent JSON configuration management
-- `config/model_create.py` - Model instantiation for all providers
-- `config/model_manager.py` - Model provider management
+- `config/config.py` — Settings hub (502 connections), color scheme, model factory, console init
+- `config/nova_config.py` — Persistent JSON config (`~/.nova/Nova.config.json`)
+- `config/model_create.py` — Model instantiation for all providers
+- `config/model_manager.py` — Model provider management
 
 **Context & Memory:**
-- `context/` - Context budget tracking, eviction, optimization, and growth monitoring
-- `memory/store.py` - Durable LangGraph key/value store (`remember`/`recall`) using sync SqliteStore with async wrappers; includes a stdlib-fallback BaseStore (works without `langgraph-checkpoint-sqlite`)
-- `prompts/` - Jinja2 template rendering
+- `context/` — Context budget tracking, eviction, optimization, growth monitoring
+- `memory/store.py` — Durable LangGraph key/value store with stdlib-fallback
+- `prompts/` — Jinja2 template rendering
 
-**Learning System (Hermes):**
-- `hermes/middleware.py` - NovaLearningMiddleware — reviews tool usage every ~10 calls, writes lessons to `USER.md`/`MEMORY.md`, and triggers autonomous skill creation
-- `hermes/memory_tiers.py` - Manages the two memory tiers (user model in `USER.md`, session decisions in `MEMORY.md`)
-- `hermes/skill_discovery.py` - Analyzes repeated successful tool sequences and autonomously creates reusable skills with deterministic naming
+**Learning (Hermes):**
+- `hermes/middleware.py` — NovaLearningMiddleware
+- `hermes/memory_tiers.py` — USER.md / MEMORY.md management
+- `hermes/skill_discovery.py` — Autonomous skill creation from repeated patterns
 
-**UI:**
-- `ui/ui_elements.py` - Token tracking, help display, diff rendering, todo lists
-- `ui/execution.py` - Tool execution orchestration and approval flow
-- `ui/streaming.py` - Real-time output streaming
-- `ui/tool_processing.py` - Tool call formatting and display
-- `ui/hitl_approval.py` - Human-in-the-loop approval UI
-- `ui/subagent_tracking.py` - Subagent progress visualization
+**UI (Rich REPL):**
+- `ui/ui_elements.py` — Token tracking, help, diff rendering, todos
+- `ui/execution.py` — Tool execution orchestration and approval flow
+- `ui/streaming.py` — Real-time output streaming
+- `ui/tool_processing.py` — Tool call formatting and display
+- `ui/hitl_approval.py` — Human-in-the-loop approval UI
+- `ui/subagent_tracking.py` — Subagent progress visualization
 
 **TUI (Textual):**
-- `tui/app.py` - NovaApp — the full Textual terminal UI with chat messages, modals, keyboard shortcuts, condensed tool groups, click-to-copy, and history management
-- `tui/animations.py` - Entrance animations (fade/slide) for modals, pulsing borders, shimmer effects, and thinking dots
+- `tui/app.py` — NovaApp: chat messages, modals, keyboard shortcuts, condensed tool groups, history
+- `tui/animations.py` — Fade/slide/zoom, pulsing borders, shimmer, thinking dots
 
-**Tools (21 modules):**
-- `tools/` - HTTP fetch, web search, DuckDuckGo search, docs search, web scraping (GitHub trending, HN, LinkedIn, Reddit, Twitter/X), package info, git, LSP, browser, memory, reflection, project graph, code search, and plan mode tools
+**Tools:**
+- `tools/` — HTTP fetch, search, web scraping, package info, git, LSP, browser, memory, reflection, project graph, code search, plan mode
 
 **Integrations:**
-- `integrations/` - Sandbox providers (Modal, Runloop, Daytona, Docker, E2B)
-- `mcp/` - Model Context Protocol client, config, middleware, and presets
-- `remote/` - Discord and Telegram bridge support
+- `integrations/` — Sandbox providers and workdir backend
+- `mcp/` — MCP client, config, middleware, presets
+- `remote/` — Discord and Telegram bridge
 
 **Infrastructure:**
-- `session/` - Session persistence, restore, summarization, and prompt building
-- `states/Session.py` - SessionState dataclass with plan mode, steering, and remote support
-- `server_runner/` - Development server and test runner lifecycle management
-- `process_manager.py` - Subprocess lifecycle, health checks, and cleanup
-- `tracking/` - File tracking, run logging, LangSmith tracing, workspace anchoring
+- `session/` — Session persistence, restore, summarization, prompt building
+- `states/slices/` — 5 state slices (UISettings, AgentRuntime, RemoteBridge, BackgroundTask, Notifications)
+- `states/Session.py` — SessionState composite dataclass
+- `server_runner/` — Dev server and test runner lifecycle
+- `process_manager.py` — Subprocess lifecycle, health checks, cleanup
+- `tracking/` — File tracking, run logging, LangSmith, workspace anchoring
 
 **Safety & Recovery:**
-- `errors/` - Error taxonomy (14 categories) and recovery handlers
-- `security/` - Unicode security and input validation
-- `git_safety.py` - Dangerous command detection and injection prevention
-- `file_ops.py` - File operation tracking, diff computation, and approval previews
-- `recovery.py` - File recovery snapshots
-- `path_approval.py` - Path-based operation approval
+- `errors/` — Error taxonomy (14 categories) and recovery handlers
+- `security/` — Unicode security and input validation
+- `git_safety.py` — Dangerous command detection and injection prevention
+- `file_ops.py` — File operation tracking, diff, approval previews
+- `recovery.py` — File recovery snapshots
+- `path_approval.py` — Path-based operation approval
 
 **Specialized:**
-- `bootstrap/` - Environment snapshots, project graph context, steering instructions
-- `init/` - Project initialization (detect, extract, generate, graph)
-- `skills/` - Skill loading, creation, locking, and system prompt generation
-- `hitl/` - Human-in-the-loop interrupt configuration
-- `vision/` - Vision model support
-- `vixie/` - Desktop companion server (notifications, system tray)
-- `hooks.py` - Lifecycle hook system
-- `compaction.py` - Conversation summarization via LLM
-- `plans.py` - Plan management and persistence
-- `onboarding.py` - Interactive first-run setup with SecretManager
-- `doctor.py` - System diagnostics and environment validation
-- `migrate.py` - Configuration migration utilities
+- `bootstrap/` — Environment snapshots, project graph context, steering instructions
+- `init/` — Project initialization (detect → extract → generate → graph)
+- `skills/` — Skill loading, creation, locking, system prompt generation
+- `hitl/` — Human-in-the-loop interrupt configuration
+- `vision/` — Vision model support
+- `vixie/` — Desktop companion server (notifications, system tray)
+- `plugins/` — Plugin system
+- `hooks.py` — Lifecycle hook dispatch
+- `compaction.py` — Conversation summarization via LLM
+- `plans.py` — Plan management and persistence
+- `onboarding.py` — Interactive first-run setup
+- `doctor.py` — System diagnostics
+- `migrate.py` — Configuration migration
 
-## Vixie Integration
+## Optional Dependencies
 
-NOVA includes **Vixie**, a lightweight desktop companion server:
+```bash
+# Graph visualization
+pip install novacode-cli[graphify]
 
-### Features
+# Code search
+pip install novacode-cli[code-search]
 
-- **Desktop Notifications**: Task completion and status alerts
-- **System Tray Integration**: Quick access to Nova status
-- **Server Module**: `novacode_cli/vixie/server.py`
+# Discord bridge
+pip install novacode-cli[remote-discord]
 
-Vixie runs as a background service alongside the Nova CLI and provides desktop-level integrations for a smoother workflow.
+# Voice agent
+pip install novacode-cli[voice]
+```
+
+## Docker
+
+NOVA ships with a `Dockerfile` and `docker-compose.yml` for containerized deployment:
+
+```bash
+# Build and run with docker-compose
+docker-compose up --build
+
+# Or build manually
+docker build -t novacode-cli .
+docker run -it --rm -v "$(pwd):/workspace" novacode-cli
+```
 
 ## Dependencies
 
-This package depends on the `deepagents` library for core agent functionality, which is automatically installed as a dependency.
+This package depends on the `deepagents` library for core agent functionality, which is automatically installed as a dependency. Core dependencies include LangChain ecosystem (LangGraph, LangSmith), Rich, Textual, prompt-toolkit, and various integration libraries.
 
 ## License
 
-MIT License - see LICENSE file for details.
+MIT License — see LICENSE file for details.
 
 ## Contributing
 
@@ -952,7 +910,4 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 3. Commit your changes (`git commit -m 'Add amazing feature'`)
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
-n a Pull Request
-ature/amazing-feature`)
-5. Open a Pull Request
-n a Pull Request
+
