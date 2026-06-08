@@ -2137,6 +2137,21 @@ async def main(
                     checkpointer=checkpointer,
                     restored_session_data=restored_session_data,
                 )
+
+                # If this run saved no session (e.g. the user exited immediately
+                # without a single turn), don't leave the freshly-created sandbox
+                # behind — there's no session to ever reconnect it. Vetoing
+                # persistence makes create_sandbox remove it on exit instead of
+                # accumulating orphaned containers.
+                try:
+                    if session_manager is not None:
+                        _saved = session_manager.load_session(
+                            session_state.session_id
+                        )
+                        if _saved is None or not _saved.messages:
+                            sandbox_backend._nova_discard_on_exit = True  # type: ignore[attr-defined]  # noqa: SLF001
+                except Exception:  # noqa: BLE001 - never block exit on cleanup hint
+                    pass
         except (ImportError, ValueError, RuntimeError, NotImplementedError) as e:
             console.print()
             if not explicit_sandbox:

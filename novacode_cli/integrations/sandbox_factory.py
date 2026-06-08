@@ -423,15 +423,33 @@ def create_daytona_sandbox(
             console.print(f"[yellow]⚠ Cleanup failed: {e}[/yellow]")
 
 
+def _saved_session_ids() -> set[str]:
+    """Return the set of session ids that still exist on disk."""
+    from pathlib import Path
+
+    sessions_dir = Path.home() / ".nova" / "sessions"
+    try:
+        return {p.name for p in sessions_dir.iterdir() if p.is_dir()}
+    except OSError:
+        return set()
+
+
 def _cleanup_stale_docker_containers(
     client, *, keep_id: str | None = None, max_age_days: int = 30
 ) -> None:
-    """Remove Nova-managed Docker containers older than max_age_days.
+    """Prune Nova-managed Docker containers that won't be reconnected.
 
     Persisted containers are stopped (not removed) on exit so sessions can
-    reconnect. This best-effort sweep prevents unbounded accumulation of
-    abandoned containers. The container currently being reconnected (keep_id)
-    is never removed.
+    reconnect. This best-effort startup sweep removes two kinds of leftovers so
+    they don't accumulate:
+
+    * **Orphans** — a managed container whose ``nova.session`` no longer has a
+      session saved on disk (e.g. the user started Nova, it created the sandbox,
+      then exited before any turn was saved). Removed regardless of age, but only
+      when *not running* so a concurrent live session is never killed.
+    * **Stale** — anything older than ``max_age_days``.
+
+    The container currently being reconnected (``keep_id``) is never removed.
 
     Args:
         client: Docker client
@@ -449,10 +467,28 @@ def _cleanup_stale_docker_containers(
     except Exception:  # noqa: BLE001
         return  # Docker API hiccup — skip cleanup silently
 
+    valid_ids = _saved_session_ids()
+
     for cont in managed:
         try:
             if keep_id and (cont.id == keep_id or cont.id.startswith(keep_id)):
                 continue
+
+            # Orphan: its session was never saved (or was deleted) and it isn't
+            # running, so nothing will ever reconnect it. Remove immediately.
+            session_label = (getattr(cont, "labels", None) or {}).get("nova.session") or ""
+            if (
+                session_label
+                and session_label not in valid_ids
+                and getattr(cont, "status", "") != "running"
+            ):
+                cont.remove(force=True)
+                console.print(
+                    f"[dim]Removed orphaned sandbox container {cont.id[:12]} "
+                    f"(no saved session)[/dim]"
+                )
+                continue
+
             created_raw = cont.attrs.get("Created", "")
             # Docker timestamps look like 2026-05-30T12:00:00.000000000Z
             created_str = created_raw.split(".")[0].rstrip("Z")
@@ -465,6 +501,16 @@ def _cleanup_stale_docker_containers(
                 )
         except Exception:  # noqa: BLE001, S112
             continue  # Best effort — never block startup on cleanup
+
+
+def _keep_sandbox_on_exit(persist: bool, backend: object) -> bool:  # noqa: FBT001
+    """Whether to keep a persistable sandbox on exit.
+
+    ``persist`` is the requested policy; a caller can still veto it by setting
+    ``backend._nova_discard_on_exit = True`` (e.g. when the session saved
+    nothing, so keeping the container would just orphan it).
+    """
+    return bool(persist) and not getattr(backend, "_nova_discard_on_exit", False)
 
 
 @contextmanager
@@ -649,8 +695,12 @@ def create_docker_sandbox(
         yield backend
 
     finally:
+        # The caller may veto persistence at exit — e.g. an immediately-exited
+        # session that saved nothing would otherwise leave a freshly-created
+        # container orphaned (kept "for resume" but no session references it).
+        keep = _keep_sandbox_on_exit(persist, backend)
         if container:
-            if persist:
+            if keep:
                 # Keep the container (and its writable layer + mount) so a later
                 # session can reconnect. Stop it to free resources.
                 try:
