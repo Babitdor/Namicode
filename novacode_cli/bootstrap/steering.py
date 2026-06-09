@@ -39,6 +39,7 @@ they act as persistent guardrails rather than one-off suggestions.
 from __future__ import annotations
 
 import itertools
+import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -49,6 +50,16 @@ from langchain.agents.middleware.types import (
     ModelResponse,
 )
 from langchain_core.messages import HumanMessage, SystemMessage
+
+logger = logging.getLogger(__name__)
+
+# ── Context-window safety ──────────────────────────────────────────
+# If the system prompt (after ALL middleware injections) exceeds this
+# fraction of the model's context window, skip steering to avoid
+# silently truncating the model's output. Hardcoded as a class-level
+# constant so subclasses can override.
+_INJECTION_CTX_MARGIN = 0.80  # 80% — generous margin for messages + output
+_STEERING_SENTINEL = "[/User Steering]"
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +129,63 @@ class SteeringMiddleware(AgentMiddleware):
         # persists via the system prompt).
         self._delivered: set[int] = set()
 
+    @staticmethod
+    def _estimate_tokens(text: str) -> int:
+        """Rough token estimate for a text blob (~3 chars/token for code-heavy text)."""
+        return max(1, len(text) // 3)
+
+    def _lookup_context_window(self, request: ModelRequest) -> int | None:
+        """Return the model's context-window size in tokens, or None if unknown."""
+        # 1) Check model.profile (seeded by _seed_summarization_profile in core_agent.py)
+        try:
+            profile = getattr(request.model, "profile", None) or {}
+            max_tokens = profile.get("max_input_tokens")
+            if max_tokens and int(max_tokens) > 0:
+                return int(max_tokens)
+        except Exception:  # noqa: BLE001
+            pass
+        # 2) Fall back to ContextManager lookup
+        try:
+            model_name = (
+                getattr(request.model, "model_name", None)
+                or getattr(request.model, "model", None)
+                or ""
+            )
+            if model_name:
+                from novacode_cli.context.manager import ContextManager
+
+                cm = ContextManager(model_name)
+                return cm.window_size()
+        except Exception:  # noqa: BLE001
+            pass
+        return None
+
+    def _prompt_within_margin(self, request: ModelRequest, added_chars: int) -> bool:
+        """True if the prompt (existing + added) fits within the context margin.
+
+        When unknown (no model profile, no ContextManager entry) we assume yes
+        rather than silently dropping steering.
+        """
+        window = self._lookup_context_window(request)
+        if window is None:
+            return True  # can't measure → don't block
+        existing_prompt = request.system_prompt or ""
+        existing_tokens = self._estimate_tokens(existing_prompt)
+        added_tokens = self._estimate_tokens(added_chars)
+        total = existing_tokens + added_tokens
+        margin = int(window * _INJECTION_CTX_MARGIN)
+        if total >= margin:
+            logger.warning(
+                "Steering injection skipped: system prompt ~%s tokens exceeds "
+                "%s%% of %s-token context window (%s tokens)",
+                total,
+                int(_INJECTION_CTX_MARGIN * 100),
+                window,
+                margin,
+            )
+            return False
+        return True
+
     def _inject(self, request: ModelRequest) -> ModelRequest:
         """Inject steering instructions into this model call.
 
@@ -128,6 +196,16 @@ class SteeringMiddleware(AgentMiddleware):
           a one-time HumanMessage so the agent actively reads and incorporates it
           into the task in progress — a passive system-prompt line mid-tool-loop
           is easy to overlook.
+
+        Guards:
+        * **Sentinel** — skips system-prompt injection when the block is already
+          present (accumulating copies on every model call bloats the prompt).
+        * **Context margin** — skips system-prompt injection when the prompt after
+          injection would exceed 80 % of the model's context window (overflow
+          silently truncates the model's output).
+        * The one-time nudge HumanMessage for *new* steers still fires in both
+          cases — even when the standing block is skipped, newly added instructions
+          reach the model via an actionable in-band message.
         """
         if not self._enabled:
             return request
@@ -136,6 +214,7 @@ class SteeringMiddleware(AgentMiddleware):
         if not instructions:
             return request
 
+        # ── Build the steering block ──────────────────────────────────
         lines = [
             f"- [{si.label}] {si.instruction}" if si.label else f"- {si.instruction}"
             for si in instructions
@@ -144,12 +223,18 @@ class SteeringMiddleware(AgentMiddleware):
             "[User Steering — standing instructions from the user that you MUST "
             "follow on every step]\n" + "\n".join(lines) + "\n[/User Steering]"
         )
+
+        overrides: dict[str, Any] = {}
+
+        # ── Guard 1: Sentinel — skip if already injected ──────────────
         system_prompt = request.system_prompt
-        new_prompt = (system_prompt + "\n\n" + block) if system_prompt else block
+        already_injected = system_prompt is not None and _STEERING_SENTINEL in system_prompt
 
-        overrides: dict[str, Any] = {"system_message": SystemMessage(new_prompt)}
+        if not already_injected and self._prompt_within_margin(request, len(block)):
+            new_prompt = (system_prompt + "\n\n" + block) if system_prompt else block
+            overrides["system_message"] = SystemMessage(new_prompt)
 
-        # Deliver newly-added steers as a live user message (once).
+        # ── Guard 2 (always): deliver newly-added steers as a live msg ─
         new = [si for si in instructions if si.uid not in self._delivered]
         if new:
             for si in new:
@@ -162,6 +247,8 @@ class SteeringMiddleware(AgentMiddleware):
             )
             overrides["messages"] = [*request.messages, msg]
 
+        if not overrides:
+            return request
         return request.override(**overrides)
 
     def wrap_model_call(
