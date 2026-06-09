@@ -27,6 +27,82 @@ def _make_console() -> Console:
     from novacode_cli.config.config import console as _global_console
     return _global_console
 
+def _coerce_float(value: Any, default: float) -> float:
+    """Coerce a value to ``float``, returning ``default`` when impossible.
+
+    ``bool`` is treated as non-numeric here (an LLM "weight": true is junk), and
+    dict/list/None fall through to the default.
+    """
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return default
+    return default
+
+
+_NUMERIC_EDGE_FIELDS = frozenset({"weight", "confidence_score", "confidence"})
+"""Edge fields that must be numeric for NetworkX arithmetic."""
+_STRING_EDGE_FIELDS = frozenset({"source", "target", "relation"})
+"""Edge fields that must be strings — dicts here cause '>' comparison crashes."""
+
+
+def sanitize_graph_extraction(extraction: dict[str, Any]) -> dict[str, Any]:
+    """Coerce all fields so malformed extraction can't crash the graph.
+
+    The semantic-extraction stage is LLM-authored, and weak models sometimes
+    emit a numeric field (``weight``, ``confidence_score``) as a dict, or
+    a string field (``source``, ``target``) as an object.  NetworkX's
+    internal degree computation and graphify's analysis then do comparisons
+    against those dicts and raise::
+
+        '>' not supported between instances of 'float' and 'dict'
+
+    We coerce every known field type at the graph boundary so a single bad
+    fragment can't fail the whole ``/init``. Mutates in place and returns it.
+    """
+    if not isinstance(extraction, dict):
+        return extraction
+
+    # ── Sanitize edges ──────────────────────────────────────────────────
+    for edge in extraction.get("edges") or []:
+        if not isinstance(edge, dict):
+            continue
+        for key in _NUMERIC_EDGE_FIELDS:
+            if key in edge:
+                edge[key] = _coerce_float(edge[key], 1.0)
+        for key in _STRING_EDGE_FIELDS:
+            if key in edge and not isinstance(edge[key], str):
+                edge[key] = str(edge[key]) if edge[key] is not None else ""
+
+    # ── Sanitize nodes (degree_map in graph_reader.py does arithmetic) ──
+    for node in extraction.get("nodes") or []:
+        if not isinstance(node, dict):
+            continue
+        # community / group must be int-able for clustering
+        for key in ("community", "group"):
+            val = node.get(key)
+            if val is not None and not isinstance(val, (int, float)):
+                try:
+                    node[key] = int(val)
+                except (TypeError, ValueError):
+                    node.pop(key, None)
+
+    # ── Sanitize hyperedges ─────────────────────────────────────────────
+    for hyper in extraction.get("hyperedges") or []:
+        if not isinstance(hyper, dict):
+            continue
+        for key in _NUMERIC_EDGE_FIELDS:
+            if key in hyper:
+                hyper[key] = _coerce_float(hyper[key], 1.0)
+
+    return extraction
+
+
 if TYPE_CHECKING:
     import networkx as nx
 
@@ -62,6 +138,10 @@ def build_project_graph(
     if not extraction.get("nodes"):
         console.print("[yellow]⚠ No nodes to build graph from[/yellow]")
         return None
+
+    # Guarantee numeric edge weights before handing off to graphify/NetworkX —
+    # catches LLM-malformed semantic fragments AND any poisoned extraction cache.
+    extraction = sanitize_graph_extraction(extraction)
 
     G = build_from_json(extraction)
 

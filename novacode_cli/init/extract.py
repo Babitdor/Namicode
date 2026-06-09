@@ -526,13 +526,20 @@ def merge_ast_semantic(ast: dict[str, Any], semantic: dict[str, Any]) -> dict[st
     Nodes dedup by id (AST wins on conflict), edges dedup by
     (source, target, relation), hyperedges concatenated.
     """
+    # Coerce LLM-authored semantic edge weights to numbers BEFORE merge, so the
+    # extraction cache (saved right after this) is clean and malformed weights
+    # never reach the graph. build_project_graph re-sanitizes as a catch-all.
+    from novacode_cli.init.graph import sanitize_graph_extraction
+
+    semantic = sanitize_graph_extraction(semantic)
+
     # base=semantic, new=ast → on an id/edge conflict the AST (authoritative for
     # code structure) wins, since merge_extractions lets `new` override `base`.
     merged = merge_extractions(semantic, ast)
     merged["hyperedges"] = (ast.get("hyperedges") or []) + (
         semantic.get("hyperedges") or []
     )
-    return merged
+    return sanitize_graph_extraction(merged)
 
 
 def extract_project_incremental(

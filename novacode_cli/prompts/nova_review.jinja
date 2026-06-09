@@ -1,52 +1,41 @@
 <nova_review>
-## 🔄 Nova Review Cycle
+## Nova Review Cycle
 
-You have completed {{ tool_call_count }} tool calls since the last review.
-Perform a brief self-evaluation:
+{{ tool_call_count }} tool calls since last review. Brief self-evaluation:
+
 {% if prior_lessons %}
-### 0. Already Known — DO NOT Repeat
-You have already recorded the lessons below in previous reviews. Do **not**
-restate, rephrase, or re-derive them. Only capture what is *genuinely new*
-since these:
+### Already Known — DO NOT Repeat
+Previously recorded (do not restate or re-derive):
 
 {{ prior_lessons }}
 {% endif %}
 ### 1. Extract Lessons
-What did you learn recently that should be remembered? (1-3 bullet points)
-Skip anything already covered above.
+What did you learn that should be remembered? (1-3 bullets; skip anything above)
 
-### 2. Identify Reusable Skills
-Did this session include a concrete, multi-step workflow you'd want to repeat
-on a *future, similar* task (e.g. "add a new slash command to the TUI", "wire a
-new middleware")? Only then propose a skill — see the `<skill>` block below.
-Do NOT propose a skill for generic activity (reading then editing then testing
-is just normal work, not a skill).
+### 2. Reusable Skills
+Did this session include a concrete, multi-step workflow worth repeating on a future similar task? If so, propose a skill (kebab-case name, trigger description, concrete body). Do NOT propose for generic read→edit→test activity.
 {% if recovered_from_error %}
-**You recovered from an error this session** (a failure followed by a working
-fix). That fix is high-value procedural memory — strongly consider capturing the
-*working solution* (and the gotcha that caused the failure) as a skill below.
+**You recovered from an error** — strongly consider capturing the working fix + gotcha as a skill.
 {% endif %}
 
 ### 3. Memory Health Check
 Are USER.md / MEMORY.md up to date? Any stale entries to prune?
 
-### 4. Pending/Incomplete Work
+### 4. Pending Work
 What's left unfinished or blocked?
 
-Keep your response concise — this is a checkpoint, not a full session summary.
+Keep it concise — this is a checkpoint, not a full summary.
 
-### Output Format (IMPORTANT)
-Record durable learnings using the XML blocks below so they persist to memory.
-Only include a block if you have something concrete to store; omit empty blocks.
+### Output Format
+Record learnings in XML blocks. Omit empty blocks.
 
-- Put updates about the *user* (communication style, preferences, workflows,
-  frustrations) inside a `<user_updates>` block. Start each entry with a
-  Markdown section header (e.g. `## Communication Style`) so it merges into
-  the matching section of USER.md.
-- Put cross-cutting *session* learnings (decisions, reusable patterns, facts)
-  inside a `<session_memory>` block as bullet points; these append to MEMORY.md.
+- `<user_updates>` — user model entries (each as `## Section Header`). Written to USER.md.
+- `<session_memory>` — cross-session decisions, patterns, facts as bullets. Appended to MEMORY.md.
+- `<skill>` — at most one. Only if step 2 identified a genuinely reusable workflow.
 
-Example:
+<!-- 
+Example blocks — these are illustrative, do not output them unless you have real content:
+
 <user_updates>
 ## Communication Style
 - Prefers concise bullet points over prose
@@ -54,30 +43,18 @@ Example:
 
 <session_memory>
 - Tests are run with `pytest -x` for fast feedback
-- The MCP middleware is skipped entirely when no servers are configured
 </session_memory>
-
-If — and only if — you identified a genuinely reusable, non-trivial workflow in
-step 2, include **at most one** `<skill>` block. Omit it entirely otherwise
-(most reviews should have no skill). Ground it in what you actually did this
-session: a descriptive kebab-case `name`, a `description` that says *when to use
-it* (the trigger), and a `body` of concrete steps — the exact files, commands,
-conventions, and gotchas a future agent needs. Do not invent steps you didn't
-perform. Do not name it `nova-...`; use a task-descriptive name.
 
 <skill>
 <name>add-tui-slash-command</name>
 <description>Use when adding a new /command to the Textual TUI (novacode_cli/tui/app.py).</description>
 <body>
-# Add a TUI slash command
-
-Steps to add a new `/command` handled natively by the Textual UI:
-
-1. Add the command name to `_TUI_SLASH_COMMANDS` in `novacode_cli/tui/app.py` (autocomplete).
-2. Add an `elif cmd == "<name>":` branch in `_run_slash` that calls a new `_run_<name>` handler.
-3. Implement `_run_<name>` — render via native widgets / `self._log`, never `console.print` (it corrupts the TUI).
-4. Add a one-line entry to the `/help` text.
+1. Add command name to `_TUI_SLASH_COMMANDS` in `novacode_cli/tui/app.py`.
+2. Add `elif` branch in `_run_slash` calling a new `_run_<name>` handler.
+3. Implement handler — use native widgets / `self._log`; never `console.print` (corrupts TUI).
+4. Add entry to `/help`.
 5. Verify: `uv run pytest tests/test_tui_app.py -k routing`.
 </body>
 </skill>
+-->
 </nova_review>
