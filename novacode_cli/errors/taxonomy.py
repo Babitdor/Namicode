@@ -1,5 +1,7 @@
 """Error taxonomy and classification for deepagents CLI."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from enum import Enum
 
@@ -43,3 +45,36 @@ class RecoverableError:
     recovery_suggestion: str
     user_message: str
     retry_allowed: bool = True
+
+    @classmethod
+    def from_exception(
+        cls,
+        exc: Exception,
+        *,
+        category: ErrorCategory,
+        context: dict,
+        recovery_suggestion: str,
+        user_message: str | None = None,
+        retry_allowed: bool = True,
+    ) -> RecoverableError:
+        """Create a RecoverableError from an exception.
+
+        Args:
+            exc: The original exception.
+            category: Error category for recovery strategy selection.
+            context: Additional context about the error.
+            recovery_suggestion: Human-readable suggestion for fixing the error.
+            user_message: User-friendly message. Defaults to ``str(exc)``.
+            retry_allowed: Whether automatic retry is allowed.
+
+        Returns:
+            A new RecoverableError instance.
+        """
+        return cls(
+            category=category,
+            original_error=exc,
+            context=context,
+            recovery_suggestion=recovery_suggestion,
+            user_message=user_message if user_message is not None else str(exc),
+            retry_allowed=retry_allowed,
+        )

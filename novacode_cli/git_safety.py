@@ -94,18 +94,14 @@ def extract_command_prefix(command: str) -> str | Literal["none"] | Literal["com
     # Strip leading whitespace
     command = command.strip()
     
-    # Check if it starts with git
-    if not command.startswith("git"):
-        return "none"
-    
     # Parse the command parts
     parts = command.split()
     
-    if len(parts) < 2:
-        return "git" if parts[0] == "git" else "none"
+    if not parts:
+        return "none"
     
     # Handle environment variables before git
-    # e.g., "FOO=bar git status" -> "FOO=bar git status"
+    # e.g., "FOO=bar git status" -> env vars stripped
     env_vars = []
     i = 0
     while i < len(parts) and "=" in parts[i]:
@@ -120,26 +116,26 @@ def extract_command_prefix(command: str) -> str | Literal["none"] | Literal["com
         if remaining[0] != "git":
             return "none"
         if len(remaining) < 2:
-            return " ".join(env_vars + ["git"])
+            return "git"
         
         # Get git subcommand
         subcommand = remaining[1]
         
-        # Special cases for git commands with sub-subcommands
-        if subcommand in ["push", "pull", "fetch"]:
-            # git push origin main -> "git push"
-            return " ".join(env_vars + ["git", subcommand])
-        elif subcommand in ["commit", "add", "reset", "checkout", "branch", "tag", "remote", "stash"]:
-            # git commit -m "msg" -> "git commit"
-            return " ".join(env_vars + ["git", subcommand])
-        elif subcommand in ["log", "diff", "show", "status", "blame"]:
-            # git log -n 5 -> "git log"
-            return " ".join(env_vars + ["git", subcommand])
+        # Return prefix without env vars
+        if subcommand in ["push", "pull", "fetch", "commit", "add", "reset",
+                          "checkout", "branch", "tag", "remote", "stash",
+                          "log", "diff", "show", "status", "blame"]:
+            return f"git {subcommand}"
         else:
-            # git <subcommand> -> "git <subcommand>"
-            return " ".join(env_vars + ["git", subcommand])
+            return f"git {subcommand}"
     
     # No env vars, just git command
+    if parts[0] != "git":
+        return "none"
+    
+    if len(parts) < 2:
+        return "git"
+    
     subcommand = parts[1]
     
     # Special handling for common git commands

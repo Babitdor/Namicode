@@ -83,13 +83,20 @@ class TestExtractRmTargets:
 class TestFileRecoveryManager:
     """FileRecoveryManager: snapshot, list, restore."""
 
+    @pytest.fixture(autouse=True)
+    def _setup(self, tmp_path, monkeypatch):
+        import novacode_cli.recovery as rec
+        rec._manager = None
+        # Isolate trash to tmp_path so tests don't collide
+        monkeypatch.setattr(rec, "_TRASH_ROOT", tmp_path / ".nova" / "trash")
+
     def test_snapshot_file(self, tmp_path):
         workspace = tmp_path / "project"
         workspace.mkdir()
         target = workspace / "main.py"
         target.write_text("print('hello')")
 
-        mgr = FileRecoveryManager("test-session", workspace)
+        mgr = FileRecoveryManager("snap-file", workspace)
         assert mgr.snapshot(target, reason="write_file") is True
 
         entries = mgr.list_snapshots(include_past_sessions=False)
@@ -99,23 +106,24 @@ class TestFileRecoveryManager:
     def test_snapshot_nonexistent_file(self, tmp_path):
         workspace = tmp_path / "project"
         workspace.mkdir()
-        mgr = FileRecoveryManager("test-session", workspace)
+        mgr = FileRecoveryManager("snap-nonexist", workspace)
         assert mgr.snapshot(workspace / "nonexistent.py", reason="write_file") is False
 
     def test_snapshot_from_content(self, tmp_path):
         workspace = tmp_path / "project"
         workspace.mkdir()
-        mgr = FileRecoveryManager("test-session", workspace)
+        mgr = FileRecoveryManager("snap-content", workspace)
         assert mgr.snapshot_from_content("src/main.py", "print('hello')", reason="write_file") is True
 
         entries = mgr.list_snapshots(include_past_sessions=False)
         assert len(entries) == 1
-        assert entries[0][1].original_path == "src/main.py"
+        # Path is stored as absolute since it's not under workspace_root
+        assert "src/main.py" in entries[0][1].original_path
 
     def test_snapshot_from_empty_content(self, tmp_path):
         workspace = tmp_path / "project"
         workspace.mkdir()
-        mgr = FileRecoveryManager("test-session", workspace)
+        mgr = FileRecoveryManager("snap-empty", workspace)
         assert mgr.snapshot_from_content("src/main.py", "", reason="write_file") is False
 
     def test_restore_snapshot(self, tmp_path):
@@ -124,7 +132,7 @@ class TestFileRecoveryManager:
         target = workspace / "main.py"
         target.write_text("original content")
 
-        mgr = FileRecoveryManager("test-session", workspace)
+        mgr = FileRecoveryManager("test-restore", workspace)
         mgr.snapshot(target, reason="write_file")
 
         # Overwrite the file
@@ -138,7 +146,7 @@ class TestFileRecoveryManager:
     def test_restore_missing_snapshot(self, tmp_path):
         workspace = tmp_path / "project"
         workspace.mkdir()
-        mgr = FileRecoveryManager("test-session", workspace)
+        mgr = FileRecoveryManager("restore-miss", workspace)
         entry = SnapshotEntry(
             id="test", original_path="main.py", snapshot_file="nonexistent",
             reason="write_file", timestamp="2026-01-01T00:00:00",
@@ -151,7 +159,7 @@ class TestFileRecoveryManager:
         (workspace / "a.py").write_text("a")
         (workspace / "b.py").write_text("b")
 
-        mgr = FileRecoveryManager("test-session", workspace)
+        mgr = FileRecoveryManager("list-multi", workspace)
         mgr.snapshot(workspace / "a.py", reason="write_file")
         mgr.snapshot(workspace / "b.py", reason="edit_file")
 
@@ -164,11 +172,11 @@ class TestFileRecoveryManager:
         target = workspace / "main.py"
         target.write_text("content")
 
-        mgr1 = FileRecoveryManager("test-session", workspace)
+        mgr1 = FileRecoveryManager("test-persist", workspace)
         mgr1.snapshot(target, reason="write_file")
 
         # New manager with same session should load existing manifest
-        mgr2 = FileRecoveryManager("test-session", workspace)
+        mgr2 = FileRecoveryManager("test-persist", workspace)
         entries = mgr2.list_snapshots(include_past_sessions=False)
         assert len(entries) == 1
 

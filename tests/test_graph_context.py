@@ -7,7 +7,18 @@ detail are intentionally NOT injected — they live behind ``query_project_graph
 
 from __future__ import annotations
 
-from novacode_cli.bootstrap.graph_reader import GraphSummary as _GraphSummary
+import importlib.util
+import sys
+
+# Import graph_reader directly to avoid bootstrap/__init__.py pulling in langchain
+_spec = importlib.util.spec_from_file_location(
+    "novacode_cli.bootstrap.graph_reader",
+    "novacode_cli/bootstrap/graph_reader.py",
+)
+_graph_reader = importlib.util.module_from_spec(_spec)
+sys.modules["novacode_cli.bootstrap.graph_reader"] = _graph_reader
+_spec.loader.exec_module(_graph_reader)
+_GraphSummary = _graph_reader.GraphSummary
 
 
 def _summary() -> _GraphSummary:
