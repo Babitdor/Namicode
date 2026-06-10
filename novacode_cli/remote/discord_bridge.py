@@ -27,7 +27,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from typing import Any, Callable, Awaitable
+from typing import Any, Awaitable, Callable
 
 from novacode_cli.remote.bridge import (
     BridgeConfig,
@@ -202,18 +202,32 @@ class DiscordBridge:
             _EDIT_LIMIT = 1990
 
             async def edit_fn(text: str, final: bool = False) -> None:
-                """Create-or-edit the live answer message, rolling on overflow."""
+                """Create-or-edit the live answer message, rolling on overflow.
+
+                During execution (``final=False``), the text is a short live-status
+                like ``"🤔 Working… using read_file×4, grep×2"`` — brief enough to
+                avoid rate limits on rapid edits.
+
+                On completion (``final=True``), the text is the condensed response
+                with an optional ``"-# {digest}``" footer that Discord renders as a
+                small footnote (tool usage summary).
+                """
                 try:
+                    # Trim "Thinking..." / "Working..." prefixes on final answer
+                    display = text
+                    if final:
+                        display = text.replace("\U0001f914 ", "", 1)
+
                     # Flush full blocks past the limit into frozen messages.
-                    while len(text) - _live["base"] > _EDIT_LIMIT:
-                        block = text[_live["base"] : _live["base"] + _EDIT_LIMIT]
+                    while len(display) - _live["base"] > _EDIT_LIMIT:
+                        block = display[_live["base"] : _live["base"] + _EDIT_LIMIT]
                         if _live["msg"] is None:
                             _live["msg"] = await message.channel.send(block)
                         else:
                             await _live["msg"].edit(content=block)
                         _live["base"] += _EDIT_LIMIT
                         _live["msg"] = None  # next remainder starts a fresh message
-                    remainder = text[_live["base"] :] or "…"
+                    remainder = display[_live["base"] :] or "\u2026"
                     if _live["msg"] is None:
                         _live["msg"] = await message.channel.send(remainder)
                     else:

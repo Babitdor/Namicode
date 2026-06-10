@@ -67,7 +67,11 @@ async def execute_task(  # type: ignore
     """
     from novacode_cli.vixie.server import (
         set_idle as vixie_set_idle,
+    )
+    from novacode_cli.vixie.server import (
         set_thinking as vixie_set_thinking,
+    )
+    from novacode_cli.vixie.server import (
         set_working as vixie_set_working,
     )
 
@@ -200,8 +204,8 @@ async def execute_task(  # type: ignore
                 console.print(md, justify="full")
                 try:
                     from novacode_cli.hooks import (
-                        dispatch_hook_fire_and_forget,
                         HookEvent,
+                        dispatch_hook_fire_and_forget,
                     )
 
                     dispatch_hook_fire_and_forget(
@@ -228,8 +232,8 @@ async def execute_task(  # type: ignore
 
                 try:
                     from novacode_cli.hooks import (
-                        dispatch_hook_fire_and_forget,
                         HookEvent,
+                        dispatch_hook_fire_and_forget,
                     )
 
                     dispatch_hook_fire_and_forget(
@@ -264,8 +268,8 @@ async def execute_task(  # type: ignore
 
                 try:
                     from novacode_cli.hooks import (
-                        dispatch_hook_fire_and_forget,
                         HookEvent,
+                        dispatch_hook_fire_and_forget,
                     )
 
                     dispatch_hook_fire_and_forget(
@@ -324,6 +328,13 @@ async def execute_task(  # type: ignore
                 if not spinner_active:
                     status.start()
                     spinner_active = True
+                # Mirror the plan into the remote status line (legacy bridge path).
+                _todo_notify = getattr(session_state, "_remote_todo_notify", None)
+                if _todo_notify is not None:
+                    try:
+                        _todo_notify(event.todos)
+                    except Exception:  # noqa: BLE001
+                        pass
 
             elif isinstance(event, ev.SubagentActivity):
                 if event.kind == "dispatched":

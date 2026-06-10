@@ -2173,17 +2173,11 @@ class NovaApp(App):
         self._subagent_widgets: dict[str, tuple[Collapsible, Static, str, float]] = {}
         self._subagent_count: int = 0  # running total for display
         self._remote_msg: Any = None  # current RemoteMessage during remote turn
-        # Tool/subagent names used during the current remote turn — flushed as a
-        # single condensed digest message so chats aren't flooded per call.
+        # Tool/subagent names used during the current remote turn — collapsed
+        # into the compact live status line's condensed counts.
         self._remote_activity: list[str] = []
-        # Edit-in-place streaming of the agent's answer to the remote chat.
-        # _remote_stream_buf is the full accumulated answer text; a background
-        # pump (_remote_stream_pump) coalesces edits so we don't HTTP-call per
-        # token. _remote_streamed marks that text was streamed (so we finalize
-        # the live message instead of sending a duplicate answer).
-        self._remote_stream_buf: str = ""
-        self._remote_streamed: bool = False
-        self._remote_stream_task: Any = None
+        # The per-turn live status line (edits one compact message in place).
+        self._remote_status: Any = None
         # The MatrixRain animation widget, tracked so it can be removed on clear.
         self._home_banner: Static | None = None
         # name → async (args) -> str  for slash commands contributed by plugins.
@@ -2431,30 +2425,67 @@ class NovaApp(App):
             pass
 
     def _remote_record(self, name: str | None) -> None:
-        """Record one tool/subagent name for this remote turn's digest.
+        """Record one tool/subagent name for this remote turn's live status line.
 
-        No network call — names are collapsed into a single message by
-        :meth:`_flush_remote_activity` when the turn ends.
+        No network call — the name feeds the compact status line (condensed
+        counts, edited in place) which the pump flushes on its own timer.
         """
         if self._remote_msg is None or not name:
             return
         self._remote_activity.append(str(name))
+        if self._remote_status is not None:
+            self._remote_status.note(str(name))
 
-    async def _flush_remote_activity(self) -> None:
-        """Send (once) a condensed digest of this turn's tool/subagent activity."""
-        names = self._remote_activity
-        self._remote_activity = []
-        msg = self._remote_msg
-        if msg is None or not names:
-            return
-        from novacode_cli.remote.bridge import format_tool_digest
+    async def _remote_steer_drain(self, queue: Any) -> None:
+        """While a remote turn runs, treat further remote messages as live steers.
 
-        digest = format_tool_digest(names)
-        if digest:
+        Lets a remote user "add extra stuff to the previous prompt": a message
+        (or ``/steer …``) arriving mid-turn is injected as a live steer the
+        running agent picks up at its next step, instead of queuing a whole new
+        turn behind the current one. Other slash commands get a "busy" note.
+        Cancelled when the turn ends.
+        """
+        while True:
             try:
-                await msg.reply_fn(digest)
-            except Exception:  # noqa: BLE001
-                pass
+                m = await queue.get()
+            except asyncio.CancelledError:
+                return
+            try:
+                text = (getattr(m, "text", "") or "").strip()
+                low = text.lower()
+                if low.startswith("/steer"):
+                    text = text[len("/steer") :].strip()
+                elif text.startswith("/"):
+                    reply_fn = getattr(m, "reply_fn", None)
+                    if reply_fn is not None:
+                        try:
+                            await reply_fn(
+                                "⏳ Busy with the current task — send "
+                                "`/steer <text>` (or just text) to add to it."
+                            )
+                        except Exception:  # noqa: BLE001
+                            pass
+                    continue
+                if not text:
+                    continue
+                self._add_live_steer(text)
+                react_fn = getattr(m, "react_fn", None)
+                reply_fn = getattr(m, "reply_fn", None)
+                if react_fn is not None:
+                    try:
+                        await react_fn("↗")
+                    except Exception:  # noqa: BLE001
+                        pass
+                elif reply_fn is not None:
+                    try:
+                        await reply_fn(f"↗ Added to the running task: {text}")
+                    except Exception:  # noqa: BLE001
+                        pass
+            finally:
+                try:
+                    queue.task_done()
+                except Exception:  # noqa: BLE001
+                    pass
 
     def _remote_react(self, emoji: str, msg: Any = None) -> None:
         """Add a reaction emoji to the remote user's message (best-effort).
@@ -2475,28 +2506,6 @@ class NovaApp(App):
         except Exception:  # noqa: BLE001
             pass
 
-    async def _remote_stream_pump(self, msg: Any) -> None:
-        """Coalesce streamed answer text into edit-in-place updates of one message.
-
-        Runs for the duration of a remote turn: every ~1.2s it edits the live
-        reply message with whatever has accumulated in ``_remote_stream_buf`` (a
-        single serialized editor — no per-token HTTP calls, no edit races).
-        """
-        import asyncio
-
-        last = ""
-        try:
-            while True:
-                await asyncio.sleep(1.2)
-                buf = self._remote_stream_buf
-                if buf and buf != last and getattr(msg, "edit_fn", None):
-                    last = buf
-                    try:
-                        await msg.edit_fn(buf, False)
-                    except Exception:  # noqa: BLE001
-                        pass
-        except asyncio.CancelledError:
-            return
 
     def _log(self, renderable: Any) -> None:
         """Mount an ancillary line (errors, command output, notices)."""
@@ -2996,8 +3005,8 @@ class NovaApp(App):
                 e.subagent_type or "subagent",
                 time.time(),
             )
-            # Record for the condensed remote digest (not sent per-event).
-            self._remote_record(f"task:{e.subagent_type or 'subagent'}")
+            # Record the subagent for the end-of-turn remote footer.
+            self._remote_record("task")
 
         elif e.kind == "completed":
             # Try matching by call_id first, then fallback to subagent_type
@@ -3136,6 +3145,11 @@ class NovaApp(App):
             line.append("  🔔 ", style="bold #e0af68")
             line.append(str(notif), style="bold #e0af68")
 
+        pending = self._pending_approval_count()
+        if pending:
+            line.append("  ⚡", style="bold yellow")
+            line.append(str(pending), style="bold yellow")
+
         try:
             self._w("#status", Static).update(line)
         except NoMatches:
@@ -3145,6 +3159,13 @@ class NovaApp(App):
         """Unread notification count (0 on any error)."""
         try:
             return self.session_state.unread_notification_count()
+        except Exception:  # noqa: BLE001
+            return 0
+
+    def _pending_approval_count(self) -> int:
+        """Pending approval count (0 on any error)."""
+        try:
+            return self.session_state.pending_approval_count()
         except Exception:  # noqa: BLE001
             return 0
 
@@ -3887,20 +3908,26 @@ class NovaApp(App):
                 prev_auto = getattr(self.session_state, "auto_approve", False)
                 self.session_state.auto_approve = True
                 config = {"configurable": {"thread_id": self.session_state.thread_id}}
+                typing_task: "asyncio.Task | None" = None
                 try:
-                    # Trigger typing indicator on the remote platform
-                    if msg.typing_fn is not None:
-                        try:
-                            import asyncio
-
-                            asyncio.create_task(msg.typing_fn())
-                        except Exception:  # noqa: BLE001
-                            pass
                     self._remote_msg = msg
-                    self._remote_activity = []  # fresh digest per turn
-                    self._remote_stream_buf = ""  # fresh answer stream per turn
-                    self._remote_streamed = False
+                    self._remote_activity = []  # tool/subagent names for the status
+                    self._remote_status = None
                     self._remote_react("🤔")  # acknowledge: thinking
+                    # Keep the "typing…" indicator alive for the whole turn so it
+                    # reads like a person typing, then sends a message (the platform
+                    # indicator only lasts ~10s, so it must be re-triggered).
+                    if msg.typing_fn is not None:
+
+                        async def _typing_loop(typing_fn=msg.typing_fn) -> None:
+                            try:
+                                while True:
+                                    await typing_fn()
+                                    await asyncio.sleep(8)
+                            except asyncio.CancelledError:
+                                return
+
+                        typing_task = asyncio.create_task(_typing_loop())
 
                     # Slash commands from chat: handle the remote-safe subset
                     # directly (info/toggles/conversation), stream skills as a
@@ -3922,48 +3949,48 @@ class NovaApp(App):
                     else:
                         pre = await self.agent.aget_state(config)
                         pre_count = len(pre.values.get("messages", [])) if pre else 0
-                        # Stream the answer edit-in-place via a coalescing pump.
+                        # A compact status line edits in place to show live tool/
+                        # subagent activity (condensed counts) — SEPARATE from the
+                        # answer, which is sent as a fresh chat message below.
                         if getattr(msg, "edit_fn", None) is not None:
-                            self._remote_stream_task = asyncio.create_task(
-                                self._remote_stream_pump(msg)
-                            )
+                            from novacode_cli.remote.status import RemoteStatusLine
+
+                            self._remote_status = RemoteStatusLine(msg.edit_fn)
+                            self._remote_status.start()
+                        # While the turn runs, drain further remote messages as
+                        # live steers so the user can "add to the previous prompt".
+                        steer_drain = asyncio.create_task(
+                            self._remote_steer_drain(queue)
+                        )
                         try:
                             await self._stream_prompt(prompt_text)
                         finally:
-                            if self._remote_stream_task is not None:
-                                self._remote_stream_task.cancel()
-                                try:
-                                    await self._remote_stream_task
-                                except (
-                                    asyncio.CancelledError,
-                                    Exception,
-                                ):  # noqa: BLE001
-                                    pass
-                                self._remote_stream_task = None
+                            steer_drain.cancel()
+                            try:
+                                await steer_drain
+                            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                                pass
+                        # Settle the status line to a done-summary, then send the
+                        # answer as its own message (no footer — the status carries
+                        # the tool/subagent summary).
+                        if self._remote_status is not None:
+                            await self._remote_status.finalize()
                         post = await self.agent.aget_state(config)
-                        reply = (
-                            _extract_response(post, pre_count) or "✅ Task completed."
-                        )
-                        # If we streamed text, finalize the live message in place
-                        # (the stream IS the answer — no duplicate send). Otherwise
-                        # (tools-only turn, or no edit_fn) send the answer once.
-                        if self._remote_streamed and getattr(msg, "edit_fn", None):
-                            try:
-                                await msg.edit_fn(
-                                    self._remote_stream_buf or reply, True
-                                )
-                            except Exception:  # noqa: BLE001
-                                pass
-                        else:
-                            try:
-                                await msg.reply_fn(reply)
-                            except Exception:  # noqa: BLE001
-                                pass
-                        # Condensed tool/subagent digest as a trailing message.
-                        await self._flush_remote_activity()
+                        reply = _extract_response(post, pre_count) or "✅ Task completed."
+                        try:
+                            await msg.reply_fn(reply)
+                        except Exception:  # noqa: BLE001
+                            pass
                         self._remote_react("✅")
                 finally:
                     self._remote_msg = None
+                    self._remote_status = None
+                    if typing_task is not None:
+                        typing_task.cancel()
+                        try:
+                            await typing_task
+                        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                            pass
                     self.session_state.auto_approve = prev_auto
             except asyncio.CancelledError:
                 self._log(Text("Remote turn cancelled.", style="yellow"))
@@ -4061,6 +4088,19 @@ class NovaApp(App):
         if cmd == "save":
             await self._run_save()
             return "✅ Session saved.", None
+        if cmd == "steer":
+            text = arg.strip()
+            if text.lower() in ("clear", "reset", "off"):
+                self._clear_live_steers()
+                return "✅ Steering cleared.", None
+            if not text:
+                return (
+                    "Usage: /steer <instruction> — extra guidance the agent "
+                    "follows on its next step (and a running turn picks up now).",
+                    None,
+                )
+            self._add_live_steer(text)
+            return f"↗ Steering added: {text}", None
 
         if cmd in self._REMOTE_LOCAL_ONLY:
             return f"/{cmd} is only available in the local TUI.", None
@@ -5226,7 +5266,7 @@ class NovaApp(App):
         )
 
     async def _run_notifications(self, text: str) -> None:
-        """Native /notifications: list, dismiss <id>, or clear."""
+        """Native /notifications: list, dismiss <id>, approve <id>, or clear."""
         parts = text.split(maxsplit=1)
         args = parts[1].strip() if len(parts) > 1 else ""
         ap = args.split(maxsplit=1)
@@ -5234,19 +5274,41 @@ class NovaApp(App):
         ss = self.session_state
 
         if sub in ("clear", "reset"):
+            # Dismiss all — reject any pending approvals.
+            for n in list(ss.notifications):
+                if n.action_id and not n.dismissed:
+                    ss.resolve_approval(n.action_id, approve=False)
             n = ss.clear_notifications()
             self._log(Text(f"Cleared {n} notification(s).", style="green"))
             self._refresh_status()
             return
         if sub in ("dismiss", "rm", "ack") and len(ap) > 1:
             nid = ap[1].strip()
-            ok = ss.dismiss_notification(nid)
-            self._log(
-                Text(
-                    f"Dismissed {nid}" if ok else f"Notification {nid} not found",
-                    style="green" if ok else "yellow",
+            n = self._find_notification(ss, nid)
+            if n and n.action_id and not n.dismissed:
+                ss.resolve_approval(n.action_id, approve=False)
+                self._log(Text(f"Dismissed {nid} (rejected approval).", style="green"))
+            elif ss.dismiss_notification(nid):
+                self._log(Text(f"Dismissed {nid}", style="green"))
+            else:
+                self._log(Text(f"Notification {nid} not found", style="yellow"))
+            self._refresh_status()
+            return
+        if sub == "approve" and len(ap) > 1:
+            nid = ap[1].strip()
+            n = self._find_notification(ss, nid)
+            if n and n.action_id and not n.dismissed:
+                if ss.resolve_approval(n.action_id, approve=True):
+                    self._log(Text(f"Approved {nid}.", style="green"))
+                else:
+                    self._log(Text(f"Approval {nid} already resolved.", style="yellow"))
+            else:
+                self._log(
+                    Text(
+                        f"Notification {nid} not found or has no pending approval.",
+                        style="yellow",
+                    )
                 )
-            )
             self._refresh_status()
             return
 
@@ -5256,17 +5318,24 @@ class NovaApp(App):
             "success": "green",
             "warning": "yellow",
             "error": "red",
+            "approval": "magenta",
         }
+        pending = ss.pending_approval_count()
+        title = f"Notifications ({ss.unread_notification_count()} unread"
+        if pending:
+            title += f", {pending} pending approval"
+        title += ")"
         t = Text()
-        t.append(
-            f"Notifications ({ss.unread_notification_count()} unread)\n", style="bold"
-        )
+        t.append(f"{title}\n", style="bold")
         if not notes:
             t.append("  (none yet — long-running tasks notify here)\n", style="dim")
         else:
             for n in notes:
                 c = colors.get(n.level, "white")
-                t.append(f"  {'●' if not n.dismissed else '○'} ", style=c)
+                marker = "●" if not n.dismissed else "○"
+                if n.action_id and not n.dismissed and n.action_type == "approve":
+                    marker = f"⚡{marker}"
+                t.append(f"  {marker} ", style=c)
                 t.append(f"{n.id} ", style="dim")
                 t.append(f"{n.timestamp.strftime('%H:%M:%S')} ", style="dim")
                 t.append(f"[{n.source}] ", style="dim")
@@ -5275,9 +5344,20 @@ class NovaApp(App):
                     t.append(f" — {n.message[:60]}", style="dim")
                 t.append("\n")
             t.append(
-                "  /notifications dismiss <id> · /notifications clear\n", style="dim"
+                "  /notifications dismiss <id> · /notifications approve <id>"
+                " · /notifications clear\n",
+                style="dim",
             )
         self._log(t)
+
+
+    @staticmethod
+    def _find_notification(ss, nid: str) -> object | None:
+        """Return the Notification with the given id, or None."""
+        for n in ss.notifications:
+            if n.id == nid:
+                return n
+        return None
 
     async def _tui_execute_fn(
         self,
@@ -6253,7 +6333,7 @@ class NovaApp(App):
         t.append("  /steer           ", style="cyan")
         t.append("add/list/clear steering instructions\n", style="dim")
         t.append("  /notifications   ", style="cyan")
-        t.append("review task notifications (dismiss <id> · clear)\n", style="dim")
+        t.append("review/pending approvals (dismiss|approve <id> · clear)\n", style="dim")
         t.append("  /research        ", style="cyan")
         t.append("launch a multi-agent research swarm\n", style="dim")
         t.append("  /dream           ", style="cyan")
@@ -6337,16 +6417,8 @@ class NovaApp(App):
             self._schedule_stream_flush()
             if self._activity != "responding…":
                 self._set_status("responding…")
-            # Mirror the answer text to the remote chat (edit-in-place). The pump
-            # task flushes this buffer on a timer so we don't edit per token.
-            if (
-                self._remote_msg is not None
-                and getattr(self._remote_msg, "edit_fn", None) is not None
-            ):
-                if not self._remote_streamed:
-                    self._remote_streamed = True
-                    self._remote_react("💬")
-                self._remote_stream_buf += e.text
+            # Remote turns don't mirror the answer live — the full answer is sent
+            # as a normal chat message when the turn ends (chat-style flow).
         elif isinstance(e, ev.TextDiscard):
             self._stream_flush_scheduled = False
             if self._stream_msg is not None:
@@ -6395,7 +6467,7 @@ class NovaApp(App):
                 self._add_tool_group_call(
                     e.call_id, f"{e.icon} {e.display_str}", e.name
                 )
-            # Record for the condensed remote digest (not sent per-event).
+            # Record for the end-of-turn remote footer (not sent per-event).
             self._remote_record(e.name)
         elif isinstance(e, ev.ToolResult):
             if e.call_id and e.call_id in self._tool_components:
@@ -6441,9 +6513,10 @@ class NovaApp(App):
             else:
                 self._todo_widget.update(todo_text)
                 self._scroll_end()
-            # Todo updates are intentionally NOT streamed to remote — they fire
-            # frequently and flooded the chat. The condensed tool digest plus the
-            # final answer convey progress instead.
+            # Mirror the plan into the remote status line (one message edited in
+            # place, throttled) so the remote user watches the checklist update.
+            if self._remote_status is not None:
+                self._remote_status.note_todos(e.todos)
         elif isinstance(e, ev.ErrorOutput):
             self._log(Text(e.text, style="red"))
         elif isinstance(e, ev.CompactionNotice):

@@ -1,10 +1,9 @@
 <memory_stores>
-**User**: `/memories/agent.md` — personality, style, universal behavior
-**User model (auto)**: `/user-memory/USER.md` — communication style, preferences, workflows, frustrations
-**Session memory (auto)**: `/session-memory/MEMORY.md` — decisions, reusable patterns, facts learned across sessions
-**Project**: `/project-memory/NOVA.md` — build commands, architecture, conventions
-**Topic index**: `/memories/memories/INDEX.md` — map of your topic memory files (see `<memory_index>` below)
-Loaded at startup and injected into system prompt every session.
+**User model (auto)**: `/memories/agent.md` — personality, communication style, preferences, workflows, frustrations; always injected.
+**Topic memory (auto)**: `/memories/memories/<topic>.md` — cross-session decisions, reusable patterns, and facts learned, grouped by topic.
+**Topic index**: `/memories/memories/INDEX.md` — map of your topic memory files (see `<memory_index>` below).
+**Project**: `/project-memory/NOVA.md` — build commands, architecture, conventions.
+Loaded at startup and injected into the system prompt every session.
 
 The `(auto)` tiers are maintained by Nova's background self-review (see `<learning_system>`) and compacted automatically — read them for context, but you normally don't edit them by hand.
 
@@ -25,7 +24,7 @@ Fallback project locations (merged if found): `/CLAUDE.md` → `/project-memory/
 | Trigger | Action |
 |---------|--------|
 | Session start | `read_memory("user")` + `read_memory("project")` |
-| Start of substantive work | Read `/user-memory/USER.md` + `/session-memory/MEMORY.md` for user model & prior decisions |
+| Start of substantive work | Read `/memories/agent.md` (user model) + scan `/memories/memories/INDEX.md` for prior decisions |
 | "What do you know about X?" | Check memories first |
 | User references past work | Search memory for related context |
 

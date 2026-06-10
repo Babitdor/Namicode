@@ -461,8 +461,49 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
                 plan_approved = False
                 for interrupt_id, kind, payload in pending_interrupts:
                     fut: asyncio.Future = loop.create_future()
+
+                    # Raise the notification BEFORE surfacing the interrupt, so the
+                    # badge/notification hook fire the moment approval is needed —
+                    # not after the modal is answered (the old order ran this only
+                    # once the generator resumed past the yield). This is what makes
+                    # "permission needed" actually alert the user (and /notifications
+                    # + remote bridges see the pending approval).
+                    _notif_id: str | None = None
+                    if kind in ("tool", "plan", "question"):
+                        _notif_msg = (
+                            "Plan requires approval"
+                            if kind == "plan"
+                            else (
+                                "Tool action requires approval"
+                                if kind == "tool"
+                                else "Question requires response"
+                            )
+                        )
+                        try:
+                            _notif_id = session_state.add_notification(
+                                level="approval",
+                                title=_notif_msg,
+                                message=str(payload)[:200],
+                                source="system",
+                                action_id=interrupt_id,
+                                action_type=(
+                                    "approve" if kind in ("tool", "plan") else "select"
+                                ),
+                            )
+                            session_state.register_pending_approval(interrupt_id, fut)
+                        except Exception:  # noqa: BLE001 — never break the turn on a notification
+                            pass
+
                     yield ev.InterruptRequest(kind=kind, payload=payload, future=fut)
                     response = await fut
+
+                    # Resolved (via the modal or /notifications) — clear the badge
+                    # so a settled approval doesn't linger as "pending".
+                    if _notif_id is not None:
+                        try:
+                            session_state.dismiss_notification(_notif_id)
+                        except Exception:  # noqa: BLE001
+                            pass
                     if kind == "tool":
                         hitl_response[interrupt_id] = {
                             "decisions": response.get("decisions", [])

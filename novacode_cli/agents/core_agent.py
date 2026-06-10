@@ -805,10 +805,6 @@ This file stores your preferences and context that persist across sessions.
             virtual_mode=True,
         )
         _routes["/memories/"] = _agent_backend
-        # Nova memory tier routes — point to the same agent directory
-        # but are used solely for USER.md and MEMORY.md access.
-        _routes["/user-memory/"] = _agent_backend
-        _routes["/session-memory/"] = _agent_backend
 
     # /store/ route → StoreBackend (persistent, cross-thread).
     #

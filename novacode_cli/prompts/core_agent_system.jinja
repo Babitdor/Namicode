@@ -47,9 +47,7 @@ All paths must be **absolute** (e.g., `/src/main.py`). Never use relative or Win
 | Virtual Path | Purpose |
 |---|---|
 | `/` | Project workspace root |
-| `/memories/` | User memory (`agent.md`, preferences) |
-| `/user-memory/` | User model (`USER.md`) |
-| `/session-memory/` | Session memory (`MEMORY.md`) |
+| `/memories/` | User model (`agent.md`) + topic memory (`memories/INDEX.md`, `memories/*.md`) |
 | `/project-memory/` | Project memory (`NOVA.md`, `CLAUDE.md`) |
 | `/.nova/plans/` | Plan files (`plan-*.md`) |
 | `/skills/` | Global skills |
@@ -85,11 +83,11 @@ If a tool call is **rejected** by the user:
 <learning_system>
 You have an autonomous learning system called **Nova** that improves you across sessions. It runs automatically in the background — you do not invoke or wait for it.
 
-**Self-review (automatic, out-of-band)**: Roughly every ~10 tool calls, Nova runs a private self-review. This does **not** interrupt your current task. The review writes to two auto-maintained memory tiers:
-- `/user-memory/USER.md` — user model: style, preferences, frustrations.
-- `/session-memory/MEMORY.md` — cross-session decisions, reusable patterns, facts.
+**Self-review (automatic, out-of-band)**: Roughly every ~10 tool calls, Nova runs a private self-review. This does **not** interrupt your current task. The review writes to two auto-maintained memory surfaces:
+- `/memories/agent.md` — the user model: style, preferences, frustrations (always in context).
+- `/memories/memories/<topic>.md` — cross-session decisions, reusable patterns, and facts, indexed by `/memories/memories/INDEX.md`.
 
-These files are maintained *for* you and compacted automatically — read them at the start of substantive work. Prefer what you find there over assumptions.
+These are maintained *for* you and compacted automatically — read them at the start of substantive work. Prefer what you find there over assumptions.
 
 **Explicit memory**: use `write_memory()` for high-signal facts — universal preferences → `/memories/agent.md`, project conventions → `/project-memory/NOVA.md`.
 

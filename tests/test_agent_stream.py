@@ -153,6 +153,82 @@ def test_question_interrupt_resumes():
     assert isinstance(evts[-1], ev.Done)
 
 
+def test_approval_interrupt_fires_and_clears_notification():
+    """An interrupt raises an 'approval' notification BEFORE it's surfaced (so the
+    badge/hook fire the moment permission is needed) and clears it once resolved."""
+
+    class _RecordingSS:
+        thread_id = "t1"
+
+        def __init__(self):
+            self.added: list = []
+            self.registered: list = []
+            self.dismissed: list = []
+            self._n = 0
+
+        def add_notification(
+            self, level, title, message, source, *, action_id=None, action_type=None
+        ):
+            self._n += 1
+            nid = f"n{self._n}"
+            self.added.append((level, action_id, action_type, nid))
+            return nid
+
+        def register_pending_approval(self, action_id, future):
+            self.registered.append(action_id)
+
+        def dismiss_notification(self, nid):
+            self.dismissed.append(nid)
+            return True
+
+    class Agent:
+        def __init__(self):
+            self.calls = 0
+
+        async def aget_state(self, config):
+            return _State([])
+
+        async def astream(self, inp, **kw):
+            self.calls += 1
+            if self.calls == 1:
+                yield (
+                    (),
+                    "updates",
+                    {
+                        "__interrupt__": [
+                            types.SimpleNamespace(
+                                value={"type": "question", "request": {"prompt": "pick"}},
+                                id="i1",
+                            )
+                        ]
+                    },
+                )
+            else:
+                yield ((), "messages", (_Chunk("m9", [{"type": "text", "text": "done"}]), {}))
+
+        async def aupdate_state(self, **kw):
+            pass
+
+    ss = _RecordingSS()
+
+    async def _run():
+        async for e in iterate_agent_events("hi", Agent(), "nova-agent", ss):
+            if isinstance(e, ev.InterruptRequest):
+                # Raised BEFORE the interrupt surfaced (the ordering fix).
+                assert ss.added, "notification must precede the interrupt"
+                e.future.set_result({"answer": "A"})
+
+    asyncio.run(_run())
+
+    assert ss.added, ss.added
+    level, action_id, action_type, nid = ss.added[0]
+    assert level == "approval"
+    assert action_id == "i1"
+    assert action_type == "select"
+    assert "i1" in ss.registered
+    assert nid in ss.dismissed  # cleared once resolved
+
+
 def test_text_streams_as_deltas_then_commits():
     class Agent:
         async def aget_state(self, config):

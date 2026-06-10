@@ -123,7 +123,9 @@ class SteeringMiddleware(AgentMiddleware):
             enabled: If False, this middleware is a no-op.
         """
         self._enabled = enabled
-        self._instructions: list[SteeringInstruction] = instructions if instructions is not None else []
+        self._instructions: list[SteeringInstruction] = (
+            instructions if instructions is not None else []
+        )
         # uids of instructions already surfaced as a live user message, so each
         # new steer is delivered as an actionable message exactly once (then
         # persists via the system prompt).
@@ -160,24 +162,44 @@ class SteeringMiddleware(AgentMiddleware):
             pass
         return None
 
-    def _prompt_within_margin(self, request: ModelRequest, added_chars: int) -> bool:
-        """True if the prompt (existing + added) fits within the context margin.
+    @staticmethod
+    def _messages_chars(messages: Any) -> int:
+        """Total character count of the conversation messages' content."""
+        total = 0
+        for m in messages or []:
+            content = getattr(m, "content", "")
+            if isinstance(content, str):
+                total += len(content)
+            elif isinstance(content, list):
+                for part in content:
+                    if isinstance(part, str):
+                        total += len(part)
+                    elif isinstance(part, dict):
+                        total += len(str(part.get("text", "")))
+        return total
 
-        When unknown (no model profile, no ContextManager entry) we assume yes
-        rather than silently dropping steering.
+    def _prompt_within_margin(self, request: ModelRequest, added_chars: int) -> bool:
+        """True if the *full* input (system + history + steering) fits the margin.
+
+        The real input the model receives is the system prompt **plus the whole
+        conversation**, so a steering block that fits the system prompt alone can
+        still push a long chat over the window — which truncates the model's
+        answer mid-sentence. We therefore count the messages too (the previous
+        check looked only at the system prompt). When the window is unknown
+        (no model profile / ContextManager entry) we assume yes rather than
+        silently dropping steering.
         """
         window = self._lookup_context_window(request)
         if window is None:
             return True  # can't measure → don't block
-        existing_prompt = request.system_prompt or ""
-        existing_tokens = self._estimate_tokens(existing_prompt)
-        added_tokens = self._estimate_tokens(added_chars)
-        total = existing_tokens + added_tokens
+        system_chars = len(request.system_prompt or "")
+        messages_chars = self._messages_chars(getattr(request, "messages", None))
+        total = max(1, (system_chars + messages_chars + max(0, added_chars)) // 3)
         margin = int(window * _INJECTION_CTX_MARGIN)
         if total >= margin:
             logger.warning(
-                "Steering injection skipped: system prompt ~%s tokens exceeds "
-                "%s%% of %s-token context window (%s tokens)",
+                "Steering injection skipped: input ~%s tokens (system + history + "
+                "steering) exceeds %s%% of %s-token context window (%s tokens)",
                 total,
                 int(_INJECTION_CTX_MARGIN * 100),
                 window,
@@ -312,32 +334,60 @@ def classify_instruction(text: str) -> str:
 
     # Constraint signals
     constraint_keywords = [
-        "never", "don't", "dont", "do not", "must not", "cannot",
-        "avoid", "refrain", "forbidden", "disallow", "no ",
+        "never",
+        "don't",
+        "dont",
+        "do not",
+        "must not",
+        "cannot",
+        "avoid",
+        "refrain",
+        "forbidden",
+        "disallow",
+        "no ",
     ]
     if any(kw in text_lower for kw in constraint_keywords):
         return "constraint"
 
     # Focus signals
     focus_keywords = [
-        "focus on", "concentrate on", "prioritize", "emphasize",
-        "pay attention to", "concentrate", "center on",
+        "focus on",
+        "concentrate on",
+        "prioritize",
+        "emphasize",
+        "pay attention to",
+        "concentrate",
+        "center on",
     ]
     if any(kw in text_lower for kw in focus_keywords):
         return "focus"
 
     # Priority signals
     priority_keywords = [
-        "always", "make sure", "ensure", "guarantee", "important",
-        "critical", "essential", "must",
+        "always",
+        "make sure",
+        "ensure",
+        "guarantee",
+        "important",
+        "critical",
+        "essential",
+        "must",
     ]
     if any(kw in text_lower for kw in priority_keywords):
         return "priority"
 
     # Style signals
     style_keywords = [
-        "use async", "use ", "prefer ", "style", "format", "pattern",
-        "verbose", "concise", "brief", "detailed",
+        "use async",
+        "use ",
+        "prefer ",
+        "style",
+        "format",
+        "pattern",
+        "verbose",
+        "concise",
+        "brief",
+        "detailed",
     ]
     if any(kw in text_lower for kw in style_keywords):
         return "style"

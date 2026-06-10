@@ -26,8 +26,22 @@ class NotificationState:
 
     # -- CRUD ------------------------------------------------------------------
 
-    def add(self, level: str, title: str, message: str, source: str) -> str:
-        """Create and store a notification. Returns id. Does NOT fire hooks."""
+    def add(
+        self,
+        level: str,
+        title: str,
+        message: str,
+        source: str,
+        *,
+        action_id: str | None = None,
+        action_type: str | None = None,
+    ) -> str:
+        """Create and store a notification. Returns id. Does NOT fire hooks.
+
+        When *action_id* is set the notification represents a *pending approval*
+        — the agent is blocked waiting for the user to approve/reject via the
+        corresponding key in ``SessionState._pending_approvals``.
+        """
         from novacode_cli.states.Session import Notification
 
         n = Notification(
@@ -36,6 +50,8 @@ class NotificationState:
             title=title,
             message=message,
             source=source,
+            action_id=action_id,
+            action_type=action_type,
         )
         self.notifications.appendleft(n)
         return n.id

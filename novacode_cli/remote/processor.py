@@ -8,11 +8,14 @@ The processor serialises access with an ``asyncio.Lock`` so remote and
 local messages do not interleave mid-stream.
 """
 
+from __future__ import annotations
+
 import asyncio
 import inspect
 import logging
 import os
-from typing import Any, Callable, Awaitable
+import re
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +33,62 @@ def _write_debug(line: str) -> None:
     os.makedirs(os.path.dirname(_DEBUG_LOG), exist_ok=True)
     with open(_DEBUG_LOG, "a") as f:
         f.write(line)
+
+
+def _condense_response(raw: str) -> str:
+    """Strip verbose/internal scaffolding from the agent's response for Discord.
+
+    The agent's raw output often contains internal meta-commentary that makes
+    sense in a terminal but clutters a chat message. This function strips:
+
+    * \"I'll...\" / \"Let me...\" / \"Now I'll...\" prefatory lines
+    * \"I used X tool to...\" self-narration
+    * Duplicate/echo of the user's own request
+    * Excessive blank lines
+
+    Args:
+        raw: The raw concatenated AIMessage content.
+
+    Returns:
+        Condensed text suitable for a chat platform.
+    """
+    text = raw.strip()
+    if not text:
+        return text
+
+    lines = text.splitlines()
+    cleaned: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+
+        # Skip lines that are just the agent narrating what it's about to do
+        if re.match(
+            r"^(I'?ll|Let me|Now I'?ll|First,? I'?ll|I should|I need to|"
+            r"I want to|I will now|Going to|About to)",
+            stripped,
+            re.IGNORECASE,
+        ):
+            continue
+
+        # Skip lines that are just tool self-narration
+        if re.match(
+            r"^(I used|I ran|I executed|I called|Using the|With the|"
+            r"The (tool|command|output|result) (show|indicate|return|gave|was))",
+            stripped,
+            re.IGNORECASE,
+        ):
+            continue
+
+        # Skip lines that literally echo "The user asked: / said:"
+        if re.match(r"^(The user|You asked|You said|User asked)", stripped, re.IGNORECASE):
+            continue
+
+        cleaned.append(stripped)
+
+    # Rejoin, collapse runs of blank lines to at most one
+    result = "\n".join(cleaned)
+    result = re.sub(r"\n{3,}", "\n\n", result)
+    return result.strip()
 
 
 async def remote_message_processor(
@@ -58,7 +117,6 @@ async def remote_message_processor(
 
     while True:
         try:
-            # Wait for a remote message (blocks until one arrives)
             remote_msg = await queue.get()
             await _debug_log(f"DEQUEUED from queue {id(queue)}: {remote_msg.text[:80]}")
 
@@ -67,7 +125,6 @@ async def remote_message_processor(
                 remote_msg.user_name, remote_msg.platform.value
             )
 
-            # Notify the local CLI user
             console.print()
             console.print(
                 f"  [{COLORS.get('primary', 'cyan')}]\U0001f4e1 Remote ({remote_msg.platform.value})[/"
@@ -76,9 +133,8 @@ async def remote_message_processor(
             )
             console.print()
 
-            # Fire remote.message hook
             try:
-                from novacode_cli.hooks import dispatch_hook_fire_and_forget, HookEvent
+                from novacode_cli.hooks import HookEvent, dispatch_hook_fire_and_forget
                 dispatch_hook_fire_and_forget(HookEvent.REMOTE_MESSAGE, {
                     "platform": remote_msg.platform.value,
                     "user": remote_msg.user_name,
@@ -88,25 +144,13 @@ async def remote_message_processor(
             except Exception:
                 pass
 
-            # Serialize with the lock so remote and local messages don't conflict
             async with lock:
                 try:
-                    # Show "typing" indicator on the remote platform while thinking
-                    # Discord: channel.typing is an async context manager method.
-                    # Telegram: typing_fn is a regular async function.
-                    #
-                    # We distinguish them without calling the function (which may
-                    # have side effects) by inspecting its type:
-                    #   - A coroutine function (inspect.iscoroutinefunction) ->
-                    #     Telegram-style: loop sendChatAction every 8 s.
-                    #   - Anything else (bound method returning a context-manager) ->
-                    #     Discord-style: use as async with.
                     _typing_cm = None
                     typing_task: asyncio.Task | None = None
                     typing_fn = getattr(remote_msg, "typing_fn", None)
                     if typing_fn is not None:
                         if inspect.iscoroutinefunction(typing_fn):
-                            # Telegram-style coroutine -- loop the real calls
                             async def _typing_loop():
                                 try:
                                     while True:
@@ -116,7 +160,6 @@ async def remote_message_processor(
                                     pass
                             typing_task = asyncio.create_task(_typing_loop())
                         else:
-                            # Discord-style async context manager
                             try:
                                 _typing_cm = typing_fn()
                                 if _typing_cm is not None and hasattr(_typing_cm, "__aenter__"):
@@ -126,40 +169,39 @@ async def remote_message_processor(
                             except Exception:
                                 _typing_cm = None
 
-                    # Notify local CLI that agent is thinking
                     console.print(
                         f"  [{COLORS.get('dim', 'dim')}]\U0001f914 Thinking...[/]"
                     )
 
-                    # Auto-approve tool actions during remote processing so
-                    # the agent doesn't block waiting for local CLI input.
-                    # /remote start already set auto_approve=True persistently,
-                    # but we still save/restore here as a safety net in case
-                    # someone toggled it off mid-session.
+                    # A compact status line edits in place to show live tool/
+                    # subagent activity (condensed counts), SEPARATE from the
+                    # answer (sent as a fresh message at the end).
+                    edit_fn = getattr(remote_msg, "edit_fn", None)
+                    status = None
+                    if edit_fn is not None:
+                        from novacode_cli.remote.status import RemoteStatusLine
+
+                        status = RemoteStatusLine(edit_fn)
+                        status.start()
+
                     _prev_auto_approve = getattr(session_state, "auto_approve", False)
                     session_state.auto_approve = True
 
-                    # Accumulate tool activity instead of sending one chat
-                    # message per call (which floods Discord/Telegram). The names
-                    # are collapsed into a single digest message after the turn.
-                    #
-                    # This also fixes an async-correctness bug: the previous code
-                    # scheduled each notification via an untracked
-                    # ``loop.create_task(...)``. Those fire-and-forget tasks could
-                    # be garbage-collected mid-send, swallowed exceptions, and —
-                    # because they weren't awaited — could arrive out of order
-                    # relative to the awaited final reply. Recording into a list
-                    # is synchronous and ordered.
                     _tool_names: list[str] = []
 
-                    def _record_tool(name, info=None, *, is_result=False):
-                        if not is_result and name:
-                            _tool_names.append(str(name))
+                    def _record_tool(name, info=None, *, is_result=False):  # noqa: ARG001
+                        """Hook per tool call — collect names + feed the status line."""
+                        if is_result or not name:
+                            return
+                        _tool_names.append(str(name))
+                        if status is not None:
+                            status.note(str(name))
 
                     session_state._remote_tool_notify = _record_tool
+                    if status is not None:
+                        session_state._remote_todo_notify = status.note_todos
 
                     try:
-                        # Record the message count before execution
                         config = {
                             "configurable": {"thread_id": session_state.thread_id}
                         }
@@ -168,7 +210,6 @@ async def remote_message_processor(
                             pre_state.values.get("messages", [])
                         ) if pre_state else 0
 
-                        # Execute the task
                         if execute_fn is not None:
                             await execute_fn(
                                 remote_msg.text,
@@ -183,33 +224,27 @@ async def remote_message_processor(
                                 skip_file_mentions=True,
                             )
 
-                        # Get the agent's response from the state
                         post_state = await agent.aget_state(config)
                         response_text = _extract_response(post_state, pre_msg_count)
 
-                        # One condensed tool digest, in order, before the answer.
-                        from novacode_cli.remote.bridge import format_tool_digest
-
-                        digest = format_tool_digest(_tool_names)
-                        if digest:
-                            try:
-                                await remote_msg.reply_fn(digest)
-                            except Exception:
-                                pass
-
-                        if response_text:
-                            await remote_msg.reply_fn(response_text)
-                        else:
-                            await remote_msg.reply_fn(
-                                "\u2705 Task completed (no text response)."
-                            )
+                        # Settle the status line, then send the answer as its own
+                        # message (the status carries the tool/subagent summary).
+                        if status is not None:
+                            await status.finalize()
+                        condensed = (
+                            _condense_response(response_text) if response_text else ""
+                        )
+                        final_text = condensed or "✅ Task completed (no text response)."
+                        try:
+                            await remote_msg.reply_fn(final_text)
+                        except Exception:
+                            pass
 
                     finally:
-                        # Restore settings
                         session_state.auto_approve = _prev_auto_approve
                         session_state._remote_tool_notify = None
+                        session_state._remote_todo_notify = None
 
-                        # Stop the typing indicator
                         if typing_task is not None:
                             typing_task.cancel()
                             try:
@@ -228,7 +263,7 @@ async def remote_message_processor(
                     logger.error(f"Error processing remote message: {e}")
                     try:
                         await remote_msg.reply_fn(
-                            f"\u274c Error: {str(e)[:200]}"
+                            f"❌ Error: {str(e)[:200]}"
                         )
                     except Exception:
                         pass
@@ -243,8 +278,33 @@ async def remote_message_processor(
             await asyncio.sleep(1)
 
 
+def _ai_message_text(msg: Any) -> str:
+    """Flatten an AIMessage's content to text (str or content-block list)."""
+    content = getattr(msg, "content", "")
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "text":
+                text = part.get("text", "").strip()
+                if text:
+                    parts.append(text)
+            elif isinstance(part, str) and part.strip():
+                parts.append(part.strip())
+        return "\n\n".join(parts)
+    return ""
+
+
 def _extract_response(post_state: Any, pre_msg_count: int) -> str:
-    """Extract the agent's text response from the state after execution."""
+    """Return only the agent's FINAL answer from the state after execution.
+
+    A tool-using turn produces many AI messages — the text in the intermediate
+    ones is step-by-step narration between tool calls ("Now I'll…", "Let me…",
+    "Good, now update…") which is noise in a chat (the live status line already
+    shows *what* it's doing). So we return the **last** AI message that actually
+    has text — the answer — not a concatenation of the whole play-by-play.
+    """
     if post_state is None:
         return ""
 
@@ -252,20 +312,9 @@ def _extract_response(post_state: Any, pre_msg_count: int) -> str:
 
     messages = post_state.values.get("messages", [])
     new_messages = messages[pre_msg_count:]
-
-    parts: list[str] = []
-    for msg in new_messages:
+    for msg in reversed(new_messages):
         if isinstance(msg, AIMessage):
-            content = msg.content
-            if isinstance(content, str) and content.strip():
-                parts.append(content.strip())
-            elif isinstance(content, list):
-                for part in content:
-                    if isinstance(part, dict) and part.get("type") == "text":
-                        text = part.get("text", "").strip()
-                        if text:
-                            parts.append(text)
-                    elif isinstance(part, str) and part.strip():
-                        parts.append(part.strip())
-
-    return "\n\n".join(parts)
+            text = _ai_message_text(msg)
+            if text:
+                return text
+    return ""

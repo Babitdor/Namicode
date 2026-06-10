@@ -78,6 +78,52 @@ def test_disabled_is_passthrough():
     assert mw._inject(req) is req
 
 
+class _Model:
+    def __init__(self, window):
+        self.profile = {"max_input_tokens": window}
+
+
+class _ReqM(_Req):
+    """A _Req that also exposes a model with a known context window."""
+
+    def __init__(self, system_prompt, messages, window):
+        super().__init__(system_prompt, messages)
+        self.model = _Model(window)
+
+
+def test_steering_skipped_when_history_overflows_window():
+    """A long conversation that alone nears the window must NOT get the steering
+    block appended (that overflow truncates the model's answer mid-sentence) —
+    but the newly-added steer still reaches the model in-band."""
+    big = HumanMessage("x" * 3000)  # ~1000 tokens of history
+    mw = SteeringMiddleware(instructions=[SteeringInstruction("steer", "focus")])
+    out = mw._inject(_ReqM("BASE", [big], window=1000))
+    assert "system_message" not in out.applied  # block skipped (would overflow)
+    assert "messages" in out.applied  # but the nudge still fires
+    assert "focus" in _content(out.applied["messages"][-1])
+
+
+def test_steering_injected_when_history_fits():
+    mw = SteeringMiddleware(instructions=[SteeringInstruction("steer", "focus")])
+    out = mw._inject(_ReqM("BASE", [HumanMessage("hi")], window=100_000))
+    assert "system_message" in out.applied
+    assert "focus" in out.applied["system_message"].content
+
+
+def test_margin_counts_messages_not_just_system_prompt():
+    """Regression: the guard must include the conversation, not only the system
+    prompt — a tiny system prompt with a huge history previously slipped through."""
+    mw = SteeringMiddleware(instructions=[SteeringInstruction("s", "x")])
+    huge_history = [HumanMessage("y" * 5000)]
+    assert (
+        mw._prompt_within_margin(_ReqM("tiny", huge_history, window=1000), added_chars=50) is False
+    )
+    assert (
+        mw._prompt_within_margin(_ReqM("tiny", [HumanMessage("hi")], window=1000), added_chars=50)
+        is True
+    )
+
+
 def test_reset_conversation_preserves_list_identity():
     """The agent middleware holds the same list; reset must mutate it in place."""
     from novacode_cli.states.Session import SessionState

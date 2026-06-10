@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
@@ -19,12 +20,14 @@ class Notification:
     """A single in-terminal notification event."""
 
     id: str  # short uuid hex
-    level: str  # "info" | "success" | "warning" | "error"
+    level: str  # "info" | "success" | "warning" | "error" | "approval"
     title: str  # short headline (e.g. "Ralph task completed")
     message: str  # longer description
     source: str  # e.g. "ralph", "tests", "process", "system"
     timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
     dismissed: bool = False
+    action_id: str | None = None  # Key into SessionState._pending_approvals
+    action_type: str | None = None  # "approve" | "select" | "input"
 
 
 class RalphTaskStatus(Enum):
@@ -88,6 +91,12 @@ class SessionState:
 
         # Dynamic fields (browser_use_tasks, current_task, etc.) stored here
         self._dynamic: dict[str, Any] = {}
+
+        # Pending approval Futures keyed by action_id.
+        # When the agent loop yields an InterruptRequest, the Future is stored
+        # here alongside a notification so the user can approve/reject via
+        # /notifications approve <id> or platform-specific buttons.
+        self._pending_approvals: dict[str, asyncio.Future] = {}
 
     # ══════════════════════════════════════════════════════════════════════
     # Backward-compatible properties — delegate to UI settings slice
@@ -518,10 +527,21 @@ class SessionState:
     # -- notifications delegated with hook dispatch -----------------------
 
     def add_notification(
-        self, level: str, title: str, message: str, source: str
+        self,
+        level: str,
+        title: str,
+        message: str,
+        source: str,
+        *,
+        action_id: str | None = None,
+        action_type: str | None = None,
     ) -> str:
-        """Create and store a notification, fire the notification hook, return id."""
-        nid = self._ntf.add(level, title, message, source)
+        """Create and store a notification, fire the notification hook, return id.
+
+        When *action_id* is set the notification represents a *pending approval*
+        — see :meth:`register_pending_approval` and :meth:`resolve_approval`.
+        """
+        nid = self._ntf.add(level, title, message, source, action_id=action_id, action_type=action_type)
         # Fire hook with session_id (cross-domain coordination in SessionState)
         try:
             from novacode_cli.hooks import HookEvent, dispatch_hook_fire_and_forget
@@ -537,6 +557,8 @@ class SessionState:
                     "source": n.source,
                     "timestamp": n.timestamp.isoformat(),
                     "session_id": self.session_id,
+                    "action_id": n.action_id,
+                    "action_type": n.action_type,
                 },
             )
         except Exception:  # noqa: BLE001 — notifications must never break callers
@@ -554,3 +576,56 @@ class SessionState:
     def unread_notification_count(self) -> int:
         """Number of non-dismissed notifications."""
         return self._ntf.unread_count()
+
+    # -- pending approval resolution ---------------------------------------
+
+    def register_pending_approval(
+        self, action_id: str, future: asyncio.Future
+    ) -> None:
+        """Store a Future that the approval flow must resolve.
+
+        Called by the agent loop when an ``InterruptRequest`` is yielded.
+        The caller (TUI, CLI, or remote bridge) resolves the Future via
+        :meth:`resolve_approval` or :meth:`dismiss_notification`.
+        """
+        self._pending_approvals[action_id] = future
+
+    def resolve_approval(self, action_id: str, approve: bool = True) -> bool:
+        """Resolve a pending approval Future.
+
+        Args:
+            action_id: The key (matches ``Notification.action_id``).
+            approve: ``True`` to approve, ``False`` to reject.
+
+        Returns:
+            ``True`` if the action was found and resolved, ``False`` if no
+            pending approval with that key exists.
+        """
+        fut = self._pending_approvals.pop(action_id, None)
+        if fut is None or fut.done():
+            return False
+        if approve:
+            fut.set_result(
+                {"decisions": [{"type": "approve"}], "any_rejected": False}
+            )
+        else:
+            fut.set_result(
+                {
+                    "decisions": [{"type": "reject", "message": "Rejected by user"}],
+                    "any_rejected": True,
+                }
+            )
+        # Also dismiss the corresponding notification.
+        for n in self._ntf.notifications:
+            if n.action_id == action_id and not n.dismissed:
+                n.dismissed = True
+                break
+        return True
+
+    def pending_approval_count(self) -> int:
+        """Number of unresolved approval notifications."""
+        return sum(
+            1
+            for n in self._ntf.notifications
+            if not n.dismissed and n.action_type == "approve"
+        )

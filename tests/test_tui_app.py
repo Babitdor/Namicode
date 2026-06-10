@@ -560,13 +560,14 @@ def test_tui_remote_render():
 
 
 async def _drive_remote_streaming():
-    """When the bridge supports edit_fn, the answer streams edit-in-place.
+    """A remote turn: the answer is a normal chat message; a SEPARATE compact
+    status line edits in place to show activity.
 
     Assertions:
-    - the answer is streamed via edit_fn (finalized with final=True), NOT re-sent
-      via reply_fn (no duplicate),
-    - reactions fire at lifecycle points (🤔 on dequeue, 💬 on first text, ✅ done),
-    - a tools-only/no-edit_fn bridge still gets a normal reply_fn answer.
+    - the answer is delivered via reply_fn (a fresh message),
+    - edit_fn is used only for the status line (never carries the answer),
+    - lifecycle reactions fire (🤔 on dequeue, ✅ on done),
+    - auto_approve is restored after the turn.
     """
     from langchain_core.messages import AIMessage
 
@@ -639,17 +640,17 @@ async def _drive_remote_streaming():
         await ss._remote_message_queue.put(_RemoteMsg())
         for _ in range(40):
             await pilot.pause()
-            if edits:
+            if replies:
                 break
 
-        # The answer was streamed + finalized via edit_fn...
+        # The answer was sent as a normal chat message (reply_fn)...
+        assert any("Streamed answer" in r for r in replies), replies
+        # ...while a SEPARATE compact status line edited in place — and that
+        # status message never carries the answer text.
         assert edits, edits
-        assert any(final and "Streamed answer" in text for text, final in edits), edits
-        # ...and NOT duplicated through reply_fn (no digest here — no tools).
-        assert replies == [], replies
-        # Lifecycle reactions fired.
+        assert not any("Streamed answer" in text for text, _final in edits), edits
+        # Lifecycle reactions fired (🤔 on dequeue, ✅ on done).
         assert "🤔" in reactions and "✅" in reactions, reactions
-        assert "💬" in reactions, reactions
         assert ss.auto_approve is False  # restored
 
 
@@ -812,11 +813,74 @@ async def _drive_remote_slash():
         reply, stream = await app._remote_slash("/definitelynotacommand")
         assert stream is None and isinstance(reply, str)
 
+        # /steer → adds a live steer the agent picks up; no agent turn
+        reply, stream = await app._remote_slash("/steer focus on tests")
+        assert stream is None and "Steering added" in reply
+        assert any(
+            "focus on tests" in si.instruction
+            for si in app.session_state.steering_instructions
+        )
+        # /steer clear → clears, no agent turn
+        reply, stream = await app._remote_slash("/steer clear")
+        assert stream is None and "cleared" in reply.lower()
+
 
 def test_tui_remote_slash():
     if not _HAS_TEXTUAL:
         return
     asyncio.run(_drive_remote_slash())
+
+
+async def _drive_remote_steer_drain():
+    """A message arriving mid-turn is applied as a live steer, not a new turn."""
+    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.ui.ui_elements import TokenTracker
+
+    class _SSRemote(_SS):
+        def __init__(self):
+            pass
+
+    app = NovaApp(
+        agent=_FakeAgent(),
+        assistant_id="nova-agent",
+        session_state=_SSRemote(),
+        backend=None,
+        token_tracker=TokenTracker(),
+        image_tracker=None,
+        model_name="m",
+    )
+    async with app.run_test():
+        queue: asyncio.Queue = asyncio.Queue()
+
+        class _Msg:
+            text = "also handle null inputs"
+            reacted = None
+
+            async def react_fn(self, emoji):
+                self.reacted = emoji
+
+        await queue.put(_Msg())
+        drain = asyncio.create_task(app._remote_steer_drain(queue))
+        for _ in range(20):
+            await asyncio.sleep(0.01)
+            if getattr(app.session_state, "steering_instructions", None):
+                break
+        drain.cancel()
+        try:
+            await drain
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass
+
+        assert any(
+            "null inputs" in si.instruction
+            for si in app.session_state.steering_instructions
+        )
+
+
+def test_tui_remote_steer_drain():
+    if not _HAS_TEXTUAL:
+        return
+    asyncio.run(_drive_remote_steer_drain())
 
 
 async def _drive_markup_safe():

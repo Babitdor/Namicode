@@ -34,7 +34,7 @@ import re
 import textwrap
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Awaitable
+from typing import Any, Awaitable, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -199,6 +199,47 @@ def format_tool_digest(tool_names: list[str], *, max_shown: int = 8) -> str:
     return f"🔧 {total} tool call{plural} · `{body}`"
 
 
+# Tool name -> coarse activity category, for the compact end-of-turn footer.
+_TOOL_CATEGORY: dict[str, str] = {
+    "read_file": "read", "read": "read", "view": "read", "cat": "read",
+    "write_file": "edit", "edit_file": "edit", "write": "edit", "edit": "edit",
+    "str_replace": "edit",
+    "execute": "run", "run_tests": "run", "shell": "run", "bash": "run",
+    "run_command": "run",
+    "grep": "search", "glob": "search", "ls": "search", "code_search": "search",
+    "find_related_code": "search",
+    "web_search": "web", "duckduckgo_search": "web", "fetch_url": "web",
+    "docs_search": "web", "package_info": "web",
+    "task": "subagent", "think": "think",
+}
+
+
+def categorize_tools(tool_names: list[str]) -> str:
+    """Compact category counts for a turn's tools, e.g. ``read×4, edit×2, run×3``.
+
+    Collapses tools into coarse categories so progress reads as *what kind* of
+    work is happening, not a list of every tool. Returns "" when none.
+    """
+    names = [n for n in tool_names if n]
+    if not names:
+        return ""
+    counts: dict[str, int] = {}
+    for n in names:
+        cat = _TOOL_CATEGORY.get(n, "other")
+        counts[cat] = counts.get(cat, 0) + 1
+    return ", ".join(f"{cat}×{c}" if c > 1 else cat for cat, c in counts.items())
+
+
+def format_activity_footer(tool_names: list[str]) -> str:
+    """One-line ``-#`` small-text footer, e.g. ``-# 🔧 11 tools · read×4, edit×2``."""
+    cats = categorize_tools(tool_names)
+    if not cats:
+        return ""
+    total = len([n for n in tool_names if n])
+    plural = "s" if total != 1 else ""
+    return f"-# 🔧 {total} tool{plural} · {cats}"
+
+
 def _split_by_sentences(text: str, limit: int) -> list[str]:
     """Split text into chunks on sentence boundaries."""
     sentences = re.split(r"(?<=[.!?])\s+", text)
@@ -355,6 +396,7 @@ class RemoteBridgeManager:
 
         try:
             import discord  # noqa: F401 -- eager check for availability
+
             from novacode_cli.remote.discord_bridge import DiscordBridge
 
             bridge = DiscordBridge(config=config, message_queue=self._queue, on_status=self._on_status)
@@ -424,6 +466,7 @@ class RemoteBridgeManager:
 
         try:
             import aiohttp
+
             from novacode_cli.remote.telegram_bridge import TelegramBridge
 
             # Verify the token works before creating the background task
@@ -490,6 +533,7 @@ class RemoteBridgeManager:
 
         try:
             import discord  # noqa: F401
+
             from novacode_cli.remote.discord_bridge import DiscordBridge
 
             # Start with placeholder — we'll update after channel creation
