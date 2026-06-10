@@ -1,21 +1,18 @@
-"""Skill discovery — pattern recognition, skill creation, and refinement.
+"""Skill discovery — episode-grounded skill creation and refinement.
 
 This module implements the "Autonomous Skill Creation" and "Skill Refinement"
-pillars of the Nova system. It analyzes tool usage history to detect
-repeated workflow patterns, creates reusable SKILL.md files from those
-patterns, and refines existing skills when better approaches are found.
+pillars of the **Procedural memory tier**. Skills are created from the review
+engine's ``<skill>`` block — an episode-grounded spec written with the full
+conversation in context (semantic name, "use when…" trigger, concrete steps) —
+and refined when their attributed outcomes show they're ineffective.
 
-Pattern detection approach:
-    1. Group tool calls by session (roughly: tools called in sequence)
-    2. Look for repeated sequences of 3+ tool calls
-    3. Filter out trivial sequences (only read_file, only grep)
-    4. Flag sequences that include write_file, edit_file, execute, tests
-    5. Consider: did the user approve/praise the result? (tracked via success)
+(An earlier n-gram path that synthesized opaque ``nova-<hash>`` skills from tool
+*name* sequences was removed; ``cleanup_legacy_pattern_skills`` reclaims any
+left on disk.)
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 import shutil
@@ -27,13 +24,6 @@ if TYPE_CHECKING:
     from langgraph.store.base import BaseStore
 
 logger = logging.getLogger("nova.hermes.skill_discovery")
-
-# Minimum sequence length to consider as a pattern
-_MIN_PATTERN_LENGTH = 3
-# Minimum number of repetitions to consider as a skill candidate
-_MIN_REPETITIONS = 2
-# Recent tool calls to analyze
-_RECENT_N = 100
 
 
 # ── TUI Event Emission ─────────────────────────────────────────────────────
@@ -62,232 +52,9 @@ def _emit_tui_event(event_type: str, message: str) -> None:
     try:
         from novacode_cli.events import nova_event_log
 
-        nova_event_log.append(
-            (event_type, config["icon"], config["color"], message)
-        )
+        nova_event_log.append((event_type, config["icon"], config["color"], message))
     except Exception:  # noqa: BLE001
         logger.debug("skill event (not surfaced): %s — %s", event_type, message)
-
-
-# ── Pattern detection ──────────────────────────────────────────────────────
-
-
-class Pattern:
-    """A detected tool usage pattern that may warrant skill creation."""
-
-    def __init__(
-        self,
-        sequence: list[str],
-        frequency: int,
-        success_rate: float,
-        description: str = "",
-    ) -> None:
-        self.sequence = sequence
-        self.frequency = frequency
-        self.success_rate = success_rate
-        self.description = description or " | ".join(sequence)
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "sequence": self.sequence,
-            "frequency": self.frequency,
-            "success_rate": self.success_rate,
-            "description": self.description,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> Pattern:
-        return cls(
-            sequence=data["sequence"],
-            frequency=data.get("frequency", 1),
-            success_rate=data.get("success_rate", 1.0),
-            description=data.get("description", ""),
-        )
-
-
-def _is_trivial(tools: list[str]) -> bool:
-    """Check if a tool sequence is too trivial to be a skill."""
-    non_trivial = {"execute", "write_file", "edit_file", "run_tests"}
-    return not any(t in non_trivial for t in tools)
-
-
-def _sequence_key(seq: list[str]) -> str:
-    """Create a canonical key for a tool sequence."""
-    return "→".join(seq)
-
-
-def detect_patterns(
-    history: list[dict[str, Any]], min_length: int = _MIN_PATTERN_LENGTH
-) -> list[Pattern]:
-    """Detect repeated tool usage patterns from tool history.
-
-    Uses a sliding-window approach: for each subsequence of ``min_length``
-    consecutive tools, count how many times it appears. Patterns appearing
-    more than once are candidates.
-
-    Args:
-        history: List of tool usage records with ``tool`` and ``success`` keys.
-        min_length: Minimum sequence length to consider.
-
-    Returns:
-        List of detected patterns, sorted by frequency descending.
-    """
-    if len(history) < min_length:
-        return []
-
-    tools = [h["tool"] for h in history]
-    sequences: dict[str, list[str]] = {}
-    success_map: dict[str, list[bool]] = {}
-
-    for i in range(len(tools) - min_length + 1):
-        seq = tools[i : i + min_length]
-        key = _sequence_key(seq)
-
-        if key not in sequences:
-            sequences[key] = seq
-
-        # Track success for this occurrence
-        if key not in success_map:
-            success_map[key] = []
-        success_map[key].append(
-            all(h.get("success", True) for h in history[i : i + min_length])
-        )
-
-    patterns: list[Pattern] = []
-    for key, seq in sequences.items():
-        occurrences = len(success_map[key])
-        if occurrences < _MIN_REPETITIONS:
-            continue
-        if _is_trivial(seq):
-            continue
-
-        successes = sum(1 for s in success_map[key] if s)
-        success_rate = successes / occurrences if occurrences > 0 else 0.0
-
-        patterns.append(
-            Pattern(
-                sequence=seq,
-                frequency=occurrences,
-                success_rate=success_rate,
-            )
-        )
-
-    patterns.sort(key=lambda p: p.frequency, reverse=True)
-    return patterns
-
-
-def is_skill_candidate(pattern: Pattern) -> bool:
-    """Check if a pattern is complex enough and reusable to be a skill.
-
-    Criteria:
-    - At least 3 tool calls in the sequence
-    - Appeared at least 2 times
-    - At least 60% success rate
-    - Includes at least one non-trivial tool (write, edit, execute, test)
-    """
-    if len(pattern.sequence) < _MIN_PATTERN_LENGTH:
-        return False
-    if pattern.frequency < _MIN_REPETITIONS:
-        return False
-    if pattern.success_rate < 0.6:
-        return False
-    if _is_trivial(pattern.sequence):
-        return False
-    return True
-
-
-def generate_skill_name(pattern: Pattern) -> str:
-    """Derive a skill name from the tool sequence.
-
-    Uses non-trivial tools as hints and appends a hash suffix to avoid collisions.
-    """
-    tool_hints = {
-        "execute": "exec",
-        "write_file": "write",
-        "edit_file": "edit",
-        "run_tests": "test",
-    }
-    hints: list[str] = []
-    for t in pattern.sequence:
-        hint = tool_hints.get(t)
-        if hint and hint not in hints:
-            hints.append(hint)
-
-    if hints:
-        base = "-".join(hints[:2])
-    else:
-        base = "tool"
-
-    # Deterministic hash (stable across processes) so the same pattern always
-    # maps to the same skill name — enables dedup. Python's built-in hash() is
-    # randomized per process (PYTHONHASHSEED) and must not be used here.
-    import hashlib
-
-    seq_hash = hashlib.sha1(_sequence_key(pattern.sequence).encode("utf-8")).hexdigest()[:6]
-    return f"nova-{base}-{seq_hash}"
-
-
-def pattern_to_description(pattern: Pattern) -> str:
-    """Generate a human-readable description for a pattern-based skill."""
-    tools_str = " → ".join(pattern.sequence)
-    return (
-        f"Automated workflow detected from repeated tool usage: {tools_str}. "
-        f"Appeared {pattern.frequency} times with "
-        f"{pattern.success_rate * 100:.0f}% success rate."
-    )
-
-
-# ── Skill creation ─────────────────────────────────────────────────────────
-
-
-async def create_skill_from_pattern(
-    pattern: Pattern,
-    skills_dir: Path,
-    store: BaseStore | None = None,
-) -> str | None:
-    """Create a skill from a detected pattern.
-
-    Reuses the existing ``_generate_skill`` from ``novacode_cli.skills.skill_creation``.
-
-    Args:
-        pattern: The detected tool usage pattern.
-        skills_dir: Directory where skills are stored (``~/.nova/skills/``).
-        store: Optional durable store for recording the creation.
-
-    Returns:
-        The skill name if created successfully, None otherwise.
-    """
-    if not is_skill_candidate(pattern):
-        return None
-
-    skill_name = generate_skill_name(pattern)
-    description = pattern_to_description(pattern)
-
-    try:
-        from novacode_cli.skills.skill_creation import _generate_skill
-
-        result = await _generate_skill(skill_name, skills_dir, description)
-        if result:
-            _emit_tui_event(
-                "nova_skill_created",
-                f"Nova created skill: {skill_name}\n   Description: {description}\n   Location: {skills_dir / skill_name}/",
-            )
-
-            if store:
-                await store.aput(
-                    ("nova", "created_skills"),
-                    skill_name,
-                    {
-                        "pattern": pattern.to_dict(),
-                        "timestamp": time.time(),
-                    },
-                )
-            return skill_name
-    except Exception as exc:
-        _emit_tui_event(
-            "nova_skill_error", f"Nova skill creation failed for '{skill_name}': {exc}"
-        )
-    return None
 
 
 # ── Episode-grounded skill creation (from the review LLM) ───────────────────
@@ -514,9 +281,7 @@ async def refine_skill(
     skill_dir = skills_dir / skill_name
     skill_path = skill_dir / "SKILL.md"
     if not skill_path.exists():
-        _emit_tui_event(
-            "nova_skill_error", f"Cannot refine '{skill_name}': SKILL.md not found"
-        )
+        _emit_tui_event("nova_skill_error", f"Cannot refine '{skill_name}': SKILL.md not found")
         return False
 
     try:
@@ -571,8 +336,11 @@ async def refine_skill(
             config={
                 "run_name": "nova_skill_refine",
                 "tags": ["nova", "hermes", "skill-refine"],
-                "metadata": {"skill": skill_name, "issue": issue,
-                             "n_failure_samples": len(failure_samples or [])},
+                "metadata": {
+                    "skill": skill_name,
+                    "issue": issue,
+                    "n_failure_samples": len(failure_samples or []),
+                },
             },
         )
         raw = getattr(resp, "content", "")
@@ -599,30 +367,3 @@ async def refine_skill(
         )
 
     return False
-
-
-# ── Public analysis API ────────────────────────────────────────────────────
-
-
-async def analyze_tool_history(
-    store: BaseStore,
-    recent_n: int = _RECENT_N,
-) -> list[Pattern]:
-    """Analyze recent tool history for skill-worthy patterns.
-
-    Args:
-        store: Durable store with tool history.
-        recent_n: Number of recent tool calls to analyze.
-
-    Returns:
-        List of detected patterns that are skill candidates.
-    """
-    try:
-        entry = await store.aget(("nova", "tool_history"), "history")
-        if entry and isinstance(entry.value, dict):
-            history = entry.value.get("entries", [])[-recent_n:]
-            patterns = detect_patterns(history)
-            return [p for p in patterns if is_skill_candidate(p)]
-    except Exception:  # noqa: BLE001
-        pass
-    return []

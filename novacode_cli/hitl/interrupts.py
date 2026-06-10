@@ -27,7 +27,6 @@ from langchain.agents.middleware.types import AgentState
 from langchain.messages import ToolCall
 from langgraph.runtime import Runtime
 
-
 # ---------------------------------------------------------------------------
 # Schema types
 # ---------------------------------------------------------------------------
@@ -111,7 +110,10 @@ INTERRUPT_SPECS: dict[str, InterruptSpec] = {
     ),
     "run_tests": InterruptSpec(
         fields=[
-            ("command", FieldSpec("Test Command", default_display="(auto-detect framework)")),
+            (
+                "command",
+                FieldSpec("Test Command", default_display="(auto-detect framework)"),
+            ),
             ("working_dir", FieldSpec("Working Directory")),
             ("timeout", FieldSpec("Timeout", transform=lambda v: f"{v}s")),
         ],
@@ -121,11 +123,17 @@ INTERRUPT_SPECS: dict[str, InterruptSpec] = {
         fields=[
             ("command", FieldSpec("Server Command")),
             ("name", FieldSpec("Name")),
-            ("port", FieldSpec("Port",
-                               transform=lambda v: str(v) if v else "auto-detect")),
+            (
+                "port",
+                FieldSpec("Port", transform=lambda v: str(v) if v else "auto-detect"),
+            ),
             ("working_dir", FieldSpec("Working Directory")),
-            ("auto_open_browser", FieldSpec("Auto-open browser",
-                                            transform=lambda v: "Yes" if v else "No")),
+            (
+                "auto_open_browser",
+                FieldSpec(
+                    "Auto-open browser", transform=lambda v: "Yes" if v else "No"
+                ),
+            ),
         ],
         warnings=["Will start a background process (killed on CLI exit)"],
     ),
@@ -133,7 +141,10 @@ INTERRUPT_SPECS: dict[str, InterruptSpec] = {
         fields=[
             ("memory_type", FieldSpec("Memory Type")),
             ("path", FieldSpec("Path")),
-            ("append", FieldSpec("Mode", transform=lambda v: "Append" if v else "Replace")),
+            (
+                "append",
+                FieldSpec("Mode", transform=lambda v: "Append" if v else "Replace"),
+            ),
             ("content", FieldSpec("Content Preview", truncate=100)),
         ],
         warnings=["Will write to memory file"],
@@ -163,15 +174,26 @@ _INTERRUPT_ARG_SCHEMAS: dict[str, dict[str, Any]] = {
         "type": "object",
         "properties": {
             "command": {"type": "string", "description": "Shell command to run"},
-            "timeout": {"type": "integer", "description": "Timeout in seconds", "default": 120},
+            "timeout": {
+                "type": "integer",
+                "description": "Timeout in seconds",
+                "default": 120,
+            },
         },
         "required": ["command"],
     },
     "execute": {
         "type": "object",
         "properties": {
-            "command": {"type": "string", "description": "Command to execute in sandbox"},
-            "timeout": {"type": "integer", "description": "Timeout in seconds", "default": 120},
+            "command": {
+                "type": "string",
+                "description": "Command to execute in sandbox",
+            },
+            "timeout": {
+                "type": "integer",
+                "description": "Timeout in seconds",
+                "default": 120,
+            },
         },
         "required": ["command"],
     },
@@ -196,7 +218,11 @@ _INTERRUPT_ARG_SCHEMAS: dict[str, dict[str, Any]] = {
         "type": "object",
         "properties": {
             "query": {"type": "string", "description": "Search query"},
-            "max_results": {"type": "integer", "description": "Max results", "default": 5},
+            "max_results": {
+                "type": "integer",
+                "description": "Max results",
+                "default": 5,
+            },
         },
         "required": ["query"],
     },
@@ -204,7 +230,11 @@ _INTERRUPT_ARG_SCHEMAS: dict[str, dict[str, Any]] = {
         "type": "object",
         "properties": {
             "url": {"type": "string", "description": "URL to fetch"},
-            "timeout": {"type": "integer", "description": "Timeout in seconds", "default": 30},
+            "timeout": {
+                "type": "integer",
+                "description": "Timeout in seconds",
+                "default": 30,
+            },
         },
         "required": ["url"],
     },
@@ -213,7 +243,11 @@ _INTERRUPT_ARG_SCHEMAS: dict[str, dict[str, Any]] = {
         "properties": {
             "command": {"type": "string", "description": "Test command"},
             "working_dir": {"type": "string", "description": "Working directory"},
-            "timeout": {"type": "integer", "description": "Timeout in seconds", "default": 300},
+            "timeout": {
+                "type": "integer",
+                "description": "Timeout in seconds",
+                "default": 300,
+            },
         },
         "required": [],
     },
@@ -231,9 +265,17 @@ _INTERRUPT_ARG_SCHEMAS: dict[str, dict[str, Any]] = {
         "type": "object",
         "properties": {
             "content": {"type": "string", "description": "Memory content to write"},
-            "memory_type": {"type": "string", "description": "Type of memory", "enum": ["user", "project"]},
+            "memory_type": {
+                "type": "string",
+                "description": "Type of memory",
+                "enum": ["user", "project"],
+            },
             "path": {"type": "string", "description": "Virtual path to write to"},
-            "append": {"type": "boolean", "description": "Append to existing", "default": False},
+            "append": {
+                "type": "boolean",
+                "description": "Append to existing",
+                "default": False,
+            },
         },
         "required": ["content"],
     },
@@ -241,7 +283,11 @@ _INTERRUPT_ARG_SCHEMAS: dict[str, dict[str, Any]] = {
         "type": "object",
         "properties": {
             "query": {"type": "string", "description": "Search query"},
-            "max_results": {"type": "integer", "description": "Max results", "default": 5},
+            "max_results": {
+                "type": "integer",
+                "description": "Max results",
+                "default": 5,
+            },
         },
         "required": ["query"],
     },
@@ -285,7 +331,11 @@ def _format_interrupt_description(
             value = field.default_display
         elif field.transform:
             value = field.transform(value)
-        elif field.truncate is not None and isinstance(value, str) and len(value) > field.truncate:
+        elif (
+            field.truncate is not None
+            and isinstance(value, str)
+            and len(value) > field.truncate
+        ):
             value = value[: field.truncate] + "..."
         parts.append(f"{field.label}: {value}")
 

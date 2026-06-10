@@ -293,9 +293,7 @@ def list_agents() -> None:
         )
         return
 
-    console.print(
-        f"\n[bold {COLORS['primary']}]📋 Available Agents[/bold {COLORS['primary']}]\n"
-    )
+    console.print(f"\n[bold {COLORS['primary']}]📋 Available Agents[/bold {COLORS['primary']}]\n")
 
     for agent_name, agent_path, scope in sorted(agents, key=lambda x: (x[2], x[0])):
         # Display scope badge
@@ -363,17 +361,13 @@ def reset_agent(agent_name: str, source_agent: str | None = None) -> None:
 
     if agent_dir.exists():
         shutil.rmtree(agent_dir)
-        console.print(
-            f"Removed existing agent directory: {agent_dir}", style=COLORS["tool"]
-        )
+        console.print(f"Removed existing agent directory: {agent_dir}", style=COLORS["tool"])
 
     agent_dir.mkdir(parents=True, exist_ok=True)
     agent_md = agent_dir / "agent.md"
     agent_md.write_text(source_content, encoding="utf-8")
 
-    console.print(
-        f"✓ Agent '{agent_name}' reset to {action_desc}", style=COLORS["primary"]
-    )
+    console.print(f"✓ Agent '{agent_name}' reset to {action_desc}", style=COLORS["primary"])
     console.print(f"Location: {agent_dir}\n", style=COLORS["dim"])
 
 
@@ -531,9 +525,7 @@ def _harden_subagent_specs(specs: list) -> list:
             existing
             if has_retry
             else [
-                ModelRetryMiddleware(
-                    max_retries=3, backoff_factor=2.0, initial_delay=1.0
-                ),
+                ModelRetryMiddleware(max_retries=3, backoff_factor=2.0, initial_delay=1.0),
                 *existing,
             ]
         )
@@ -557,10 +549,7 @@ def _seed_summarization_profile(model: object, model_name: str) -> None:
     or isn't a chat-model instance. Never raises — it's a pure optimization.
     """
     try:
-        if (
-            not isinstance(model, BaseChatModel)
-            or getattr(model, "profile", None) is not None
-        ):
+        if not isinstance(model, BaseChatModel) or getattr(model, "profile", None) is not None:
             return
         from novacode_cli.context import ContextManager
 
@@ -711,12 +700,18 @@ This file stores your preferences and context that persist across sessions.
                 encoding="utf-8",
             )
 
-        # Ensure the Nova learning memory tiers (USER.md / MEMORY.md) exist so
-        # the learning middleware has files to read/write during review cycles.
+        # Ensure the semantic-tier scaffolding (memories/ dir) exists, and
+        # one-time-migrate any legacy USER.md/MEMORY.md into the injected
+        # surface (agent.md + memories/). migrate_legacy_tiers renames consumed
+        # files to *.migrated.bak, so a second run is a no-op.
         try:
-            from novacode_cli.hermes.memory_tiers import ensure_memory_tiers
+            from novacode_cli.hermes.memory_tiers import (
+                ensure_memory_tiers,
+                migrate_legacy_tiers,
+            )
 
             ensure_memory_tiers(agent_dir)
+            migrate_legacy_tiers(agent_dir)
         except Exception:  # noqa: BLE001
             console.print("[dim]⚠ Failed to ensure Nova memory tiers[/dim]")
 
@@ -929,9 +924,7 @@ This file stores your preferences and context that persist across sessions.
             backend=composite_backend,  # Route through CompositeBackend for /skills/ etc.
             # When in a sandbox, show the in-sandbox working dir (e.g. /workspace)
             # in the tool description instead of the host path.
-            sandbox_working_dir=(
-                get_default_working_dir(sandbox_type) if sandbox_type else None
-            ),
+            sandbox_working_dir=(get_default_working_dir(sandbox_type) if sandbox_type else None),
         ),
         AgentMemoryMiddleware(
             settings=settings,
@@ -975,9 +968,7 @@ This file stores your preferences and context that persist across sessions.
                         asyncio.create_task(_before())
                     except Exception:
                         logger = __import__("logging").getLogger("nova.plugins")
-                        logger.exception(
-                            "Plugin '%s' before_agent_setup hook failed", _pkg_name
-                        )
+                        logger.exception("Plugin '%s' before_agent_setup hook failed", _pkg_name)
     except Exception:
         pass
 
@@ -998,9 +989,7 @@ This file stores your preferences and context that persist across sessions.
                 boot_status("mcp: connecting to servers…")
                 mcp_middleware._discover_tools_sync()
             except Exception as exc:  # noqa: BLE001
-                boot_status(
-                    f"mcp: discovery did not complete ({type(exc).__name__})", "warn"
-                )
+                boot_status(f"mcp: discovery did not complete ({type(exc).__name__})", "warn")
         agent_middleware.insert(3, mcp_middleware)
 
     # NOTE: automatic context-window summarization is provided by
@@ -1037,10 +1026,7 @@ This file stores your preferences and context that persist across sessions.
     # prompt overlay, which is an acceptable trade for resilience).
     from deepagents.middleware.subagents import GENERAL_PURPOSE_SUBAGENT
 
-    if not any(
-        isinstance(s, dict) and s.get("name") == "general-purpose"
-        for s in Nova_SubAgent
-    ):
+    if not any(isinstance(s, dict) and s.get("name") == "general-purpose" for s in Nova_SubAgent):
         Nova_SubAgent.append({**GENERAL_PURPOSE_SUBAGENT, "tools": tools})  # type: ignore
 
     # Load async subagents (run on remote LangGraph servers in background)
@@ -1048,9 +1034,7 @@ This file stores your preferences and context that persist across sessions.
 
     # Get the system prompt (sandbox-aware and with skills)
     if system_prompt is None:
-        system_prompt = get_system_prompt(
-            assistant_id=assistant_id, sandbox_type=sandbox_type
-        )
+        system_prompt = get_system_prompt(assistant_id=assistant_id, sandbox_type=sandbox_type)
 
     if auto_approve:
         # No interrupts - all tools run automatically
@@ -1120,9 +1104,7 @@ This file stores your preferences and context that persist across sessions.
                     asyncio.create_task(_after(agent))  # type: ignore
                 except Exception:
                     _log = __import__("logging").getLogger("nova.plugins")
-                    _log.exception(
-                        "Plugin '%s' after_agent_setup hook failed", _pkg_name
-                    )
+                    _log.exception("Plugin '%s' after_agent_setup hook failed", _pkg_name)
     except Exception:
         pass
 

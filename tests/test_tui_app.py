@@ -2421,6 +2421,41 @@ def test_tui_plugins_screen():
     asyncio.run(_drive_plugins_screen())
 
 
+async def _drive_chatmessage_pending_body():
+    """A first stream chunk can call update_body before compose mounts `.body`.
+
+    Regression for: NoMatches: No nodes match '.body' on ChatMessage. The
+    renderable must be stashed and applied once mounted, never crash.
+    """
+    from rich.text import Text as RText
+    from textual.app import App, ComposeResult
+    from textual.containers import VerticalScroll
+    from textual.widgets import Static
+
+    from novacode_cli.tui.app import ChatMessage
+
+    class _App(App):
+        def compose(self) -> ComposeResult:
+            yield VerticalScroll(id="box")
+
+    app = _App()
+    async with app.run_test() as pilot:
+        msg = ChatMessage(RText("hdr"), "nova")
+        # Called BEFORE mount: must stash (not raise) and keep raw_text in sync.
+        msg.update_body(RText("hello world"))
+        assert msg.raw_text == "hello world"
+        await app.query_one("#box").mount(msg)
+        await pilot.pause()
+        body = msg.query_one(".body", Static)
+        assert "hello world" in str(body.render())
+
+
+def test_tui_chatmessage_pending_body():
+    if not _HAS_TEXTUAL:
+        return
+    asyncio.run(_drive_chatmessage_pending_body())
+
+
 if __name__ == "__main__":
     if _HAS_TEXTUAL:
         asyncio.run(_drive())

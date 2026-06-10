@@ -1,11 +1,15 @@
 """Sandbox lifecycle management with context managers."""
 
+import atexit
 import os
 import shlex
+import signal
 import string
+import sys
+import threading
 import time
 from collections.abc import Callable, Generator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 
 from deepagents.backends.protocol import (
@@ -32,37 +36,28 @@ _DEFAULT_SANDBOX_IMAGE = "python:3.11-slim"
 # actually run version control, linting, tests, and builds. Without these,
 # execute/test/validate commands fail almost immediately (git/ruff "not found").
 #
-#   - git / openssh-client: version control, incl. cloning over ssh.
-#   - ca-certificates / curl / wget: fetch dependencies and remote resources.
-#   - build-essential: compile native extensions (many pip wheels need a toolchain).
-#   - nodejs / npm: the execute tool's own description advertises npm/npx
-#     scaffolding (create-next-app, vite, etc.) — without these those commands
-#     fail immediately. Debian's nodejs is older but sufficient for scaffolding;
-#     point NOVA_SANDBOX_IMAGE at a prebaked image for a specific Node version.
-#   - ripgrep: fast code search (rg) the agent reaches for constantly.
-#   - jq / tree / unzip / less: lightweight utilities agents commonly pipe through.
+#   - git: version control (clone, status, diff).
+#   - ca-certificates: SSL certs for HTTPS clones and fetches.
+#   - curl: HTTP fetches from shell (covers wget functionality).
+#   - ripgrep: fast code search (rg) the agent uses constantly.
+#   - unzip: occasionally needed for dependency extraction.
 #
-# This is intentionally a "batteries-included" default so the sandbox can handle
-# whatever task it's given out of the box. The cost is a slower first-container
-# start; use a prebaked NOVA_SANDBOX_IMAGE + NOVA_SANDBOX_SKIP_PROVISION=1 to skip
-# it, or NOVA_SANDBOX_EXTRA_APT/PIP to add more.
+# Dropped (saves ~250MB+ per container):
+#   - openssh-client: HTTPS works for git, SSH cloning is rare.
+#   - wget: redundant with curl.
+#   - build-essential: most wheels are pre-compiled; uv handles edge cases.
+#   - nodejs / npm: Python-centric agent rarely uses JS scaffolding.
+#   - jq / tree / less: cosmetic utilities, rarely functional.
+#   - networkx: only for graph building; agent degrades gracefully.
 _PROVISION_APT_PACKAGES = (
     "git",
-    "openssh-client",
     "ca-certificates",
     "curl",
-    "wget",
-    "build-essential",
-    "nodejs",
-    "npm",
     "ripgrep",
-    "jq",
-    "tree",
     "unzip",
-    "less",
 )
 # uv is a fast Rust-based pip/venv/workflow replacement.
-_PROVISION_PIP_PACKAGES = ("ruff", "pytest", "uv", "networkx")
+_PROVISION_PIP_PACKAGES = ("ruff", "pytest", "uv")
 
 
 def _sandbox_image() -> str:
@@ -89,7 +84,7 @@ def _build_provision_script() -> str:
 
     - System packages (git + build tools) go through apt, but only when ``git``
       is missing — apt update/install is the slow part, and git is the canary.
-    - Python tools (ruff, pytest, uv, networkx) go through pip in one satisfiable call.
+    - Python tools (ruff, pytest, uv) go through pip in one satisfiable call.
     - Each step is best-effort: a failure prints a marker and continues rather
       than aborting the whole session. A final summary line lets the run log show
       exactly which tools ended up available.
@@ -117,7 +112,7 @@ fi
 if command -v pip >/dev/null 2>&1; then
   pip install --quiet --no-input --root-user-action=ignore {pip_list} || echo "nova-provision: pip install failed (continuing)"
 fi
-echo "nova-provision-summary: git=$(command -v git || echo MISSING) node=$(command -v node || echo MISSING) npm=$(command -v npm || echo MISSING) rg=$(command -v rg || echo MISSING) ruff=$(command -v ruff || echo MISSING) pytest=$(command -v pytest || echo MISSING) uv=$(command -v uv || echo MISSING) networkx=$(python3 -c 'import networkx; print(networkx.__version__)' 2>/dev/null || echo MISSING)"
+echo "nova-provision-summary: git=$(command -v git || echo MISSING) rg=$(command -v rg || echo MISSING) ruff=$(command -v ruff || echo MISSING) pytest=$(command -v pytest || echo MISSING) uv=$(command -v uv || echo MISSING)"
 """
 
 
@@ -130,7 +125,7 @@ def _provision_sandbox_tools(backend: SandboxBackendProtocol) -> None:
     """
     console.print(
         "[dim]Provisioning sandbox toolchain "
-        "(git, node, npm, rg, ruff, pytest, uv, networkx, build tools)...[/dim]"
+        "(git, rg, ruff, pytest, uv, unzip)...[/dim]"
     )
     try:
         # execute() already runs the command under `bash -c`; pass the script raw.
@@ -156,8 +151,7 @@ def _provision_sandbox_tools(backend: SandboxBackendProtocol) -> None:
         )
     else:
         console.print(
-            "[green]✓ Sandbox toolchain ready "
-            "(git, node, npm, rg, ruff, pytest, uv, networkx, build tools)[/green]"
+            "[green]✓ Sandbox toolchain ready " "(git, rg, ruff, pytest, uv)[/green]"
         )
 
 
@@ -501,22 +495,45 @@ def _cleanup_stale_docker_containers(
 
     cutoff = time.time() - max_age_days * 86400
     try:
-        managed = client.containers.list(
-            all=True, filters={"label": "nova.managed=1"}
-        )
+        managed = client.containers.list(all=True, filters={"label": "nova.managed=1"})
     except Exception:  # noqa: BLE001
         return  # Docker API hiccup — skip cleanup silently
 
     valid_ids = _saved_session_ids()
 
+    # A container re-tied by /clear keeps its original (now-stale) Docker label,
+    # so the label-based orphan test below would wrongly target it. The registry
+    # is the authoritative owner: protect any container it still owns for a valid
+    # session (match by id prefix, since backend.id may be short or full).
+    try:
+        from novacode_cli.integrations import sandbox_registry
+
+        protected_ids = [
+            str(rec.get("sandbox_id", ""))
+            for rec in sandbox_registry.list_records()
+            if rec.get("session_id", "") in valid_ids and rec.get("sandbox_id")
+        ]
+    except Exception:  # noqa: BLE001
+        protected_ids = []
+
+    def _is_protected(container_id: str) -> bool:
+        return any(
+            container_id.startswith(pid) or pid.startswith(container_id[:12])
+            for pid in protected_ids
+        )
+
     for cont in managed:
         try:
             if keep_id and (cont.id == keep_id or cont.id.startswith(keep_id)):
                 continue
+            if _is_protected(cont.id):
+                continue
 
             # Orphan: its session was never saved (or was deleted) and it isn't
             # running, so nothing will ever reconnect it. Remove immediately.
-            session_label = (getattr(cont, "labels", None) or {}).get("nova.session") or ""
+            session_label = (getattr(cont, "labels", None) or {}).get(
+                "nova.session"
+            ) or ""
             if (
                 session_label
                 and session_label not in valid_ids
@@ -785,6 +802,65 @@ _SANDBOX_PROVIDERS = {
 }
 
 
+class _Heartbeat:
+    """Daemon thread that refreshes a sandbox's registry heartbeat.
+
+    Proves the owning process is alive so the next startup can distinguish a
+    crash-orphan (stale heartbeat) from a concurrent live session (fresh one).
+    """
+
+    def __init__(self, sandbox_id: str) -> None:
+        from novacode_cli.integrations import sandbox_registry as reg
+
+        self._id = sandbox_id
+        self._interval = reg.HEARTBEAT_INTERVAL_SECS
+        self._stop = threading.Event()
+        self._thread = threading.Thread(
+            target=self._run, name="nova-sandbox-heartbeat", daemon=True
+        )
+        self._thread.start()
+
+    def _run(self) -> None:
+        from novacode_cli.integrations import sandbox_registry as reg
+
+        while not self._stop.wait(self._interval):
+            with suppress(Exception):
+                reg.heartbeat(self._id)
+
+    def stop(self) -> None:
+        self._stop.set()
+
+
+_EXIT_NET_INSTALLED = False
+
+
+def _install_exit_net() -> None:
+    """Install an atexit + SIGTERM net that terminates this process's sandboxes.
+
+    The ``with create_sandbox`` ``finally`` already covers a normal exit and
+    SIGINT (KeyboardInterrupt unwinds it). This adds a SIGTERM handler — ``kill``
+    otherwise terminates without running cleanup — plus an atexit backstop. Both
+    call the idempotent ``terminate_owned``. Installed once per process.
+    """
+    global _EXIT_NET_INSTALLED
+    if _EXIT_NET_INSTALLED:
+        return
+    _EXIT_NET_INSTALLED = True
+
+    from novacode_cli.integrations import sandbox_registry as reg
+
+    atexit.register(reg.terminate_owned)
+
+    def _on_sigterm(signum, frame):  # noqa: ANN001, ARG001
+        with suppress(Exception):
+            reg.terminate_owned()
+        sys.exit(143)  # 128 + SIGTERM
+
+    # Signal handlers can only be set from the main thread; never fatal if not.
+    with suppress(ValueError, OSError, AttributeError):
+        signal.signal(signal.SIGTERM, _on_sigterm)
+
+
 @contextmanager
 def create_sandbox(
     provider: str,
@@ -820,6 +896,18 @@ def create_sandbox(
         )
         raise ValueError(msg)
 
+    from novacode_cli.integrations import sandbox_registry as reg
+
+    # Startup reclaim: terminate any sandbox whose owning process is dead (a
+    # crash-orphan), across all providers. Best-effort — never block startup.
+    with suppress(Exception):
+        reclaimed = reg.reclaim_dead_sandboxes()
+        if reclaimed:
+            console.print(
+                f"[dim]Reclaimed {len(reclaimed)} orphaned sandbox(es) "
+                "from a previous run.[/dim]"
+            )
+
     sandbox_provider = _SANDBOX_PROVIDERS[provider]
 
     # Build kwargs for sandbox provider
@@ -841,7 +929,28 @@ def create_sandbox(
             sandbox_kwargs["session_id"] = session_id
 
     with sandbox_provider(**sandbox_kwargs) as backend:
-        yield backend
+        # Register ownership + start the liveness heartbeat so an abrupt end is
+        # recoverable on the next launch. The InMemory test sandbox is skipped.
+        heartbeat: _Heartbeat | None = None
+        backend_id = getattr(backend, "id", None)
+        if backend_id and provider != "inmemory":
+            with suppress(Exception):
+                reg.register(
+                    backend_id,
+                    provider=provider,
+                    session_id=session_id,
+                    persist=persist,
+                )
+                _install_exit_net()
+                heartbeat = _Heartbeat(backend_id)
+        try:
+            yield backend
+        finally:
+            if heartbeat is not None:
+                heartbeat.stop()
+            if backend_id and provider != "inmemory":
+                with suppress(Exception):
+                    reg.deregister(backend_id)
 
 
 def get_available_sandbox_types() -> list[str]:
@@ -916,8 +1025,8 @@ class InMemorySandbox(BaseSandbox):
         command locally and captures output. Falls back to a canned response
         when there is no shell.
         """
-        import subprocess  # noqa: S404
         import shlex
+        import subprocess  # noqa: S404
 
         try:
             result = subprocess.run(  # noqa: S602

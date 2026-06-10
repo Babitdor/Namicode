@@ -1089,6 +1089,8 @@ async def simple_cli(
                     session_manager=session_manager,
                     model_name=model_name,
                     image_tracker=image_tracker,
+                    sandbox_id=sandbox_id,
+                    sandbox_type=sandbox_type,
                 )
                 if result == "exit":
                     await _cleanup_and_save_session()
@@ -1548,6 +1550,7 @@ async def _run_agent_session(
         assistant_id=assistant_id,
         model=model,
         sandbox_type=sandbox_type,
+        sandbox_id=getattr(sandbox_backend, "id", None) if sandbox_backend else None,
     )
 
     # Wire the SteeringMiddleware's instruction list to the session state.
@@ -1783,6 +1786,8 @@ async def _run_agent_session(
                     model_name=_crash_model,
                     project_root=Path.cwd(),
                     task_status="crashed",
+                    sandbox_id=getattr(sandbox_backend, "id", None) if sandbox_backend else None,
+                    sandbox_type=sandbox_type,
                 )
                 console.print(f"[dim]Session saved → {_crash_dir}[/dim]")
             except Exception as _save_err:

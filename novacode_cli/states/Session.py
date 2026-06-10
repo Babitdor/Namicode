@@ -426,11 +426,12 @@ class SessionState:
         assistant_id: str,
         model: Any,
         sandbox_type: str | None = None,
+        sandbox_id: str | None = None,
     ) -> None:
         """Set the agent context for dynamic model switching."""
         self._agent_runtime.set_agent_context(
             agent, backend, checkpointer, store, tools,
-            assistant_id, model, sandbox_type,
+            assistant_id, model, sandbox_type, sandbox_id,
         )
 
     async def switch_model(self, new_model: Any) -> tuple[Any, Any]:

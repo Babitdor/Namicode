@@ -33,13 +33,21 @@ logger = logging.getLogger("nova.hermes.review")
 
 # Tools that signal *real work* happened in a window (vs. read-only browsing).
 # Any non-builtin tool (a skill or MCP tool) also counts as substantive.
-_SUBSTANTIVE_TOOLS: frozenset[str] = frozenset(
-    {"write_file", "edit_file", "execute", "run_tests"}
-)
+_SUBSTANTIVE_TOOLS: frozenset[str] = frozenset({"write_file", "edit_file", "execute", "run_tests"})
 # Read-only/builtin tools that, on their own, are not worth reviewing.
 _TRIVIAL_BUILTINS: frozenset[str] = frozenset(
-    {"read_file", "grep", "ls", "glob", "think", "web_search",
-     "duckduckgo_search", "docs_search", "fetch_url", "package_info"}
+    {
+        "read_file",
+        "grep",
+        "ls",
+        "glob",
+        "think",
+        "web_search",
+        "duckduckgo_search",
+        "docs_search",
+        "fetch_url",
+        "package_info",
+    }
 )
 # A burst of failures in the window is worth reviewing *early* (before the count
 # threshold), so the agent captures the recovery while it's fresh.
@@ -62,11 +70,11 @@ def _window_recovered(window: list[dict]) -> bool:
         return False
     for h in window[last_fail + 1 :]:
         if h.get("success", True) and (
-            h.get("tool") in _SUBSTANTIVE_TOOLS
-            or h.get("tool") not in _TRIVIAL_BUILTINS
+            h.get("tool") in _SUBSTANTIVE_TOOLS or h.get("tool") not in _TRIVIAL_BUILTINS
         ):
             return True
     return False
+
 
 # Icon / color mapping for TUI events emitted by this module.
 _EVENT_CONFIG: dict[str, dict[str, str]] = {
@@ -147,8 +155,7 @@ class ReviewRunner:
         failures = sum(1 for h in window if not h.get("success", True))
         # Only suppress when we positively know the window was all-trivial.
         substantive = (not window) or any(
-            (h.get("tool") in _SUBSTANTIVE_TOOLS)
-            or (h.get("tool") not in _TRIVIAL_BUILTINS)
+            (h.get("tool") in _SUBSTANTIVE_TOOLS) or (h.get("tool") not in _TRIVIAL_BUILTINS)
             for h in window
         )
 
@@ -189,9 +196,7 @@ class ReviewRunner:
             # The counter is reset before this task runs, so look back a fixed
             # recent window (history isn't reset) to detect an error-recovery.
             try:
-                recent = await self._tracker.get_tool_history(
-                    limit=2 * self._review_threshold
-                )
+                recent = await self._tracker.get_tool_history(limit=2 * self._review_threshold)
             except Exception:  # noqa: BLE001
                 recent = []
             recovered_from_error = _window_recovered(recent)
@@ -290,29 +295,23 @@ class ReviewRunner:
             response_content = response_content or ""
 
             from novacode_cli.hermes.memory_tiers import (
-                compact_memory_file,
                 parse_review_response,
                 update_from_review,
             )
 
             parsed = parse_review_response(response_content)
 
-            if self._agent_dir and (
-                parsed["user_updates"] or parsed["session_memory"]
-            ):
+            if self._agent_dir and (parsed["user_model"] or parsed["lessons"]):
                 update_from_review(
                     self._agent_dir,
-                    parsed["user_updates"],
-                    parsed["session_memory"],
+                    parsed["user_model"],
+                    parsed["lessons"],
                 )
                 logger.info(
-                    "Nova review applied: user_updates=%s, session_memory=%s",
-                    bool(parsed["user_updates"]),
-                    bool(parsed["session_memory"]),
+                    "Nova review applied: user_model=%s, lessons=%d",
+                    bool(parsed["user_model"]),
+                    len(parsed["lessons"]),
                 )
-            elif self._agent_dir and response_content:
-                update_from_review(self._agent_dir, "", response_content)
-                logger.info("Nova review applied as session memory (no XML structure)")
 
             current_count = await self._get_review_count()
 
@@ -334,15 +333,8 @@ class ReviewRunner:
                 },
             )
 
-            if self._agent_dir:
-                try:
-                    user_md = self._agent_dir / "USER.md"
-                    memory_md = self._agent_dir / "MEMORY.md"
-                    for f in [user_md, memory_md]:
-                        if f.exists():
-                            compact_memory_file(f)
-                except Exception:  # noqa: BLE001
-                    logger.exception("Failed to compact memory files")
+            # Compaction is handled inside the semantic writers
+            # (update_user_model / record_lesson), so nothing extra here.
 
             if self._skill_manager:
                 await self._skill_manager.cleanup_legacy_skills_once()
@@ -373,9 +365,7 @@ class ReviewRunner:
     async def _get_review_just_completed(self) -> bool:
         """Check if a review was just completed."""
         try:
-            entry = await self._store.aget(
-                ("nova", "meta"), "review_just_completed"
-            )
+            entry = await self._store.aget(("nova", "meta"), "review_just_completed")
             if entry and isinstance(entry.value, dict):
                 return entry.value.get("value", False)
         except Exception:  # noqa: BLE001

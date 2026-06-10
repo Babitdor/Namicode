@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
@@ -52,8 +53,9 @@ from typing_extensions import NotRequired
 from novacode_cli.events import nova_event_log
 
 if TYPE_CHECKING:
-    from langgraph.store.base import BaseStore
     from pathlib import Path
+
+    from langgraph.store.base import BaseStore
 
 logger = logging.getLogger("nova.hermes.middleware")
 
@@ -156,9 +158,10 @@ class NovaLearningMiddleware(AgentMiddleware[NovaState]):
         self._enabled = enabled
 
         # Lazy-import the extracted modules to keep startup footprint small.
-        from novacode_cli.hermes.tracker import ToolUsageTracker
+        from novacode_cli.hermes.evolution import EvolutionEngine
         from novacode_cli.hermes.review import ReviewRunner
         from novacode_cli.hermes.skill_manager import SkillManager
+        from novacode_cli.hermes.tracker import ToolUsageTracker
 
         self._skill_manager = SkillManager(
             store,
@@ -177,6 +180,17 @@ class NovaLearningMiddleware(AgentMiddleware[NovaState]):
             agent_dir=agent_dir,
             enabled=enabled,
         )
+        # Self-evolution: complex-task completion unlocks / levels up a skill.
+        self._evolution = EvolutionEngine(
+            store,
+            self._tracker,
+            self._skill_manager,
+            skills_dir=skills_dir,
+            enabled=enabled,
+        )
+        # Start time of the current task (set in abefore_agent), used to slice
+        # the task's episodic window in aafter_agent.
+        self._task_start_ts: float | None = None
 
     @property
     def _refinement_tasks(self) -> set[asyncio.Task]:
@@ -270,6 +284,32 @@ class NovaLearningMiddleware(AgentMiddleware[NovaState]):
     # ------------------------------------------------------------------
     # Middleware hooks
     # ------------------------------------------------------------------
+
+    # -- Task lifecycle (self-evolution) ------------------------------------
+
+    def before_agent(self, state: AgentState, runtime: Any = None) -> None:  # noqa: ARG002
+        """Synchronous hook — mark task start (pass-through)."""
+        self._task_start_ts = time.time()
+
+    async def abefore_agent(self, state: AgentState, runtime: Any = None) -> None:  # noqa: ARG002
+        """Mark the start of a task (used to slice its episodic window)."""
+        self._task_start_ts = time.time()
+
+    def after_agent(self, state: AgentState, runtime: Any = None) -> None:  # noqa: ARG002
+        """Synchronous hook — pass-through (evolution runs async)."""
+
+    async def aafter_agent(self, state: AgentState, runtime: Any = None) -> None:  # noqa: ARG002
+        """At task completion, maybe evolve a skill from a complex task.
+
+        Fires only for the main agent (subagents don't carry this middleware),
+        so it is exactly one trigger per user task. Never raises.
+        """
+        if not self._enabled:
+            return
+        try:
+            await self._evolution.maybe_evolve(dict(state), self._task_start_ts)
+        except Exception:  # noqa: BLE001
+            logger.debug("aafter_agent evolution failed", exc_info=True)
 
     def wrap_tool_call(
         self,

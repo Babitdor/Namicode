@@ -19,7 +19,7 @@ Did this session include a concrete, multi-step workflow worth repeating on a fu
 {% endif %}
 
 ### 3. Memory Health Check
-Are USER.md / MEMORY.md up to date? Any stale entries to prune?
+Is the user model (`agent.md`) up to date? Any stale facts to prune?
 
 ### 4. Pending Work
 What's left unfinished or blocked?
@@ -29,21 +29,21 @@ Keep it concise — this is a checkpoint, not a full summary.
 ### Output Format
 Record learnings in XML blocks. Omit empty blocks.
 
-- `<user_updates>` — user model entries (each as `## Section Header`). Written to USER.md.
-- `<session_memory>` — cross-session decisions, patterns, facts as bullets. Appended to MEMORY.md.
+- `<user_model>` — user model entries (each as `## Section Header`). Merged into `agent.md` (always in context).
+- `<lesson topic="...">` — cross-session decisions, patterns, facts as bullets, grouped under a short kebab-case `topic`. Written to `memories/<topic>.md` and indexed (surfaced in context via the memory INDEX). Emit one block per topic.
 - `<skill>` — at most one. Only if step 2 identified a genuinely reusable workflow.
 
-<!-- 
+<!--
 Example blocks — these are illustrative, do not output them unless you have real content:
 
-<user_updates>
+<user_model>
 ## Communication Style
 - Prefers concise bullet points over prose
-</user_updates>
+</user_model>
 
-<session_memory>
+<lesson topic="testing">
 - Tests are run with `pytest -x` for fast feedback
-</session_memory>
+</lesson>
 
 <skill>
 <name>add-tui-slash-command</name>

@@ -1,7 +1,8 @@
 """Tests for /dream memory consolidation.
 
 Covers the bug where /dream looked in ~/.nova (root) instead of the real agent
-memory dir and ignored USER.md/MEMORY.md, plus the legacy-UI → emit conversion.
+memory dir, operating on the semantic surface (agent.md + memories/ topic
+files), plus the legacy-UI → emit conversion.
 """
 
 from __future__ import annotations
@@ -28,8 +29,7 @@ async def test_no_memory_returns_true_and_emits(tmp_path, capsys):
 
 
 async def test_with_tier_files_returns_virtual_path_prompt(tmp_path):
-    (tmp_path / "USER.md").write_text("# USER\nLikes terse answers.\n", encoding="utf-8")
-    (tmp_path / "MEMORY.md").write_text("# MEMORY\nChose SSE for /chat.\n", encoding="utf-8")
+    (tmp_path / "agent.md").write_text("# Agent Memory\nLikes terse answers.\n", encoding="utf-8")
     lines, emit = _sink()
 
     result = await handle_dream_command(
@@ -37,10 +37,9 @@ async def test_with_tier_files_returns_virtual_path_prompt(tmp_path):
     )
     assert isinstance(result, str)
     # The prompt targets the virtual /memories/ route (not a raw OS path) and
-    # names the real tier files.
+    # names the real tier file.
     assert "/memories/" in result
-    assert "/memories/USER.md" in result
-    assert "/memories/MEMORY.md" in result
+    assert "/memories/agent.md" in result
     assert any("Memory Consolidation" in ln for ln in lines)
 
 
@@ -48,7 +47,7 @@ async def test_index_uses_full_virtual_path(tmp_path):
     mem = tmp_path / "memories"
     mem.mkdir()
     (mem / "INDEX.md").write_text("- [A](a.md) — hook", encoding="utf-8")
-    (tmp_path / "USER.md").write_text("u", encoding="utf-8")
+    (tmp_path / "agent.md").write_text("u", encoding="utf-8")
     lines, emit = _sink()
 
     result = await handle_dream_command(

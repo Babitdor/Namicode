@@ -110,7 +110,8 @@ class TestSkillUsageAttribution:
 class TestCheckSkillEffectivenessNewSchema:
     async def test_low_usage_from_invocations(self, store):
         await store.aput(
-            ("nova", "skill_usage"), "rare",
+            ("nova", "skill_usage"),
+            "rare",
             {"invocations": 1, "successes": 1, "failures": 0},
         )
         issues = await check_skill_effectiveness(store)
@@ -118,7 +119,8 @@ class TestCheckSkillEffectivenessNewSchema:
 
     async def test_high_failure_from_outcomes(self, store):
         await store.aput(
-            ("nova", "skill_usage"), "bad",
+            ("nova", "skill_usage"),
+            "bad",
             {"invocations": 4, "successes": 1, "failures": 6},
         )
         issues = await check_skill_effectiveness(store)
@@ -126,7 +128,8 @@ class TestCheckSkillEffectivenessNewSchema:
 
     async def test_healthy_skill_not_flagged(self, store):
         await store.aput(
-            ("nova", "skill_usage"), "good",
+            ("nova", "skill_usage"),
+            "good",
             {"invocations": 5, "successes": 9, "failures": 1},
         )
         issues = await check_skill_effectiveness(store)
@@ -185,7 +188,7 @@ class TestSignalBasedTriggers:
         await _seed_window(store, window)
         await store.aput(("nova", "meta"), "review_just_completed", {"value": True})
         assert await review.should_review() is False  # skipped
-        assert await review.should_review() is True   # flag cleared
+        assert await review.should_review() is True  # flag cleared
 
 
 # ── 3. Stronger success signal ───────────────────────────────────────────────
@@ -195,9 +198,7 @@ class TestExecutionFailureDetection:
     def test_traceback_is_failure(self):
         from novacode_cli.hermes.middleware import _execution_failed
 
-        resp = SimpleNamespace(
-            content="Traceback (most recent call last):\n  ...\nValueError"
-        )
+        resp = SimpleNamespace(content="Traceback (most recent call last):\n  ...\nValueError")
         assert _execution_failed("execute", resp) is True
 
     def test_clean_output_is_success(self):
@@ -332,10 +333,12 @@ class TestMemoryDedup:
         from novacode_cli.hermes.memory_tiers import update_from_review
 
         agent_dir = tmp_path
-        (agent_dir / "MEMORY.md").write_text(
-            "# MEMORY.md\n\n## Key Facts Learned\n- alpha fact\n", encoding="utf-8"
+        topic_file = agent_dir / "memories" / "lessons.md"
+        topic_file.parent.mkdir(parents=True, exist_ok=True)
+        topic_file.write_text(
+            "# Lessons\n\n## Review — earlier\n\n- alpha fact\n", encoding="utf-8"
         )
-        update_from_review(agent_dir, "", "- alpha fact")
-        content = (agent_dir / "MEMORY.md").read_text(encoding="utf-8")
+        update_from_review(agent_dir, "", [{"topic": "lessons", "bullets": "- alpha fact"}])
+        content = topic_file.read_text(encoding="utf-8")
         # No new "## Review" section appended because the only bullet was a dup.
-        assert "## Review" not in content
+        assert content.count("## Review") == 1

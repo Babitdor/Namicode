@@ -1,17 +1,26 @@
-"""Dynamic memory tiers — USER.md & MEMORY.md auto-maintenance.
+"""Semantic-tier writers — the consolidation engines' output surface.
 
-This module implements the "Dynamic Memory Tiers" pillar of the Nova system.
-It creates and maintains two separate memory files alongside the existing
-``agent.md``:
+This module writes Nova's **Semantic memory tier**: durable facts distilled by
+consolidation (the review engine and ``/dream``). Crucially, it writes the
+surface ``AgentMemoryMiddleware`` actually *injects*, so learned facts re-enter
+the agent's context on the next turn:
 
     ~/.nova/{assistant_id}/
-    ├── agent.md     # Existing — general preferences
-    ├── USER.md      # NEW — user modeling (personality, style, communication)
-    └── MEMORY.md    # NEW — session cross-cutting memory (decisions, patterns, facts)
+    ├── agent.md            # user model + preferences (always injected)
+    └── memories/
+        ├── INDEX.md        # topic pointer list (always injected)
+        └── <topic>.md      # topic facts/lessons (read on demand via INDEX)
 
-Files are automatically compacted when they exceed ``MAX_MEMORY_CHARS`` using
-LLM-based summarization (reusing the ``summarize_conversation`` pattern from
-``compaction.py``).
+User-model updates land in ``agent.md`` (see :func:`update_user_model`);
+cross-session lessons land in topic files with an ``INDEX.md`` pointer (see
+:func:`record_lesson`).
+
+Legacy ``USER.md`` / ``MEMORY.md`` (a previous tier generation that was never
+read back) are retained here as **migration readers only** — see
+:func:`migrate_legacy_tiers`.
+
+Files are compacted when they exceed ``MAX_MEMORY_CHARS`` (shared with the
+read side via ``novacode_cli/memory/limits.py``), keeping the newest content.
 """
 
 from __future__ import annotations
@@ -20,10 +29,9 @@ import logging
 import re
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Any
 
-if TYPE_CHECKING:
-    pass
+from novacode_cli.memory.limits import MAX_MEMORY_CHARS
 
 logger = logging.getLogger("nova.hermes.memory_tiers")
 
@@ -45,79 +53,39 @@ def _emit_memory_event(message: str, icon: str = "📝") -> None:
     except Exception:  # noqa: BLE001
         logger.debug("memory event (not surfaced): %s", message)
 
-# Maximum characters per memory file before compaction (~3K tokens at 4 chars/token).
-# Matches the existing MAX_MEMORY_CHARS from agent_memory.py.
-MAX_MEMORY_CHARS = 12_000
-_MEMORY_TRUNCATION_NOTICE = (
-    "\n\n... [older history truncated — only recent entries shown]"
-)
 
-# ── Default templates ──────────────────────────────────────────────────────
+_MEMORY_TRUNCATION_NOTICE = "\n\n... [older history truncated — only recent entries shown]"
 
-DEFAULT_USER_MD = """# USER.md — User Model
-
-This file captures the user's personality, preferences, communication style,
-and working patterns. It persists across sessions so the agent can provide
-consistent, personalized assistance.
-
-## Communication Style
-- (auto-detected)
-
-## Preferred Workflows
-- (auto-detected)
-
-## Technical Preferences
-- (auto-detected)
-
-## Known Frustrations
-- (auto-detected)
-"""
-
-DEFAULT_MEMORY_MD = """# MEMORY.md — Cross-Session Memory
-
-This file stores decisions, patterns, facts, and lessons learned across
-sessions. Unlike agent.md (preferences) and USER.md (user model), this file
-focuses on actionable memory: things the agent learned by doing.
-
-## Architecture Decisions
-- (captured during reviews)
-
-## Reusable Patterns
-- (captured during reviews)
-
-## Key Facts Learned
-- (captured during reviews)
-"""
+# Default H1 header for a freshly-created topic lesson file.
+_DEFAULT_TOPIC_HEADER = "# {title}\n\nLessons captured during reviews / dreams.\n"
+# A safe default topic for unstructured or untagged lessons.
+_DEFAULT_TOPIC = "lessons"
 
 
 # ── Public API ─────────────────────────────────────────────────────────────
 
 
 def ensure_memory_tiers(agent_dir: Path) -> None:
-    """Create USER.md and MEMORY.md with default content if they don't exist.
+    """Ensure the semantic-tier scaffolding (the ``memories/`` directory) exists.
+
+    The always-injected ``agent.md`` is created by the agent bootstrap; topic
+    files and ``INDEX.md`` are created on demand by :func:`record_lesson`. This
+    just guarantees the directory is present.
 
     Args:
         agent_dir: Path to the agent directory (``~/.nova/{assistant_id}/``).
     """
-    agent_dir.mkdir(parents=True, exist_ok=True)
-
-    user_md = agent_dir / "USER.md"
-    if not user_md.exists():
-        user_md.write_text(DEFAULT_USER_MD, encoding="utf-8")
-        _emit_memory_event(f"Created USER.md at {user_md}")
-
-    memory_md = agent_dir / "MEMORY.md"
-    if not memory_md.exists():
-        memory_md.write_text(DEFAULT_MEMORY_MD, encoding="utf-8")
-        _emit_memory_event(f"Created MEMORY.md at {memory_md}")
+    (agent_dir / "memories").mkdir(parents=True, exist_ok=True)
 
 
 def compact_memory_file(path: Path, max_chars: int = MAX_MEMORY_CHARS) -> bool:
-    """Compact a memory file by keeping most recent entries.
+    """Compact a memory file by keeping the newest entries.
 
-    When a file exceeds the limit, this method truncates it by keeping the
-    last ``max_chars // 2`` characters (most recent entries) and prepending
-    a truncation notice.
+    Memory files are written newest-first (new sections/lessons are prepended
+    below the ``# Title`` header), so the **head** of the file is the most
+    recent content. When the file exceeds the limit we keep the head and drop
+    the older tail — matching the injection-side truncation in
+    ``agent_memory.py`` (see ``novacode_cli/memory/limits.py`` for the invariant).
 
     Args:
         path: Path to the memory file to compact.
@@ -133,25 +101,22 @@ def compact_memory_file(path: Path, max_chars: int = MAX_MEMORY_CHARS) -> bool:
     if len(content) <= max_chars:
         return False
 
-    # Keep last half (most recent entries)
-    keep_chars = max_chars // 2
+    # Keep the newest half (the head).
+    end_pos = min(len(content), max_chars // 2)
 
-    # Find a good break point (near a newline) to avoid cutting mid-line
-    start_pos = max(0, len(content) - keep_chars)
-    search_start = max(0, start_pos - 200)
-    newline_pos = content.find("\n", search_start)
+    # Cut at a section boundary so we don't slice mid-section; else fall back to
+    # the nearest preceding newline.
+    header_pos = content.find("\n## ", end_pos)
+    if header_pos != -1 and header_pos < end_pos + 500:
+        end_pos = header_pos
+    else:
+        newline_pos = content.rfind("\n", max(0, end_pos - 200), end_pos)
+        if newline_pos != -1:
+            end_pos = newline_pos
 
-    if newline_pos != -1 and newline_pos < start_pos + 200:
-        start_pos = newline_pos + 1
+    truncated = content[:end_pos].rstrip() + "\n" + _MEMORY_TRUNCATION_NOTICE + "\n"
 
-    # Find section header to ensure we don't start mid-section
-    header_pos = content.rfind("\n## ", 0, start_pos)
-    if header_pos != -1 and header_pos > start_pos - 500:
-        start_pos = header_pos
-
-    truncated = f"{_MEMORY_TRUNCATION_NOTICE}\n\n" + content[start_pos:]
-
-    # Guard: don't write if compaction would grow file
+    # Guard: don't write if compaction would grow the file.
     if len(truncated) >= len(content):
         return False
     path.write_text(truncated, encoding="utf-8")
@@ -163,153 +128,190 @@ def compact_memory_file(path: Path, max_chars: int = MAX_MEMORY_CHARS) -> bool:
     return True
 
 
-def update_user_memory(agent_dir: Path, new_content: str) -> None:
-    """Append or update entries in USER.md.
+def _merge_section(content: str, new_section: str) -> str:
+    """Replace an existing ``## Section`` (matched by header) or append it.
 
-    If ``new_content`` is a complete section (starts with ``## ``), it will
-    replace any existing section with the same heading. Otherwise it appends
-    as a bullet point.
+    ``new_section`` includes its own ``## Header`` line; if a section with the
+    same header already exists, its header + body are replaced wholesale,
+    otherwise the section is appended at the end.
+    """
+    section_header = new_section.split("\n", 1)[0].strip()
+    lines = content.split("\n")
+    out: list[str] = []
+    i = 0
+    replaced = False
+    while i < len(lines):
+        line = lines[i]
+        if line.startswith("## ") and line.strip() == section_header:
+            out.extend(new_section.rstrip().split("\n"))
+            i += 1
+            # Skip the old body up to the next section / H1.
+            while i < len(lines) and not (
+                lines[i].startswith("## ")
+                or (lines[i].startswith("# ") and not lines[i].startswith("##"))
+            ):
+                i += 1
+            replaced = True
+        else:
+            out.append(line)
+            i += 1
+    if not replaced:
+        return content.rstrip() + "\n\n" + new_section.strip() + "\n"
+    return "\n".join(out)
+
+
+def update_user_model(agent_dir: Path, new_content: str) -> None:
+    """Merge user-model section(s) into ``agent.md`` (the always-injected surface).
+
+    ``new_content`` is one or more ``## Section`` blocks (as emitted by the
+    review's ``<user_model>`` block). Each section replaces an existing one with
+    the same header, or is appended. Plain bullets (no header) go under ``## Notes``.
 
     Args:
         agent_dir: Path to the agent directory.
-        new_content: Content to add to USER.md.
+        new_content: User-model content (``## Section`` blocks or bullets).
     """
-    user_md = agent_dir / "USER.md"
-    if not user_md.exists():
-        user_md.write_text(DEFAULT_USER_MD, encoding="utf-8")
+    new_content = (new_content or "").strip()
+    if not new_content:
+        return
+    agent_md = agent_dir / "agent.md"
+    content = agent_md.read_text(encoding="utf-8") if agent_md.exists() else "# Agent Memory\n"
 
-    content = user_md.read_text(encoding="utf-8")
-
-    # If it's a section header, try to replace existing section
     if new_content.startswith("## "):
-        section_name = new_content.split("\n")[0].strip()
-        if section_name in content:
-            # Replace existing section content
-            lines = content.split("\n")
-            new_lines: list[str] = []
-            in_section = False
-            section_found = False
-            i = 0
-            while i < len(lines):
-                line = lines[i]
-                if line.strip() == section_name:
-                    in_section = True
-                    section_found = True
-                    new_lines.append(line)
-                    # Add new section content (skip the header line itself)
-                    for sub_line in new_content.split("\n")[1:]:
-                        new_lines.append(sub_line)
-                    i += 1
-                elif in_section:
-                    # Check if we've reached the next section
-                    if line.startswith("## ") or (
-                        line.startswith("# ") and not line.startswith("##")
-                    ):
-                        in_section = False
-                        new_lines.append(line)
-                    # else skip old section content
-                    i += 1
-                else:
-                    new_lines.append(line)
-                    i += 1
+        for sec in re.split(r"(?=^## )", new_content, flags=re.MULTILINE):
+            sec = sec.strip()
+            if sec:
+                content = _merge_section(content, sec)
+    else:
+        content = _merge_section(content, "## Notes\n" + new_content)
 
-            if section_found:
-                user_md.write_text("\n".join(new_lines), encoding="utf-8")
-                _emit_memory_event(f"Updated section in USER.md: {section_name}")
-                return
-
-    # Append as new section or bullets
-    content += "\n" + new_content
-    user_md.write_text(content, encoding="utf-8")
-    _emit_memory_event("Appended to USER.md")
+    agent_md.parent.mkdir(parents=True, exist_ok=True)
+    agent_md.write_text(content.rstrip() + "\n", encoding="utf-8")
+    _emit_memory_event("Updated user model in agent.md")
+    compact_memory_file(agent_md)
 
 
-def update_session_memory(agent_dir: Path, session_summary: str) -> None:
-    """Write session memory to MEMORY.md.
+def _slugify_topic(raw: str) -> str:
+    """Normalize a topic name into a safe kebab-case filename stem."""
+    slug = (raw or "").strip().lower()
+    slug = re.sub(r"[\s_]+", "-", slug)
+    slug = re.sub(r"[^a-z0-9-]", "", slug)
+    slug = re.sub(r"-{2,}", "-", slug).strip("-")
+    return slug[:50]
 
-    Prepends the session summary to MEMORY.md so the most recent session
-    appears first.
+
+def _upsert_index_pointer(memories_dir: Path, topic_slug: str) -> None:
+    """Ensure ``memories/INDEX.md`` has a pointer to ``<topic_slug>.md``."""
+    index = memories_dir / "INDEX.md"
+    line = f"- [{topic_slug}]({topic_slug}.md)"
+    if index.exists():
+        content = index.read_text(encoding="utf-8")
+        if re.search(rf"\]\(\s*{re.escape(topic_slug)}\.md\s*\)", content):
+            return  # pointer already present
+        content = content.rstrip() + "\n" + line + "\n"
+    else:
+        content = (
+            "# Memory Index\n\n"
+            "Topic files capturing facts and lessons learned across sessions.\n\n" + line + "\n"
+        )
+    index.write_text(content, encoding="utf-8")
+    _emit_memory_event(f"Indexed memory topic: {topic_slug}")
+
+
+def record_lesson(agent_dir: Path, topic: str, bullets: str) -> None:
+    """Record cross-session lesson bullets to ``memories/<topic>.md`` + INDEX.
+
+    Lessons are prepended (newest-first) under a timestamped section, deduped
+    against what the topic file already holds, and the topic is registered in
+    ``memories/INDEX.md`` (which ``AgentMemoryMiddleware`` injects every turn).
 
     Args:
         agent_dir: Path to the agent directory.
-        session_summary: Summary of the session to persist.
+        topic: Topic name (slugified into the filename).
+        bullets: Bullet lines to record under this topic.
     """
-    memory_md = agent_dir / "MEMORY.md"
-    if not memory_md.exists():
-        memory_md.write_text(DEFAULT_MEMORY_MD, encoding="utf-8")
+    if not (bullets or "").strip():
+        return
+    topic_slug = _slugify_topic(topic) or _DEFAULT_TOPIC
+    memories_dir = agent_dir / "memories"
+    memories_dir.mkdir(parents=True, exist_ok=True)
+    topic_file = memories_dir / f"{topic_slug}.md"
 
-    content = memory_md.read_text(encoding="utf-8")
+    if topic_file.exists():
+        content = topic_file.read_text(encoding="utf-8")
+    else:
+        content = _DEFAULT_TOPIC_HEADER.format(title=topic_slug.replace("-", " ").title())
 
-    # Insert after the header (before the first ## section)
-    header_end = content.find("\n## ")
-    if header_end == -1:
-        header_end = len(content)
+    deduped = _dedup_against(content, bullets)
+    if not deduped:
+        _emit_memory_event(f"Lesson added no new memory to '{topic_slug}' (all duplicates)")
+        return
 
-    before = content[:header_end]
-    after = content[header_end:]
-
-    # Create a timestamped entry
+    # Prepend (newest-first) after the H1 header / intro, before the first section.
+    insert_at = content.find("\n## ")
+    if insert_at == -1:
+        insert_at = len(content)
+    before, after = content[:insert_at], content[insert_at:]
     timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
-    entry = f"\n## Session — {timestamp}\n\n{session_summary}\n"
+    entry = f"\n## Review — {timestamp}\n\n{deduped}\n"
+    topic_file.write_text(before.rstrip() + "\n" + entry + after, encoding="utf-8")
 
-    new_content = before + entry + after
-    memory_md.write_text(new_content, encoding="utf-8")
-    _emit_memory_event("Updated MEMORY.md")
-
-    # Compact if needed
-    compact_memory_file(memory_md)
+    _upsert_index_pointer(memories_dir, topic_slug)
+    _emit_memory_event(f"Recorded lesson to memories/{topic_slug}.md")
+    compact_memory_file(topic_file)
 
 
-def parse_review_response(response_content: str) -> dict[str, str]:
-    """Extract structured data from LLM review response.
+_LESSON_BLOCK_RE = re.compile(
+    r'<lesson(?:\s+topic\s*=\s*["\']?([^"\'>]*)["\']?)?\s*>(.*?)</lesson>',
+    re.DOTALL | re.IGNORECASE,
+)
 
-    Expected format (XML tags):
-        <user_updates>
+
+def parse_review_response(response_content: str) -> dict[str, Any]:
+    """Extract structured data from an LLM review response (new contract).
+
+    Expected format (XML tags)::
+
+        <user_model>
         ## Communication Style
         - Prefers concise bullet points
-        </user_updates>
+        </user_model>
 
-        <session_memory>
-        - Discovered that pytest with -x flag is preferred for quick feedback
-        - User rejected async/await patterns in favor of explicit sync code
-        </session_memory>
+        <lesson topic="testing">
+        - Tests are run with `pytest -x` for fast feedback
+        </lesson>
+
+    ``<user_model>`` → ``agent.md`` (the injected user surface); each
+    ``<lesson topic="…">`` → ``memories/<topic>.md`` (+ INDEX pointer).
 
     Args:
         response_content: The raw response content from the LLM.
 
     Returns:
-        Dictionary with 'user_updates' and 'session_memory' keys.
+        ``{"user_model": str, "lessons": [{"topic": str, "bullets": str}, ...]}``.
     """
-    result = {"user_updates": "", "session_memory": ""}
+    result: dict[str, Any] = {"user_model": "", "lessons": []}
 
     if not response_content:
         return result
 
-    # Extract user model updates (all blocks)
     user_matches = re.findall(
-        r"<user_updates>(.*?)</user_updates>",
+        r"<user_model>(.*?)</user_model>",
         response_content,
         re.DOTALL | re.IGNORECASE,
     )
     if user_matches:
-        result["user_updates"] = "\n".join(m.strip() for m in user_matches)
+        result["user_model"] = "\n".join(m.strip() for m in user_matches)
 
-    # Extract session memory (all blocks)
-    memory_matches = re.findall(
-        r"<session_memory>(.*?)</session_memory>",
-        response_content,
-        re.DOTALL | re.IGNORECASE,
-    )
-    if memory_matches:
-        result["session_memory"] = "\n".join(m.strip() for m in memory_matches)
+    for match in _LESSON_BLOCK_RE.finditer(response_content):
+        topic = (match.group(1) or _DEFAULT_TOPIC).strip() or _DEFAULT_TOPIC
+        bullets = match.group(2).strip()
+        if bullets:
+            result["lessons"].append({"topic": topic, "bullets": bullets})
 
-    # Fallback: if no XML tags but content exists, treat as session memory
-    if (
-        not result["user_updates"]
-        and not result["session_memory"]
-        and response_content.strip()
-    ):
-        result["session_memory"] = response_content.strip()
+    # Fallback: unstructured response with content → a single default-topic lesson.
+    if not result["user_model"] and not result["lessons"] and response_content.strip():
+        result["lessons"].append({"topic": _DEFAULT_TOPIC, "bullets": response_content.strip()})
 
     return result
 
@@ -323,7 +325,7 @@ def _dedup_against(existing: str, block: str) -> str:
     """Drop bullet lines from ``block`` already present in ``existing``.
 
     Compares normalized bullet text so trivial whitespace/case differences
-    don't slip a near-duplicate into MEMORY.md. Non-bullet lines (headers,
+    don't slip a near-duplicate into a topic file. Non-bullet lines (headers,
     prose) are always kept.
     """
     known = {
@@ -342,45 +344,126 @@ def _dedup_against(existing: str, block: str) -> str:
     return "\n".join(kept).strip()
 
 
-def update_from_review(agent_dir: Path, user_updates: str, session_memory: str) -> None:
-    """Apply review learnings to USER.md and MEMORY.md.
+def update_from_review(
+    agent_dir: Path,
+    user_model: str,
+    lessons: list[dict[str, str]],
+) -> None:
+    """Apply review learnings to the injected semantic surface.
+
+    User-model updates land in ``agent.md``; each lesson lands in its
+    ``memories/<topic>.md`` topic file (+ INDEX pointer).
 
     Args:
         agent_dir: Path to the agent directory.
-        user_updates: Content to add to USER.md (usually a section with updates).
-        session_memory: Content to add to MEMORY.md as a session review.
+        user_model: ``## Section`` block(s) for ``agent.md`` (may be empty).
+        lessons: ``[{"topic", "bullets"}, ...]`` from the review.
     """
-    if user_updates:
-        update_user_memory(agent_dir, user_updates)
+    if user_model:
+        update_user_model(agent_dir, user_model)
 
-    if session_memory:
-        memory_md = agent_dir / "MEMORY.md"
-        if not memory_md.exists():
-            memory_md.write_text(DEFAULT_MEMORY_MD, encoding="utf-8")
+    for lesson in lessons or []:
+        topic = (lesson.get("topic") or _DEFAULT_TOPIC).strip() or _DEFAULT_TOPIC
+        bullets = lesson.get("bullets") or ""
+        if bullets.strip():
+            record_lesson(agent_dir, topic, bullets)
 
-        content = memory_md.read_text(encoding="utf-8")
 
-        # Drop bullets we've already recorded, so reviews don't pile up
-        # near-duplicate lessons in MEMORY.md.
-        session_memory = _dedup_against(content, session_memory)
-        if not session_memory:
-            _emit_memory_event("Review added no new memory (all duplicates)")
-            return
+# ── Legacy migration ───────────────────────────────────────────────────────
 
-        # Insert after header
-        header_end = content.find("\n## ")
-        if header_end == -1:
-            header_end = len(content)
+_PLACEHOLDER_RE = re.compile(r"\(auto-detected\)|\(captured during reviews\)", re.IGNORECASE)
 
-        before = content[:header_end]
-        after = content[header_end:]
 
-        timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
-        entry = f"\n## Review — {timestamp}\n\n{session_memory}\n"
+def _section_has_real_content(section: str) -> bool:
+    """True if a ``## Section`` block has a non-placeholder bullet."""
+    return any(
+        ln.lstrip().startswith(("-", "*", "•")) and not _PLACEHOLDER_RE.search(ln)
+        for ln in section.splitlines()
+    )
 
-        new_content = before + entry + after
-        memory_md.write_text(new_content, encoding="utf-8")
-        _emit_memory_event("Applied review to MEMORY.md")
 
-        # Compact if needed
-        compact_memory_file(memory_md)
+def migrate_legacy_tiers(agent_dir: Path) -> bool:
+    """One-time merge of legacy ``USER.md`` / ``MEMORY.md`` into the injected surface.
+
+    ``USER.md`` non-placeholder sections → ``agent.md``; ``MEMORY.md`` bullets →
+    ``memories/lessons.md`` (+ INDEX). Migrated files are renamed to
+    ``*.migrated.bak`` so a second run is a filesystem-level no-op too. The
+    caller should additionally guard with a durable-store flag.
+
+    Returns:
+        True if any content was migrated.
+    """
+    migrated = False
+
+    user_md = agent_dir / "USER.md"
+    if user_md.exists():
+        try:
+            content = user_md.read_text(encoding="utf-8")
+            for sec in re.split(r"(?=^## )", content, flags=re.MULTILINE):
+                sec = sec.strip()
+                if sec.startswith("## ") and _section_has_real_content(sec):
+                    update_user_model(agent_dir, sec)
+                    migrated = True
+            user_md.rename(user_md.with_name("USER.md.migrated.bak"))
+        except OSError:
+            logger.exception("Failed migrating USER.md")
+
+    memory_md = agent_dir / "MEMORY.md"
+    if memory_md.exists():
+        try:
+            content = memory_md.read_text(encoding="utf-8")
+            bullets = "\n".join(
+                ln
+                for ln in content.splitlines()
+                if ln.lstrip().startswith(("-", "*", "•")) and not _PLACEHOLDER_RE.search(ln)
+            )
+            if bullets.strip():
+                record_lesson(agent_dir, _DEFAULT_TOPIC, bullets)
+                migrated = True
+            memory_md.rename(memory_md.with_name("MEMORY.md.migrated.bak"))
+        except OSError:
+            logger.exception("Failed migrating MEMORY.md")
+
+    # Scrub stale INDEX.md pointers to the legacy files. Runs unconditionally
+    # (not gated on USER.md/MEMORY.md still existing) so an index written before
+    # the rename self-heals on a later launch — their content now lives in
+    # agent.md + memories/lessons.md, which the index already lists.
+    if _scrub_legacy_index_refs(agent_dir):
+        migrated = True
+
+    if migrated:
+        _emit_memory_event("Migrated legacy USER.md/MEMORY.md → agent.md + memories/")
+    return migrated
+
+
+# Matches a markdown list line whose link target is the legacy USER.md / MEMORY.md
+# (e.g. ``- [USER.md](../USER.md) — …``), regardless of the relative path prefix.
+_LEGACY_INDEX_REF_RE = re.compile(
+    r"^.*\]\([^)]*(?:USER|MEMORY)\.md\).*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _scrub_legacy_index_refs(agent_dir: Path) -> bool:
+    """Remove dead ``USER.md`` / ``MEMORY.md`` pointers from ``memories/INDEX.md``.
+
+    Returns True if the index was changed.
+    """
+    index = agent_dir / "memories" / "INDEX.md"
+    if not index.exists():
+        return False
+    try:
+        content = index.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    scrubbed = _LEGACY_INDEX_REF_RE.sub("", content)
+    if scrubbed == content:
+        return False
+    # Collapse the blank lines left where the pointer lines were removed.
+    scrubbed = re.sub(r"\n{3,}", "\n\n", scrubbed)
+    try:
+        index.write_text(scrubbed, encoding="utf-8")
+    except OSError:
+        return False
+    _emit_memory_event("Scrubbed legacy USER.md/MEMORY.md refs from INDEX.md")
+    return True

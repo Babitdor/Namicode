@@ -32,15 +32,9 @@ from textual import events, work
 from textual.app import App, ComposeResult
 from textual.color import Color
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.css.query import NoMatches
 from textual.screen import ModalScreen
 from textual.theme import Theme
-
-from novacode_cli.tui.animations import (
-    animate_entrance,
-    animate_modal_screen,
-    shimmer_bar,
-)
-
 from textual.widgets import (
     Button,
     Collapsible,
@@ -50,7 +44,12 @@ from textual.widgets import (
     Static,
 )
 from textual.widgets.option_list import Option
-from textual.css.query import NoMatches
+
+from novacode_cli.tui.animations import (
+    animate_entrance,
+    animate_modal_screen,
+    shimmer_bar,
+)
 
 # ---------------------------------------------------------------------------
 # Matrix rain — animated home screen banner
@@ -329,6 +328,7 @@ _TUI_SLASH_COMMANDS = [
     "/notifications",
     "/research",
     "/dream",
+    "/evolution",
     "/reindex",
     "/images",
     "/files",
@@ -423,15 +423,36 @@ class ChatMessage(Vertical):
         # can be copied verbatim (click-to-copy / the /copy command) without
         # re-deriving it from the rendered markdown.
         self.raw_text: str = ""
+        # Body renderable received before compose() finished mounting the `.body`
+        # child. Applied in on_mount so a fast first stream chunk isn't lost.
+        self._pending_body: Any = None
         self.tooltip = "Click to copy this message"
 
     def compose(self) -> ComposeResult:
         yield Static(self._header, classes="role")
-        yield Static("", classes="body")
+        yield Static(self._pending_body or "", classes="body")
+
+    def on_mount(self) -> None:
+        # If update_body ran before the `.body` child existed, apply the stashed
+        # renderable now that the children are mounted.
+        if self._pending_body is not None:
+            try:
+                self.query_one(".body", Static).update(self._pending_body)
+            except NoMatches:
+                pass
+            self._pending_body = None
 
     def update_body(self, renderable: Any) -> None:
-        self.query_one(".body", Static).update(renderable)
         self.raw_text = self._renderable_text(renderable)
+        try:
+            body = self.query_one(".body", Static)
+        except NoMatches:
+            # Children not mounted yet (Textual composes asynchronously). Stash
+            # the renderable; on_mount/compose will apply it. Prevents the
+            # "No nodes match '.body'" crash on a fast first stream chunk.
+            self._pending_body = renderable
+            return
+        body.update(renderable)
 
     @staticmethod
     def _renderable_text(renderable: Any) -> str:
@@ -1105,8 +1126,8 @@ class McpScreen(ModalScreen[None]):
 
         # Create and save config
         try:
-            from novacode_cli.mcp.presets import create_config_from_preset
             from novacode_cli.mcp.config import MCPConfig
+            from novacode_cli.mcp.presets import create_config_from_preset
 
             config = create_config_from_preset(preset_id, user_inputs)
             if config:
@@ -1628,9 +1649,16 @@ class RemoteScreen(ModalScreen[None]):
 
     BINDINGS = [("escape", "close", "Close")]
 
-    def __init__(self, session_state) -> None:
+    def __init__(
+        self,
+        session_state,
+        sandbox_id: str | None = None,
+        sandbox_type: str | None = None,
+    ) -> None:
         super().__init__()
         self._ss = session_state
+        self._sandbox_id = sandbox_id
+        self._sandbox_type = sandbox_type
 
     def compose(self) -> ComposeResult:
         with Vertical(id="modal-box"):
@@ -1727,6 +1755,8 @@ class RemoteScreen(ModalScreen[None]):
                     app.assistant_id,  # type: ignore
                     model_name=app.model_name,  # type: ignore
                     image_tracker=app.image_tracker,  # type: ignore
+                    sandbox_id=self._sandbox_id,
+                    sandbox_type=self._sandbox_type,
                 )
             out = cap.get().strip()
         except Exception as ex:  # noqa: BLE001
@@ -3058,30 +3088,54 @@ class NovaApp(App):
             )
 
     def _refresh_status(self) -> None:
-        pct = ""
+        line = Text()
+
+        def _sep() -> None:
+            line.append(" · ", style="dim")
+
+        # Model name — a subtle accent so it reads as a label, not noise.
+        line.append(str(self.model_name or "—"), style="#7aa2f7")
+
+        # Context usage — color-coded by how full the window is, so it's
+        # glanceable: green (healthy) → yellow (warning ≥75%) → red (critical ≥90%).
         if self.token_tracker is not None:
             try:
                 bd = self.token_tracker.get_breakdown()
-                if bd:
-                    pct = f" · ctx {bd.usage_percentage:.0f}%"
             except Exception:  # noqa: BLE001
-                pass
+                bd = None
+            if bd is not None:
+                p = bd.usage_percentage
+                if p >= 90:
+                    ctx_style = "bold #f7768e"
+                elif p >= 75:
+                    ctx_style = "#e0af68"
+                else:
+                    ctx_style = "#9ece6a"
+                _sep()
+                line.append(f"ctx {p:.0f}%", style=ctx_style)
+
+        # Activity — spinner + label + elapsed while a turn is live.
+        _sep()
         if self._turn_active:
             frame = self._SPINNER[self._spinner_frame % len(self._SPINNER)]
             elapsed = time.monotonic() - self._turn_start
-            activity = f"{frame} {self._activity} · {elapsed:0.1f}s"
+            line.append(f"{frame} ", style="#7aa2f7")
+            line.append(str(self._activity), style="dim")
+            line.append(f" · {elapsed:0.1f}s", style="dim")
         else:
-            activity = self._activity
-        line = Text(f"[{self.model_name}]{pct} · {activity}", style="dim")
-        # Nova learning status (review cycle) — shown beside ctx% so it lives in
-        # the status line and never overlaps the input.
+            line.append(str(self._activity), style="dim")
+
+        # Nova learning status (review cycle) — lives in the status line so it
+        # never overlaps the input box.
         if self._nova_status:
             line.append("  ", style="dim")
             line.append(self._nova_status, style=self._nova_status_style)
+
         notif = self._unread_count()
         if notif:
             line.append("  🔔 ", style="bold #e0af68")
             line.append(str(notif), style="bold #e0af68")
+
         try:
             self._w("#status", Static).update(line)
         except NoMatches:
@@ -3948,6 +4002,7 @@ class NovaApp(App):
             "log",
             "research",
             "dream",
+            "evolution",
             "tests",
             "fast",
         }
@@ -4105,7 +4160,11 @@ class NovaApp(App):
         elif cmd == "init":
             await self._run_init(text)
         elif cmd == "remote":
-            await self.push_screen_wait(RemoteScreen(self.session_state))
+            await self.push_screen_wait(RemoteScreen(
+                self.session_state,
+                sandbox_id=self._sandbox_id,
+                sandbox_type=self._sandbox_type,
+            ))
         elif cmd == "agents":
             await self._run_agents()
         elif cmd == "skills":
@@ -4145,6 +4204,8 @@ class NovaApp(App):
             await self._run_research(text)
         elif cmd == "dream":
             await self._run_dream()
+        elif cmd == "evolution":
+            await self._run_evolution()
         elif cmd == "reindex":
             await self._run_reindex()
         elif cmd == "images":
@@ -4345,6 +4406,8 @@ class NovaApp(App):
                     self.assistant_id,
                     model_name=self.model_name,
                     image_tracker=self.image_tracker,
+                    sandbox_id=self._sandbox_id,
+                    sandbox_type=self._sandbox_type,
                 )
             out = cap.get()
             if out.strip():
@@ -4527,6 +4590,7 @@ class NovaApp(App):
         # panels, tree-sitter Progress). We surface the real stats as native
         # step detail via the pipeline's emit events instead.
         import io as _io
+
         from rich.console import Console as _Console
 
         quiet_console = _Console(
@@ -4952,9 +5016,14 @@ class NovaApp(App):
         if getattr(result, "success", False):
             if self.token_tracker is not None:
                 try:
+                    # reset() clears the stale pre-compaction peak; recompute the
+                    # breakdown from the actual post-compaction messages so ctx%
+                    # is accurate immediately (not just after the next turn).
                     self.token_tracker.reset()
+                    await self._update_context_breakdown()
                 except Exception:  # noqa: BLE001
                     pass
+                self._refresh_status()
             t = Text()
             t.append("✓ Conversation compacted\n", style="green")
             t.append(
@@ -5019,6 +5088,18 @@ class NovaApp(App):
         # Total reset of session/conversation state: new thread+session id
         # (empty checkpointer state), cleared todos / steering / plan mode.
         self.session_state.reset_conversation()
+
+        # Re-own the live sandbox to the new session so resume reconnects to it
+        # and the orphan sweep never reclaims a container the new chat still uses
+        # (the container's Docker label is immutable; the registry is the source
+        # of truth for ownership).
+        if self._sandbox_id:
+            try:
+                from novacode_cli.integrations import sandbox_registry
+
+                sandbox_registry.retie(self._sandbox_id, self.session_state.session_id)
+            except Exception:  # noqa: BLE001
+                pass
 
         # Drop per-conversation UI/tracking state.
         self._reset_streaming()
@@ -5277,6 +5358,29 @@ class NovaApp(App):
         if isinstance(result, str) and result.strip():
             self._log(Text("💭 Dreaming over memories…", style="bold"))
             await self._stream_prompt(result)
+
+    async def _run_evolution(self) -> None:
+        """Run /evolution: show the self-evolution log as a native block."""
+        from novacode_cli.commands.evolution_handler import handle_evolution_command
+
+        lines: list[str] = []
+
+        def _emit(message: str = "") -> None:
+            if message:
+                lines.append(message)
+
+        await handle_evolution_command(emit=_emit)
+
+        if lines:
+            block = Text()
+            for i, line in enumerate(lines):
+                try:
+                    block.append_text(Text.from_markup(line))
+                except Exception:  # noqa: BLE001 - bad markup: show literally
+                    block.append(line)
+                if i < len(lines) - 1:
+                    block.append("\n")
+            self._log(block)
 
     async def _run_reindex(self) -> None:
         """Rebuild the semantic code-search index, with a native status."""
@@ -5905,8 +6009,8 @@ class NovaApp(App):
     async def _run_trello(self, text: str) -> None:
         """Run /trello; start the server inline, then watch for tasks in background."""
         from novacode_cli.commands.trello_handler import (
-            _handle_stop,
             _handle_status,
+            _handle_stop,
         )
         from novacode_cli.commands.trello_server import TrelloServer
 
@@ -5993,8 +6097,8 @@ class NovaApp(App):
     async def _run_chat(self, text: str) -> None:
         """Run /council — start or stop the Council web UI in the browser."""
         from novacode_cli.commands.chat_handler import (
-            is_server_running,
             get_server_url,
+            is_server_running,
             set_agent_refs,
             start_chat_server,
             stop_chat_server,
@@ -6154,6 +6258,8 @@ class NovaApp(App):
         t.append("launch a multi-agent research swarm\n", style="dim")
         t.append("  /dream           ", style="cyan")
         t.append("reflect over memories to surface ideas\n", style="dim")
+        t.append("  /evolution       ", style="cyan")
+        t.append("view skills unlocked / levelled up by complex tasks\n", style="dim")
         t.append("  /reindex         ", style="cyan")
         t.append("rebuild the semantic code-search index\n", style="dim")
         t.append("  /images          ", style="cyan")
@@ -6342,6 +6448,18 @@ class NovaApp(App):
             self._log(Text(e.text, style="red"))
         elif isinstance(e, ev.CompactionNotice):
             self._log(Text("⟳ Context compacted", style="dim"))
+            # Context just shrank. The API-sourced current_context is the turn's
+            # PEAK (pre-compaction) and would otherwise mask the reduction, so
+            # reset() clears has_api_data and lets the recomputed, message-based
+            # breakdown show the real post-compaction size. Then refresh the
+            # status line so ctx% reflects it immediately.
+            if self.token_tracker is not None:
+                try:
+                    self.token_tracker.reset()
+                    await self._update_context_breakdown()
+                except Exception:  # noqa: BLE001
+                    pass
+                self._refresh_status()
         elif isinstance(e, ev.ContextMessage):
             # Review-cycle start/complete are transient status, not log entries:
             # surface them on the live indicator above the input instead of

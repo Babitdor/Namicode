@@ -1,10 +1,16 @@
-"""Tool usage tracker — counter, history, tool stats, and skill effectiveness.
+"""Episodic capture — the experience timeline (tool calls, outcomes, skills).
+
+This module owns Nova's **Episodic memory tier**: the durable, time-ordered
+record of what the agent actually did. ``tool_history`` is the timeline itself;
+``tool_stats`` and ``skill_usage`` are *derived indices* over that experience.
+Consolidation (the review engine and ``/dream``) replays this timeline to write
+the Semantic and Procedural tiers — episodic → cortical consolidation.
 
 Extracted from ``NovaLearningMiddleware`` to make the counter and history
 independently testable.  Owns four durable-store namespaces:
 
 - ``("nova", "tool_counter")`` → simple integer count
-- ``("nova", "tool_history")`` → capped list of recent tool calls
+- ``("nova", "tool_history")`` → the episodic timeline (capped list of episodes)
 - ``("nova", "tool_stats")``    → per-(non-builtin)-tool usage counters (telemetry)
 - ``("nova", "skill_usage")``   → per-SKILL.md effectiveness:
   ``{skill_name: {"invocations","successes","failures","last_used"}}``
@@ -14,6 +20,9 @@ The distinction between the last two matters: ``tool_stats`` tracks *tools*
 actual SKILL.md *skills* the agent invoked by reading their file. The
 refinement loop (``check_skill_effectiveness``) reads ``skill_usage`` — keying
 it off tool names (the historical bug) meant it could never match a real skill.
+
+Read the timeline back with :meth:`ToolUsageTracker.query_episodes` (the seam a
+future embedding-based associative recall plugs into).
 """
 
 from __future__ import annotations
@@ -34,9 +43,7 @@ _MAX_COUNTER = 1_000_000  # Sanity cap to prevent integer overflow
 # A read of ``…/<something>skills…/<skill-name>/SKILL.md`` is how the agent
 # invokes a skill under deepagents' progressive-disclosure model (there is no
 # dedicated "load skill" tool). Capture the skill directory name.
-_SKILL_READ_RE = re.compile(
-    r"/[^/]*skills[^/]*/(?P<name>[^/]+)/SKILL\.md$", re.IGNORECASE
-)
+_SKILL_READ_RE = re.compile(r"/[^/]*skills[^/]*/(?P<name>[^/]+)/SKILL\.md$", re.IGNORECASE)
 # Tool names whose path argument can signal a skill read.
 _READ_TOOLS: frozenset[str] = frozenset({"read_file", "read", "view", "cat"})
 # How many subsequent tool calls a skill invocation "owns" for outcome
@@ -44,23 +51,25 @@ _READ_TOOLS: frozenset[str] = frozenset({"read_file", "read", "view", "cat"})
 _SKILL_ATTRIBUTION_BUDGET = 15
 # How many recent failure excerpts to retain per skill (for grounded refinement).
 _MAX_FAILURE_SAMPLES = 5
-_BUILTIN_TOOLS: frozenset[str] = frozenset({
-    "read_file",
-    "write_file",
-    "edit_file",
-    "grep",
-    "ls",
-    "glob",
-    "execute",
-    "think",
-    "web_search",
-    "duckduckgo_search",
-    "docs_search",
-    "code_search",
-    "find_related_code",
-    "fetch_url",
-    "package_info",
-})
+_BUILTIN_TOOLS: frozenset[str] = frozenset(
+    {
+        "read_file",
+        "write_file",
+        "edit_file",
+        "grep",
+        "ls",
+        "glob",
+        "execute",
+        "think",
+        "web_search",
+        "duckduckgo_search",
+        "docs_search",
+        "code_search",
+        "find_related_code",
+        "fetch_url",
+        "package_info",
+    }
+)
 
 
 class AtomicCounter:
@@ -80,9 +89,7 @@ class AtomicCounter:
 
             new_value = min(current + 1, _MAX_COUNTER)
 
-            await self._store.aput(
-                ("nova", "tool_counter"), "counter", {"count": new_value}
-            )
+            await self._store.aput(("nova", "tool_counter"), "counter", {"count": new_value})
             return new_value
 
     async def get(self) -> int:
@@ -183,21 +190,17 @@ class ToolUsageTracker:
         try:
             existing = await self._store.aget(("nova", "tool_history"), "history")
             history: list[dict[str, Any]] = []
-            if (
-                existing
-                and isinstance(existing.value, dict)
-                and "entries" in existing.value
-            ):
+            if existing and isinstance(existing.value, dict) and "entries" in existing.value:
                 history = existing.value["entries"][-199:]
 
-            history.append({
-                "tool": tool_name,
-                "success": success,
-                "timestamp": time.time(),
-            })
-            await self._store.aput(
-                ("nova", "tool_history"), "history", {"entries": history}
+            history.append(
+                {
+                    "tool": tool_name,
+                    "success": success,
+                    "timestamp": time.time(),
+                }
             )
+            await self._store.aput(("nova", "tool_history"), "history", {"entries": history})
 
             await self._track_tool_stats(tool_name, success)
 
@@ -227,6 +230,41 @@ class ToolUsageTracker:
         except Exception:  # noqa: BLE001
             logger.exception("Failed to get tool history")
         return []
+
+    async def query_episodes(
+        self,
+        *,
+        limit: int = 50,
+        since: float | None = None,
+        tool: str | None = None,
+        success: bool | None = None,
+    ) -> list[dict[str, Any]]:
+        """Query the episodic timeline with simple filters.
+
+        The canonical read API over ``tool_history`` for consolidation (the
+        review engine and ``/dream``) and any future recall tool. Filters are
+        applied newest-last; ``limit`` caps the returned (post-filter) episodes.
+
+        Args:
+            limit: Maximum number of episodes to return (most recent kept).
+            since: Only include episodes with ``timestamp >= since`` (unix secs).
+            tool: Only include episodes for this tool name.
+            success: Only include episodes whose outcome matches (True/False).
+
+        Returns:
+            A list of episode dicts (``{"tool", "success", "timestamp"}``),
+            oldest-first, at most ``limit`` long. Empty on any error.
+        """
+        # Pull the full retained window (history is capped at ~200 entries), then
+        # filter in memory — cheaper than a richer store query for this size.
+        episodes = await self.get_tool_history(limit=10_000)
+        if since is not None:
+            episodes = [e for e in episodes if e.get("timestamp", 0.0) >= since]
+        if tool is not None:
+            episodes = [e for e in episodes if e.get("tool") == tool]
+        if success is not None:
+            episodes = [e for e in episodes if bool(e.get("success", True)) is success]
+        return episodes[-limit:]
 
     # -- Tool-level telemetry -----------------------------------------------
 

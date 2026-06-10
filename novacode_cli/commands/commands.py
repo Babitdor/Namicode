@@ -5,9 +5,9 @@ slash commands via ``CommandRegistry`` to their respective handlers.
 """
 
 import argparse
-import re
 import asyncio
 import io
+import re
 import subprocess
 import sys
 import uuid
@@ -20,11 +20,11 @@ from novacode_cli.commands import (
     CommandRegistry,
     build_command_registry,
 )
+from novacode_cli.commands.ralph_handler import _stop_and_save_all_ralph_tasks
+from novacode_cli.commands.skill_invoke import _try_skill_invocation
 from novacode_cli.config.config import COLORS, NOVA_CODE_ASCII, console
 from novacode_cli.states.Session import RalphTaskStatus
 from novacode_cli.ui.ui_elements import TokenTracker, show_interactive_help
-from novacode_cli.commands.skill_invoke import _try_skill_invocation
-from novacode_cli.commands.ralph_handler import _stop_and_save_all_ralph_tasks
 
 # Module-level registry, lazily populated on first use
 _registry = None
@@ -67,6 +67,8 @@ async def handle_command(
     session_manager=None,
     model_name: str | None = None,
     image_tracker=None,
+    sandbox_id: str | None = None,
+    sandbox_type: str | None = None,
 ) -> str | bool:
     """Handle slash commands. Returns 'exit' to exit, True if handled, False to pass to agent."""
     # Parse command and optional arguments
@@ -209,6 +211,16 @@ async def handle_command(
         # cleared todos / steering / plan mode. Long-term memory, the Nova
         # learning store, and the agent itself are preserved.
         session_state.reset_conversation()
+        # Re-own the live sandbox to the new session (registry is the source of
+        # truth for ownership; the Docker label is immutable) so resume reconnects
+        # and the orphan sweep won't reclaim a container the new chat still uses.
+        if sandbox_id:
+            try:
+                from novacode_cli.integrations import sandbox_registry
+
+                sandbox_registry.retie(sandbox_id, session_state.session_id)
+            except Exception:  # noqa: BLE001
+                pass
         token_tracker.reset()
         console.clear()
         console.print(NOVA_CODE_ASCII, style=f"bold {COLORS['primary']}")
@@ -271,12 +283,12 @@ async def handle_command(
 
     if cmd == "reindex":
         try:
+            from novacode_cli.config.config import settings as _settings
             from novacode_cli.tools.code_search_tools import (
-                _reset_index,
                 _get_index,
                 _is_semble_available,
+                _reset_index,
             )
-            from novacode_cli.config.config import settings as _settings
             if not _is_semble_available():
                 console.print()
                 console.print("[yellow]Code search is not available.[/yellow]")
@@ -322,6 +334,8 @@ async def handle_command(
         session_manager=session_manager,
         model_name=model_name,
         image_tracker=image_tracker,
+        sandbox_id=sandbox_id,
+        sandbox_type=sandbox_type,
     )
 
     handler = _get_registry().get(cmd)
@@ -591,8 +605,10 @@ async def _handle_remote_command(cmd_args: str | None, session_state, console) -
     """
     from novacode_cli.remote.bridge import RemoteBridgeManager, RemotePlatform
     from novacode_cli.remote.config import (
-        async_load_remote_config, async_save_remote_config,
-        async_save_discord_config, async_save_telegram_config,
+        async_load_remote_config,
+        async_save_discord_config,
+        async_save_remote_config,
+        async_save_telegram_config,
     )
 
     # Get or create the bridge manager on the session state

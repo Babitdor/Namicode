@@ -86,9 +86,7 @@ class SkillManager:
         if not self._enabled or not self._skills_dir:
             return
         try:
-            done = await self._store.aget(
-                ("nova", "meta"), "legacy_skills_cleaned_v1"
-            )
+            done = await self._store.aget(("nova", "meta"), "legacy_skills_cleaned_v1")
             if done is not None:
                 return
             from novacode_cli.hermes.skill_discovery import (
@@ -117,7 +115,13 @@ class SkillManager:
     # -- Skill refinement ---------------------------------------------------
 
     async def maybe_refine_skills(self) -> None:
-        """Refine an existing skill flagged as ineffective (one per cycle)."""
+        """Refine an existing skill flagged as ineffective (one per cycle).
+
+        Handles both issue kinds from ``check_skill_effectiveness``:
+        ``high_failure`` (revise steps, grounded in captured failure samples) and
+        ``low_usage`` (sharpen the trigger/description). High-failure is
+        prioritized when both are present.
+        """
         if not self._enabled or not self._skills_dir:
             return
         try:
@@ -127,21 +131,25 @@ class SkillManager:
             )
 
             candidates = await check_skill_effectiveness(self._store)
-            for skill_name, issue in candidates[:1]:  # one per cycle
-                if issue != "high_failure":
+            # Prioritize high_failure over low_usage; act on one per cycle.
+            candidates.sort(key=lambda c: 0 if c[1] == "high_failure" else 1)
+            for skill_name, issue in candidates:
+                if issue not in ("high_failure", "low_usage"):
                     continue
                 if not (self._skills_dir / skill_name / "SKILL.md").exists():
                     continue
 
-                # Pull the captured failure samples so refinement is grounded
-                # in what actually went wrong, not a generic "improve this".
+                # For high_failure, pull captured failure samples so refinement
+                # is grounded in what actually went wrong. low_usage is about the
+                # trigger, so no samples are needed.
                 failure_samples: list = []
-                try:
-                    entry = await self._store.aget(("nova", "skill_usage"), skill_name)
-                    if entry and isinstance(entry.value, dict):
-                        failure_samples = list(entry.value.get("failure_samples") or [])
-                except Exception:  # noqa: BLE001
-                    failure_samples = []
+                if issue == "high_failure":
+                    try:
+                        entry = await self._store.aget(("nova", "skill_usage"), skill_name)
+                        if entry and isinstance(entry.value, dict):
+                            failure_samples = list(entry.value.get("failure_samples") or [])
+                    except Exception:  # noqa: BLE001
+                        failure_samples = []
 
                 from novacode_cli.events import nova_event_log
 
@@ -161,6 +169,7 @@ class SkillManager:
                         failure_samples=failure_samples,
                     )
                 )
+                break  # one refinement per cycle
         except Exception:  # noqa: BLE001
             logger.exception("Failed to check skill effectiveness / refine")
 

@@ -86,9 +86,7 @@ class TestCounter:
         """Counter should be persisted via store.aput."""
         mock_store.aget.return_value = None
         await middleware._increment_counter()
-        mock_store.aput.assert_awaited_with(
-            ("nova", "tool_counter"), "counter", {"count": 1}
-        )
+        mock_store.aput.assert_awaited_with(("nova", "tool_counter"), "counter", {"count": 1})
 
     async def test_cap_at_max(self, middleware, mock_store):
         """Counter should be capped at _MAX_COUNTER."""
@@ -139,10 +137,7 @@ class TestToolUsageRecording:
         await middleware._record_tool_usage("edit_file", True)
         # Should have called aput with the history entry
         calls = mock_store.aput.await_args_list
-        history_calls = [
-            c for c in calls
-            if c[0][0] == ("nova", "tool_history")
-        ]
+        history_calls = [c for c in calls if c[0][0] == ("nova", "tool_history")]
         assert len(history_calls) >= 1
 
     async def test_record_tool_usage_failure(self, middleware, mock_store):
@@ -150,10 +145,7 @@ class TestToolUsageRecording:
         mock_store.aget.return_value = None
         await middleware._record_tool_usage("execute", False)
         calls = mock_store.aput.await_args_list
-        history_calls = [
-            c for c in calls
-            if c[0][0] == ("nova", "tool_history")
-        ]
+        history_calls = [c for c in calls if c[0][0] == ("nova", "tool_history")]
         assert len(history_calls) >= 1
 
 
@@ -162,9 +154,7 @@ class TestMiddlewareHooks:
 
     async def test_enabled_false_is_noop(self, middleware, mock_store):
         """When enabled=False, hooks should pass through without tracking."""
-        disabled = NovaLearningMiddleware(
-            store=mock_store, enabled=False
-        )
+        disabled = NovaLearningMiddleware(store=mock_store, enabled=False)
         call_fn = AsyncMock(return_value="result")
         # (request, handler) order
         result = await disabled.awrap_tool_call(MagicMock(tool_name="test"), call_fn)
@@ -183,8 +173,7 @@ class TestMiddlewareHooks:
 
         # Counter should have been persisted
         counter_calls = [
-            c for c in mock_store.aput.await_args_list
-            if c[0][0] == ("nova", "tool_counter")
+            c for c in mock_store.aput.await_args_list if c[0][0] == ("nova", "tool_counter")
         ]
         assert len(counter_calls) >= 1
 
@@ -217,7 +206,7 @@ class TestOutOfBandReview:
         handler = AsyncMock(return_value=real_response)
 
         review_ai = MagicMock()
-        review_ai.content = "<session_memory>- learned X</session_memory>"
+        review_ai.content = '<lesson topic="testing">- learned X</lesson>'
         request = MagicMock()
         request.messages = []
         request.model = MagicMock()

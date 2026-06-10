@@ -1,7 +1,7 @@
 [project]
 name = "nova_hello_mw"
 version = "0.1.0"
-description = "A demo middleware that prints "Hello, World!" before every model call."
+description = "A demo middleware that prints 'Hello, World!' before every model call."
 requires-python = ">=3.11"
 dependencies = [
     "langchain-core>=1.0",

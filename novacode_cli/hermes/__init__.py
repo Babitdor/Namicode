@@ -5,18 +5,18 @@ self-improvement. Follows the same AgentMiddleware pattern as
 AgentMemoryMiddleware and SteeringMiddleware.
 """
 
+from novacode_cli.hermes.evolution import EvolutionEngine, score_task_complexity
 from novacode_cli.hermes.memory_tiers import (
     compact_memory_file,
     ensure_memory_tiers,
-    update_session_memory,
-    update_user_memory,
+    migrate_legacy_tiers,
+    record_lesson,
+    update_user_model,
 )
 from novacode_cli.hermes.middleware import NovaLearningMiddleware
 from novacode_cli.hermes.review import ReviewRunner
 from novacode_cli.hermes.skill_discovery import (
-    analyze_tool_history,
     check_skill_effectiveness,
-    create_skill_from_pattern,
     refine_skill,
 )
 from novacode_cli.hermes.skill_manager import SkillManager
@@ -27,12 +27,13 @@ __all__ = [
     "ReviewRunner",
     "SkillManager",
     "ToolUsageTracker",
+    "EvolutionEngine",
+    "score_task_complexity",
     "ensure_memory_tiers",
     "compact_memory_file",
-    "update_user_memory",
-    "update_session_memory",
-    "analyze_tool_history",
+    "update_user_model",
+    "record_lesson",
+    "migrate_legacy_tiers",
     "check_skill_effectiveness",
-    "create_skill_from_pattern",
     "refine_skill",
 ]

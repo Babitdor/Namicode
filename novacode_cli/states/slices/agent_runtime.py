@@ -23,6 +23,7 @@ class AgentRuntimeState:
         self._assistant_id: str | None = None  # Agent ID
         self._model: Any = None          # Current model instance
         self._sandbox_type: str | None = None  # Sandbox type
+        self._sandbox_id: str | None = None   # Sandbox/container ID
         self.token_tracker: Any = None   # TokenTracker for toolbar context display
         self.plan_agent: Any = None      # Plan agent for planning phase
         self.plan_backend: Any = None    # Plan backend
@@ -48,6 +49,7 @@ class AgentRuntimeState:
         assistant_id: str,
         model: Any,
         sandbox_type: str | None = None,
+        sandbox_id: str | None = None,
     ) -> None:
         """Set the agent context for dynamic model switching."""
         self._agent = agent
@@ -58,6 +60,7 @@ class AgentRuntimeState:
         self._assistant_id = assistant_id
         self._model = model
         self._sandbox_type = sandbox_type
+        self._sandbox_id = sandbox_id
 
     async def switch_model(
         self,

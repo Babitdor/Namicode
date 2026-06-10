@@ -28,9 +28,8 @@ async def handle_dream_command(
     """Handle the /dream command - run memory consolidation.
 
     Performs a multi-phase memory consolidation pass over the agent's *real*
-    memory directory (``~/.nova/agents/{assistant_id}/``): agent.md (preferences),
-    USER.md (user model), MEMORY.md (cross-session memory), and any topic files
-    under ``memories/``.
+    memory directory (``~/.nova/agents/{assistant_id}/``): agent.md (user model +
+    preferences) and the topic files under ``memories/`` (indexed by INDEX.md).
 
     Returns the consolidation prompt (a ``str``) for the caller to stream to the
     agent when memory exists, or ``True`` (handled, nothing to do) when it does
@@ -57,11 +56,10 @@ async def handle_dream_command(
         except Exception:  # noqa: BLE001 - bad agent id, fall back to main
             agent_dir = settings.get_agent_dir(MAIN_AGENT_ID)
 
-    # Nova's memory tiers (all in agent_dir) + optional topic files under memories/.
+    # Nova's semantic surface: agent.md (user model + prefs) + topic files
+    # under memories/ (indexed by INDEX.md).
     tier_files = {
-        "agent.md": "preferences & general notes",
-        "USER.md": "user model (who the user is, how they work)",
-        "MEMORY.md": "cross-session memory (decisions, facts, patterns)",
+        "agent.md": "user model, preferences & general notes",
     }
     memories_dir = agent_dir / "memories"
 
@@ -110,9 +108,7 @@ async def handle_dream_command(
     for name, role in present:
         emit(f"  [cyan]{name}[/cyan] [dim]— {role}[/dim]")
     if topic_files:
-        names = ", ".join(f.name for f in topic_files[:6]) + (
-            "…" if len(topic_files) > 6 else ""
-        )
+        names = ", ".join(f.name for f in topic_files[:6]) + ("…" if len(topic_files) > 6 else "")
         emit(f"  [cyan]memories/[/cyan] [dim]— {len(topic_files)} topic file(s): {names}[/dim]")
     emit("")
 
@@ -156,6 +152,7 @@ def get_dream_prompt(
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
+
 
 def register_commands(registry) -> None:
     from novacode_cli.commands import CommandContext

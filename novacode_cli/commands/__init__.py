@@ -8,7 +8,7 @@ through a single dispatch in ``commands.py``.  Each handler module exports a
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 if TYPE_CHECKING:
     from novacode_cli.states.Session import SessionState
@@ -36,6 +36,8 @@ class CommandContext:
     session_manager: Any = None
     model_name: str | None = None
     image_tracker: Any = None
+    sandbox_id: str | None = None
+    sandbox_type: str | None = None
 
 
 CommandHandler = Callable[[CommandContext], Awaitable[str | bool]]
@@ -122,26 +124,27 @@ def build_command_registry() -> CommandRegistry:
 
     # Module-based handlers ##################################################
     # Import each handler module's register_commands and call it.
+    from novacode_cli.commands.agents_commands import register_commands as _r8
+    from novacode_cli.commands.browser_use_handler import register_commands as _r14
+    from novacode_cli.commands.chat_handler import register_commands as _r19
+    from novacode_cli.commands.dream_handler import register_commands as _r15
+    from novacode_cli.commands.evolution_handler import register_commands as _r21
+    from novacode_cli.commands.file_commands import register_commands as _r9
+    from novacode_cli.commands.hooks_handler import register_commands as _r4
     from novacode_cli.commands.init_handler import register_commands as _r1
+    from novacode_cli.commands.log_commands import register_commands as _r18
     from novacode_cli.commands.mcp_handler import register_commands as _r2
     from novacode_cli.commands.model_handler import register_commands as _r3
-    from novacode_cli.commands.hooks_handler import register_commands as _r4
-    from novacode_cli.commands.session_commands import register_commands as _r5
-    from novacode_cli.commands.server_commands import register_commands as _r6
-    from novacode_cli.commands.skills_commands import register_commands as _r7
-    from novacode_cli.commands.agents_commands import register_commands as _r8
-    from novacode_cli.commands.file_commands import register_commands as _r9
     from novacode_cli.commands.notifications_handler import register_commands as _r10
     from novacode_cli.commands.plan_handler import register_commands as _r11
-    from novacode_cli.commands.trace_handler import register_commands as _r12
-    from novacode_cli.commands.ralph_handler import register_commands as _r13
-    from novacode_cli.commands.browser_use_handler import register_commands as _r14
-    from novacode_cli.commands.dream_handler import register_commands as _r15
-    from novacode_cli.commands.research_handler import register_commands as _r16
-    from novacode_cli.commands.trello_handler import register_commands as _r17
-    from novacode_cli.commands.log_commands import register_commands as _r18
-    from novacode_cli.commands.chat_handler import register_commands as _r19
     from novacode_cli.commands.plugins_handler import register_commands as _r20
+    from novacode_cli.commands.ralph_handler import register_commands as _r13
+    from novacode_cli.commands.research_handler import register_commands as _r16
+    from novacode_cli.commands.server_commands import register_commands as _r6
+    from novacode_cli.commands.session_commands import register_commands as _r5
+    from novacode_cli.commands.skills_commands import register_commands as _r7
+    from novacode_cli.commands.trace_handler import register_commands as _r12
+    from novacode_cli.commands.trello_handler import register_commands as _r17
 
     for _r in (
         _r1,
@@ -164,6 +167,7 @@ def build_command_registry() -> CommandRegistry:
         _r18,
         _r19,
         _r20,
+        _r21,
     ):
         _r(registry)
 

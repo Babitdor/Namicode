@@ -134,6 +134,8 @@ async def handle_save_command(
     assistant_id: str,
     session_manager=None,
     model_name: str | None = None,
+    sandbox_id: str | None = None,
+    sandbox_type: str | None = None,
 ) -> bool:
     """Handle the /save command - manually save current session.
 
@@ -143,6 +145,8 @@ async def handle_save_command(
         assistant_id: Agent identifier
         session_manager: Session manager instance
         model_name: Name of the model being used
+        sandbox_id: Sandbox/container ID for session reconnect
+        sandbox_type: Sandbox provider ("docker", "modal", ...) or None
 
     Returns:
         True (command always handled)
@@ -177,6 +181,8 @@ async def handle_save_command(
             todos=session_state.todos,
             model_name=model_name,
             project_root=project_root,
+            sandbox_id=sandbox_id,
+            sandbox_type=sandbox_type,
         )
 
         console.print(
@@ -285,6 +291,7 @@ def register_commands(registry) -> None:
         return await handle_save_command(
             ctx.agent, ctx.session_state, ctx.assistant_id,
             ctx.session_manager, ctx.model_name,
+            ctx.sandbox_id, ctx.sandbox_type,
         )
 
     async def _handle_compact(ctx: CommandContext) -> bool:

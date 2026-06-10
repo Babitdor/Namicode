@@ -20,11 +20,11 @@ from langchain.agents.middleware.types import (
 
 # from langgraph.runtime import Runtime
 from novacode_cli.config.config import Settings
+from novacode_cli.memory.limits import MAX_MEMORY_CHARS
 from novacode_cli.prompts import render_template
 
-# Maximum characters to inject per memory source (~3,000 tokens at 4 chars/token).
-# Prevents unbounded prompt growth from large CLAUDE.md / NOVA.md files.
-MAX_MEMORY_CHARS = 12_000
+# Injection-time truncation keeps the file *head* (newest, given memory files are
+# written newest-first — see novacode_cli/memory/limits.py for the invariant).
 _MEMORY_TRUNCATION_NOTICE = "\n\n... [memory truncated — use read_file for full content]"
 
 
@@ -81,7 +81,7 @@ class AgentMemoryMiddleware(AgentMiddleware):
     at the start of the conversation and stored in state.
 
     Supports loading from multiple project memory files and combining them.
-    
+
     When a sandbox backend is provided, memory files are read from the sandbox
     instead of the local filesystem.
     """
@@ -313,7 +313,7 @@ class AgentMemoryMiddleware(AgentMiddleware):
 
         Hot-reload: Automatically reloads memory files when they change on disk.
         Tracks modification times and reloads when files are updated.
-        
+
         When a sandbox backend is provided:
         - User memory files (~/.nova/{agent}/agent.md) are ALWAYS read from local
           filesystem since they're not synced to the sandbox
@@ -332,7 +332,9 @@ class AgentMemoryMiddleware(AgentMiddleware):
         # Gather all memory file paths to check for changes
         user_path = self.settings.get_user_agent_md_path(self.assistant_id)
         index_path = self.agent_dir / "memories" / "INDEX.md"
-        project_paths = self.settings.get_project_agent_md_paths() if not self.skip_project_memory else []
+        project_paths = (
+            self.settings.get_project_agent_md_paths() if not self.skip_project_memory else []
+        )
         all_paths = [user_path, index_path] + list(project_paths)
 
         # Check if any files have changed (hot-reload) - only for local filesystem
@@ -398,7 +400,7 @@ class AgentMemoryMiddleware(AgentMiddleware):
             Complete system prompt with memory sections injected.
         """
         import time
-        
+
         # Extract memory from state
         state = cast("AgentMemoryState", request.state)
         user_memory = state.get("user_memory")
@@ -418,7 +420,7 @@ class AgentMemoryMiddleware(AgentMiddleware):
             and (self._cached_project_memory or "") == memory_content[1]
             and (self._cached_memory_index or "") == memory_content[2]
         )
-        
+
         if can_use_cache:
             # Sliding window: reset timer on access to keep cache alive during active use
             self._memory_section_cache_time = current_time
@@ -443,7 +445,7 @@ class AgentMemoryMiddleware(AgentMiddleware):
                     project_memory if project_memory else "(No project CLAUDE.md or NOVA.md)"
                 ),
             )
-            
+
             # Add longterm memory template
             memory_section += "\n\n" + render_template(
                 "longterm_memory.jinja",
