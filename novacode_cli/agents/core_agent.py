@@ -512,6 +512,13 @@ def _harden_subagent_specs(specs: list) -> list:
     """
     from langchain.agents.middleware import ModelRetryMiddleware
 
+    # Tools that raise a HITL ``interrupt()`` directly in their body (not via
+    # ``interrupt_on``). Clearing ``interrupt_on`` below doesn't neutralise these,
+    # so they must be removed from a subagent's tool list outright — otherwise a
+    # subagent invoking one raises an unresolvable ``GraphInterrupt`` that crashes
+    # the turn. The main agent keeps them; it's the sole HITL boundary.
+    _interrupting_tools = {"ask_user_question", "enter_plan_mode", "exit_plan_mode"}
+
     out: list = []
     for spec in specs:
         if not isinstance(spec, dict) or "runnable" in spec or "url" in spec:
@@ -520,6 +527,12 @@ def _harden_subagent_specs(specs: list) -> list:
         existing = list(spec.get("middleware") or [])
         new_spec = dict(spec)  # copy — never mutate the (possibly cached) original
         new_spec["interrupt_on"] = {}
+        spec_tools = new_spec.get("tools")
+        if spec_tools:
+            # New list (shallow copy shares the ref with the main tool list).
+            new_spec["tools"] = [
+                t for t in spec_tools if getattr(t, "name", None) not in _interrupting_tools
+            ]
         has_retry = any(type(m).__name__ == "ModelRetryMiddleware" for m in existing)
         new_spec["middleware"] = (
             existing

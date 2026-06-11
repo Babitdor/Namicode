@@ -107,9 +107,7 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
     if seen_message_ids is None:
         seen_message_ids = set()
 
-    file_op_tracker = get_session_file_op_tracker(
-        assistant_id=assistant_id, backend=backend
-    )
+    file_op_tracker = get_session_file_op_tracker(assistant_id=assistant_id, backend=backend)
     subagent_tracker = SubagentTracker()
 
     displayed_tool_ids: set[str] = set()
@@ -133,9 +131,7 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
             while nova_event_log:
                 etype, icon, color, msg = nova_event_log.pop(0)
                 events.append(
-                    ev.ContextMessage(
-                        message=msg, event_type=etype, icon=icon, color=color
-                    )
+                    ev.ContextMessage(message=msg, event_type=etype, icon=icon, color=color)
                 )
             return events
         except Exception:
@@ -286,12 +282,8 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
                                 continue
                             # generic tool HITL interrupt
                             try:
-                                validated = _HITL_REQUEST_ADAPTER.validate_python(
-                                    interrupt_value
-                                )
-                                pending_interrupts.append(
-                                    (interrupt_obj.id, "tool", validated)
-                                )
+                                validated = _HITL_REQUEST_ADAPTER.validate_python(interrupt_value)
+                                pending_interrupts.append((interrupt_obj.id, "tool", validated))
                                 interrupt_occurred = True
                             except ValidationError as e:
                                 yield ev.Error(f"Invalid HITL request data: {e}")
@@ -310,9 +302,7 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
                                     _msgs = []
                             for _msg in _msgs:
                                 if (
-                                    getattr(_msg, "additional_kwargs", {}).get(
-                                        "lc_source"
-                                    )
+                                    getattr(_msg, "additional_kwargs", {}).get("lc_source")
                                     == "summarization"
                                 ):
                                     _post_summarization = True
@@ -321,13 +311,23 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
                 elif current_stream_mode == "messages":
                     is_main_agent = _namespace == ()
                     is_subagent = _namespace != ()
-                    subagent_type_for_ns = (
-                        _namespace[0] if is_subagent and _namespace else None
-                    )
+                    subagent_type_for_ns = _namespace[0] if is_subagent and _namespace else None
 
                     if not isinstance(data, tuple) or len(data) != 2:
                         continue
                     message, _metadata = data
+
+                    # Hermes runs its review/skill-refine model calls out-of-band
+                    # as fire-and-forget asyncio tasks spawned from inside the
+                    # agent's model call. Those tasks inherit LangGraph's message
+                    # streaming callback via contextvars, so their full output
+                    # (e.g. a regenerated SKILL.md) would otherwise surface here as
+                    # a "Nova" assistant message. They're tagged nova_oob — drop
+                    # them; their user-facing notices come via nova_event_log.
+                    if isinstance(_metadata, dict) and (
+                        _metadata.get("nova_oob") or "hermes" in (_metadata.get("tags") or [])
+                    ):
+                        continue
 
                     _ckpt_ns = (
                         _metadata.get("langgraph_checkpoint_ns", "")
@@ -386,17 +386,11 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
                         if usage:
                             cache_read = usage.get("cache_read_input_tokens", 0)
                             cache_create = usage.get("cache_creation_input_tokens", 0)
-                            actual = (
-                                usage.get("input_tokens", 0) + cache_read + cache_create
-                            )
+                            actual = usage.get("input_tokens", 0) + cache_read + cache_create
                             out = usage.get("output_tokens", 0)
                             if actual or out:
-                                captured.input_tokens = max(
-                                    captured.input_tokens, actual
-                                )
-                                captured.output_tokens = max(
-                                    captured.output_tokens, out
-                                )
+                                captured.input_tokens = max(captured.input_tokens, actual)
+                                captured.output_tokens = max(captured.output_tokens, out)
                                 captured.cache_read_tokens = max(
                                     captured.cache_read_tokens, cache_read
                                 )
@@ -441,6 +435,21 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
                                 subagent_tracker=subagent_tracker,
                                 flush_text=_flush_events,
                             ):
+                                # The agent can self-engage plan mode: when it calls
+                                # enter_plan_mode, flip the session flag so the
+                                # pre-HITL gate (check_plan_mode_blocked) starts
+                                # blocking writes/shell for the rest of the turn —
+                                # making the agent read-only until exit_plan_mode is
+                                # approved. exit_plan_mode's approval clears it.
+                                if (
+                                    isinstance(_e, ev.ToolCall)
+                                    and _e.name == "enter_plan_mode"
+                                    and is_main_agent
+                                ):
+                                    try:
+                                        session_state.plan_mode_enabled = True
+                                    except Exception:  # noqa: BLE001
+                                        pass
                                 yield _e
 
                     if getattr(message, "chunk_position", None) == "last":
@@ -459,17 +468,50 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
             if interrupt_occurred:
                 any_rejected = False
                 plan_approved = False
+                # When the turn auto-approves (e.g. a /remote turn sets
+                # auto_approve=True), no permission is actually being asked of the
+                # user — the interrupt is resolved automatically — so a badge /
+                # desktop notification would just be noise. Skip it there; local,
+                # interactive turns (auto_approve off) still notify.
+                _auto_approve = bool(getattr(session_state, "auto_approve", False))
+                from novacode_cli.ui.hitl_approval import evaluate_tool_actions
+
                 for interrupt_id, kind, payload in pending_interrupts:
+                    # Pre-HITL policy gate: auto-resolve the actions that don't need
+                    # a prompt (policy-allow → approve, policy-deny → reject, plus
+                    # plan-mode/auto_approve) so the safe majority never interrupts
+                    # and hard-denies block without asking. Only a genuine "ask"
+                    # falls through to surface an InterruptRequest + notification.
+                    _policy_resolutions: list[dict | None] | None = None
+                    if kind == "tool":
+                        try:
+                            _policy_resolutions = evaluate_tool_actions(
+                                payload,
+                                session_state,
+                                plan_mode_enabled=getattr(
+                                    session_state, "plan_mode_enabled", False
+                                ),
+                            )
+                        except Exception:  # noqa: BLE001 — never break the turn
+                            _policy_resolutions = None
+                        if _policy_resolutions is not None and all(
+                            r is not None for r in _policy_resolutions
+                        ):
+                            _decided = [r for r in _policy_resolutions if r is not None]
+                            hitl_response[interrupt_id] = {"decisions": _decided}
+                            if any(d.get("type") == "reject" for d in _decided):
+                                any_rejected = True
+                            continue
+
                     fut: asyncio.Future = loop.create_future()
 
                     # Raise the notification BEFORE surfacing the interrupt, so the
                     # badge/notification hook fire the moment approval is needed —
                     # not after the modal is answered (the old order ran this only
-                    # once the generator resumed past the yield). This is what makes
-                    # "permission needed" actually alert the user (and /notifications
-                    # + remote bridges see the pending approval).
+                    # once the generator resumed past the yield). Skipped entirely
+                    # when auto-approving (see above).
                     _notif_id: str | None = None
-                    if kind in ("tool", "plan", "question"):
+                    if kind in ("tool", "plan", "question") and not _auto_approve:
                         _notif_msg = (
                             "Plan requires approval"
                             if kind == "plan"
@@ -486,9 +528,7 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
                                 message=str(payload)[:200],
                                 source="system",
                                 action_id=interrupt_id,
-                                action_type=(
-                                    "approve" if kind in ("tool", "plan") else "select"
-                                ),
+                                action_type=("approve" if kind in ("tool", "plan") else "select"),
                             )
                             session_state.register_pending_approval(interrupt_id, fut)
                         except Exception:  # noqa: BLE001 — never break the turn on a notification
@@ -505,10 +545,25 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
                         except Exception:  # noqa: BLE001
                             pass
                     if kind == "tool":
-                        hitl_response[interrupt_id] = {
-                            "decisions": response.get("decisions", [])
-                        }
-                        if response.get("any_rejected"):
+                        _user_decisions = list(response.get("decisions", []))
+                        # Overlay policy verdicts onto the user's batch decision:
+                        # policy-decided slots (allow/deny) win, only the "ask"
+                        # slots take the user's choice — so a hard deny in a mixed
+                        # batch is honored even if the user approved the prompt.
+                        if _policy_resolutions is not None:
+                            _final: list[dict] = []
+                            for _i, _r in enumerate(_policy_resolutions):
+                                if _r is not None:
+                                    _final.append(_r)
+                                elif _i < len(_user_decisions):
+                                    _final.append(_user_decisions[_i])
+                                else:
+                                    _final.append({"type": "reject", "message": "No decision"})
+                            _user_decisions = _final
+                        hitl_response[interrupt_id] = {"decisions": _user_decisions}
+                        if response.get("any_rejected") or any(
+                            d.get("type") == "reject" for d in _user_decisions
+                        ):
                             any_rejected = True
                     elif kind == "question":
                         hitl_response[interrupt_id] = response
@@ -526,9 +581,7 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
                             plan_approved = True
 
                 if any_rejected:
-                    yield ev.ErrorOutput(
-                        "Command rejected. Tell the agent what to do differently."
-                    )
+                    yield ev.ErrorOutput("Command rejected. Tell the agent what to do differently.")
 
                 # Don't resume the graph when the plan was approved — exit the
                 # streaming loop so the caller can execute with the main agent.
@@ -657,19 +710,13 @@ async def _handle_tool_message(
             subagent_tracker.record_error(namespace, tool_name)
 
     # Completed subagent (task tool)
-    if (
-        tool_name == "task"
-        and tool_call_id
-        and tool_call_id in subagent_tracker.active_subagents
-    ):
+    if tool_name == "task" and tool_call_id and tool_call_id in subagent_tracker.active_subagents:
         info = subagent_tracker.complete_subagent(tool_call_id)
         if info:
             subagent_type, _, start_time = info
         else:
             subagent_type, start_time = "unknown", time.time()
-        activity = subagent_tracker.claim_namespace_for_tool_call(
-            namespace, tool_call_id
-        )
+        activity = subagent_tracker.claim_namespace_for_tool_call(namespace, tool_call_id)
         yield ev.SubagentActivity(
             kind="completed",
             subagent_type=subagent_type,
@@ -712,16 +759,12 @@ async def _handle_tool_message(
                 start = subagent_tracker.tool_call_start_times.pop(tool_call_id, None)
                 if start is not None:
                     elapsed = time.time() - start
-                preview = format_tool_result_preview(
-                    tool_name, tool_content, tool_status, elapsed
-                )
+                preview = format_tool_result_preview(tool_name, tool_content, tool_status, elapsed)
                 if preview:
                     yield ev.ToolResult(
                         preview=preview,
                         is_error=preview.startswith("✗"),
-                        full_output=(
-                            tool_content if isinstance(tool_content, str) else ""
-                        ),
+                        full_output=(tool_content if isinstance(tool_content, str) else ""),
                         call_id=tool_call_id,
                     )
 

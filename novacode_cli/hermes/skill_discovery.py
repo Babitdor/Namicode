@@ -337,6 +337,11 @@ async def refine_skill(
                 "run_name": "nova_skill_refine",
                 "tags": ["nova", "hermes", "skill-refine"],
                 "metadata": {
+                    # Out-of-band marker: keeps the regenerated SKILL.md from
+                    # leaking into the chat as a "Nova" assistant message (this
+                    # task inherits the graph's stream callback via contextvars).
+                    # See agent_loop's nova_oob filter.
+                    "nova_oob": True,
                     "skill": skill_name,
                     "issue": issue,
                     "n_failure_samples": len(failure_samples or []),

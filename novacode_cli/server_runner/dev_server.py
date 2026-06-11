@@ -459,6 +459,51 @@ def list_servers(include_external: bool = False) -> list[ServerInfo]:
 # Tool definitions for agent use
 
 
+async def start_dev_server_tool(command: str, name: str = "dev-server", **kwargs: Any) -> dict[str, Any]:
+    """Start a development server as a managed background process.
+
+    Args:
+        command: Command to start the server
+        name: Name for the server process
+        **kwargs: Additional arguments for start_dev_server
+
+    Returns:
+        Dictionary with server info or error
+    """
+    try:
+        server_info = await start_dev_server(command, name=name, **kwargs)
+        return {
+            "success": True,
+            "server": {
+                "pid": server_info.pid,
+                "name": server_info.name,
+                "url": server_info.url,
+                "port": server_info.port,
+                "status": server_info.status.value,
+                "command": server_info.command,
+            },
+        }
+    except (ValueError, RuntimeError) as e:
+        return {"success": False, "error": str(e)}
+
+
+async def stop_server_tool(pid: int | None = None, name: str | None = None) -> dict[str, Any]:
+    """Stop a running development server.
+
+    Args:
+        pid: Process ID of server to stop
+        name: Name of server to stop (alternative to pid)
+
+    Returns:
+        Dictionary with result
+    """
+    try:
+        stopped = await stop_server(pid=pid, name=name)
+        return {"success": stopped, "message": f"Server {'stopped' if stopped else 'not found'}"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 def list_servers_tool() -> dict[str, Any]:
     """List all running development servers.
 

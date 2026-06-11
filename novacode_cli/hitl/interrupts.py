@@ -130,9 +130,7 @@ INTERRUPT_SPECS: dict[str, InterruptSpec] = {
             ("working_dir", FieldSpec("Working Directory")),
             (
                 "auto_open_browser",
-                FieldSpec(
-                    "Auto-open browser", transform=lambda v: "Yes" if v else "No"
-                ),
+                FieldSpec("Auto-open browser", transform=lambda v: "Yes" if v else "No"),
             ),
         ],
         warnings=["Will start a background process (killed on CLI exit)"],
@@ -331,11 +329,7 @@ def _format_interrupt_description(
             value = field.default_display
         elif field.transform:
             value = field.transform(value)
-        elif (
-            field.truncate is not None
-            and isinstance(value, str)
-            and len(value) > field.truncate
-        ):
+        elif field.truncate is not None and isinstance(value, str) and len(value) > field.truncate:
             value = value[: field.truncate] + "..."
         parts.append(f"{field.label}: {value}")
 
@@ -372,8 +366,25 @@ def get_interrupt_configs() -> dict[str, InterruptOnConfig]:
     can modify tool arguments before approval (the input form is built from
     the ``args_schema``).
     """
+    # Consult the approval policy: tools it unconditionally allows (e.g. read-only
+    # searches) don't need to pause the graph at all, so drop them from the gate.
+    # Arg-dependent tools (shell/write/edit/fetch/…) stay gated and are decided
+    # per-call by the policy inside the agent loop.
+    try:
+        from novacode_cli.security.policy import get_policy
+
+        policy = get_policy()
+    except Exception:  # noqa: BLE001 — fail closed: gate everything if policy load fails
+        policy = None
+
     configs: dict[str, InterruptOnConfig] = {}
     for tool_name in INTERRUPT_SPECS:
+        if (
+            policy is not None
+            and policy.tool_default(tool_name) == "allow"
+            and not policy.has_arg_rules(tool_name)
+        ):
+            continue
         configs[tool_name] = {
             "allowed_decisions": ["approve", "edit", "reject"],
             "description": _format_interrupt_description,  # type: ignore[typeddict-item]

@@ -435,3 +435,35 @@ async def run_tests(
     )
 
 
+async def run_tests_tool(
+    command: str = "",
+    working_dir: str = ".",
+    timeout: int = 300,
+) -> dict[str, Any]:
+    """Run tests and return structured results as a tool.
+
+    Args:
+        command: Test command to run (auto-detected if empty)
+        working_dir: Directory to run tests in
+        timeout: Maximum execution time in seconds
+
+    Returns:
+        Dictionary with test results or error
+    """
+    try:
+        result = await run_tests(command, working_dir=working_dir, timeout=timeout)
+        return {
+            "success": result.success,
+            "exit_code": result.exit_code,
+            "output": result.output,
+            "framework": result.framework.value if result.framework else "unknown",
+            "tests_run": result.tests_run,
+            "tests_passed": result.tests_passed,
+            "tests_failed": result.tests_failed,
+            "duration_seconds": result.duration_seconds,
+            "error": result.error,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+

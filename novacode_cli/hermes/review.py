@@ -218,6 +218,11 @@ class ReviewRunner:
                 "run_name": "nova_oob_review",
                 "tags": ["nova", "hermes", "oob-review"],
                 "metadata": {
+                    # Marks this as an out-of-band call so iterate_agent_events
+                    # drops its streamed output instead of rendering it as a
+                    # "Nova" assistant message (it inherits the graph's stream
+                    # callback via contextvars). See agent_loop's nova_oob filter.
+                    "nova_oob": True,
                     "nova_review_count": review_count,
                     "nova_review_threshold": self._review_threshold,
                     "nova_window_messages": len(request.messages),

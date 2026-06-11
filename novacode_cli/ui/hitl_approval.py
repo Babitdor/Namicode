@@ -19,10 +19,7 @@ def _is_plan_file_path(file_path: str) -> bool:
 
     normalized = file_path.replace("\\", "/").lower()
     basename = os.path.basename(normalized)
-    return (
-        ".nova/plans/" in normalized
-        or basename.startswith("plan") and basename.endswith(".md")
-    )
+    return ".nova/plans/" in normalized or basename.startswith("plan") and basename.endswith(".md")
 
 
 def check_plan_mode_blocked(
@@ -51,9 +48,7 @@ def check_plan_mode_blocked(
             blocked_actions.append(action_request)
         elif tool_name in RESTRICTED_WRITE_TOOLS:
             # Allow only when targeting a plan file
-            file_path = str(
-                action_request.get("args", {}).get("file_path", "")
-            )
+            file_path = str(action_request.get("args", {}).get("file_path", ""))
             if not _is_plan_file_path(file_path):
                 blocked_actions.append(action_request)
 
@@ -71,6 +66,75 @@ def check_plan_mode_blocked(
         return True, {"decisions": decisions}
 
     return False, None
+
+
+def evaluate_tool_actions(
+    hitl_request: dict,
+    session_state,
+    *,
+    plan_mode_enabled: bool = False,
+) -> list[dict | None]:
+    """Resolve each action in a tool interrupt against the pre-HITL gate.
+
+    Folds the three short-circuits that don't need a prompt — plan-mode blocking,
+    session ``auto_approve``, and the risk-tiered approval policy — into a single
+    per-action verdict. This runs in the UI-agnostic agent loop, so the TUI, the
+    Rich REPL, and remote turns all behave identically.
+
+    Args:
+        hitl_request: The validated HITL request (has ``action_requests``).
+        session_state: Session state (read for ``auto_approve``).
+        plan_mode_enabled: Whether plan mode is active.
+
+    Returns:
+        A list aligned with ``action_requests`` where each element is either a
+        resolved decision dict (``{"type": "approve"}`` /
+        ``{"type": "reject", "message": ...}``) or ``None`` meaning "ask the
+        user". When no element is ``None`` the caller can resolve the interrupt
+        without surfacing a prompt.
+    """
+    from novacode_cli.security.policy import get_policy
+
+    action_requests = list(hitl_request.get("action_requests", []))
+    if not action_requests:
+        return []
+
+    # Plan mode blocks the whole interrupt (rejects every action).
+    is_blocked, rejection = check_plan_mode_blocked(hitl_request, plan_mode_enabled)
+    if is_blocked and rejection:
+        return list(rejection["decisions"])
+
+    # auto_approve (e.g. a /remote turn) approves everything, no prompt.
+    if getattr(session_state, "auto_approve", False):
+        return [{"type": "approve"} for _ in action_requests]
+
+    # Per-action policy: allow → approve silently, deny → reject, ask → prompt.
+    try:
+        policy = get_policy()
+    except Exception:  # noqa: BLE001 — a policy failure must never break the turn
+        return [None for _ in action_requests]
+
+    resolutions: list[dict | None] = []
+    for action_request in action_requests:
+        name = action_request.get("name", "")
+        args = action_request.get("args", {}) or {}
+        try:
+            decision = policy.evaluate(name, args)
+        except Exception:  # noqa: BLE001 — fail safe: ask the user
+            resolutions.append(None)
+            continue
+        if decision.tier == "allow":
+            resolutions.append({"type": "approve"})
+        elif decision.tier == "deny":
+            resolutions.append(
+                {
+                    "type": "reject",
+                    "message": decision.reason or "Blocked by approval policy",
+                }
+            )
+        else:
+            resolutions.append(None)
+    return resolutions
 
 
 async def process_hitl_approval(
@@ -142,7 +206,7 @@ async def process_hitl_approval(
             console.print("[dim]All future tool actions will be automatically approved.[/dim]")
             console.print()
             decisions.append({"type": "approve"})
-            for _remaining in action_requests[action_index + 1:]:
+            for _remaining in action_requests[action_index + 1 :]:
                 decisions.append({"type": "approve"})
             break
 

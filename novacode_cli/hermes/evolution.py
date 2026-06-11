@@ -231,7 +231,12 @@ class EvolutionEngine:
                 config={
                     "run_name": "nova_evolution",
                     "tags": ["nova", "hermes", "evolution"],
-                    "metadata": {"nova_complexity": breakdown.get("score", 0)},
+                    # nova_oob: out-of-band marker so the agent loop drops this
+                    # call's streamed output (see agent_loop's nova_oob filter).
+                    "metadata": {
+                        "nova_oob": True,
+                        "nova_complexity": breakdown.get("score", 0),
+                    },
                 },
             )
             raw = getattr(resp, "content", "")

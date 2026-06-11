@@ -379,12 +379,14 @@ class FileTrackerMiddleware(AgentMiddleware):
         # Sanitize any file-type content blocks in message history (e.g., from
         # restored sessions) so they don't crash backends like Ollama
         from novacode_cli.utils.pdf_extraction import sanitize_messages_file_blocks
+
         sanitize_messages_file_blocks(request.messages)
 
         if self.include_system_prompt:
             import time
+
             current_time = time.time()
-            
+
             # Use cached prompt if still valid (sliding window: refreshes on access)
             if (
                 self._prompt_cache is not None
@@ -395,10 +397,11 @@ class FileTrackerMiddleware(AgentMiddleware):
                 file_tracker_prompt = self._prompt_cache
             else:
                 from novacode_cli.prompts import render_template
+
                 file_tracker_prompt = render_template("file_tracker.jinja")
                 self._prompt_cache = file_tracker_prompt
                 self._prompt_cache_time = current_time
-            
+
             system_prompt = (
                 request.system_prompt + "\n\n" + file_tracker_prompt
                 if request.system_prompt
@@ -416,12 +419,14 @@ class FileTrackerMiddleware(AgentMiddleware):
         # Sanitize any file-type content blocks in message history (e.g., from
         # restored sessions) so they don't crash backends like Ollama
         from novacode_cli.utils.pdf_extraction import sanitize_messages_file_blocks
+
         sanitize_messages_file_blocks(request.messages)
 
         if self.include_system_prompt:
             import time
+
             current_time = time.time()
-            
+
             # Use cached prompt if still valid (sliding window: refreshes on access)
             if (
                 self._prompt_cache is not None
@@ -432,10 +437,11 @@ class FileTrackerMiddleware(AgentMiddleware):
                 file_tracker_prompt = self._prompt_cache
             else:
                 from novacode_cli.prompts import render_template
+
                 file_tracker_prompt = render_template("file_tracker.jinja")
                 self._prompt_cache = file_tracker_prompt
                 self._prompt_cache_time = current_time
-            
+
             system_prompt = (
                 request.system_prompt + "\n\n" + file_tracker_prompt
                 if request.system_prompt
@@ -458,7 +464,14 @@ class FileTrackerMiddleware(AgentMiddleware):
             return None
 
         file_path = args.get("file_path") or args.get("path", "")
-        if file_path and not self.tracker.has_read_file(file_path):
+        # A file the agent has written or previously edited this session is known
+        # content — treat it like a read so write_file→edit_file (a very common
+        # pattern) isn't falsely rejected. Only genuinely-unseen files are gated.
+        if (
+            file_path
+            and not self.tracker.has_read_file(file_path)
+            and file_path not in self.tracker.files_written
+        ):
             self.tracker.record_rejected_edit()
             return ToolMessage(
                 content=(
@@ -470,6 +483,9 @@ class FileTrackerMiddleware(AgentMiddleware):
                     f'**To fix**: First run `read_file("{file_path}")`, then retry your edit.'
                 ),
                 tool_call_id=tool_call.get("id", ""),
+                # Mark as an error so the UI shows it as a failed edit rather than
+                # a silent ✓ with no diff (the file is unchanged on rejection).
+                status="error",
             )
 
         return None

@@ -623,7 +623,14 @@ class SessionState:
         return True
 
     def pending_approval_count(self) -> int:
-        """Number of unresolved approval notifications."""
+        """Number of unresolved approval notifications.
+
+        Returns 0 immediately when auto-approve is enabled (remote sessions
+        auto-approve everything — no human is being asked, so a flashing badge
+        is just noise).
+        """
+        if self.auto_approve:
+            return 0
         return sum(
             1
             for n in self._ntf.notifications

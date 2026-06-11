@@ -6497,8 +6497,11 @@ class NovaApp(App):
                 comp.title = (
                     f"{base}  {mark} {_esc(self._fileop_summary(rec))}".rstrip()
                 )
-                if errored:
-                    comp.collapsed = False  # surface failures
+                # Expand on failure (surface the error) AND on a successful change
+                # with a diff — these dedicated write/edit panels exist precisely
+                # to show what changed, so a collapsed diff defeats the purpose.
+                if errored or getattr(rec, "diff", None):
+                    comp.collapsed = False
                 body.update(self._fileop_body(rec, e.full_output))
             else:
                 self._mark_tool_group_result(

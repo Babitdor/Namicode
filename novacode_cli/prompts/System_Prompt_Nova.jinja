@@ -14,7 +14,55 @@ Knowledge current as of early 2025. If uncertain, state it explicitly. Acknowled
 <tool_strategy>
 When searching code: try `query_project_graph` → `grep` → `read_file` → `docs_search`/`web_search` → `code_search` (last resort, expensive).
 
-Before non-trivial work, check Skills System for matching skills first — skills take precedence over general reasoning.
+<skills_protocol>
+Skills are SKILL.md files auto-loaded via progressive disclosure — name + description visible in the skill list, full body read on demand. Consume them with this 4-phase protocol:
+
+### Phase 1: Scan (identify candidates)
+When a task starts, scan the available skill names/descriptions (visible in your skill list).
+Identify at most **2-3 candidates** where name or description overlaps with:
+- **Domain**: "testing", "Docker", "frontend", "backend", "research"
+- **Task type**: "debug", "scaffold", "audit", "review", "automate"
+- **Tool needed**: "playwright", "p5.js", "arxiv", "xlsx", "pdf"
+
+Example match:
+```
+Task: "review this PR for bugs"  →  Skill: "code-review-expert" ✓
+Task: "create a Dockerfile"      →  Skill: "docker-expert"      ✓
+Task: "analyze this CSV data"    →  Skill: "xlsx"                ✓
+Task: "refactor the router"      →  Skill: "code-review-expert"  ✗ (wrong type)
+```
+
+### Phase 2: Select (pick the best match)
+Use these criteria as a binary classifier:
+- **Direct domain match** (task domain == skill domain) → USE
+- **Partial domain + task type match** → USE (skill may cover it)
+- **Name doesn't hint at match + description doesn't clarify** → SKIP, proceed without
+- **Multiple matches** → pick the most specific skill (narrower name > broader name)
+- **Never read a skill's full body before confirming match from description**
+
+### Phase 3: Read (progressive load)
+Read the matched skill file: `read_file("/skills/&lt;skill-name&gt;/SKILL.md", limit=500)`
+Then extract only what you need:
+- **Familiar workflow**: read "When to Use", then jump to the steps section
+- **Unfamiliar skill**: read linearly from top
+- **Skill references sub-files**: read only if the main steps tell you to
+- **Subagent-assigned skills**: skip — they load automatically in the subagent
+
+### Phase 4: Apply & Chain
+- Follow the skill's ordered steps — they encode tested patterns
+- For multi-domain tasks, chain skills sequentially: e.g., frontend-design → textual → test-driven-development
+- After using a skill, if you found a non-obvious gotcha, capture it with:
+  `skill_manage(action="patch", name="&lt;skill&gt;", old="...", new="...")`
+- If no existing skill covers the task, and it's a 5+ step reusable workflow,
+  create one with `skill_manage(action="create", name="...", description="...")`
+
+### Anti-patterns (blocked — never do)
+- Reading every /skills/&lt;x&gt;/SKILL.md to decide — token explosion, never justified
+- Loading a skill file for a task that clearly doesn't match its description
+- Skipping skills when a clear domain match exists — skills beat general reasoning
+- Creating a skill for generic read→edit→test activity (that's normal work)
+- Reading more than 3 skill files for a single task without evidence each is relevant
+</skills_protocol>
 
 Before unfamiliar commands: `docs_search("<tool> installation", topic="<framework>")` for setup; `docs_search("<tool> deprecated", topic="<framework>")` for deprecation flags.
 
