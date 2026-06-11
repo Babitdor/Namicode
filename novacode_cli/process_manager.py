@@ -246,6 +246,18 @@ class ProcessManager:
 
             return info
 
+    def register_process(self, info: ProcessInfo) -> None:
+        """Register an externally-created process for tracking and cleanup.
+
+        For callers that spawn their own subprocess (e.g. ShellMiddleware's
+        background servers) but want it tracked and terminated on exit. Best-effort
+        and lock-free: the async lock guards start/stop coordination; this is just
+        bookkeeping into the same registries the public accessors read.
+        """
+        self._processes[info.pid] = info
+        if info.name:
+            self._name_to_pid[info.name] = info.pid
+
     async def _stream_output(
         self,
         process: asyncio.subprocess.Process,
@@ -427,9 +439,12 @@ class ProcessManager:
             try:
                 import aiohttp
 
-                async with aiohttp.ClientSession() as session, session.get(
-                    info.health_check_url, timeout=aiohttp.ClientTimeout(total=5)
-                ) as resp:
+                async with (
+                    aiohttp.ClientSession() as session,
+                    session.get(
+                        info.health_check_url, timeout=aiohttp.ClientTimeout(total=5)
+                    ) as resp,
+                ):
                     if resp.status < 400:
                         info.status = ProcessStatus.HEALTHY
                     else:

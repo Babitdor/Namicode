@@ -16,6 +16,15 @@ from deepagents.backends.protocol import (
 from harbor.environments.base import BaseEnvironment
 
 
+# Per-command timeout cap (seconds) when the caller doesn't specify one. Without
+# this, a single hung command (e.g. an agent-written program that infinite-loops,
+# or one waiting on stdin) blocks until the whole agent timeout (~900s) fires,
+# burning the entire budget on one call. Modal kills the process at this limit and
+# returns its partial output, so the agent gets an error and can recover/retry.
+# Generous enough for typical builds; bump it for tasks with very long compiles.
+_DEFAULT_EXEC_TIMEOUT_SEC = 300
+
+
 class HarborSandbox(SandboxBackendProtocol):
     """A sandbox implementation without assuming that python3 is available."""
 
@@ -26,10 +35,18 @@ class HarborSandbox(SandboxBackendProtocol):
     async def aexecute(
         self,
         command: str,
-        **kwargs,
+        *,
+        timeout: float | int | None = None,
+        **kwargs,  # noqa: ARG002 — accept/ignore other deepagents kwargs
     ) -> ExecuteResponse:
-        """Execute a bash command in the task environment."""
-        result = await self.environment.exec(command)
+        """Execute a bash command in the task environment.
+
+        Honors the per-command ``timeout`` the deepagents execute/shell tool
+        passes (mapped to harbor's ``timeout_sec``); falls back to
+        ``_DEFAULT_EXEC_TIMEOUT_SEC`` so one hung command can't eat the budget.
+        """
+        timeout_sec = int(timeout) if timeout else _DEFAULT_EXEC_TIMEOUT_SEC
+        result = await self.environment.exec(command, timeout_sec=timeout_sec)
 
         # These errors appear in harbor environments when running bash commands
         # in non-interactive/non-TTY contexts. They're harmless artifacts.

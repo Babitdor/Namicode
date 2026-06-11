@@ -390,6 +390,84 @@ class AgentMemoryMiddleware(AgentMiddleware):
 
         return result
 
+    async def _aread_file(self, path: Path) -> str | None:
+        """Async read: through the backend via ``aread``, else local filesystem.
+
+        Unifies :meth:`_read_file` and :meth:`_read_file_sandbox` for the async
+        path — both reduce to "backend aread by virtual path, else local read".
+        """
+        if self._backend is not None:
+            virtual_path = self._real_to_virtual(path)
+            if virtual_path:
+                try:
+                    from novacode_cli.utils.backend_paths import aread_via_backend
+
+                    content = await aread_via_backend(virtual_path, self._backend)
+                    if content is not None:
+                        return content
+                except Exception:  # noqa: BLE001, S110 — best-effort; fall back to local
+                    pass
+        return self._read_file_local(path)
+
+    async def abefore_agent(  # type: ignore[override]  # noqa: PLR0912 — mirrors before_agent
+        self,
+        state: AgentMemoryState,
+    ) -> AgentMemoryStateUpdate:
+        """Async load of agent memory before agent execution.
+
+        Mirrors :meth:`before_agent`, but reads through the backend with ``aread``.
+        The sync path routes sandbox reads through ``backend.read``, whose
+        sync→async bridge (``run_coroutine_threadsafe``) **deadlocks** when called
+        from the agent's own running loop during ``ainvoke``/``astream`` — that
+        hung every sandboxed (Modal/Docker) run at
+        ``AgentMemoryMiddleware.before_agent``. Async execution uses this method.
+        """
+        result: AgentMemoryStateUpdate = {}
+
+        user_path = self.settings.get_user_agent_md_path(self.assistant_id)
+        index_path = self.agent_dir / "memories" / "INDEX.md"
+        project_paths = (
+            self.settings.get_project_agent_md_paths() if not self.skip_project_memory else []
+        )
+        all_paths = [user_path, index_path, *project_paths]
+        needs_reload = self._files_changed(all_paths) if self._backend is None else True
+
+        if needs_reload or "user_memory" not in state:
+            content = await self._aread_file(user_path)
+            if content is not None:
+                if len(content) > MAX_MEMORY_CHARS:
+                    content = content[:MAX_MEMORY_CHARS] + _MEMORY_TRUNCATION_NOTICE
+                result["user_memory"] = content
+
+        if needs_reload or "memory_index" not in state:
+            index_content = await self._aread_file(index_path)
+            if index_content is not None and index_content.strip():
+                if len(index_content) > MAX_MEMORY_CHARS:
+                    index_content = index_content[:MAX_MEMORY_CHARS] + _MEMORY_TRUNCATION_NOTICE
+                result["memory_index"] = index_content
+
+        if not self.skip_project_memory and (needs_reload or "project_memory" not in state):
+            combined_memories: list[str] = []
+            self.loaded_project_memory_sources = []
+            for path in project_paths:
+                content = await self._aread_file(path)
+                if content is not None:
+                    if len(content) > MAX_MEMORY_CHARS:
+                        content = content[:MAX_MEMORY_CHARS] + _MEMORY_TRUNCATION_NOTICE
+                    if content.strip():
+                        relative_path = (
+                            path.relative_to(self.project_root) if self.project_root else path.name
+                        )
+                        combined_memories.append(f"<!-- Source: {relative_path} -->\n{content}")
+                        self.loaded_project_memory_sources.append(str(relative_path))
+            if combined_memories:
+                result["project_memory"] = "\n\n---\n\n".join(combined_memories)
+
+        if self._backend is None:
+            self._record_mtimes(all_paths)
+
+        return result
+
     def _build_system_prompt(self, request: ModelRequest) -> str:
         """Build the complete system prompt with memory sections.
 

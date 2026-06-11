@@ -168,8 +168,12 @@ DANGEROUS_PATTERNS = [
     r"chmod\s+(-\w*R|-R\w*)\s+[0-7]*7+\s+/",
     # Privilege escalation
     r"\bsudo\b",
-    # Environment dump (leaks API keys)
-    r"\benv\b",
+    # Environment dump (leaks secrets): a bare `env`/`printenv` as its own command
+    # — at the start or after a chain operator, optionally piped/redirected. Does
+    # NOT match legitimate uses like `conda env list`, `python -m venv`, `uv venv`,
+    # or `env FOO=bar cmd` (setting a var, not dumping).
+    r"(?:^|[;&|])\s*printenv\b",
+    r"(?:^|[;&|])\s*env\s*(?:[|>]|$)",
     # SSH key theft
     r"\bcat\s+.*\.ssh[/\\]",
     # File ownership change (often used in container escape)
@@ -183,9 +187,9 @@ _COMPILED_DANGEROUS = [re.compile(p, re.IGNORECASE) for p in DANGEROUS_PATTERNS]
 # Prompts that are safe to answer automatically without user interaction.
 # Maps regex pattern -> auto-response string.
 AUTO_ANSWER_PATTERNS: dict[str, str] = {
-    r"ok to proceed\??": "y",          # npm/npx install confirmation
+    r"ok to proceed\??": "y",  # npm/npx install confirmation
     r"need to install the following": "y",  # npm "Need to install packages:"
-    r"do you want to install": "y",    # pnpm dlx and similar
+    r"do you want to install": "y",  # pnpm dlx and similar
 }
 _COMPILED_AUTO_ANSWER: dict[re.Pattern[str], str] = {
     re.compile(p, re.IGNORECASE): resp for p, resp in AUTO_ANSWER_PATTERNS.items()

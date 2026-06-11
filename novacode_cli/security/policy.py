@@ -39,7 +39,6 @@ from novacode_cli.config.config import HOME_DIR
 from novacode_cli.git_safety import (
     BLOCKED_COMMANDS,
     DANGEROUS_GIT_COMMANDS,
-    detect_command_injection,
 )
 
 logger = logging.getLogger(__name__)
@@ -212,18 +211,19 @@ class ApprovalPolicy:
             return self._eval_url(tool_name, args)
         return ApprovalDecision(self.tool_default(tool_name), rule="tool-default")
 
-    def _eval_shell(  # noqa: PLR0911 — linear deny→ask→allow→default ladder
-        self, tool_name: str, args: dict[str, Any]
-    ) -> ApprovalDecision:
+    def _eval_shell(self, tool_name: str, args: dict[str, Any]) -> ApprovalDecision:
         command = str(args.get("command") or "").strip()
         if not command:
             return ApprovalDecision(self.tool_default(tool_name), rule="tool-default")
 
-        # deny: command injection
-        if detect_command_injection(command):
-            return ApprovalDecision("deny", "Command injection pattern detected", "injection")
-        # deny: blocked git operations (config edits, --no-verify, ...)
+        # NOTE: we deliberately do NOT treat shell metacharacters (``;`` ``&&``
+        # ``||`` ``$(...)`` backticks) as "injection" here. They are normal shell
+        # syntax (``pkill -f x 2>/dev/null; echo done``, ``... || true``), and a
+        # general shell tool must allow them. Genuinely dangerous commands hidden
+        # inside a chain are still caught below: the deny regexes ``.search()`` the
+        # whole string, so ``ls; rm -rf /`` still matches the ``rm -rf /`` rule.
         low = command.lower()
+        # deny: blocked git operations (config edits, --no-verify, ...)
         for blocked, why in BLOCKED_COMMANDS.items():
             if blocked.lower() in low:
                 return ApprovalDecision("deny", f"Blocked: {why}", blocked)

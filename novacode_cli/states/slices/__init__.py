@@ -5,6 +5,7 @@ from novacode_cli.states.slices.agent_runtime import AgentRuntimeState
 from novacode_cli.states.slices.remote_bridge import RemoteBridgeState
 from novacode_cli.states.slices.background_tasks import BackgroundTaskState
 from novacode_cli.states.slices.notifications import NotificationState
+from novacode_cli.states.slices.wiki import WikiState
 
 __all__ = [
     "UISettings",
@@ -12,4 +13,5 @@ __all__ = [
     "RemoteBridgeState",
     "BackgroundTaskState",
     "NotificationState",
+    "WikiState",
 ]

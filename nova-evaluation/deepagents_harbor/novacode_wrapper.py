@@ -6,9 +6,23 @@ This wrapper integrates the full Nova Code agent with all middleware
 
 import warnings
 
-# Suppress Harbor SDK deprecation warnings that are out of our control
-warnings.filterwarnings("ignore", message=".*Sandbox\\.open\\(\\) is deprecated.*")
-warnings.filterwarnings("ignore", message=".*FileIO\\.write\\(\\) is deprecated.*")
+# Modal's SDK (via Harbor's Modal environment) emits PendingDeprecation warnings
+# for its legacy Sandbox.open() / FileIO.{read,write,open} file APIs. They still
+# work and are out of our control — silence them. Match loosely: the messages are
+# date-prefixed and wrap the API names in backticks (e.g. "`Sandbox.open()` is
+# deprecated"), so an exact "Sandbox.open() is deprecated" pattern never matched.
+warnings.filterwarnings("ignore", message=r".*Sandbox\.open.*deprecated.*")
+warnings.filterwarnings("ignore", message=r".*FileIO\.(read|write|open).*deprecated.*")
+# Belt-and-suspenders: silence by Modal's own warning category when available.
+try:
+    from modal.exception import PendingDeprecationError as _ModalPendingDeprecation
+
+    if isinstance(_ModalPendingDeprecation, type) and issubclass(
+        _ModalPendingDeprecation, Warning
+    ):
+        warnings.filterwarnings("ignore", category=_ModalPendingDeprecation)
+except Exception:  # noqa: BLE001 — modal may not expose this symbol
+    pass
 
 import json
 import os

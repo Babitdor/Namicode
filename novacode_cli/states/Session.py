@@ -12,6 +12,7 @@ from novacode_cli.states.slices import (
     NotificationState,
     RemoteBridgeState,
     UISettings,
+    WikiState,
 )
 
 
@@ -56,13 +57,14 @@ class BackgroundRalphTask:
 class SessionState:
     """Holds mutable session state across all domains.
 
-    SessionState is a composite container that holds 5 focused state slices:
+    SessionState is a composite container that holds 6 focused state slices:
 
         UISettings         — auto-approve, plan mode, verbose, hints, splash
         AgentRuntimeState  — agent graph, backend, model, plan agent
         RemoteBridgeState  — Discord/Telegram bridge queue, lock, manager
         BackgroundTaskState — Ralph tasks, Trello server
         NotificationState  — in-terminal notification deque
+        WikiState          — wiki metadata (page count, last ingest)
 
     Properties on this class delegate to the appropriate slice, so **zero
     callers need to change**. Dynamically-assigned fields (e.g.
@@ -77,6 +79,7 @@ class SessionState:
         self._remote_bridge = RemoteBridgeState()
         self._bg_tasks = BackgroundTaskState()
         self._ntf = NotificationState()
+        self._wiki = WikiState()
 
         # -- cross-cutting session identity fields ----------------------------
         self.thread_id = str(uuid.uuid4())
@@ -357,6 +360,42 @@ class SessionState:
     @notifications.setter
     def notifications(self, value: deque) -> None:
         self._ntf.notifications = value
+
+    # ══════════════════════════════════════════════════════════════════════
+    # Backward-compatible properties — delegate to wiki slice
+    # ══════════════════════════════════════════════════════════════════════
+
+    @property
+    def wiki_root(self) -> str | None:
+        return self._wiki.wiki_root
+
+    @wiki_root.setter
+    def wiki_root(self, value: str | None) -> None:
+        self._wiki.wiki_root = value
+
+    @property
+    def wiki_enabled(self) -> bool:
+        return self._wiki.wiki_enabled
+
+    @wiki_enabled.setter
+    def wiki_enabled(self, value: bool) -> None:
+        self._wiki.wiki_enabled = value
+
+    @property
+    def wiki_page_count(self) -> int:
+        return self._wiki.page_count
+
+    @wiki_page_count.setter
+    def wiki_page_count(self, value: int) -> None:
+        self._wiki.page_count = value
+
+    @property
+    def wiki_last_ingest(self) -> str | None:
+        return self._wiki.last_ingest
+
+    @wiki_last_ingest.setter
+    def wiki_last_ingest(self, value: str | None) -> None:
+        self._wiki.last_ingest = value
 
     # ══════════════════════════════════════════════════════════════════════
     # Dynamic-field fallback

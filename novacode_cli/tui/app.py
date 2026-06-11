@@ -351,6 +351,10 @@ _TUI_SLASH_COMMANDS = [
     "/theme",
     "/quit",
     "/exit",
+    # Wiki commands
+    "/ingest",
+    "/ask",
+    "/file",
 ]
 
 from novacode_cli import ui_events as ev
@@ -4046,6 +4050,8 @@ class NovaApp(App):
             "• /compact — summarize & free up context\n"
             "• /save — save the session\n"
             "• /verbose — toggle settings\n"
+            "• /ingest <path> — ingest a raw source into the wiki\n"
+            "• /ask <question> — ask with wiki context\n"
             "• /<skill> (e.g. /graphify) — run a skill\n"
             "Anything without a leading / is sent to the agent. Interactive "
             "panels (/model picker, /sessions, /mcp, /theme…) are local-only."
@@ -4101,6 +4107,53 @@ class NovaApp(App):
                 )
             self._add_live_steer(text)
             return f"↗ Steering added: {text}", None
+
+        if cmd == "ingest":
+            from novacode_cli.wiki.ingest import IngestEngine
+
+            try:
+                engine = IngestEngine()
+                if not arg:
+                    # Auto-discover the local wiki's Clipping/ + raw/ contents.
+                    sources = engine.list_raw_sources()
+                    if sources:
+                        listing = "\n".join(f"  • {s}" for s in sources)
+                        return (
+                            "Usage: /ingest <path> (filename found anywhere in "
+                            f"Clipping/ or raw/)\nAvailable sources:\n{listing}",
+                            None,
+                        )
+                    return (
+                        "No sources yet — save web clips into "
+                        f"{engine._mgr.root / 'Clippings'} first.",
+                        None,
+                    )
+                # Resolve the source (Clipping/ or raw/), then stream as a turn.
+                source_full = engine.resolve_source(arg)
+                rel = source_full.relative_to(engine._mgr.root).as_posix()
+                source_content = source_full.read_text(encoding="utf-8")
+                prompt = (
+                    "Please analyze this source and create a wiki page at "
+                    "/.nova/wiki/ for it.\n\n"
+                    f"Source ({rel}):\n```\n{source_content[:8000]}\n```"
+                )
+                return None, prompt
+            except (FileNotFoundError, ValueError) as ex:
+                return f"Error: {ex}", None
+            except Exception as ex:  # noqa: BLE001
+                return f"/ingest error: {ex}", None
+
+        if cmd == "ask":
+            if not arg:
+                return "Usage: /ask <question>", None
+            # Search wiki and prepend context
+            from novacode_cli.wiki.ask import WikiAskEngine
+            try:
+                engine = WikiAskEngine()
+                prompt = await engine.build_prompt(arg)
+                return None, prompt
+            except Exception as ex:  # noqa: BLE001
+                return f"/ask error: {ex}", None
 
         if cmd in self._REMOTE_LOCAL_ONLY:
             return f"/{cmd} is only available in the local TUI.", None
@@ -4242,6 +4295,12 @@ class NovaApp(App):
             await self._run_notifications(text)
         elif cmd == "research":
             await self._run_research(text)
+        elif cmd == "ingest":
+            await self._run_ingest(text)
+        elif cmd == "ask":
+            await self._run_ask(text)
+        elif cmd == "file":
+            await self._run_file(text)
         elif cmd == "dream":
             await self._run_dream()
         elif cmd == "evolution":
@@ -5408,6 +5467,103 @@ class NovaApp(App):
                 execute_fn=self._tui_execute_fn,
             )
 
+    async def _run_ingest(self, text: str) -> None:
+        """Ingest a raw source into the wiki."""
+        from novacode_cli.commands.wiki_commands import handle_ingest
+
+        parts = text.split(maxsplit=1)
+        args = parts[1].strip() if len(parts) > 1 else ""
+        if not args:
+            # Show usage
+            with _rich_console.capture() as cap:
+                from novacode_cli.commands import CommandContext
+
+                mock_ctx = CommandContext(
+                    cmd="ingest", cmd_args=None, agent=self.agent,
+                    token_tracker=self.token_tracker,
+                    session_state=self.session_state,
+                    assistant_id=self.assistant_id,
+                )
+                await handle_ingest(mock_ctx)
+            out = Text.from_ansi(cap.get()).plain.strip()
+            self._log(Text(out or "Usage: /ingest <raw_path>", style="dim"))
+            return
+        self._log(Text(f"📥 Ingesting: {args}", style="bold"))
+        with _rich_console.capture():
+            from novacode_cli.commands import CommandContext
+
+            mock_ctx = CommandContext(
+                cmd="ingest", cmd_args=args, agent=self.agent,
+                token_tracker=self.token_tracker,
+                session_state=self.session_state,
+                assistant_id=self.assistant_id,
+            )
+            await handle_ingest(mock_ctx, execute_fn=self._tui_execute_fn)
+
+    async def _run_ask(self, text: str) -> None:
+        """Ask a question with wiki context prepended."""
+        from novacode_cli.commands.wiki_commands import handle_ask
+
+        parts = text.split(maxsplit=1)
+        question = parts[1].strip() if len(parts) > 1 else ""
+        if not question:
+            with _rich_console.capture() as cap:
+                from novacode_cli.commands import CommandContext
+
+                mock_ctx = CommandContext(
+                    cmd="ask", cmd_args=None, agent=self.agent,
+                    token_tracker=self.token_tracker,
+                    session_state=self.session_state,
+                    assistant_id=self.assistant_id,
+                )
+                await handle_ask(mock_ctx)
+            out = Text.from_ansi(cap.get()).plain.strip()
+            self._log(Text(out or "Usage: /ask <question>", style="dim"))
+            return
+        self._log(Text(f"📚 Asking: {question}", style="bold"))
+        with _rich_console.capture():
+            from novacode_cli.commands import CommandContext
+
+            mock_ctx = CommandContext(
+                cmd="ask", cmd_args=question, agent=self.agent,
+                token_tracker=self.token_tracker,
+                session_state=self.session_state,
+                assistant_id=self.assistant_id,
+            )
+            await handle_ask(mock_ctx, execute_fn=self._tui_execute_fn)
+
+    async def _run_file(self, text: str) -> None:
+        """File conversation knowledge into the wiki."""
+        from novacode_cli.commands.wiki_commands import handle_file
+
+        parts = text.split(maxsplit=1)
+        topic = parts[1].strip() if len(parts) > 1 else ""
+        if not topic:
+            with _rich_console.capture() as cap:
+                from novacode_cli.commands import CommandContext
+
+                mock_ctx = CommandContext(
+                    cmd="file", cmd_args=None, agent=self.agent,
+                    token_tracker=self.token_tracker,
+                    session_state=self.session_state,
+                    assistant_id=self.assistant_id,
+                )
+                await handle_file(mock_ctx)
+            out = Text.from_ansi(cap.get()).plain.strip()
+            self._log(Text(out or "Usage: /file <topic>", style="dim"))
+            return
+        self._log(Text(f"📝 Filing: {topic}", style="bold"))
+        with _rich_console.capture():
+            from novacode_cli.commands import CommandContext
+
+            mock_ctx = CommandContext(
+                cmd="file", cmd_args=topic, agent=self.agent,
+                token_tracker=self.token_tracker,
+                session_state=self.session_state,
+                assistant_id=self.assistant_id,
+            )
+            await handle_file(mock_ctx, execute_fn=self._tui_execute_fn)
+
     async def _run_dream(self) -> None:
         """Run /dream: show a native memory-consolidation summary, then stream it."""
         from novacode_cli.commands.dream_handler import handle_dream_command
@@ -6336,6 +6492,12 @@ class NovaApp(App):
         t.append("review/pending approvals (dismiss|approve <id> · clear)\n", style="dim")
         t.append("  /research        ", style="cyan")
         t.append("launch a multi-agent research swarm\n", style="dim")
+        t.append("  /ingest <path>   ", style="cyan")
+        t.append("ingest a raw source into the wiki\n", style="dim")
+        t.append("  /ask <question>  ", style="cyan")
+        t.append("ask with wiki context prepended\n", style="dim")
+        t.append("  /file <topic>    ", style="cyan")
+        t.append("file conversation knowledge into the wiki\n", style="dim")
         t.append("  /dream           ", style="cyan")
         t.append("reflect over memories to surface ideas\n", style="dim")
         t.append("  /evolution       ", style="cyan")

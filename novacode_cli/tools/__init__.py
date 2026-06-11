@@ -67,6 +67,14 @@ from novacode_cli.tools.scraper_tools import (
     reddit_posts,
 )
 
+# Wiki tools (agent-accessible project wiki)
+from novacode_cli.tools.wiki_tools import (
+    wiki_read,
+    wiki_search,
+    wiki_update_index,
+    wiki_write,
+)
+
 __all__ = [
     "docs_search",
     "duckduckgo_search",
@@ -98,4 +106,9 @@ __all__ = [
     "hacker_news",
     "linkedin_jobs",
     "reddit_posts",
+    # Wiki tools (agent-accessible project wiki)
+    "wiki_read",
+    "wiki_search",
+    "wiki_update_index",
+    "wiki_write",
 ]

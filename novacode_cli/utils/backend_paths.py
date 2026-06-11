@@ -86,7 +86,7 @@ def virtual_to_real_path(
                 for prefix, sub_backend in _get_routes(backend):
                     if virtual_path.startswith(prefix):
                         # Strip the prefix and resolve within the sub-backend.
-                        relative = virtual_path[len(prefix):].lstrip("/")
+                        relative = virtual_path[len(prefix) :].lstrip("/")
                         if hasattr(sub_backend, "root_dir") and hasattr(
                             sub_backend, "virtual_mode"
                         ):
@@ -230,23 +230,17 @@ def find_latest_plan_file_virtual(
                 if isinstance(item, dict):
                     name = item.get("name", item.get("path", ""))
                     mtime = item.get("mtime", item.get("modified", 0))
-                    if name.endswith(".md") and (
-                        name.startswith("plan") or name == "plan.md"
-                    ):
+                    if name.endswith(".md") and (name.startswith("plan") or name == "plan.md"):
                         path = item.get("path", f"{plans_virtual_dir}{name}")
                         plan_files.append((path, mtime))
                 elif isinstance(item, str):
-                    if item.endswith(".md") and (
-                        item.startswith("plan") or item == "plan.md"
-                    ):
+                    if item.endswith(".md") and (item.startswith("plan") or item == "plan.md"):
                         plan_files.append((f"{plans_virtual_dir}{item}", 0))
         elif isinstance(result, str):
             # Some backends return a formatted string.
             for line in result.strip().splitlines():
                 name = line.strip().split()[-1] if line.strip() else ""
-                if name.endswith(".md") and (
-                    name.startswith("plan") or name == "plan.md"
-                ):
+                if name.endswith(".md") and (name.startswith("plan") or name == "plan.md"):
                     plan_files.append((f"{plans_virtual_dir}{name}", 0))
 
         if not plan_files:
@@ -297,6 +291,45 @@ def read_via_backend(
         return str(result)
     except Exception:
         logger.debug("Failed to read %s via backend", virtual_path, exc_info=True)
+        return None
+
+
+async def aread_via_backend(
+    virtual_path: str,
+    backend: BackendProtocol,
+) -> str | None:
+    """Async counterpart of :func:`read_via_backend`.
+
+    Uses ``backend.aread`` so callers inside a running event loop (e.g. a
+    middleware's ``abefore_agent`` during ``ainvoke``) never trip the sync
+    sandbox-execute deadlock — a sandbox's sync ``read`` bridges to async via
+    ``run_coroutine_threadsafe`` on the *running* loop, which blocks forever.
+
+    Args:
+        virtual_path: Virtual path (e.g., "/memories/agent.md").
+        backend: BackendProtocol with aread() support.
+
+    Returns:
+        File content as string, or None if the file doesn't exist or can't be read.
+    """
+    try:
+        result = await backend.aread(virtual_path)
+        if result is None:
+            return None
+        if isinstance(result, str):
+            if result.startswith(("Error:", "error:")):
+                return None
+            return result
+        if hasattr(result, "content"):
+            return result.content
+        if hasattr(result, "file_data"):
+            if hasattr(result, "error") and result.error:
+                return None
+            if result.file_data is not None:
+                return result.file_data.get("content", "")
+        return str(result)
+    except Exception:  # noqa: BLE001 — best-effort read; mirror read_via_backend
+        logger.debug("Failed to aread %s via backend", virtual_path, exc_info=True)
         return None
 
 

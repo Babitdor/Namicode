@@ -9,13 +9,12 @@ from __future__ import annotations
 
 import asyncio
 import os
-import subprocess
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
 from langchain.agents.middleware.types import AgentMiddleware, AgentState
 from langchain.tools import ToolRuntime, tool
@@ -76,9 +75,7 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         self._timeout = timeout
         self._max_output_bytes = max_output_bytes
         self._tool_name = "shell"
-        self._env = _sanitize_env(
-            env if env is not None else os.environ.copy()
-        )
+        self._env = _sanitize_env(env if env is not None else os.environ.copy())
         self._workspace_root = workspace_root
         self._backend = backend
 
@@ -97,16 +94,16 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         _is_sandbox = self._supports_sandbox_execution()
         # Directory shown to the model in the tool description.
         _display_dir = (
-            (sandbox_working_dir or self._workspace_root)
-            if _is_sandbox
-            else self._workspace_root
+            (sandbox_working_dir or self._workspace_root) if _is_sandbox else self._workspace_root
         )
 
         # Determine shell and platform for this environment
         if _is_sandbox:
             # Sandboxes are always Linux/bash
             _shell_name = "bash"
-            _platform_note = "You are operating in an **isolated Linux sandbox** — always use bash syntax."
+            _platform_note = (
+                "You are operating in an **isolated Linux sandbox** — always use bash syntax."
+            )
         elif sys.platform == "win32":
             _shell_name = "PowerShell"
             _platform_note = (
@@ -129,7 +126,9 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
                 f"All commands execute inside the sandbox, not on the local machine. "
             )
         else:
-            execution_context = f"Commands run in **{_shell_name}** in the working directory: {_display_dir}. "
+            execution_context = (
+                f"Commands run in **{_shell_name}** in the working directory: {_display_dir}. "
+            )
 
         # Build description with working directory and platform information
         description = (
@@ -231,69 +230,32 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         """Inject --yes into npx commands to skip package-install prompts."""
         return _NPX_YES_RE.sub(r"\1 --yes ", command)
 
-    def _run_command_with_stdin(
+    def _run_async(
         self,
-        command: str,
-        stdin_input: str,
+        make_coro: Callable[[], Awaitable[ToolMessage]],
         *,
-        tool_call_id: str | None,
+        timeout: float,
     ) -> ToolMessage:
-        """Re-run a command feeding stdin_input to its stdin (for auto-answered prompts).
+        """Run a coroutine to completion from this (synchronous) tool body.
 
-        Args:
-            command: The shell command to execute.
-            stdin_input: The text to pipe into the command's stdin.
-            tool_call_id: The tool call ID for creating a ToolMessage.
-
-        Returns:
-            A ToolMessage with the command output.
+        The agent runs async, so a sync tool needing asyncio must bridge: if an
+        event loop is already running, execute in a worker thread with its own
+        loop; otherwise run it directly. ``make_coro`` is a thunk so the coroutine
+        is created exactly once, on whichever path is taken. Exceptions (including
+        the worker's ``TimeoutError``) propagate to the caller.
         """
         try:
-            result = subprocess.run(  # noqa: S602
-                command,
-                check=False,
-                shell=True,
-                capture_output=True,
-                input=stdin_input.encode(),
-                timeout=self._timeout,
-                env=self._env,
-                cwd=self._workspace_root,
-            )
-            stdout = (result.stdout or b"").decode("utf-8", errors="replace")
-            stderr = (result.stderr or b"").decode("utf-8", errors="replace")
+            asyncio.get_running_loop()
+            in_loop = True
+        except RuntimeError:
+            in_loop = False
 
-            output_parts = []
-            if stdout.strip():
-                output_parts.append(stdout)
-            if stderr.strip():
-                output_parts.extend(
-                    f"[stderr] {line}" for line in stderr.strip().split("\n")
-                )
+        if in_loop:
+            import concurrent.futures
 
-            output = "\n".join(output_parts) if output_parts else "<no output>"
-            if len(output) > self._max_output_bytes:
-                output = output[: self._max_output_bytes]
-                output += f"\n\n... Output truncated at {self._max_output_bytes} bytes."
-
-            if result.returncode != 0:
-                output = f"{output.rstrip()}\n\nExit code: {result.returncode}"
-                status = "error"
-            else:
-                status = "success"
-
-            return ToolMessage(
-                content=output,
-                tool_call_id=tool_call_id,
-                name=self._tool_name,
-                status=status,
-            )
-        except subprocess.TimeoutExpired:
-            return ToolMessage(
-                content=f"Error: Command timed out after {self._timeout:.1f} seconds.",
-                tool_call_id=tool_call_id,
-                name=self._tool_name,
-                status="error",
-            )
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                return executor.submit(asyncio.run, make_coro()).result(timeout=timeout)
+        return asyncio.run(make_coro())
 
     def _supports_sandbox_execution(self) -> bool:
         """Check whether the backend can actually execute shell commands.
@@ -383,9 +345,7 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
 
                 mgr = get_recovery_manager()
                 if mgr:
-                    for target in extract_rm_targets(
-                        command, Path(self._workspace_root)
-                    ):
+                    for target in extract_rm_targets(command, Path(self._workspace_root)):
                         mgr.snapshot(target, reason="rm-command", command=command)
             except Exception:
                 pass  # never block execution due to snapshot failure
@@ -453,18 +413,73 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
                 status="error",
             )
 
+    def _run_sandbox_background_command(
+        self,
+        command: str,
+        *,
+        tool_call_id: str | None,
+        settle_secs: float = 2.0,
+    ) -> ToolMessage:
+        """Launch a long-running command detached inside the sandbox.
+
+        Sandbox ``execute`` waits for the command to exit, so a server that never
+        exits hangs the call until the outer timeout. We instead ``nohup`` the
+        command into the background (output redirected to a log, stdin closed) so
+        ``execute`` returns immediately, wait a couple of seconds, then report
+        whether it is still running — capturing the startup banner (e.g.
+        ``Serving HTTP on ...``) or, if it died early (port in use, crash), the
+        error output. The server keeps running for the rest of the task.
+
+        Args:
+            command: The shell command to launch (Linux/bash — sandboxes are Linux).
+            tool_call_id: Tool call ID for the resulting ToolMessage.
+            settle_secs: How long to wait before checking liveness.
+
+        Returns:
+            A ToolMessage describing the launch (status=error if it exited early).
+        """
+        import shlex
+        import uuid
+
+        cid = (tool_call_id or "").replace("/", "_")[:12] or uuid.uuid4().hex[:8]
+        # /tmp inside the (Linux) sandbox container, namespaced per tool call.
+        log_path = f"/tmp/nova-bg-{cid}.log"  # noqa: S108 — sandbox container path
+        cmd_q = shlex.quote(command)
+        log_q = shlex.quote(log_path)
+        settle = max(1, int(settle_secs))
+
+        # nohup … & detaches; redirecting std{out,err}→log and stdin←/dev/null
+        # ensures the child doesn't hold the exec pipe open (which would re-hang).
+        script = (
+            f"nohup sh -c {cmd_q} > {log_q} 2>&1 < /dev/null & "
+            f"NOVA_BG_PID=$!; "
+            f"sleep {settle}; "
+            f'if kill -0 "$NOVA_BG_PID" 2>/dev/null; then '
+            f'echo "[background] started (pid $NOVA_BG_PID), still running after {settle}s"; '
+            f'echo "[background] logs: {log_path}"; '
+            f"echo '--- startup output ---'; tail -n 30 {log_q} 2>/dev/null; "
+            f"else "
+            f'echo "[background] process exited within {settle}s — it did not stay up:"; '
+            f"cat {log_q} 2>/dev/null; "
+            f"exit 1; "
+            f"fi"
+        )
+        return self._run_sandbox_command(script, tool_call_id=tool_call_id)
+
     def _run_local_command(
         self,
         command: str,
         *,
         tool_call_id: str | None,
     ) -> ToolMessage:
-        """Execute a shell command locally (original behavior).
+        """Execute a shell command locally, streaming to completion.
 
-        This method uses dynamic prompt detection:
-        1. Run the command with a short initial timeout
-        2. If output contains a prompt pattern, automatically switch to interactive mode
-        3. Otherwise, continue with normal execution
+        The command runs (on a single process — never re-executed) until it exits
+        or the full ``self._timeout`` elapses. The first few seconds double as
+        interactive-prompt detection: a known prompt is auto-answered on the
+        process's stdin; an unanswerable prompt aborts with guidance instead of
+        blocking. Output is returned in the ToolMessage — nothing is written to
+        stdout (that corrupts the Textual TUI; see ``iterate_agent_events``).
 
         Args:
             command: The shell command to execute.
@@ -474,116 +489,151 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
             A ToolMessage with the command output or an error message.
         """
         command = self._preprocess_command(command)
-
-        # Phase 1: Try running with a short timeout to detect prompts
-        prompt_detection_timeout = 5.0  # Short timeout to detect prompts
         try:
-            result = subprocess.run(  # noqa: S602
-                command,
-                check=False,
-                shell=True,
-                capture_output=True,
-                timeout=prompt_detection_timeout,
-                env=self._env,
-                cwd=self._workspace_root,
+            return self._run_async(
+                lambda: self._async_local_shell(command, tool_call_id=tool_call_id),
+                timeout=self._timeout + 15,
             )
-
-            # Command completed quickly - return result
-            stdout = (result.stdout or b"").decode("utf-8", errors="replace")
-            stderr = (result.stderr or b"").decode("utf-8", errors="replace")
-
-            output_parts = []
-            if stdout.strip():
-                output_parts.append(stdout)
-            if stderr.strip():
-                stderr_lines = stderr.strip().split("\n")
-                output_parts.extend(f"[stderr] {line}" for line in stderr_lines)
-
-            output = "\n".join(output_parts) if output_parts else "<no output>"
-
-            if len(output) > self._max_output_bytes:
-                output = output[: self._max_output_bytes]
-                output += f"\n\n... Output truncated at {self._max_output_bytes} bytes."
-
-            if result.returncode != 0:
-                output = f"{output.rstrip()}\n\nExit code: {result.returncode}"
-                status = "error"
-            else:
-                status = "success"
-
+        except TimeoutError:
             return ToolMessage(
-                content=output,
-                tool_call_id=tool_call_id,
-                name=self._tool_name,
-                status=status,
-            )
-
-        except subprocess.TimeoutExpired as e:
-            # Command timed out - check if it's waiting for input
-            partial_output = ""
-            if e.stdout:
-                partial_output = e.stdout.decode("utf-8", errors="replace")
-            if e.stderr:
-                stderr = e.stderr.decode("utf-8", errors="replace")
-                if stderr.strip():
-                    partial_output += "\n" + "\n".join(
-                        f"[stderr] {line}" for line in stderr.strip().split("\n")
-                    )
-
-            # Check if the partial output contains a prompt pattern
-            if partial_output and is_interactive_prompt(partial_output):
-                auto = get_auto_answer(partial_output)
-                if auto is not None:
-                    # Safe to answer automatically — pipe the response and re-run
-                    return self._run_command_with_stdin(
-                        command, auto, tool_call_id=tool_call_id
-                    )
-                # Not auto-answerable → switch to interactive mode
-                sys.stdout.write(
-                    "\n\033[1;33m⚠ Interactive prompt detected. Switching to interactive mode...\033[0m\n"
-                )
-                sys.stdout.write(partial_output)
-                sys.stdout.flush()
-                return self._run_interactive_shell_command(
-                    command,
-                    tool_call_id=tool_call_id,
-                    initial_output=partial_output,
-                )  # type: ignore
-
-            # No prompt detected — return partial output from the first attempt
-            # instead of re-running. This avoids double-execution of side-effectful
-            # commands (INSERT, git push, etc.) and wasteful re-execution.
-            partial_output = (partial_output.strip() or "<no output before timeout>")
-            return ToolMessage(
-                content=partial_output
-                + f"\n\n[Command timed out after {prompt_detection_timeout:.1f}s. "
-                f"No interactive prompt detected — partial output shown above.]",
+                content=f"Error: Command timed out after {self._timeout:.0f} seconds.",
                 tool_call_id=tool_call_id,
                 name=self._tool_name,
                 status="error",
             )
+        except OSError as e:
+            return ToolMessage(
+                content=f"Error running command: {e}",
+                tool_call_id=tool_call_id,
+                name=self._tool_name,
+                status="error",
+            )
+
+    async def _async_local_shell(  # noqa: PLR0912, PLR0915
+        self,
+        command: str,
+        *,
+        tool_call_id: str | None,
+        prompt_window: float = 5.0,
+    ) -> ToolMessage:
+        """Stream a local command to completion (up to ``self._timeout``).
+
+        Reads output on one long-lived process. During the first ``prompt_window``
+        seconds, a stall with prompt-like output is treated as an interactive
+        prompt — auto-answered if known, otherwise aborted with guidance (the agent
+        can re-run with non-interactive flags) rather than hanging on console input.
+        """
+        import time
+
+        proc = await asyncio.create_subprocess_shell(
+            command,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=self._workspace_root,
+            env=self._env,
+        )
+
+        out_parts: list[str] = []
+        tail = ""  # rolling last-4KB window, for prompt detection only
+        last_prompt = ""
+        start = time.time()
+        status = "success"
+        note = ""
+
+        try:
+            while True:
+                if time.time() - start > self._timeout:
+                    proc.kill()
+                    status = "error"
+                    note = f"\n\n[Command exceeded {self._timeout:.0f}s and was terminated.]"
+                    break
+                try:
+                    chunk = await asyncio.wait_for(proc.stdout.read(1024), timeout=0.5)  # type: ignore[union-attr]
+                except TimeoutError:
+                    # No output right now. Within the prompt window, check whether the
+                    # process is blocked waiting on an interactive prompt.
+                    if (
+                        tail
+                        and tail != last_prompt
+                        and (time.time() - start) <= prompt_window
+                        and proc.returncode is None
+                        and is_interactive_prompt(tail)
+                    ):
+                        last_prompt = tail
+                        auto = get_auto_answer(tail)
+                        if auto is not None and proc.stdin is not None:
+                            proc.stdin.write((auto + "\n").encode())
+                            try:
+                                await proc.stdin.drain()
+                            except (OSError, ConnectionResetError):
+                                pass
+                        else:
+                            proc.kill()
+                            status = "error"
+                            note = (
+                                "\n\n[This command is waiting for interactive input, which "
+                                "can't be provided here. Re-run it non-interactively — pass "
+                                "flags like --yes / --defaults / -y, or pipe the input via stdin.]"
+                            )
+                            break
+                    continue
+                if not chunk:
+                    break  # stdout closed → process is exiting
+                text = chunk.decode("utf-8", errors="replace")
+                out_parts.append(text)
+                tail = (tail + text)[-4096:]
+        except asyncio.CancelledError:
+            proc.kill()
+            raise
+        finally:
+            if proc.returncode is None:
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=2.0)
+                except TimeoutError:
+                    proc.kill()
+            try:
+                if proc.stdin:
+                    proc.stdin.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+        output = "".join(out_parts).strip() or "<no output>"
+        if len(output) > self._max_output_bytes:
+            output = (
+                output[: self._max_output_bytes]
+                + f"\n\n... Output truncated at {self._max_output_bytes} bytes."
+            )
+        rc = proc.returncode
+        if status == "success" and rc not in (0, None):
+            status = "error"
+            output = f"{output}\n\nExit code: {rc}"
+
+        return ToolMessage(
+            content=output + note,
+            tool_call_id=tool_call_id,
+            name=self._tool_name,
+            status=status,
+        )
 
     def _run_interactive_shell_command(
         self,
         command: str,
         *,
         tool_call_id: str | None,
-        input_callback: Callable[[str], str] | None = None,
-        initial_output: str | None = None,
-    ) -> ToolMessage | str:
-        """Execute a shell command in interactive mode with real-time I/O.
+    ) -> ToolMessage:
+        """Run a command that may prompt for input, handling prompts non-blockingly.
 
-        This method streams output in real-time and prompts the user for input
-        when it detects interactive prompts from the subprocess.
+        Shares the streaming path with ``_run_local_command`` — the only difference
+        is that prompt detection stays active for the *whole* command (not just the
+        first few seconds). Known prompts (npm/npx "ok to proceed?", …) are
+        auto-answered on the process's stdin; an unanswerable prompt aborts with
+        guidance rather than blocking on console input (there is no console to read
+        from under the Textual TUI). Nothing is written to stdout.
 
         Args:
             command: The shell command to execute.
             tool_call_id: The tool call ID for creating a ToolMessage.
-            input_callback: Optional callback to get user input. If None, uses
-                the default console input. The callback receives the prompt text
-                and should return the user's response.
-            initial_output: Optional output already captured from a previous
-                execution attempt (used when switching to interactive mode).
 
         Returns:
             A ToolMessage with the command output or an error message.
@@ -592,54 +642,31 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
             msg = "Shell tool expects a non-empty command string."
             raise ToolException(msg)
 
-        # Convert Unix commands to Windows-compatible commands
         command = _convert_unix_command_to_windows(command)
         command = self._preprocess_command(command)
 
         dangerous, reason = is_dangerous_command(command)
         if dangerous:
-            blocked_msg = (
-                f"Command blocked: matches dangerous pattern `{reason}`. "
-                "If intentional, run it manually in your terminal."
-            )
             return ToolMessage(
-                content=blocked_msg,
+                content=(
+                    f"Command blocked: matches dangerous pattern `{reason}`. "
+                    "If intentional, run it manually in your terminal."
+                ),
                 tool_call_id=tool_call_id,
                 name=self._tool_name,
                 status="error",
             )
 
-        # Run the async implementation in an event loop
         try:
-            try:
-                asyncio.get_running_loop()
-                # If we're already in an async context, we need to use a thread
-                import concurrent.futures
-
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(
-                        asyncio.run,
-                        self._async_interactive_shell(
-                            command,
-                            tool_call_id=tool_call_id,
-                            input_callback=input_callback,
-                            initial_output=initial_output,
-                        ),
-                    )
-                    return future.result(timeout=self._timeout)
-            except RuntimeError:
-                # No running loop, we can use asyncio.run directly
-                return asyncio.run(
-                    self._async_interactive_shell(
-                        command,
-                        tool_call_id=tool_call_id,
-                        input_callback=input_callback,
-                        initial_output=initial_output,
-                    )
-                )
+            return self._run_async(
+                lambda: self._async_local_shell(
+                    command, tool_call_id=tool_call_id, prompt_window=self._timeout
+                ),
+                timeout=self._timeout + 15,
+            )
         except TimeoutError:
             return ToolMessage(
-                content=f"Error: Command timed out after {self._timeout:.1f} seconds.",
+                content=f"Error: Command timed out after {self._timeout:.0f} seconds.",
                 tool_call_id=tool_call_id,
                 name=self._tool_name,
                 status="error",
@@ -651,264 +678,6 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
                 name=self._tool_name,
                 status="error",
             )
-
-    async def _async_interactive_shell(  # noqa: PLR0912, PLR0915
-        self,
-        command: str,
-        *,
-        tool_call_id: str | None,
-        input_callback: Callable[[str], str] | None = None,
-        initial_output: str | None = None,
-    ) -> ToolMessage:
-        """Async implementation of interactive shell execution.
-
-        Args:
-            command: The shell command to execute.
-            tool_call_id: The tool call ID for creating a ToolMessage.
-            input_callback: Optional callback to get user input.
-            initial_output: Optional output already captured from a previous
-                execution attempt (used when switching to interactive mode).
-
-        Returns:
-            A ToolMessage with the command output.
-        """
-        output_lines: list[str] = []
-        status = "success"
-
-        # Include any initial output from previous execution
-        if initial_output:
-            output_lines.append(initial_output)
-            # Check if initial output contains a prompt that needs response
-            if is_interactive_prompt(initial_output):
-                sys.stdout.write(initial_output)
-                sys.stdout.flush()
-                if input_callback:
-                    user_input = input_callback(initial_output)
-                else:
-                    user_input = self._get_user_input(initial_output)
-                output_lines.append(f"> {user_input}")
-
-        # Use cmd.exe on Windows, bash/sh on Unix
-        if sys.platform == "win32":
-            shell_cmd = command
-            process = await asyncio.create_subprocess_shell(
-                shell_cmd,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-                cwd=self._workspace_root,
-                env=self._env,
-            )
-        else:
-            process = await asyncio.create_subprocess_shell(
-                command,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-                cwd=self._workspace_root,
-                env=self._env,
-            )
-
-        # Buffer for accumulating partial lines (prompts often don't end with newline)
-        buffer = ""
-        last_prompt_check = ""
-
-        try:
-            while True:
-                # Read available data (with timeout to check for prompts)
-                try:
-                    chunk = await asyncio.wait_for(
-                        process.stdout.read(1024),  # type: ignore[union-attr]
-                        timeout=0.5,
-                    )
-                except TimeoutError:
-                    # No data available, check if buffer looks like a prompt
-                    if buffer and buffer != last_prompt_check:
-                        last_prompt_check = buffer
-                        if is_interactive_prompt(buffer):
-                            auto = get_auto_answer(buffer)
-                            if auto is not None:
-                                user_input = auto
-                            else:
-                                # Display the prompt and get user input
-                                sys.stdout.write(buffer)
-                                sys.stdout.flush()
-                                if input_callback:
-                                    user_input = input_callback(buffer)
-                                else:
-                                    user_input = self._get_user_input(buffer)
-
-                            output_lines.append(buffer)
-                            output_lines.append(f"> {user_input}")
-                            buffer = ""
-
-                            # Send input to process
-                            if process.stdin:
-                                process.stdin.write((user_input + "\n").encode())
-                                await process.stdin.drain()
-                    continue
-
-                if not chunk:
-                    # Process ended
-                    break
-
-                # Decode and process the chunk
-                decoded = chunk.decode("utf-8", errors="replace")
-                buffer += decoded
-
-                # Process complete lines
-                while "\n" in buffer:
-                    line, buffer = buffer.split("\n", 1)
-                    # Display and record the line
-                    sys.stdout.write(line + "\n")
-                    sys.stdout.flush()
-                    output_lines.append(line)
-
-                # Check if remaining buffer is a prompt (even without newline)
-                if buffer and is_interactive_prompt(buffer):
-                    auto = get_auto_answer(buffer)
-                    if auto is not None:
-                        user_input = auto
-                    else:
-                        # Display the prompt and get user input
-                        sys.stdout.write(buffer)
-                        sys.stdout.flush()
-                        if input_callback:
-                            user_input = input_callback(buffer)
-                        else:
-                            user_input = self._get_user_input(buffer)
-
-                    output_lines.append(buffer)
-                    output_lines.append(f"> {user_input}")
-                    buffer = ""
-                    last_prompt_check = ""
-
-                    # Send input to process
-                    if process.stdin:
-                        process.stdin.write((user_input + "\n").encode())
-                        await process.stdin.drain()
-
-            # Flush any remaining buffer
-            if buffer:
-                sys.stdout.write(buffer + "\n")
-                sys.stdout.flush()
-                output_lines.append(buffer)
-
-            # Wait for process to complete
-            await process.wait()
-
-            if process.returncode != 0:
-                status = "error"
-
-        except asyncio.CancelledError:
-            # Task was cancelled — terminate the subprocess and re-raise
-            output_lines.append("\n[yellow]Task cancelled[/yellow]")
-            status = "error"
-            try:
-                process.terminate()
-                try:
-                    await asyncio.wait_for(process.wait(), timeout=2.0)
-                except TimeoutError:
-                    process.kill()
-                    await process.wait()
-            except OSError:
-                pass
-            finally:
-                try:
-                    if process.stdin:
-                        process.stdin.close()
-                except Exception:
-                    pass
-            raise
-        except OSError as e:
-            output_lines.append(f"\nError during execution: {e}")
-            status = "error"
-            # Try to terminate the process
-            try:
-                process.terminate()
-                await process.wait()
-            except OSError:
-                pass  # Process may already be terminated
-        except KeyboardInterrupt:
-            # User interrupted - terminate the process immediately
-            output_lines.append("\n[yellow]Interrupted by user[/yellow]")
-            status = "error"
-            try:
-                # Try graceful termination first
-                process.terminate()
-                # Wait briefly for graceful shutdown
-                try:
-                    await asyncio.wait_for(process.wait(), timeout=2.0)
-                except TimeoutError:
-                    # Force kill if process doesn't terminate
-                    try:
-                        process.kill()
-                        await process.wait()
-                    except OSError:
-                        pass  # Process already terminated
-            except OSError:
-                pass  # Process already terminated
-            finally:
-                # Ensure stdin is closed
-                try:
-                    if process.stdin:
-                        process.stdin.close()
-                except Exception:
-                    pass
-        finally:
-            # Close stdin (StreamWriter) to prevent ResourceWarning on Windows
-            # Note: stdout/stderr are StreamReader and don't need explicit closing
-            try:
-                if process.stdin:
-                    process.stdin.close()
-            except Exception:
-                pass
-
-        # Build output
-        output = "\n".join(output_lines) if output_lines else "<no output>"
-
-        # Truncate if needed
-        if len(output) > self._max_output_bytes:
-            output = output[: self._max_output_bytes]
-            output += f"\n\n... Output truncated at {self._max_output_bytes} bytes."
-
-        # Add exit code if non-zero
-        if process.returncode and process.returncode != 0:
-            output = f"{output.rstrip()}\n\nExit code: {process.returncode}"
-
-        return ToolMessage(
-            content=output,
-            tool_call_id=tool_call_id,
-            name=self._tool_name,
-            status=status,
-        )
-
-    def _get_user_input(self, _prompt: str) -> str:
-        """Get user input for an interactive prompt.
-
-        Args:
-            _prompt: The prompt text (for context, already displayed to user).
-
-        Returns:
-            The user's input string.
-        """
-        # Print a visual indicator that input is needed
-        sys.stdout.write("\n")
-        sys.stdout.write("\033[1;33m")  # Yellow bold
-        sys.stdout.write("⚠ Shell is waiting for input")
-        sys.stdout.write("\033[0m")  # Reset
-        sys.stdout.write("\n")
-        sys.stdout.flush()
-
-        try:
-            return input("> ")
-        except EOFError:
-            # User pressed Ctrl+D - treat as empty input
-            return ""
-        except KeyboardInterrupt:
-            # User pressed Ctrl+C - return empty and let caller handle it
-            # Re-raise to ensure proper cleanup in the calling context
-            raise
 
     def _run_background_shell_command(
         self,
@@ -955,37 +724,21 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
                 status="error",
             )
 
-        # If sandbox backend is available, execute synchronously
-        # (sandbox doesn't support persistent background processes)
+        # In a sandbox, launch the process DETACHED inside the container so the
+        # call returns immediately. Running it synchronously (the old behavior)
+        # blocked forever on never-exiting servers (e.g. `python -m http.server`),
+        # which looked like the agent hanging until the outer timeout fired.
         if self._supports_sandbox_execution():
-            return self._run_sandbox_command(command, tool_call_id=tool_call_id)
+            return self._run_sandbox_background_command(command, tool_call_id=tool_call_id)
 
-        # Run the async implementation in an event loop (local execution)
+        # Local execution: stream the server's startup in its own loop.
         try:
-            try:
-                asyncio.get_running_loop()
-                # If we're already in an async context, we need to use a thread
-                import concurrent.futures
-
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(
-                        asyncio.run,
-                        self._async_background_shell(
-                            command,
-                            tool_call_id=tool_call_id,
-                            startup_timeout=startup_timeout,
-                        ),
-                    )
-                    return future.result(timeout=startup_timeout + 10)
-            except RuntimeError:
-                # No running loop, we can use asyncio.run directly
-                return asyncio.run(
-                    self._async_background_shell(
-                        command,
-                        tool_call_id=tool_call_id,
-                        startup_timeout=startup_timeout,
-                    )
-                )
+            return self._run_async(
+                lambda: self._async_background_shell(
+                    command, tool_call_id=tool_call_id, startup_timeout=startup_timeout
+                ),
+                timeout=startup_timeout + 10,
+            )
         except TimeoutError:
             return ToolMessage(
                 content=f"Error: Server did not start within {startup_timeout:.1f} seconds.",
@@ -1059,14 +812,7 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
             working_dir=self._workspace_root,
             _process=process,
         )
-        manager._processes[process.pid] = process_info
-        manager._name_to_pid[process_info.name] = process.pid
-
-        # Print a header to indicate we're starting a background process
-        sys.stdout.write(
-            f"\n\033[1;36m▶ Starting background process: {command}\033[0m\n"
-        )
-        sys.stdout.flush()
+        manager.register_process(process_info)
 
         try:
             while time.time() - start_time < startup_timeout:
@@ -1092,18 +838,14 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
                 # Decode and process the chunk
                 decoded = chunk.decode("utf-8", errors="replace")
 
-                # Process each line
+                # Collect each line into output_lines — do NOT stream to stdout
+                # (that corrupts the Textual TUI; the agent loop renders the
+                # returned ToolMessage instead).
                 for line in decoded.split("\n"):
                     if line:
-                        sys.stdout.write(line + "\n")
-                        sys.stdout.flush()
                         output_lines.append(line)
-
-                        # Check if this line indicates server is ready
                         if is_server_ready(line):
                             server_ready = True
-                            sys.stdout.write("\n\033[1;32m✓ Server started successfully!\033[0m\n")
-                            sys.stdout.flush()
                             break
 
                 if server_ready:
@@ -1122,9 +864,7 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
                         decoded = remaining.decode("utf-8", errors="replace")
                         for line in decoded.split("\n"):
                             if line:
-                                sys.stdout.write(line + "\n")
                                 output_lines.append(line)
-                        sys.stdout.flush()
                 except TimeoutError:
                     pass
 
@@ -1180,9 +920,7 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
                     async def _drain() -> None:
                         while True:
                             try:
-                                chunk = await _asyncio.wait_for(
-                                    proc_stdout.read(4096), timeout=1.0
-                                )
+                                chunk = await _asyncio.wait_for(proc_stdout.read(4096), timeout=1.0)
                                 if not chunk:
                                     break
                             except (TimeoutError, Exception):
