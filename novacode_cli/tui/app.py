@@ -199,6 +199,7 @@ class MatrixRain(Static):
         # directly comparable: if the widget sits entirely above or below the
         # parent scroll-container's visible area, there's nothing to draw.
         import sys
+
         is_testing = "pytest" in sys.modules or getattr(self.app, "_driving", False)
         try:
             if not is_testing:
@@ -1711,7 +1712,9 @@ class RemoteScreen(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="modal-box"):
-            yield Static(Text("🔗 Remote Bridges Status & Config", style="bold cyan"), id="modal-title")
+            yield Static(
+                Text("🔗 Remote Bridges Status & Config", style="bold cyan"), id="modal-title"
+            )
             with VerticalScroll(id="remote-status-container"):
                 yield Static("", id="remote-status")
             yield Static(Text("Start / Connect Bridge", style="bold"), id="remote-section-title")
@@ -1747,15 +1750,19 @@ class RemoteScreen(ModalScreen[None]):
                     "🟢" if status == "running" else ("🔴" if "error" in status.lower() else "🟡")
                 )
                 bot = f" (@{b['bot_user']})" if b.get("bot_user") else ""
-                platform = str(b['platform']).capitalize()
-                
+                platform = str(b["platform"]).capitalize()
+
                 t.append("  ")
                 t.append(icon)
                 t.append(f" {platform}{bot}", style="bold white")
                 t.append(" — Chat: ")
-                t.append(str(b['chat_id']), style="yellow")
+                t.append(str(b["chat_id"]), style="yellow")
                 t.append(" — Status: ")
-                status_style = "bold green" if status == "running" else ("bold red" if "error" in status.lower() else "bold yellow")
+                status_style = (
+                    "bold green"
+                    if status == "running"
+                    else ("bold red" if "error" in status.lower() else "bold yellow")
+                )
                 t.append(status, style=status_style)
                 t.append("\n")
         else:
@@ -1774,7 +1781,7 @@ class RemoteScreen(ModalScreen[None]):
                 t.append(" · Token: ")
                 t.append(tok, style=tok_style)
                 t.append(" · Channel: ")
-                t.append(str(d.get('channel_id', '—')), style="yellow")
+                t.append(str(d.get("channel_id", "—")), style="yellow")
                 t.append("\n")
             if "telegram" in saved:
                 tg = saved["telegram"]
@@ -1784,7 +1791,7 @@ class RemoteScreen(ModalScreen[None]):
                 t.append(" · Token: ")
                 t.append(tok, style=tok_style)
                 t.append(" · Chat: ")
-                t.append(str(tg.get('chat_id', '—')), style="yellow")
+                t.append(str(tg.get("chat_id", "—")), style="yellow")
                 t.append("\n")
         self.query_one("#remote-status", Static).update(t)
 
@@ -2069,6 +2076,25 @@ class NovaApp(App):
         height: auto; padding: 0 2;
         background: $surface; margin: 1 0;
     }
+    /* --- /ralph native cards (accent-bar style, like .initlog) --- */
+    #transcript > .ralph-run {
+        height: auto; border-left: thick $primary;
+        padding: 0 2; margin: 1 0; background: $surface;
+    }
+    #transcript > .ralph-iter {
+        height: auto; border-left: thick $accent;
+        padding: 0 2; margin: 1 0; background: $surface;
+    }
+    #transcript > .ralph-iter.done { border-left: thick $success; }
+    #transcript > .ralph-iter.failed { border-left: thick $error; }
+    #transcript > .ralph-summary {
+        height: auto; border-left: thick $success;
+        padding: 0 2; margin: 1 0; background: $surface;
+    }
+    #transcript > .ralph-status {
+        height: auto; border-left: thick $secondary;
+        padding: 0 2; margin: 1 0; background: $surface;
+    }
     #transcript > .nova-event {
         height: auto; padding: 0 2;
         background: $surface; margin: 1 0;
@@ -2341,6 +2367,9 @@ class NovaApp(App):
         self._todo_widget: Static | None = None  # updated in place per turn
         self._init_widget: Static | None = None  # live /init step tracker widget
         self._init_steps: list[dict] = []
+        # Live per-iteration Ralph cards, keyed by iteration number, so an
+        # IterationFinished event can update the card mounted at its start.
+        self._ralph_iter_cards: dict[int, Static] = {}
         self._skill_names_cache: list[str] | None = None
         self._agent_names_cache: list[str] | None = None
         # Live status state (animated spinner + elapsed while a turn runs).
@@ -2515,6 +2544,7 @@ class NovaApp(App):
                     pass
 
         import threading
+
         if getattr(self, "_thread_id", None) == threading.get_ident():
             update_ui()
         else:
@@ -2668,7 +2698,10 @@ class NovaApp(App):
             except asyncio.CancelledError:
                 return
             try:
-                if self._remote_question_future is not None and not self._remote_question_future.done():
+                if (
+                    self._remote_question_future is not None
+                    and not self._remote_question_future.done()
+                ):
                     react_fn = getattr(m, "react_fn", None)
                     if react_fn is not None:
                         try:
@@ -2876,9 +2909,7 @@ class NovaApp(App):
 
             if tunnels := meta.get("tunnels"):
                 for tn in tunnels:  # type: ignore[union-attr]
-                    lines.append(
-                        ("tunnel", f"localhost:{tn['host']} → sandbox:{tn['container']}")
-                    )
+                    lines.append(("tunnel", f"localhost:{tn['host']} → sandbox:{tn['container']}"))
 
             t = Text()
             t.append("● session\n", style="bold yellow")
@@ -2910,6 +2941,7 @@ class NovaApp(App):
                     from novacode_cli.integrations.sandbox_factory import (
                         get_default_working_dir,
                     )
+
                     wd = get_default_working_dir(sandbox_type)
                 except Exception:
                     wd = "?"
@@ -3312,7 +3344,9 @@ class NovaApp(App):
             status_text = Text(e.detail or "", style="dim") if e.detail else Text("")
             await body.mount(Static(status_text, id="subagent-status"))
             await body.mount(Static("", id="subagent-list"))
-            await body.mount(RichLog(id="subagent-log", classes="terminal-log", highlight=True, markup=True))
+            await body.mount(
+                RichLog(id="subagent-log", classes="terminal-log", highlight=True, markup=True)
+            )
 
             # Initialize dynamic height tracking and entry lists
             comp._log_lines = 0
@@ -3361,7 +3395,9 @@ class NovaApp(App):
                 comp.title = f"{_esc(str(icon))}  ({dur}){remaining}"
                 if e.detail:
                     try:
-                        body.query_one("#subagent-status", Static).update(Text(e.detail, style="dim"))
+                        body.query_one("#subagent-status", Static).update(
+                            Text(e.detail, style="dim")
+                        )
                     except Exception:
                         pass
                 else:
@@ -3426,10 +3462,12 @@ class NovaApp(App):
                     comp._tool_lines = tool_lines
                     self._refresh_subagent_list(cid)
                 else:  # status
-                    log_entries.append({
-                        "type": "status",
-                        "display": e.message,
-                    })
+                    log_entries.append(
+                        {
+                            "type": "status",
+                            "display": e.message,
+                        }
+                    )
                     comp._log_entries = log_entries
                     self._refresh_subagent_list(cid)
             else:
@@ -3453,7 +3491,7 @@ class NovaApp(App):
                     detail = entry["detail"]
                     error = entry["error"]
                     color = "#f7768e" if error else ("#73daca" if mark == "✓" else "#bb9af7")
-                    
+
                     line = f"[{color}]{mark}[/{color}] {display}"
                     if detail:
                         clean_detail = detail
@@ -4778,7 +4816,7 @@ class NovaApp(App):
                 except Exception as ex:  # noqa: BLE001
                     exit_code = -1
                     print(f"Error executing command: {ex}")
-                
+
                 if sys.stdin.isatty():
                     print("\n--- Command finished. Press Enter to return to TUI ---")
                     try:
@@ -4789,7 +4827,9 @@ class NovaApp(App):
             # Fallback for non-interactive/headless test environments where suspend is not supported
             cwd = settings.project_root or Path.cwd()
             try:
-                res = subprocess.run(cmd, shell=True, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                res = subprocess.run(
+                    cmd, shell=True, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+                )
                 exit_code = res.returncode
             except Exception:  # noqa: BLE001
                 exit_code = -1
@@ -6717,9 +6757,153 @@ class NovaApp(App):
                 execute_fn=self._tui_execute_fn,
             )
 
+    # --- /ralph native widgets -------------------------------------------
+    _RALPH_ITER_GLYPH = {
+        "running": ("▶", "yellow"),
+        "done": ("✓", "green"),
+        "failed": ("✗", "red"),
+    }
+
+    def _ralph_mount(self, widget: Widget) -> None:
+        """Mount a native Ralph card into the transcript (app thread only)."""
+        self._close_tool_group()
+        self._transcript().mount(widget)
+        self._prune_transcript()
+        self._scroll_end()
+
+    def _ralph_run_text(self, event: Any) -> Text:
+        """Header card for a Ralph run: task, iteration budget, and mode."""
+        iters = "unlimited" if event.max_iterations == 0 else str(event.max_iterations)
+        title = "🔁 Ralph Mode (Resumed)" if event.resumed_from else "🔁 Ralph Mode"
+        t = Text()
+        t.append(f"{title}\n", style="bold")
+        t.append("Task: ", style="bold")
+        t.append(f"{event.task}\n")
+        t.append("Max iterations: ", style="bold")
+        t.append(f"{iters}\n")
+        if event.resumed_from:
+            t.append("Resuming from: ", style="bold")
+            t.append(f"iteration {event.resumed_from}\n")
+        t.append("Mode: ", style="bold")
+        t.append("background (non-blocking)" if event.background else "foreground")
+        return t
+
+    def _ralph_iter_text(
+        self,
+        iteration: int,
+        max_iterations: int,
+        status: str,
+        elapsed: float | None = None,
+        error: str | None = None,
+    ) -> Text:
+        """One iteration card line, styled by ``status`` (running/done/failed)."""
+        glyph, color = self._RALPH_ITER_GLYPH.get(status, ("•", "dim"))
+        disp = f"{iteration}/{max_iterations}" if max_iterations > 0 else str(iteration)
+        t = Text()
+        t.append(f"{glyph} Iteration {disp}", style=f"bold {color}")
+        if status == "running":
+            t.append("  — running…", style="dim")
+        else:
+            t.append(f"  — {'done' if status == 'done' else 'failed'}", style=color)
+            if elapsed is not None:
+                t.append(f" ({elapsed:.1f}s)", style="dim")
+            if error:
+                t.append(f"\n    {error}", style="red")
+        return t
+
+    def _ralph_status_renderable(self, snap: Any) -> Any:
+        """Render a ``/ralph --status`` snapshot as a native table card."""
+        from rich.console import Group
+        from rich.table import Table
+
+        header = Text("Ralph Background Tasks\n", style="bold")
+        if not snap.rows:
+            header.append("No background Ralph tasks running.", style="dim")
+            return header
+
+        table = Table(show_edge=False, pad_edge=False, expand=False)
+        table.add_column("", width=2)
+        table.add_column("Iter")
+        table.add_column("Status")
+        table.add_column("Elapsed", justify="right")
+        table.add_column("Task")
+        glyphs = {
+            "running": ("⏳", "yellow"),
+            "completed": ("✓", "green"),
+            "failed": ("✗", "red"),
+        }
+        for row in snap.rows:
+            g, color = glyphs.get(row.status, ("•", "dim"))
+            disp = (
+                f"{row.iteration}/{row.max_iterations}"
+                if row.max_iterations > 0
+                else str(row.iteration)
+            )
+            desc = row.task if len(row.task) <= 50 else row.task[:50] + "…"
+            table.add_row(
+                Text(g, style=color),
+                disp,
+                Text(row.status, style=color),
+                f"{row.elapsed:.0f}s",
+                desc,
+            )
+        summary = Text()
+        summary.append(f"\nTotal {snap.total}", style="dim")
+        summary.append(f"  ·  running {snap.running}", style="yellow")
+        summary.append(f"  ·  completed {snap.completed}", style="green")
+        summary.append(f"  ·  failed {snap.failed}", style="red")
+        return Group(header, table, summary)
+
+    def _ralph_on_event(self, event: Any) -> None:
+        """Drive native Ralph widgets from a structured handler event (app thread).
+
+        Mirrors :meth:`_init_on_event`: the UI-agnostic handler reports run
+        milestones through :mod:`novacode_cli.commands.ralph_events`, and this
+        turns each into a native card instead of a flat log line.
+        """
+        from novacode_cli.commands import ralph_events as rev
+
+        if isinstance(event, rev.RalphStarted):
+            self._ralph_iter_cards.clear()
+            self._ralph_mount(Static(self._ralph_run_text(event), classes="ralph-run"))
+        elif isinstance(event, rev.IterationStarted):
+            card = Static(
+                self._ralph_iter_text(event.iteration, event.max_iterations, "running"),
+                classes="ralph-iter running",
+            )
+            self._ralph_iter_cards[event.iteration] = card
+            self._ralph_mount(card)
+        elif isinstance(event, rev.IterationFinished):
+            status = "done" if event.ok else "failed"
+            text = self._ralph_iter_text(
+                event.iteration, event.max_iterations, status, event.elapsed, event.error
+            )
+            card = self._ralph_iter_cards.get(event.iteration)
+            updated = False
+            if card is not None:
+                try:
+                    card.set_classes(f"ralph-iter {status}")
+                    card.update(text)
+                    updated = True
+                except Exception:  # noqa: BLE001 - card may have been pruned
+                    updated = False
+            if not updated:
+                self._ralph_mount(Static(text, classes=f"ralph-iter {status}"))
+        elif isinstance(event, rev.RalphFinished):
+            t = Text()
+            t.append("📊 Ralph finished", style="bold")
+            t.append(f" — {event.completed} completed", style="green")
+            if event.failed:
+                t.append(f", {event.failed} failed", style="red")
+            t.append(f" of {event.total} iteration(s)", style="dim")
+            self._ralph_mount(Static(t, classes="ralph-summary"))
+        elif isinstance(event, rev.StatusSnapshot):
+            self._ralph_mount(Static(self._ralph_status_renderable(event), classes="ralph-status"))
+
     async def _run_ralph(self, text: str) -> None:
-        """Run /ralph natively: messages render via a thread-safe emit, and
-        foreground iterations stream through ``_tui_execute_fn``."""
+        """Run /ralph natively: structured milestones render as native cards via
+        ``on_event``, free-form notices via a thread-safe ``emit``, and foreground
+        iterations stream through ``_tui_execute_fn``."""
         import threading
 
         from novacode_cli.commands.ralph_handler import handle_ralph_command
@@ -6743,6 +6927,17 @@ class NovaApp(App):
                 except Exception:  # noqa: BLE001 - app may be shutting down
                     pass
 
+        def _on_event(event: Any) -> None:
+            # Background runs fire events from a worker thread; hop to the app
+            # thread before touching widgets (same contract as ``_emit``).
+            if threading.get_ident() == loop_tid:
+                self._ralph_on_event(event)
+            else:
+                try:
+                    self.call_from_thread(self._ralph_on_event, event)
+                except Exception:  # noqa: BLE001 - app may be shutting down
+                    pass
+
         await handle_ralph_command(
             self.agent,
             self.session_state,
@@ -6751,6 +6946,7 @@ class NovaApp(App):
             args or None,
             execute_fn=self._tui_execute_fn,
             emit=_emit,
+            on_event=_on_event,
         )
 
     async def _run_trello(self, text: str) -> None:
@@ -7299,7 +7495,11 @@ class NovaApp(App):
 
     async def _ask_remote_question(self, question_request: dict) -> dict:
         """Route an agent question to the remote user via Discord/Telegram."""
-        prompt = question_request.get("question") or question_request.get("prompt") or "The agent has a question:"
+        prompt = (
+            question_request.get("question")
+            or question_request.get("prompt")
+            or "The agent has a question:"
+        )
         opts = question_request.get("options") or []
         context = question_request.get("context")
 
