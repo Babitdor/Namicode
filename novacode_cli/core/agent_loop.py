@@ -111,6 +111,16 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
     """
     loop = asyncio.get_running_loop()
 
+    if getattr(session_state, "plan_mode_enabled", False):
+        directive = (
+            "[System Directive: You are entering a new planning phase. "
+            "Any previous plan approvals have expired. You are currently restricted to "
+            "read-only tools. Design a new plan for the request below, and call `exit_plan_mode(plan=...)` "
+            "to request user approval. Do NOT call write_todos or attempt to implement yet.]\n\n"
+        )
+        if not user_input.startswith("[System Directive:"):
+            user_input = directive + user_input
+
     message_content = await prepare_input_content(
         user_input, image_tracker, skip_file_mentions=skip_file_mentions
     )

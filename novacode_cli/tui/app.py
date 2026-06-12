@@ -5564,6 +5564,8 @@ class NovaApp(App):
             self.session_state.plan_mode_enabled = True
             self._update_mode_badge()
             self.session_state.plan_content = None
+            self.session_state.approved_plan_content = None
+            self.session_state.auto_approve = False
             self.session_state.plan_agent = plan_agent
             self.session_state.plan_backend = plan_backend
             return True
