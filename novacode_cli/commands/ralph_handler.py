@@ -27,6 +27,7 @@ from typing import Any
 from prompt_toolkit import PromptSession
 from rich.markup import escape
 
+from novacode_cli.commands import ralph_events as rev
 from novacode_cli.config.config import COLORS, console
 from novacode_cli.prompts import render_template
 from novacode_cli.states.Session import BackgroundRalphTask, RalphTaskStatus
@@ -36,11 +37,33 @@ logger = logging.getLogger(__name__)
 
 # A UI sink: called with one Rich-markup string per line. "" means a blank line.
 EmitFn = Callable[[str], None]
+# A structured-progress sink (optional). Renderers that want native widgets pass
+# one of these; when it is None the handler renders the markup ``emit`` fallback.
+EventFn = rev.RalphEventFn
 
 
 def _console_emit(message: str = "") -> None:
     """Default emitter (CLI): render a Rich-markup string to the console."""
     console.print(message)
+
+
+def _emit_event(
+    on_event: EventFn | None,
+    event: rev.RalphEvent,
+    fallback: Callable[[], None],
+) -> None:
+    """Send a structured event to ``on_event`` if present, else run ``fallback``.
+
+    Keeps the handler UI-agnostic: the TUI passes ``on_event`` and renders native
+    widgets; the CLI leaves it ``None`` and the markup ``fallback`` runs unchanged.
+    """
+    if on_event is not None:
+        try:
+            on_event(event)
+        except Exception:  # noqa: BLE001 - a renderer hiccup must not break the run
+            logger.debug("ralph on_event renderer failed", exc_info=True)
+    else:
+        fallback()
 
 
 # Cross-iteration progress log. The agent reads it at the start of every
@@ -254,8 +277,61 @@ async def _prompt_stop_action(
             return "stop"  # second Ctrl+C = force stop
 
 
-async def handle_ralph_status(session_state, emit: EmitFn = _console_emit) -> bool:
+def _build_status_snapshot(session_state) -> rev.StatusSnapshot:
+    """Collect background-task state into a plain, renderer-agnostic snapshot."""
+    rows: list[rev.RalphTaskRow] = []
+    running = completed = failed = 0
+    now = datetime.now(UTC)
+    for task_id, task in session_state.background_ralph_tasks.items():
+        if task.status == RalphTaskStatus.RUNNING:
+            status = "running"
+            running += 1
+            elapsed = (now - task.created_at).total_seconds()
+        elif task.status == RalphTaskStatus.COMPLETED:
+            status = "completed"
+            completed += 1
+            elapsed = (
+                (task.completed_at - task.created_at).total_seconds() if task.completed_at else 0
+            )
+        elif task.status == RalphTaskStatus.FAILED:
+            status = "failed"
+            failed += 1
+            elapsed = (
+                (task.completed_at - task.created_at).total_seconds() if task.completed_at else 0
+            )
+        else:
+            continue
+        rows.append(
+            rev.RalphTaskRow(
+                iteration=task.iteration,
+                max_iterations=task.max_iterations,
+                status=status,
+                task=task.task_description,
+                task_id=task_id,
+                elapsed=elapsed,
+                working_directory=task.working_directory,
+                error=task.error_message,
+            )
+        )
+    return rev.StatusSnapshot(
+        rows=rows,
+        running=running,
+        completed=completed,
+        failed=failed,
+        total=len(session_state.background_ralph_tasks),
+    )
+
+
+async def handle_ralph_status(
+    session_state,
+    emit: EmitFn = _console_emit,
+    on_event: EventFn | None = None,
+) -> bool:
     """Handle /ralph --status — show background task status (UI-agnostic)."""
+    if on_event is not None:
+        on_event(_build_status_snapshot(session_state))
+        return True
+
     emit("")
     emit("[bold]Ralph Background Tasks[/bold]")
 
@@ -294,9 +370,7 @@ async def handle_ralph_status(session_state, emit: EmitFn = _console_emit) -> bo
         emit("[bold green]Completed:[/bold green]")
         for _task_id, task in completed_tasks:
             elapsed = (
-                (task.completed_at - task.created_at).total_seconds()
-                if task.completed_at
-                else 0
+                (task.completed_at - task.created_at).total_seconds() if task.completed_at else 0
             )
             emit(f"  ✓ Iteration {task.iteration}/{task.max_iterations}")
             emit(f"      Duration: {elapsed:.0f}s")
@@ -332,6 +406,7 @@ def _run_background_ralph_in_thread(
     working_directory: str,
     backend,
     emit: EmitFn = _console_emit,
+    on_event: EventFn | None = None,
 ) -> None:
     """Run background Ralph iterations in a separate thread with its own loop."""
     loop = None
@@ -350,6 +425,7 @@ def _run_background_ralph_in_thread(
                 working_directory=working_directory,
                 backend=backend,
                 emit=emit,
+                on_event=on_event,
             )
         )
     except BaseException as e:
@@ -374,19 +450,27 @@ async def _execute_all_ralph_iterations_background(
     working_directory: str,
     backend,
     emit: EmitFn = _console_emit,
+    on_event: EventFn | None = None,
 ) -> None:
     """Execute all Ralph iterations sequentially in the background (non-blocking).
 
     Tool calls are auto-approved so the run never blocks on input. Progress is
-    surfaced via ``emit`` and a final notification; check anytime with
-    ``/ralph --status``.
+    surfaced via ``emit`` / ``on_event`` and a final notification; check anytime
+    with ``/ralph --status``.
     """
     from novacode_cli.ui.execution import execute_task
 
-    emit("")
-    emit("[bold]🚀 Ralph background execution started[/bold]")
-    desc = task[:70] + "..." if len(task) > 70 else task
-    emit(f"[dim]Task: {escape(desc)}[/dim]")
+    def _hdr() -> None:
+        emit("")
+        emit("[bold]🚀 Ralph background execution started[/bold]")
+        desc = task[:70] + "..." if len(task) > 70 else task
+        emit(f"[dim]Task: {escape(desc)}[/dim]")
+
+    _emit_event(
+        on_event,
+        rev.RalphStarted(task=task, max_iterations=max_iterations, background=True),
+        _hdr,
+    )
 
     original_auto_approve = session_state.auto_approve
     session_state.auto_approve = True
@@ -406,9 +490,7 @@ async def _execute_all_ralph_iterations_background(
     try:
         while max_iterations == 0 or iteration <= max_iterations:
             task_id = str(uuid.uuid4())
-            iter_display = (
-                f"{iteration}/{max_iterations}" if max_iterations > 0 else str(iteration)
-            )
+            iter_display = f"{iteration}/{max_iterations}" if max_iterations > 0 else str(iteration)
 
             bg_task = BackgroundRalphTask(
                 task_id=task_id,
@@ -419,7 +501,13 @@ async def _execute_all_ralph_iterations_background(
             )
             session_state.background_ralph_tasks[task_id] = bg_task
 
-            emit(f"[dim]→ iteration {iter_display} started ({task_id[:8]})[/dim]")
+            _emit_event(
+                on_event,
+                rev.IterationStarted(iteration=iteration, max_iterations=max_iterations),
+                lambda disp=iter_display, tid=task_id: emit(
+                    f"[dim]→ iteration {disp} started ({tid[:8]})[/dim]"
+                ),
+            )
 
             prompt = render_template(
                 "ralph_iteration.jinja",
@@ -442,13 +530,37 @@ async def _execute_all_ralph_iterations_background(
                 bg_task.status = RalphTaskStatus.COMPLETED
                 bg_task.completed_at = datetime.now(UTC)
                 elapsed = (bg_task.completed_at - bg_task.created_at).total_seconds()
-                emit(f"[green]✓ iteration {iter_display} done[/green] [dim]({elapsed:.1f}s)[/dim]")
+                _emit_event(
+                    on_event,
+                    rev.IterationFinished(
+                        iteration=iteration,
+                        max_iterations=max_iterations,
+                        ok=True,
+                        elapsed=elapsed,
+                    ),
+                    lambda disp=iter_display, el=elapsed: emit(
+                        f"[green]✓ iteration {disp} done[/green] [dim]({el:.1f}s)[/dim]"
+                    ),
+                )
             except Exception as e:
                 bg_task.status = RalphTaskStatus.FAILED
                 bg_task.error_message = str(e)
                 bg_task.completed_at = datetime.now(UTC)
+                elapsed = (bg_task.completed_at - bg_task.created_at).total_seconds()
                 err = str(e)[:100] + "..." if len(str(e)) > 100 else str(e)
-                emit(f"[red]✗ iteration {iter_display} failed: {escape(err)}[/red]")
+                _emit_event(
+                    on_event,
+                    rev.IterationFinished(
+                        iteration=iteration,
+                        max_iterations=max_iterations,
+                        ok=False,
+                        elapsed=elapsed,
+                        error=err,
+                    ),
+                    lambda disp=iter_display, msg=err: emit(
+                        f"[red]✗ iteration {disp} failed: {escape(msg)}[/red]"
+                    ),
+                )
 
             iteration += 1
     finally:
@@ -464,17 +576,27 @@ async def _execute_all_ralph_iterations_background(
             if t.status == RalphTaskStatus.FAILED
         )
 
-        emit("")
-        emit(
-            f"[bold]📊 Ralph background summary[/bold] — "
-            f"{completed} completed, {failed} failed of {total_tasks} task(s)"
+        def _summary() -> None:
+            emit("")
+            emit(
+                f"[bold]📊 Ralph background summary[/bold] — "
+                f"{completed} completed, {failed} failed of {total_tasks} task(s)"
+            )
+
+        _emit_event(
+            on_event,
+            rev.RalphFinished(
+                completed=completed,
+                failed=failed,
+                total=total_tasks,
+                reason="background",
+            ),
+            _summary,
         )
 
         try:
             session_state.add_notification(
-                level="error"
-                if failed and not completed
-                else ("warning" if failed else "success"),
+                level="error" if failed and not completed else ("warning" if failed else "success"),
                 title="Ralph background run finished",
                 message=f"{completed} completed, {failed} failed of {total_tasks} task(s)",
                 source="ralph",
@@ -542,6 +664,7 @@ async def handle_ralph_command(
     cmd_args: str | list[str] | None,
     execute_fn=None,
     emit: EmitFn | None = None,
+    on_event: EventFn | None = None,
 ) -> bool:
     """Handle /ralph command - autonomous looping mode.
 
@@ -553,8 +676,10 @@ async def handle_ralph_command(
         /ralph --resume               - Resume from last checkpoint
         /ralph --status               - Show status of running background tasks
 
-    ``emit`` is the UI sink (defaults to the console). The TUI passes a
-    thread-safe emitter so every message renders as a native widget.
+    ``emit`` is the markup UI sink (defaults to the console). ``on_event`` is an
+    optional structured-progress sink: when provided (the TUI passes one), the
+    run's milestones render as native widgets instead of the markup ``emit``
+    fallback. The CLI leaves it ``None`` and keeps its existing output.
     """
     if emit is None:
         emit = _console_emit
@@ -575,7 +700,7 @@ async def handle_ralph_command(
 
     # --status short-circuit.
     if cmd_args and len(cmd_args) == 1 and cmd_args[0] == "--status":
-        return await handle_ralph_status(session_state, emit)
+        return await handle_ralph_status(session_state, emit, on_event)
 
     # Parse task, iterations, resume flag, and background mode.
     max_iterations = 5
@@ -623,12 +748,21 @@ async def handle_ralph_command(
         start_iteration = checkpoint["completed_iterations"] + 1
         working_directory = checkpoint.get("working_directory", os.getcwd())
 
-        _emit_ralph_header(
-            emit,
-            task=task,
-            max_iterations=max_iterations,
-            background_mode=background_mode,
-            resumed_from=start_iteration,
+        _emit_event(
+            on_event,
+            rev.RalphStarted(
+                task=task,
+                max_iterations=max_iterations,
+                background=background_mode,
+                resumed_from=start_iteration,
+            ),
+            lambda: _emit_ralph_header(
+                emit,
+                task=task,
+                max_iterations=max_iterations,
+                background_mode=background_mode,
+                resumed_from=start_iteration,
+            ),
         )
         _clear_ralph_checkpoint()
     else:
@@ -642,11 +776,19 @@ async def handle_ralph_command(
 
         start_iteration = 1
         working_directory = os.getcwd()
-        _emit_ralph_header(
-            emit,
-            task=task,
-            max_iterations=max_iterations,
-            background_mode=background_mode,
+        _emit_event(
+            on_event,
+            rev.RalphStarted(
+                task=task,
+                max_iterations=max_iterations,
+                background=background_mode,
+            ),
+            lambda: _emit_ralph_header(
+                emit,
+                task=task,
+                max_iterations=max_iterations,
+                background_mode=background_mode,
+            ),
         )
 
     # Resolve backend from the agent.
@@ -671,6 +813,7 @@ async def handle_ralph_command(
                 working_directory,
                 backend,
                 emit,
+                on_event,
             ),
             daemon=True,
         )
@@ -707,14 +850,21 @@ async def handle_ralph_command(
 
     try:
         while max_iterations == 0 or iteration <= max_iterations:
-            iter_display = (
-                f"{iteration}/{max_iterations}" if max_iterations > 0 else str(iteration)
+            iter_display = f"{iteration}/{max_iterations}" if max_iterations > 0 else str(iteration)
+
+            def _banner(display: str = iter_display) -> None:
+                emit("")
+                emit(f"[bold cyan]{'─' * 50}[/bold cyan]")
+                emit(f"[bold cyan]Iteration {display}[/bold cyan]")
+                emit(f"[bold cyan]{'─' * 50}[/bold cyan]")
+                emit("")
+
+            _emit_event(
+                on_event,
+                rev.IterationStarted(iteration=iteration, max_iterations=max_iterations),
+                _banner,
             )
-            emit("")
-            emit(f"[bold cyan]{'─' * 50}[/bold cyan]")
-            emit(f"[bold cyan]Iteration {iter_display}[/bold cyan]")
-            emit(f"[bold cyan]{'─' * 50}[/bold cyan]")
-            emit("")
+            iter_start = datetime.now(UTC)
 
             prompt = render_template(
                 "ralph_iteration.jinja",
@@ -735,17 +885,42 @@ async def handle_ralph_command(
                 backend=backend,
             )
 
+            # The iteration completed (a HITL interrupt would have broken the loop
+            # before here). Report it; the trailing markup "Continuing…" line below
+            # remains the CLI-only cue between iterations.
+            elapsed = (datetime.now(UTC) - iter_start).total_seconds()
+            _emit_event(
+                on_event,
+                rev.IterationFinished(
+                    iteration=iteration,
+                    max_iterations=max_iterations,
+                    ok=True,
+                    elapsed=elapsed,
+                ),
+                lambda: None,
+            )
+
             iteration += 1
 
             if stop_after_iteration:
-                emit("")
-                emit("[green]Finished current iteration. Stopping as requested.[/green]")
-                emit(f"[dim]Completed {iteration - 1} iteration(s).[/dim]")
-                emit("")
+                done = iteration - 1
+
+                def _finished_stop(done: int = done) -> None:
+                    emit("")
+                    emit("[green]Finished current iteration. Stopping as requested.[/green]")
+                    emit(f"[dim]Completed {done} iteration(s).[/dim]")
+                    emit("")
+
+                _emit_event(
+                    on_event,
+                    rev.RalphFinished(completed=done, failed=0, total=done, reason="finished"),
+                    _finished_stop,
+                )
                 session_state.auto_approve = original_auto_approve
                 return True
 
-            if max_iterations == 0 or iteration <= max_iterations:
+            if (max_iterations == 0 or iteration <= max_iterations) and on_event is None:
+                # CLI-only inter-iteration cue; the TUI shows it via the cards.
                 emit("")
                 emit(f"[dim]Completed iteration {iteration - 1}. Continuing...[/dim]")
 
@@ -817,9 +992,18 @@ async def handle_ralph_command(
             emit("")
             return True
 
-    emit("")
-    emit(f"[green]Ralph mode completed after {iteration - 1} iteration(s).[/green]")
-    emit("")
+    done = iteration - 1
+
+    def _finished_ok(done: int = done) -> None:
+        emit("")
+        emit(f"[green]Ralph mode completed after {done} iteration(s).[/green]")
+        emit("")
+
+    _emit_event(
+        on_event,
+        rev.RalphFinished(completed=done, failed=0, total=done, reason="completed"),
+        _finished_ok,
+    )
 
     try:
         session_state.add_notification(
