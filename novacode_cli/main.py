@@ -1176,15 +1176,25 @@ async def simple_cli(
                     # should NOT be parsed as file mentions (e.g., @e1, @e2
                     # in agent-browser SKILL.md)
                     if isinstance(result, str):
-                        # Process the prompt through the agent
+                        # Process the prompt through the active agent
+                        active_agent = agent
+                        active_backend = backend
+                        if (
+                            session_state.plan_mode_enabled
+                            and hasattr(session_state, "plan_agent")
+                            and session_state.plan_agent is not None
+                        ):
+                            active_agent = session_state.plan_agent
+                            active_backend = session_state.plan_backend
+
                         _exec_task = asyncio.create_task(
                             execute_task(
                                 result,
-                                agent,
+                                active_agent,
                                 assistant_id,
                                 session_state,
                                 token_tracker,
-                                backend=backend,
+                                backend=active_backend,
                                 is_subagent=False,
                                 image_tracker=image_tracker,
                                 seen_message_ids=_seen_message_ids,  # type: ignore

@@ -111,6 +111,7 @@ async def _start_plan_mode(
     session_state.plan_mode_enabled = True
     session_state.plan_content = None  # Clear old plan content
     session_state.approved_plan_content = None  # Clear any previously approved plan
+    session_state.auto_approve = False  # Reset auto-approve for the new planning phase
 
     console.print()
     console.print(
@@ -177,9 +178,9 @@ async def _start_plan_mode(
         session_state.plan_agent = plan_agent
         session_state.plan_backend = plan_backend
 
-        # If a prompt was provided, return False to pass it to the agent
+        # If a prompt was provided, return the prompt string to process it through the active agent
         if prompt:
-            return False
+            return prompt
 
         return True
 
