@@ -36,8 +36,8 @@ class TestSkillEffectiveness:
         issues = await check_skill_effectiveness(store_mock)
         assert ("my-skill", "high_failure") in issues
 
-    async def test_low_usage(self):
-        """Skills with very low usage should be flagged."""
+    async def test_low_usage_not_flagged_for_refinement(self):
+        """Low usage no longer drives refinement — the curator archives instead."""
         from unittest.mock import AsyncMock, MagicMock
 
         store_mock = MagicMock()
@@ -48,7 +48,7 @@ class TestSkillEffectiveness:
 
         store_mock.asearch = AsyncMock(return_value=[MockItem()])
         issues = await check_skill_effectiveness(store_mock)
-        assert ("rare-skill", "low_usage") in issues
+        assert issues == []
 
 
 class TestParseSkillSpec:

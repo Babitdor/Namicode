@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -21,6 +22,7 @@ from langchain.tools import ToolRuntime, tool
 from langchain_core.messages import ToolMessage
 from langchain_core.tools.base import ToolException
 
+from novacode_cli.shell.os_sandbox import OSSandboxPolicy, detect_backend, wrap_command
 from novacode_cli.shell.patterns import _NPX_YES_RE
 from novacode_cli.shell.utils import (
     _convert_unix_command_to_windows,
@@ -53,6 +55,8 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         env: dict[str, str] | None = None,
         backend: Any = None,
         sandbox_working_dir: str | None = None,
+        exec_sandbox: bool = False,
+        allow_network: bool = True,
     ) -> None:
         """Initialize an instance of `ShellMiddleware`.
 
@@ -70,6 +74,12 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
             sandbox_working_dir: Working directory inside the sandbox (e.g.
                 "/workspace"), used only for the tool description shown to the
                 model when running in a sandbox. Falls back to workspace_root.
+            exec_sandbox: When True (Pattern A), wrap locally-executed commands in
+                an OS kernel sandbox (bwrap/sandbox-exec) that confines filesystem
+                writes to ``workspace_root``. Ignored for sandbox-backend
+                execution. Degrades to no-op when no backend is available.
+            allow_network: Whether the OS sandbox permits network egress. Defaults
+                to True so dependency installs keep working.
         """
         super().__init__()
         self._timeout = timeout
@@ -78,6 +88,10 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         self._env = _sanitize_env(env if env is not None else os.environ.copy())
         self._workspace_root = workspace_root
         self._backend = backend
+
+        # OS-level shell confinement (Pattern A). Sets self._os_confined and
+        # self._os_policy; probes the backend once, at build time.
+        self._init_os_sandbox(exec_sandbox, allow_network)
 
         # Track background processes for cleanup
         self._background_processes: list[asyncio.subprocess.Process] = []
@@ -124,6 +138,14 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
             execution_context = (
                 f"You are operating in an **isolated sandbox environment** at {_display_dir}. "
                 f"All commands execute inside the sandbox, not on the local machine. "
+            )
+        elif self._os_confined:
+            _net = "Network is available" if self._os_policy.allow_network else "Network is blocked"
+            execution_context = (
+                f"Commands run in **{_shell_name}** in the working directory: {_display_dir}. "
+                f"The shell is **confined by an OS sandbox**: filesystem writes are "
+                f"restricted to the workspace ({_display_dir}) — writes elsewhere "
+                f"(e.g. /etc, $HOME) will fail. {_net}. "
             )
         else:
             execution_context = (
@@ -191,6 +213,45 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
                 "bash", description=f"Alias for `{self._tool_name}`. {description}"
             )(_shell_impl)
             self.tools.append(self._bash_alias)
+
+    def _init_os_sandbox(self, exec_sandbox: bool, allow_network: bool) -> None:  # noqa: FBT001
+        """Probe and configure the OS-level shell sandbox (Pattern A).
+
+        Done once at build time so the per-command path stays cheap and never
+        ``console.print``s (which would corrupt the TUI). If confinement was
+        requested but no backend is available, it is disabled with a one-line
+        warning — execution still runs, guarded by the dangerous-command
+        blocklist + HITL.
+        """
+        self._os_confined = False
+        self._os_policy = OSSandboxPolicy(
+            workspace_root=self._workspace_root,
+            allow_network=allow_network,
+            enabled=False,
+        )
+        if not exec_sandbox:
+            return
+
+        from novacode_cli.config.config import boot_status
+
+        detected = detect_backend()
+        if detected is None:
+            boot_status(
+                "sandbox: no OS sandbox backend available — shell runs "
+                "unconfined (blocklist + approval still apply)",
+                "warn",
+            )
+            return
+
+        self._os_policy = OSSandboxPolicy(
+            workspace_root=self._workspace_root,
+            allow_network=allow_network,
+            enabled=True,
+            backend=detected,
+        )
+        self._os_confined = True
+        net = "network on" if allow_network else "network blocked"
+        boot_status(f"sandbox: shell confined to workspace via {detected} ({net})", "ok")
 
     def _cleanup_background_processes(self) -> None:
         """Clean up background processes before exit to prevent asyncio errors."""
@@ -525,6 +586,11 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         """
         import time
 
+        # Confine the command to the workspace via the OS sandbox (no-op when
+        # confinement is disabled or unavailable). Done here, at the single local
+        # launch point, so interactive + non-interactive paths are both covered.
+        command = wrap_command(command, self._os_policy)
+
         proc = await asyncio.create_subprocess_shell(
             command,
             stdin=asyncio.subprocess.PIPE,
@@ -788,6 +854,11 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         # inheriting the terminal's stdin handle. On Windows, a subprocess
         # that holds the console handle locks the terminal entirely —
         # the user cannot type or Ctrl+C until the process exits.
+        # Confine the background command to the workspace via the OS sandbox
+        # (no-op when disabled/unavailable). --die-with-parent in the bwrap recipe
+        # ties the server's sandbox to Nova so it isn't orphaned on exit.
+        command = wrap_command(command, self._os_policy)
+
         process = await asyncio.create_subprocess_shell(
             command,
             stdin=asyncio.subprocess.DEVNULL,

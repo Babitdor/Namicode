@@ -31,18 +31,23 @@ SKILL.md MUST have exactly two parts:
 ---
 name: <skill-name>
 description: <verb> <object/domain>. Use when: <signal 1>, <signal 2>, <signal 3>.
+version: 1.0.0
+tags: [tag-one, tag-two]
 ---
 ```
-- Only `name` + `description` keys — no comments, no extras
-- Description defines triggers — do NOT explain usage elsewhere
-- Any violation requires explicit user approval
+- `name` + `description` are required; `version` (semver) + `tags` (list) are metadata.
+- No other keys without a reason. Description defines triggers — do NOT explain usage elsewhere.
 
 ### Part 2 — Markdown Body
-- Imperative form only (procedures, not explanations)
-- Prefer concrete examples over prose; reference external files over embedding
-- Max ~500 lines, assume expert knowledge
-- Include: core workflows, decision rules, short examples, input/output, links to references
-- Exclude: introductions, summaries, theory, background, FAQs, content duplicated in references
+Imperative form only (procedures, not explanations). Max ~500 lines, assume expert
+knowledge. Use these canonical sections (omit one only if truly N/A):
+- `## When to Use` — the concrete triggers (mirror the description).
+- `## Quick Reference` — key command(s)/one-liner(s), copy-pasteable.
+- `## Procedure` — ordered, concrete steps; reference external files over embedding.
+- `## Pitfalls` — edge cases and mistakes to avoid (the gotchas worth keeping).
+- `## Verification` — how to confirm the work is correct.
+
+Exclude: introductions, summaries, theory, background, FAQs, content duplicated in references.
 </skill_md_contract>
 
 <resources>
@@ -66,7 +71,7 @@ Use ONLY for: (1) verifying current service/API status, (2) confirming breaking 
 </process>
 
 <quality_check>
-- [ ] YAML frontmatter exists with name + description only
+- [ ] YAML frontmatter has name + description (and version + tags)
 - [ ] All referenced paths exist
 - [ ] No forbidden files or directories
 - [ ] SKILL.md body < 500 lines

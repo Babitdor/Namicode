@@ -395,7 +395,39 @@ NOVA_TOKYO_NIGHT = Theme(
 DEFAULT_THEME = "tokyo-night"
 
 
+class SessionHeader(Horizontal):
+    """A structured header showing session metadata as pills.
+    
+    Pills include: Model, Sandbox, Memory, and CWD breadcrumbs.
+    """
+    DEFAULT_CSS = """
+    SessionHeader {
+        classes: "session-header";
+    }
+    """
+
+    def __init__(self, model: str, sandbox: str, cwd: str, memory: str) -> None:
+        super().__init__()
+        self.model = model
+        self.sandbox = sandbox
+        self.cwd = cwd
+        self.memory = memory
+
+    def compose(self) -> ComposeResult:
+        yield Static(f"🤖 {self.model}", classes="session-pill pill-model")
+        yield Static(f"📦 {self.sandbox}", classes="session-pill pill-sandbox")
+        yield Static(f"🧠 {self.memory}", classes="session-pill pill-memory")
+        yield Static(f"📁 {self.cwd}", classes="breadcrumb")
+
+    def update_info(self, model: str, sandbox: str, cwd: str, memory: str) -> None:
+        self.model = model
+        self.sandbox = sandbox
+        self.cwd = cwd
+        self.memory = memory
+        self.refresh()
+
 class ChatMessage(Vertical):
+
     """A single transcript entry: a left accent bar, a role header, and a body.
 
     role_class selects the accent color (user / nova / reason). The body is set
@@ -2066,6 +2098,23 @@ class NovaApp(App):
         padding: 0 3; background: $panel;
         color: $text-muted;
     }
+    .session-header {
+        height: auto;
+        padding: 0 1;
+        background: $surface;
+        align: left middle;
+    }
+    .session-pill {
+        background: $boost;
+        border: round $border;
+        padding: 0 1;
+        margin: 0 1;
+        height: auto;
+    }
+    .pill-model { color: $primary; }
+    .pill-sandbox { color: $success; }
+    .pill-memory { color: $accent; }
+    .breadcrumb { color: $text-muted; }
     Screen > .modal-backdrop { background: $surface 50%; }
     /* Every modal centers its box and dims the backdrop. */
     ModalScreen { align: center middle; background: $surface 50%; }
@@ -2613,7 +2662,22 @@ class NovaApp(App):
             return "\n".join(parts)
         return str(content)
 
+    def _format_breadcrumbs(self, path: Path) -> str:
+        """Convert an absolute path into a condensed breadcrumb format.
+        
+        Example: B:\\Summer Project 2026\\Nova-Code\\nova-code-cli 
+                 -> .../Nova-Code/nova-code-cli
+        """
+        parts = path.parts
+        if len(parts) <= 3:
+            return str(path)
+        
+        # Keep the last 2 segments and prefix with .../
+        breadcrumb = "/".join(parts[-2:])
+        return f".../{breadcrumb}"
+
     def _render_startup_info(self) -> None:
+
         """Render a compact native session-info panel (replaces the legacy
         pre-TUI Rich panels, which never appeared in TUI mode)."""
         from pathlib import Path

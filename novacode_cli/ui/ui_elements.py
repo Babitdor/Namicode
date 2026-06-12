@@ -163,7 +163,7 @@ def format_tool_display(tool_name: str, tool_args: dict) -> str:
         if "auth" in tool_args:
             parts.append("(auth)")
         if parts:
-            return f'{tool_name}({" ".join(parts)})'
+            return f"{tool_name}({' '.join(parts)})"
 
     elif tool_name == "task":
         # Task: "[Agent Name] description" — agent name is title-cased, no icon
@@ -305,12 +305,12 @@ def render_tool_panel(
     tool_color: str | None = None,
 ) -> None:
     """Render a tool call in a beautiful bordered panel with enhanced visuals.
-    
+
     Responsive to terminal width with beautiful styling:
     - Gradient-inspired colors based on tool type
     - Enhanced visual hierarchy with proper spacing
     - Subtle decorative elements for better aesthetics
-    
+
     Args:
         tool_name: Name of the tool being called
         tool_display: Formatted display string for the tool
@@ -318,34 +318,34 @@ def render_tool_panel(
         tool_color: Optional color for the border (uses COLORS['tool'] if not provided)
     """
     if tool_color is None:
-        tool_color = COLORS.get('tool', 'cyan')
-    
+        tool_color = COLORS.get("tool", "cyan")
+
     # Get terminal width and calculate responsive panel width
     terminal_width = console.width
     # Use 80% of terminal width, minimum 50, maximum 140
     panel_width = max(50, min(140, int(terminal_width * 0.8)))
-    
+
     # Calculate available width for content
     available_width = panel_width - 10  # Account for borders, padding, and decorations
-    
+
     # Truncate with ellipsis if too long
     if len(tool_display) > available_width:
         max_display_len = available_width - 3
         tool_display = tool_display[:max_display_len] + "..."
-    
+
     # Build beautiful content with visual hierarchy
     # Add subtle separator line for visual appeal
     separator = "─" * (panel_width - 10)
-    
+
     body_lines = [
         "",  # Top padding
         f"  {icon}  [bold]{tool_display}[/bold]",  # Main content with icon spacing
         "",  # Bottom padding
     ]
-    
+
     # Create beautiful title with decorative elements
     title_text = f"[bold {tool_color}]◆[/bold {tool_color}] [bold]Tool Call[/bold] [bold {tool_color}]◆[/bold {tool_color}]"
-    
+
     console.print()
     console.print(
         Panel(
@@ -818,8 +818,7 @@ class TokenTracker:
             )
         elif breakdown.is_warning:
             console.print(
-                "  [yellow]⚠ Warning: Context usage is high. "
-                "Consider using /compact soon.[/yellow]"
+                "  [yellow]⚠ Warning: Context usage is high. Consider using /compact soon.[/yellow]"
             )
         else:
             console.print(
@@ -938,9 +937,9 @@ def _todo_line(todo: dict, indent: str = "") -> str:
 
 def render_todo_list(todos: list[dict], agent_name: str | None = None) -> None:
     """Render todo list as a beautiful rich Panel with checkboxes, supporting subtasks.
-    
+
     Responsive to terminal width with beautiful styling and visual hierarchy.
-    
+
     Args:
         todos: List of todo items with content and status
         agent_name: Optional name of the agent for display in the header
@@ -1287,7 +1286,11 @@ def show_help() -> None:
     console.print("  --agent NAME                  Agent identifier (default: agent)")
     console.print("  --auto-approve                Auto-approve tool usage without prompting")
     console.print(
-        "  --sandbox TYPE                Remote sandbox for execution (modal, runloop, daytona)"
+        "  --sandbox TYPE                Execution sandbox: os (default Linux/macOS; "
+        "Windows defaults to host+approvals), modal, runloop, daytona, docker (Windows-only opt-in)"
+    )
+    console.print(
+        "  --no-sandbox                  Run shell unconfined on the host (no OS/Docker sandbox)"
     )
     console.print("  --sandbox-id ID               Reuse existing sandbox (skips creation/cleanup)")
     console.print()
@@ -1303,6 +1306,10 @@ def show_help() -> None:
     )
     console.print(
         "  nova --auto-approve               # Start with auto-approve enabled",
+        style=COLORS["dim"],
+    )
+    console.print(
+        "  nova --no-sandbox                 # Run shell unconfined on the host",
         style=COLORS["dim"],
     )
     console.print(

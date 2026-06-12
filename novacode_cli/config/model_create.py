@@ -14,6 +14,80 @@ else:
     console = Console(highlight=False)
 
 
+def create_model_from_config(provider: str, model_name: str) -> BaseChatModel | None:
+    """Create a model instance from a provider and model name (no fallback).
+
+    Unlike :func:`create_model`, this function only tries the exact provider/model
+    requested and returns ``None`` if the required API key is missing — it never
+    falls back to another provider.  This is used for vision captioning (gemma).
+
+    Args:
+        provider: One of ``"ollama"``, ``"openai"``, ``"anthropic"``, ``"google"``, ``"openrouter"``.
+        model_name: The model name/identifier.
+
+    Returns:
+        A ``BaseChatModel`` instance, or ``None`` if the provider cannot be used.
+    """
+    if provider == "ollama":
+        from langchain_ollama import ChatOllama
+
+        from novacode_cli.context._dynamic import get_ollama_num_ctx
+
+        return ChatOllama(
+            model=model_name,
+            temperature=0,
+            disable_streaming=True,
+            keep_alive=600,
+            num_ctx=get_ollama_num_ctx(),
+        )
+
+    if provider == "openai":
+        if not os.environ.get("OPENAI_API_KEY"):
+            return None
+        from langchain_openai import ChatOpenAI
+
+        return ChatOpenAI(model=model_name, max_retries=5)
+
+    if provider == "anthropic":
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            return None
+        from langchain_anthropic import ChatAnthropic
+
+        return ChatAnthropic(
+            model_name=model_name,
+            max_tokens=20_000,  # type: ignore[arg-type]
+            max_retries=5,
+        )
+
+    if provider == "google":
+        if not os.environ.get("GOOGLE_API_KEY"):
+            return None
+        from langchain_google_genai import ChatGoogleGenerativeAI
+
+        return ChatGoogleGenerativeAI(
+            model=model_name,
+            temperature=0,
+            max_tokens=None,
+            max_retries=5,
+        )
+
+    if provider == "openrouter":
+        if not os.environ.get("OPENROUTER_API_KEY"):
+            return None
+        from langchain_openai import ChatOpenAI
+
+        from novacode_cli.config.model_manager import OPENROUTER_BASE_URL
+
+        return ChatOpenAI(
+            model=model_name,
+            base_url=OPENROUTER_BASE_URL,
+            api_key=os.environ.get("OPENROUTER_API_KEY"),  # type: ignore[arg-type]
+            max_retries=5,
+        )
+
+    return None
+
+
 def create_model() -> BaseChatModel:
     """Create the appropriate model based on available API keys.
 

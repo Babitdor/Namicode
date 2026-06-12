@@ -151,9 +151,11 @@ async def write_skill_from_spec(
         except Exception:  # noqa: BLE001
             pass
 
-    # Escape any double-quotes in the description for the YAML scalar.
-    safe_desc = description.replace('"', "'")
-    content = f'---\nname: {name}\ndescription: "{safe_desc}"\n---\n\n{body}\n'
+    # Frame the body with canonical, schema-complete frontmatter (name +
+    # description + version + tags). Tolerant — fills gaps, never raises.
+    from novacode_cli.skills.schema import normalize_skill_frontmatter
+
+    content = normalize_skill_frontmatter(body, name, description)
 
     try:
         skill_dir.mkdir(parents=True, exist_ok=True)
@@ -206,53 +208,128 @@ def cleanup_legacy_pattern_skills(skills_dir: Path) -> list[str]:
 
 # ── Skill refinement ───────────────────────────────────────────────────────
 
+# Effectiveness thresholds for flagging a skill for (high-failure) refinement.
+_MIN_INVOCATIONS_FOR_REFINE = 3   # don't rewrite a skill that's barely been used
+_MIN_OUTCOMES_FOR_REFINE = 5      # evidence floor — and, because refine resets the
+                                  # counters, this is "outcomes SINCE the last refine"
+_FAILURE_RATE_THRESHOLD = 0.6     # success_rate below this ⇒ failing
+_MAX_REFINES = 3                  # give up after this many — rewriting clearly isn't
+                                  # fixing it; leave it to the curator / a human
+_REFINE_COOLDOWN_SECS = 1800.0    # 30-min thrash guard between refines of one skill
+
 
 async def check_skill_effectiveness(
     store: BaseStore,
 ) -> list[tuple[str, str]]:
-    """Check all tracked skills for effectiveness issues.
+    """Check tracked skills for a high failure rate worth a targeted refinement.
 
     Reads the ``("nova", "skill_usage")`` namespace, which records actual
     SKILL.md invocations and the outcomes attributed to them (see
-    ``ToolUsageTracker``). Earlier this read ``skill_stats`` keyed by *tool*
-    name, so it could never match a real skill — the refinement loop was inert.
+    ``ToolUsageTracker``), cross-referenced with ``("nova", "skill_refinement")``
+    so a skill is **not** re-flagged immediately after it was refined.
 
-    Returns a list of (skill_name, issue) tuples for skills needing attention.
+    Returns a list of ``(skill_name, "high_failure")`` tuples.
 
-    Issues detected:
-    - "high_failure" — success_rate < 0.6 over >=5 attributed outcomes
-    - "low_usage" — skill invoked fewer than 2 times
+    A skill is flagged only when ALL hold:
+    - ``invocations >= _MIN_INVOCATIONS_FOR_REFINE`` (not barely used);
+    - ``outcomes >= _MIN_OUTCOMES_FOR_REFINE`` — and since ``refine_skill`` resets
+      the success/failure counters, this means *fresh* evidence accrued since the
+      last refine (so a refined skill can leave the flagged state);
+    - ``success_rate < _FAILURE_RATE_THRESHOLD``;
+    - it hasn't already been refined ``_MAX_REFINES`` times, nor within the last
+      ``_REFINE_COOLDOWN_SECS``.
+
+    **Low usage is intentionally NOT handled here** — rewriting a skill can't make
+    the agent invoke it, and chronically-unused skills are archived by the
+    curator (see ``hermes/curator.py``). Refining for low usage just churned the
+    same skill every cycle.
     """
     issues: list[tuple[str, str]] = []
 
     try:
+        now = time.time()
+
+        # Per-skill refinement history (cooldown + attempt cap). Best-effort.
+        refine_recs: dict[str, dict] = {}
+        try:
+            for rec in await store.asearch(("nova", "skill_refinement")):
+                if hasattr(rec, "key") and isinstance(getattr(rec, "value", None), dict):
+                    refine_recs[rec.key] = rec.value
+        except Exception:  # noqa: BLE001
+            refine_recs = {}
+
         results = await store.asearch(("nova", "skill_usage"))
         for item in results:
             if not hasattr(item, "key") or not hasattr(item, "value"):
                 continue
-            # item.key is the skill name, item.value is the usage dict
             value = item.value
             if not isinstance(value, dict):
                 continue
-            # New schema uses "invocations"; fall back to legacy "uses".
-            invocations = value.get("invocations", value.get("uses", 0))
-            successes = value.get("successes", 0)
-            failures = value.get("failures", 0)
+            successes = int(value.get("successes", 0))
+            failures = int(value.get("failures", 0))
             outcomes = successes + failures
+            # New schema uses "invocations"; fall back to legacy "uses".
+            invocations = int(value.get("invocations", value.get("uses", 0)))
 
-            # High failure rate over a meaningful number of attributed outcomes.
-            if outcomes >= 5:
-                success_rate = successes / outcomes if outcomes > 0 else 0.0
-                if success_rate < 0.6:
-                    issues.append((item.key, "high_failure"))
+            rec = refine_recs.get(item.key, {})
+            refine_count = int(rec.get("refine_count", 0))
+            last_refined_ts = float(rec.get("last_refined_ts", 0.0))
 
-            # Low usage (skill was created but barely invoked).
-            if invocations < 2:
-                issues.append((item.key, "low_usage"))
+            if (
+                invocations >= _MIN_INVOCATIONS_FOR_REFINE
+                and outcomes >= _MIN_OUTCOMES_FOR_REFINE
+                and (successes / outcomes) < _FAILURE_RATE_THRESHOLD
+                and refine_count < _MAX_REFINES
+                and (now - last_refined_ts) >= _REFINE_COOLDOWN_SECS
+            ):
+                issues.append((item.key, "high_failure"))
     except Exception:  # noqa: BLE001
         pass
 
     return issues
+
+
+async def _record_refinement(store: BaseStore, skill_name: str, issue: str) -> None:
+    """Persist the post-refine cooldown record and reset outcome counters.
+
+    Writes ``("nova", "skill_refinement")[skill_name]`` (timestamp, invocation
+    count at refine time, cumulative attempt count) so ``check_skill_effectiveness``
+    can enforce a cooldown + attempt cap. For ``high_failure``, also zeroes the
+    ``skill_usage`` success/failure counters and clears ``failure_samples`` so the
+    refined skill is judged on *fresh* evidence and can leave the flagged state
+    (otherwise the historical failures would re-flag it forever). Best-effort.
+    """
+    try:
+        usage = await store.aget(("nova", "skill_usage"), skill_name)
+        usage_val = dict(usage.value) if usage and isinstance(usage.value, dict) else {}
+        invocations = int(usage_val.get("invocations", 0))
+
+        prev = await store.aget(("nova", "skill_refinement"), skill_name)
+        refine_count = (
+            int(prev.value.get("refine_count", 0))
+            if prev and isinstance(prev.value, dict)
+            else 0
+        ) + 1
+
+        await store.aput(
+            ("nova", "skill_refinement"),
+            skill_name,
+            {
+                "last_refined_ts": time.time(),
+                "invocations_at_refine": invocations,
+                "refine_count": refine_count,
+                "last_issue": issue,
+            },
+        )
+
+        # Reset outcome evidence so post-refinement performance is judged fresh.
+        if issue == "high_failure" and usage_val:
+            usage_val["successes"] = 0
+            usage_val["failures"] = 0
+            usage_val["failure_samples"] = []
+            await store.aput(("nova", "skill_usage"), skill_name, usage_val)
+    except Exception:  # noqa: BLE001
+        logger.debug("Could not record refinement for '%s'", skill_name, exc_info=True)
 
 
 async def refine_skill(
@@ -261,6 +338,7 @@ async def refine_skill(
     issue: str,
     *,
     failure_samples: list[dict[str, Any]] | None = None,
+    store: BaseStore | None = None,
 ) -> bool:
     """Refine an existing skill — **grounded in the actual failures**.
 
@@ -269,11 +347,16 @@ async def refine_skill(
     for a *targeted* improvement that addresses those specific failures. The
     prior version is snapshotted first, so a bad refinement can be rolled back.
 
+    On a successful write, ``_record_refinement`` stamps a cooldown record and
+    resets the skill's outcome counters (when *store* is provided) so the same
+    skill isn't re-flagged and re-refined on every cycle.
+
     Args:
         skill_name: Name of the skill to refine.
         skills_dir: Directory where skills are stored.
         issue: The detected issue (``high_failure`` | ``low_usage``).
         failure_samples: Recent per-skill failure excerpts (from ``skill_usage``).
+        store: Durable store, for the cooldown record + counter reset.
 
     Returns:
         True if a refinement was written, False otherwise.
@@ -360,6 +443,8 @@ async def refine_skill(
 
         versioning.snapshot(skill_dir, reason=f"refine:{issue}", source="refine")
         skill_path.write_text(new_md.rstrip() + "\n", encoding="utf-8")
+        if store is not None:
+            await _record_refinement(store, skill_name, issue)
         _emit_tui_event(
             "nova_skill_refined",
             f"Nova refined skill: {skill_name} ({issue}) — previous version saved",

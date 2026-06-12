@@ -7,12 +7,8 @@ This module handles:
 """
 
 import asyncio
-from pathlib import Path
 
-from novacode_cli.config.config import console
-from novacode_cli.config.model_create import get_current_model_name
 from novacode_cli.errors.handlers import ErrorHandler
-from novacode_cli.image_utils import create_multimodal_content
 from novacode_cli.input import ImageTracker, parse_file_mentions
 
 
@@ -68,6 +64,18 @@ async def prepare_input_content(
     images_to_send = []
     if image_tracker:
         images_to_send = image_tracker.get_images()
+
+    if images_to_send:
+        # Caption pasted images to TEXT here, at ingestion, so the main
+        # (text-only) model never receives image blocks. The vision model
+        # transcribes once; only its text enters the conversation. Degrades to a
+        # placeholder string if vision is unavailable — never blocks the turn.
+        from novacode_cli.bootstrap.vision_router import caption_images
+
+        urls = [img.to_message_content()["image_url"]["url"] for img in images_to_send]
+        caption = await caption_images(urls, task_hint=final_input)
+        label = "Pasted image" if len(urls) == 1 else f"{len(urls)} pasted images"
+        return f"{final_input}\n\n[{label}: {caption}]"
 
     return final_input
 

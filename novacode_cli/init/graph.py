@@ -45,60 +45,123 @@ def _coerce_float(value: Any, default: float) -> float:
     return default
 
 
+def _coerce_str(value: Any, default: str) -> str:
+    """Coerce a value to ``str``; ``None`` → *default*, other types → ``str(value)``."""
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return default
+    return str(value)
+
+
 _NUMERIC_EDGE_FIELDS = frozenset({"weight", "confidence_score", "confidence"})
 """Edge fields that must be numeric for NetworkX arithmetic."""
 _STRING_EDGE_FIELDS = frozenset({"source", "target", "relation"})
 """Edge fields that must be strings — dicts here cause '>' comparison crashes."""
+_STRING_NODE_FIELDS = frozenset(
+    {"label", "name", "title", "source_file", "type", "file_type", "relation"}
+)
+"""Node fields graphify runs string ops on (``.lower()``, ``re.sub``, ``Path()``,
+``unicodedata.normalize()``). A ``None`` or dict here crashes build/export with
+``expected string or bytes-like object, got 'NoneType'`` or a ``normalize()`` /
+``.lower()`` ``TypeError``."""
+_NUMERIC_NODE_FIELDS = frozenset(
+    {"weight", "size", "value", "score", "degree", "betweenness", "confidence_score"}
+)
+"""Node fields used in arithmetic / sorting — a dict here raises
+``'>' not supported between instances of 'float' and 'dict'``."""
+
+
+def _sanitize_node(node: dict[str, Any]) -> bool:
+    """Coerce one node's fields in place. Return False if it must be dropped.
+
+    A node with a ``None``/empty ``id`` makes NetworkX raise "None cannot be a
+    node" and dangles every edge referencing it, so it is dropped.
+    """
+    nid = node.get("id")
+    nid = nid.strip() if isinstance(nid, str) else ("" if nid is None else str(nid).strip())
+    if not nid:
+        return False
+    node["id"] = nid
+    # String fields graphify runs str ops / regex / Path() on.
+    for key in _STRING_NODE_FIELDS:
+        if key in node and not isinstance(node[key], str):
+            node[key] = _coerce_str(node[key], "")
+    # label is special: graphify falls back to id only when the key is MISSING,
+    # not when it's present-but-empty/None — so force a usable one.
+    if not node.get("label"):
+        node["label"] = nid
+    # Numeric fields used in arithmetic / sorting.
+    for key in _NUMERIC_NODE_FIELDS:
+        if key in node and not isinstance(node[key], (int, float)):
+            node[key] = _coerce_float(node[key], 0.0)
+    # community / group must be int-able for clustering.
+    for key in ("community", "group"):
+        val = node.get(key)
+        if val is not None and not isinstance(val, (int, float)):
+            try:
+                node[key] = int(val)
+            except (TypeError, ValueError):
+                node.pop(key, None)
+    return True
+
+
+def _sanitize_edge(edge: dict[str, Any]) -> None:
+    """Coerce one edge's fields in place (endpoints/weights, never dropped)."""
+    # Guarantee a numeric weight on EVERY edge — NetworkX/graphify arithmetic
+    # needs it, and a missing/dict weight crashes clustering.
+    edge["weight"] = _coerce_float(edge.get("weight"), 1.0)
+    for key in ("confidence_score", "confidence"):
+        if key in edge:
+            edge[key] = _coerce_float(edge[key], 1.0)
+    for key in _STRING_EDGE_FIELDS:
+        if key in edge and not isinstance(edge[key], str):
+            edge[key] = _coerce_str(edge[key], "")
+    # Edge path fields graphify export reads via Path()/regex.
+    if "source_file" in edge and not isinstance(edge["source_file"], str):
+        edge["source_file"] = _coerce_str(edge["source_file"], "")
+    sf = edge.get("source_files")
+    if isinstance(sf, list):
+        edge["source_files"] = [_coerce_str(x, "") for x in sf]
 
 
 def sanitize_graph_extraction(extraction: dict[str, Any]) -> dict[str, Any]:
     """Coerce all fields so malformed extraction can't crash the graph.
 
     The semantic-extraction stage is LLM-authored, and weak models sometimes
-    emit a numeric field (``weight``, ``confidence_score``) as a dict, or
-    a string field (``source``, ``target``) as an object.  NetworkX's
-    internal degree computation and graphify's analysis then do comparisons
-    against those dicts and raise::
+    emit a numeric field (``weight``, ``confidence_score``) as a dict, a string
+    field (``label``, ``source_file``, ``source``) as ``None``/an object, or a
+    node with a ``None``/empty ``id``. graphify's build/analysis/export then
+    raise one of::
 
         '>' not supported between instances of 'float' and 'dict'
+        expected string or bytes-like object, got 'NoneType'
+        None cannot be a node
 
-    We coerce every known field type at the graph boundary so a single bad
-    fragment can't fail the whole ``/init``. Mutates in place and returns it.
+    We coerce every known field — and drop nodes with an unusable id — at the
+    graph boundary so a single bad fragment can't fail the whole ``/init``.
+    Mutates in place and returns it. Keys absent on the input stay absent.
     """
     if not isinstance(extraction, dict):
         return extraction
 
-    # ── Sanitize edges ──────────────────────────────────────────────────
-    for edge in extraction.get("edges") or []:
-        if not isinstance(edge, dict):
-            continue
-        for key in _NUMERIC_EDGE_FIELDS:
-            if key in edge:
-                edge[key] = _coerce_float(edge[key], 1.0)
-        for key in _STRING_EDGE_FIELDS:
-            if key in edge and not isinstance(edge[key], str):
-                edge[key] = str(edge[key]) if edge[key] is not None else ""
+    nodes = extraction.get("nodes")
+    if isinstance(nodes, list):
+        extraction["nodes"] = [
+            n for n in nodes if isinstance(n, dict) and _sanitize_node(n)
+        ]
 
-    # ── Sanitize nodes (degree_map in graph_reader.py does arithmetic) ──
-    for node in extraction.get("nodes") or []:
-        if not isinstance(node, dict):
-            continue
-        # community / group must be int-able for clustering
-        for key in ("community", "group"):
-            val = node.get(key)
-            if val is not None and not isinstance(val, (int, float)):
-                try:
-                    node[key] = int(val)
-                except (TypeError, ValueError):
-                    node.pop(key, None)
+    edges = extraction.get("edges")
+    if isinstance(edges, list):
+        for edge in edges:
+            if isinstance(edge, dict):
+                _sanitize_edge(edge)
 
-    # ── Sanitize hyperedges ─────────────────────────────────────────────
     for hyper in extraction.get("hyperedges") or []:
-        if not isinstance(hyper, dict):
-            continue
-        for key in _NUMERIC_EDGE_FIELDS:
-            if key in hyper:
-                hyper[key] = _coerce_float(hyper[key], 1.0)
+        if isinstance(hyper, dict):
+            for key in _NUMERIC_EDGE_FIELDS:
+                if key in hyper:
+                    hyper[key] = _coerce_float(hyper[key], 1.0)
 
     return extraction
 

@@ -81,6 +81,42 @@ class NovaConfig:
             del self._config["model"]
             self._save()
 
+    # ── Vision model config (for image routing) ─────────────────────────────
+
+    VISION_MODEL_DEFAULT = "gemma4:31b-cloud"
+    VISION_PROVIDER_DEFAULT = "ollama"
+
+    def get_vision_model_config(self) -> dict[str, str]:
+        """Get saved vision model provider configuration.
+
+        Returns:
+            Dict with 'provider' and 'model' keys. Defaults to ollama/gemma4:31b-cloud
+            when not configured.
+        """
+        cfg = self._config.get("vision_model")
+        if cfg and isinstance(cfg, dict) and "provider" in cfg and "model" in cfg:
+            return {"provider": cfg["provider"], "model": cfg["model"]}
+        return {"provider": self.VISION_PROVIDER_DEFAULT, "model": self.VISION_MODEL_DEFAULT}
+
+    def set_vision_model_config(self, provider: str, model: str) -> None:
+        """Save vision model provider configuration.
+
+        Args:
+            provider: Provider ID (openai, anthropic, ollama, google)
+            model: Model name
+        """
+        self._config["vision_model"] = {
+            "provider": provider,
+            "model": model,
+        }
+        self._save()
+
+    def clear_vision_model_config(self) -> None:
+        """Clear saved vision model configuration (reverts to default)."""
+        if "vision_model" in self._config:
+            del self._config["vision_model"]
+            self._save()
+
     def get(self, key: str, default: Any = None) -> Any:
         """Get a configuration value.
 

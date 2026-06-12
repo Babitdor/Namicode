@@ -92,13 +92,15 @@ class TestSkillUsageAttribution:
         assert usage["my-skill"]["failures"] == 1
 
     async def test_attribution_budget_expires(self, tracker, store):
+        from novacode_cli.hermes.tracker import _SKILL_ATTRIBUTION_BUDGET
+
         await tracker.record_tool_usage("read_file", True, skill_invoked="my-skill")
-        # Exhaust the 15-call window, then one more that should NOT be attributed.
-        for _ in range(20):
+        # Far exceed the window; calls past the budget must NOT be attributed.
+        for _ in range(_SKILL_ATTRIBUTION_BUDGET + 12):
             await tracker.record_tool_usage("execute", False)
         usage = await tracker.get_skill_usage()
-        # At most the budget (15) outcomes attributed, not all 20.
-        assert usage["my-skill"]["failures"] <= 15
+        # Exactly the budget's worth of outcomes attributed, not all of them.
+        assert usage["my-skill"]["failures"] == _SKILL_ATTRIBUTION_BUDGET
 
     async def test_tool_stats_separate_from_skill_usage(self, tracker, store):
         # A non-builtin tool populates tool_stats, not skill_usage.
@@ -108,14 +110,15 @@ class TestSkillUsageAttribution:
 
 
 class TestCheckSkillEffectivenessNewSchema:
-    async def test_low_usage_from_invocations(self, store):
+    async def test_low_usage_not_flagged_for_refinement(self, store):
+        # Low usage is handled by the curator (archival), not by rewriting.
         await store.aput(
             ("nova", "skill_usage"),
             "rare",
             {"invocations": 1, "successes": 1, "failures": 0},
         )
         issues = await check_skill_effectiveness(store)
-        assert ("rare", "low_usage") in issues
+        assert all(name != "rare" for name, _ in issues)
 
     async def test_high_failure_from_outcomes(self, store):
         await store.aput(
@@ -134,6 +137,78 @@ class TestCheckSkillEffectivenessNewSchema:
         )
         issues = await check_skill_effectiveness(store)
         assert all(name != "good" for name, _ in issues)
+
+    async def test_barely_used_high_failure_not_flagged(self, store):
+        # Below the invocation floor — too little evidence to refine on.
+        await store.aput(
+            ("nova", "skill_usage"),
+            "new",
+            {"invocations": 2, "successes": 1, "failures": 6},
+        )
+        issues = await check_skill_effectiveness(store)
+        assert all(name != "new" for name, _ in issues)
+
+    async def test_recently_refined_skill_not_reflagged(self, store):
+        # Cooldown: a high-failure skill refined moments ago is skipped.
+        import time
+
+        await store.aput(
+            ("nova", "skill_usage"),
+            "bad",
+            {"invocations": 4, "successes": 1, "failures": 6},
+        )
+        await store.aput(
+            ("nova", "skill_refinement"),
+            "bad",
+            {"last_refined_ts": time.time(), "refine_count": 1},
+        )
+        issues = await check_skill_effectiveness(store)
+        assert all(name != "bad" for name, _ in issues)
+
+    async def test_refine_attempt_cap_stops_reflagging(self, store):
+        from novacode_cli.hermes.skill_discovery import _MAX_REFINES
+
+        await store.aput(
+            ("nova", "skill_usage"),
+            "bad",
+            {"invocations": 9, "successes": 1, "failures": 8},
+        )
+        await store.aput(
+            ("nova", "skill_refinement"),
+            "bad",
+            {"last_refined_ts": 0.0, "refine_count": _MAX_REFINES},
+        )
+        issues = await check_skill_effectiveness(store)
+        assert all(name != "bad" for name, _ in issues)
+
+    async def test_record_refinement_resets_counters_and_stamps_record(self, store):
+        from novacode_cli.hermes.skill_discovery import _record_refinement
+
+        await store.aput(
+            ("nova", "skill_usage"),
+            "bad",
+            {
+                "invocations": 5,
+                "successes": 1,
+                "failures": 6,
+                "failure_samples": [{"tool": "x", "excerpt": "boom"}],
+            },
+        )
+        await _record_refinement(store, "bad", "high_failure")
+
+        usage = (await store.aget(("nova", "skill_usage"), "bad")).value
+        assert usage["successes"] == 0
+        assert usage["failures"] == 0
+        assert usage["failure_samples"] == []
+        assert usage["invocations"] == 5  # invocations are preserved
+
+        rec = (await store.aget(("nova", "skill_refinement"), "bad")).value
+        assert rec["refine_count"] == 1
+        assert rec["invocations_at_refine"] == 5
+        assert rec["last_refined_ts"] > 0
+
+        # The reset means the skill is no longer flagged until fresh evidence accrues.
+        assert await check_skill_effectiveness(store) == []
 
 
 # ── 2. Signal-based review triggers ──────────────────────────────────────────

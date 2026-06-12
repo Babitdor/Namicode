@@ -10,7 +10,12 @@ a single bad fragment.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 from novacode_cli.init.graph import (
     _coerce_float,
@@ -60,6 +65,82 @@ class TestSanitizeExtraction:
 
     def test_handles_missing_keys(self):
         assert sanitize_graph_extraction({}) == {}
+
+    # ── node sanitization (the second class of /init crash) ──────────────
+
+    def test_drops_nodes_with_unusable_id(self):
+        ext = {
+            "nodes": [
+                {"id": "good", "label": "A"},
+                {"id": None, "label": "B"},      # None id → "None cannot be a node"
+                {"id": "   ", "label": "C"},     # blank id
+                {"label": "D"},                  # missing id
+            ]
+        }
+        out = sanitize_graph_extraction(ext)
+        assert [n["id"] for n in out["nodes"]] == ["good"]
+
+    def test_none_label_falls_back_to_id(self):
+        # graphify only falls back to id when the label key is MISSING, not when
+        # present-but-None — a None label crashes export (re.sub/normalize on None).
+        ext = {"nodes": [{"id": "n1", "label": None}, {"id": "n2"}]}
+        out = sanitize_graph_extraction(ext)
+        assert out["nodes"][0]["label"] == "n1"
+        assert out["nodes"][1]["label"] == "n2"
+
+    def test_node_dict_weight_and_none_source_file_coerced(self):
+        ext = {"nodes": [{"id": "n1", "weight": {"v": 1}, "source_file": None}]}
+        out = sanitize_graph_extraction(ext)
+        node = out["nodes"][0]
+        assert node["weight"] == 0.0
+        assert node["source_file"] == ""
+
+    def test_dict_edge_endpoints_coerced_to_str(self):
+        ext = {
+            "nodes": [{"id": "n1", "label": "A"}],
+            "edges": [{"source": {"k": 1}, "target": "n1", "relation": "r"}],
+        }
+        out = sanitize_graph_extraction(ext)
+        assert isinstance(out["edges"][0]["source"], str)
+
+    def test_every_edge_gets_numeric_weight(self):
+        # Weight is guaranteed on every edge (NetworkX needs it), even when the
+        # fragment omitted it or emitted a dict.
+        ext = {"edges": [{"weight": {"v": 1}}, {"weight": "2"}, {}]}
+        out = sanitize_graph_extraction(ext)
+        assert [e["weight"] for e in out["edges"]] == [1.0, 2.0, 1.0]
+
+
+def test_build_and_export_survive_none_label(tmp_path: Path):
+    """A node with label=None must not crash graphify build/export.
+
+    Error 2 repro: ``expected string or bytes-like object, got 'NoneType'`` /
+    ``normalize()`` TypeError from a None label reaching the exporter.
+    """
+    from novacode_cli.init.graph import (
+        analyze_project_graph,
+        cluster_project_graph,
+        export_project_graph,
+    )
+
+    ext = {
+        "nodes": [
+            {"id": "n1", "label": None, "type": "concept", "source_file": None},
+            {"id": "n2", "label": "B", "type": "code", "source_file": "b.py"},
+        ],
+        "edges": [{"source": "n1", "target": "n2", "relation": "r", "weight": 1.0}],
+        "hyperedges": [],
+    }
+    G = build_project_graph(ext, None)
+    if G is None:
+        pytest.skip("graphify not available")
+    communities = cluster_project_graph(G, None)
+    analysis = analyze_project_graph(G, communities, None)
+    export_project_graph(
+        G=G, communities=communities, analysis=analysis,
+        output_dir=tmp_path, console=None, include_html=True,
+    )
+    assert (tmp_path / "project-graph.json").exists()
 
 
 def test_build_project_graph_survives_malformed_weights():

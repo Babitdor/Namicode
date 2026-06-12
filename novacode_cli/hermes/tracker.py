@@ -48,7 +48,9 @@ _SKILL_READ_RE = re.compile(r"/[^/]*skills[^/]*/(?P<name>[^/]+)/SKILL\.md$", re.
 _READ_TOOLS: frozenset[str] = frozenset({"read_file", "read", "view", "cat"})
 # How many subsequent tool calls a skill invocation "owns" for outcome
 # attribution (its effectiveness window) before we stop crediting/blaming it.
-_SKILL_ATTRIBUTION_BUDGET = 15
+# Kept deliberately tight: a long window credits/blames unrelated later work to
+# the skill, which produced a noisy failure signal that drove spurious refinement.
+_SKILL_ATTRIBUTION_BUDGET = 8
 # How many recent failure excerpts to retain per skill (for grounded refinement).
 _MAX_FAILURE_SAMPLES = 5
 _BUILTIN_TOOLS: frozenset[str] = frozenset(

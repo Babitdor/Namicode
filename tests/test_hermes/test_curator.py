@@ -138,5 +138,52 @@ class TestCurationLog:
         skills_dir, store = env
         _make_skill(skills_dir, "fresh", "unique alpha")
         result = await run_curation(store, skills_dir, now=time.time())
-        assert result == {"archived": [], "overlaps": []}
+        assert result == {"archived": [], "overlaps": [], "top_used": []}
         assert ("nova", "curation_log") not in store.data
+
+
+class TestTopUsed:
+    async def test_reports_most_used_sorted_desc(self, env):
+        skills_dir, store = env
+        _make_skill(skills_dir, "alpha", "x")
+        _make_skill(skills_dir, "beta", "y")
+        await _seed_usage(store, "alpha", 2)
+        await _seed_usage(store, "beta", 9)
+        result = await run_curation(store, skills_dir, now=time.time())
+        assert [t["name"] for t in result["top_used"]] == ["beta", "alpha"]
+
+    async def test_excludes_never_invoked(self, env):
+        skills_dir, store = env
+        _make_skill(skills_dir, "zero", "x")
+        await _seed_usage(store, "zero", 0)
+        result = await run_curation(store, skills_dir, now=time.time())
+        assert result["top_used"] == []
+
+
+class TestCurationSchedule:
+    async def test_maybe_curate_respects_24h_gate(self, env):
+        skills_dir, store = env
+        skills_dir.mkdir(parents=True, exist_ok=True)
+        from novacode_cli.hermes.skill_manager import SkillManager
+
+        manager = SkillManager(store, skills_dir=skills_dir, enabled=True)
+
+        # First call runs → stamps last_curation_ts.
+        await manager.maybe_curate()
+        first = store.data[("nova", "meta")]["last_curation_ts"]["ts"]
+
+        # Immediate second call is gated → timestamp unchanged.
+        await manager.maybe_curate()
+        assert store.data[("nova", "meta")]["last_curation_ts"]["ts"] == first
+
+        # Pretend a day elapsed → runs again, timestamp advances.
+        store.data[("nova", "meta")]["last_curation_ts"]["ts"] = first - 2 * _DAY
+        await manager.maybe_curate()
+        assert store.data[("nova", "meta")]["last_curation_ts"]["ts"] > first - 2 * _DAY
+
+        # Let any spawned curation tasks settle.
+        for task in list(manager.pending_tasks):
+            try:
+                await task
+            except Exception:  # noqa: BLE001, S110
+                pass

@@ -283,7 +283,18 @@ class EvolutionEngine:
 
         spec = parse_skill_spec(content)
         if spec:
-            name = await write_skill_from_spec(spec, self._skills_dir, self._store)
+            # Adversarial debate: one critic round before freezing the skill.
+            # Rejects vague/duplicate skills; may return a revised spec. Degrades
+            # to approving the draft on any failure (NOVA_SKILL_DEBATE=0 disables).
+            from novacode_cli.hermes.skill_debate import debate_skill_spec
+
+            revised, verdict = await debate_skill_spec(
+                spec, skill_library=self._existing_skills()
+            )
+            await self._record_debate(spec.get("name", ""), verdict)
+            if revised is None:
+                return  # critic rejected — do not freeze
+            name = await write_skill_from_spec(revised, self._skills_dir, self._store)
             if name:
                 _emit("nova_skill_unlocked", f"🧬 New skill unlocked: {name}")
                 await self._record("unlock", name, messages, breakdown)
@@ -310,6 +321,18 @@ class EvolutionEngine:
         return True
 
     # -- Persistence --------------------------------------------------------
+
+    async def _record_debate(self, skill: str, verdict: str) -> None:
+        """Append a skill-debate outcome to its log (best-effort, auditable)."""
+        try:
+            ts = time.time()
+            await self._store.aput(
+                ("nova", "skill_debate"),
+                f"dbt_{int(ts * 1000)}",
+                {"ts": ts, "skill": skill, "verdict": verdict},
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("Could not write skill_debate log", exc_info=True)
 
     async def _record(
         self,

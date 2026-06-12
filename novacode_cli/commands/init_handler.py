@@ -394,6 +394,7 @@ async def _run_graphify_pipeline(
         build_project_graph,
         cluster_project_graph,
         export_project_graph,
+        sanitize_graph_extraction,
     )
     from novacode_cli.init.generate import (
         generate_nova_md,
@@ -526,6 +527,12 @@ async def _run_graphify_pipeline(
     # graph, cache, facts, and docs all inherit slash paths.
     extraction = normalize_source_paths(extraction)
 
+    # Sanitize BEFORE caching so a malformed LLM fragment (dict weight, None
+    # label/id) can't poison the cache — otherwise a later `/init --update`
+    # reloads the bad data and crashes ('>' float/dict, regex on NoneType).
+    # build_project_graph re-sanitizes as a catch-all.
+    extraction = sanitize_graph_extraction(extraction)
+
     # Save extraction cache for future incremental updates
     await asyncio.to_thread(save_extraction_cache, project_root, extraction)
 
@@ -569,23 +576,27 @@ async def _run_graphify_pipeline(
 
     # Export the graph FIRST so NOVA.md authoring can query it live
     # (query_project_graph reads .nova/project-graph.json) and the agent can
-    # open it directly.
+    # open it directly. Guarded: a graphify export edge case must degrade to a
+    # notice, not abort /init — NOVA.md authoring can still proceed without it.
     nova_dir.mkdir(parents=True, exist_ok=True)
-    await asyncio.to_thread(
-        export_project_graph,
-        G=G,
-        communities=communities,
-        analysis=analysis,
-        output_dir=nova_dir,
-        console=pc,
-        include_html=not flags.no_viz,
-    )
-    emit(
-        StepDetail(
-            "Exported project-graph.json"
-            + ("" if flags.no_viz else " + project-graph.html")
+    try:
+        await asyncio.to_thread(
+            export_project_graph,
+            G=G,
+            communities=communities,
+            analysis=analysis,
+            output_dir=nova_dir,
+            console=pc,
+            include_html=not flags.no_viz,
         )
-    )
+        emit(
+            StepDetail(
+                "Exported project-graph.json"
+                + ("" if flags.no_viz else " + project-graph.html")
+            )
+        )
+    except Exception as ex:  # noqa: BLE001
+        emit(Notice(f"Graph export skipped ({ex})", "warn"))
 
     # Author NOVA.md. Preferred: the Nova AGENT writes a rich, grounded doc using
     # its tools (query_project_graph / read_file). Fallbacks: a single grounded

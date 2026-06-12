@@ -49,11 +49,19 @@ Example blocks — these are illustrative, do not output them unless you have re
 <name>add-tui-slash-command</name>
 <description>Use when adding a new /command to the Textual TUI (novacode_cli/tui/app.py).</description>
 <body>
+## When to Use
+Adding or wiring a new `/command` into the Textual TUI.
+## Quick Reference
+`uv run pytest tests/test_tui_app.py -k routing`
+## Procedure
 1. Add command name to `_TUI_SLASH_COMMANDS` in `novacode_cli/tui/app.py`.
 2. Add `elif` branch in `_run_slash` calling a new `_run_<name>` handler.
 3. Implement handler — use native widgets / `self._log`; never `console.print` (corrupts TUI).
 4. Add entry to `/help`.
-5. Verify: `uv run pytest tests/test_tui_app.py -k routing`.
+## Pitfalls
+- `console.print` inside the agent loop corrupts the TUI — use `self._log`.
+## Verification
+- `uv run pytest tests/test_tui_app.py -k routing` passes.
 </body>
 </skill>
 -->

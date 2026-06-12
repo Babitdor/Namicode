@@ -196,105 +196,32 @@ def _get_static_template(skill_name: str) -> str:
     skill_title = skill_name.replace("-", " ").replace("_", " ").title()
     return f"""---
 name: {skill_name}
-description: [Brief description of what this skill does]
+description: <verb> <object>. Use when: <signal 1>, <signal 2>.
+version: 1.0.0
+tags: []
 ---
 
-# {skill_title} Skill
+# {skill_title}
 
-## Overview
+## When to Use
+- [The concrete situation/trigger that should reach for this skill]
 
-[Provide a detailed explanation of what this skill does and when it should be used.
-Explain the key capabilities and what problems it solves.]
-
-## Core Competencies
-
-- **[Competency 1]**: [Description]
-- **[Competency 2]**: [Description]
-- **[Competency 3]**: [Description]
-
-## When to Use This Skill
-
-### Primary Use Cases
-- [Scenario 1: When the user asks...]
-- [Scenario 2: When you need to...]
-- [Scenario 3: When the task involves...]
-
-### Trigger Phrases
-- "[Example request]"
-- "[Another example]"
-
-## Detailed Instructions
-
-### Phase 1: Assessment & Planning
-1. [First step]
-2. [Second step]
-
-### Phase 2: Implementation
-1. [Implementation step]
-2. [Another step]
-
-### Phase 3: Verification & Refinement
-1. [Verification step]
-2. [Final polish]
-
-## Technical Reference
-
-### Key Commands & Tools
+## Quick Reference
 ```bash
-# Example command
+# The key command(s), copy-pasteable
 example-command --flag value
 ```
 
-### Common Patterns
-```python
-# Example code pattern
-def example():
-    pass
-```
+## Procedure
+1. [First step — concrete, reference real files/commands]
+2. [Second step]
+3. [Third step]
 
-## Best Practices
+## Pitfalls
+- [Edge case or mistake to avoid, and how]
 
-### Do's
-- [Best practice 1]
-- [Best practice 2]
-- [Best practice 3]
-
-### Don'ts
-- [Mistake to avoid 1]
-- [Mistake to avoid 2]
-
-## Troubleshooting Guide
-
-### Common Issues
-
-#### Issue: [Problem description]
-**Symptoms:** [What the user might see]
-**Solution:** [How to fix it]
-
-## Examples
-
-### Example 1: [Scenario Name]
-
-**User Request:** "[Example user request]"
-
-**Approach:**
-1. [Step-by-step breakdown]
-2. [Using tools and commands]
-3. [Expected outcome]
-
-**Expected Outcome:** [What success looks like]
-
-## Quick Reference Card
-
-| Task | Command/Action |
-|------|----------------|
-| [Task 1] | `[command]` |
-| [Task 2] | `[command]` |
-
-## Notes & Limitations
-
-- [Additional tips, warnings, or context]
-- [Known limitations or edge cases]
+## Verification
+- [How to confirm the work is correct — the check/test to run]
 """
 
 

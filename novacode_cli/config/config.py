@@ -25,13 +25,20 @@ Environment Configuration:
 """
 
 import os
+import random
 import re
 import sys
+import time
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
 import dotenv
 from rich.console import Console
+from rich.live import Live
+from rich.spinner import Spinner
+from rich.table import Table
+from rich.text import Text
 
 dotenv.load_dotenv()
 
@@ -341,8 +348,192 @@ else:
     console = Console(highlight=False)
 
 
+# Fun rotating boot messages for animated startup
+_BOOT_MESSAGES = [
+    "mcp: mustering tool servers…",
+    "mcp: routing through the stars…",
+    "mcp: establishing tool links…",
+    "memory: warming the neural core…",
+    "sandbox: spinning up isolation chamber…",
+    "session: weaving context threads…",
+    "skills: loading combat protocols…",
+    "system: calibrating LLM interface…",
+    "model: initializing cognition engine…",
+    "tools: loading the arsenal…",
+    "workspace: scanning the terrain…",
+    "plugins: discovering extensions…",
+    "engine: starting up the stacks…",
+    "firewall: raising digital shields…",
+    "backbone: synchronizing data buses…",
+]
+
+_BOOT_MESSAGE_INDEX: dict[str, list[str]] = {}
+"""Tracks which messages have been used per subsystem for rotation."""
+
+
+def _pick_boot_message(subsystem: str) -> str:
+    """Pick a fun rotating message for a given subsystem.
+
+    Cycles through available messages for that subsystem (matched by prefix),
+    preferring unused ones first to keep startup varied.
+
+    Args:
+        subsystem: The message prefix/subsystem name (e.g. ``"mcp"``, ``"memory"``).
+
+    Returns:
+        A message string that hasn't been used this session (or a random one).
+    """
+    candidates = [m for m in _BOOT_MESSAGES if m.startswith(subsystem)]
+    if not candidates:
+        return f"{subsystem}: initializing…"
+
+    if subsystem not in _BOOT_MESSAGE_INDEX:
+        _BOOT_MESSAGE_INDEX[subsystem] = []
+
+    used = _BOOT_MESSAGE_INDEX[subsystem]
+    available = [c for c in candidates if c not in used]
+
+    if available:
+        choice = random.choice(available)
+    else:
+        # All used — pick a random one and wrap around
+        choice = random.choice(candidates)
+
+    used.append(choice)
+    return choice
+
+
+class BootAnimation:
+    """Animated startup sequence with live spinner and accumulating status lines.
+
+    Use as a context manager around startup code. Any call to ``boot_status()``
+    inside the context is automatically rendered as an animated line with a
+    Rich spinner on the current message and checkmarks on completed ones.
+
+    Usage::
+
+        with BootAnimation.start():
+            boot_status("mcp: mustering tool servers…")
+            time.sleep(2)
+            boot_status("mcp: all servers online", "ok")
+            boot_status("memory: initializing…")
+            time.sleep(1)
+            boot_status("memory: store ready", "ok")
+        # animation exits — clean transition to splash screen
+    """
+
+    _instance: "BootAnimation | None" = None
+    _live: Live | None = None
+    _messages: list[tuple[str, str]] = []
+    _start_time: float = 0.0
+
+    @classmethod
+    @contextmanager
+    def start(cls) -> None:
+        """Open the live display (sync version). Yields once, then tears down."""
+        cls._messages = []
+        cls._start_time = time.monotonic()
+
+        layout = Table.grid(padding=(0, 1))
+        layout.add_column(no_wrap=True)
+
+        with Live(
+            layout,
+            console=console,
+            refresh_per_second=12,
+            transient=True,
+        ) as live:
+            cls._live = live
+            cls._instance = cls()
+            try:
+                yield
+            finally:
+                cls._instance = None
+                cls._live = None
+
+    @classmethod
+    @asynccontextmanager
+    async def async_start(cls) -> None:
+        """Open the live display (async version). Yields once, then tears down.
+
+        Safe to use with ``async with`` in async functions (e.g. ``main()``).
+        Rich's ``Live.__enter__`` starts a background rendering thread which
+        is compatible with async event loops.
+        """
+        cls._messages = []
+        cls._start_time = time.monotonic()
+
+        layout = Table.grid(padding=(0, 1))
+        layout.add_column(no_wrap=True)
+
+        live = Live(layout, console=console, refresh_per_second=12, transient=True)
+        live.__enter__()
+        cls._live = live
+        cls._instance = cls()
+        try:
+            yield
+        finally:
+            cls._instance = None
+            cls._live = None
+            live.__exit__(None, None, None)
+
+    @classmethod
+    def status(cls, message: str, level: str = "info") -> None:
+        """Add or update a status line.
+
+        ``"info"`` level messages are considered "in progress" — the most recent
+        one gets a spinner. ``"ok"`` and ``"warn"`` are "completed" and rendered
+        with checkmark or warning glyph.
+
+        Args:
+            message: Short ``"subsystem: detail"`` message.
+            level: ``"info"`` (in-progress with spinner), ``"ok"`` (green ✓),
+                or ``"warn"`` (yellow ⚠).
+        """
+        # Replace last pending "info" with the new one (live-update the spinner
+        # text), otherwise append as a new line.
+        if level == "info":
+            if cls._messages and cls._messages[-1][1] == "info":
+                cls._messages[-1] = (message, level)
+            else:
+                cls._messages.append((message, level))
+        else:
+            cls._messages.append((message, level))
+        cls._refresh()
+
+    @classmethod
+    def _refresh(cls) -> None:
+        """Rebuild and update the live display."""
+        if not cls._live:
+            return
+
+        elapsed = time.monotonic() - cls._start_time
+        layout = Table.grid(padding=(0, 1))
+        layout.add_column(no_wrap=True)
+
+        # Completed messages (all except the last one)
+        for msg, lvl in cls._messages[:-1]:
+            glyph = "✓" if lvl == "ok" else ("⚠" if lvl == "warn" else "·")
+            glyph_style = "green" if lvl == "ok" else ("yellow" if lvl == "warn" else "grey42")
+            layout.add_row(Text(f"  {glyph} {msg}", style=glyph_style))
+
+        # Current in-progress message (with spinner glyph)
+        if cls._messages:
+            last_msg = cls._messages[-1][0]
+            spinner = Spinner("dots10", text=last_msg, style="bold cyan")
+            layout.add_row(spinner)
+
+        # Elapsed time
+        layout.add_row(Text(f"  ⏱ {elapsed:.1f}s", style="grey30"))
+        cls._live.update(layout)
+
+
 def boot_status(message: str, level: str = "info") -> None:
     """Print a uniform, minimal startup status line.
+
+    When inside a ``BootAnimation`` context, the message is rendered with a
+    live spinner animation instead of a static line. Outside the context,
+    falls back to a simple dimmed status line.
 
     Keeps Nova's launch output tidy: one muted glyph per line, a consistent
     palette, and short ``subsystem: detail`` messages instead of a mix of
@@ -353,6 +544,12 @@ def boot_status(message: str, level: str = "info") -> None:
             ``"sandbox: docker 3b7334a ready"``).
         level: ``"info"`` (dim), ``"ok"`` (green), or ``"warn"`` (yellow).
     """
+    # Delegate to BootAnimation when active — renders with live spinner
+    if BootAnimation._instance is not None:
+        BootAnimation.status(message, level)
+        return
+
+    # Outside animation context: static line
     from rich.text import Text
 
     glyph, style = {

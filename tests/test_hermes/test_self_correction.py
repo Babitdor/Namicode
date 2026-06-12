@@ -59,15 +59,22 @@ class TestFailureSampleCapture:
         assert usage["s"].get("failure_samples", []) == []
 
     async def test_samples_capped(self, tracker):
+        from novacode_cli.hermes.tracker import (
+            _MAX_FAILURE_SAMPLES,
+            _SKILL_ATTRIBUTION_BUDGET,
+        )
+
         await tracker.record_tool_usage("read_file", True, skill_invoked="s")
-        for i in range(10):
+        # Stay within the attribution window so every failure is attributed.
+        n = _SKILL_ATTRIBUTION_BUDGET
+        for i in range(n):
             await tracker.record_tool_usage(
                 "execute", False, error_excerpt=f"err {i}"
             )
         usage = await tracker.get_skill_usage()
-        # Capped to _MAX_FAILURE_SAMPLES (5), keeping the most recent.
-        assert len(usage["s"]["failure_samples"]) == 5
-        assert "err 9" in usage["s"]["failure_samples"][-1]["excerpt"]
+        # Capped to _MAX_FAILURE_SAMPLES, keeping the most recent.
+        assert len(usage["s"]["failure_samples"]) == _MAX_FAILURE_SAMPLES
+        assert f"err {n - 1}" in usage["s"]["failure_samples"][-1]["excerpt"]
 
 
 # ── grounded refinement ──────────────────────────────────────────────────────

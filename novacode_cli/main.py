@@ -83,9 +83,7 @@ log_file = log_dir / "nova.log"
 # Configure file handler for warnings
 file_handler = logging.FileHandler(log_file, mode="a", encoding="utf-8")
 file_handler.setLevel(logging.WARNING)
-file_handler.setFormatter(
-    logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-)
+file_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
 
 # Configure root logger
 root_logger = logging.getLogger()
@@ -290,9 +288,7 @@ def parse_args():
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
 
     # Init command - interactive configuration setup
-    init_parser = subparsers.add_parser(
-        "init", help="Initialize project or global configuration"
-    )
+    init_parser = subparsers.add_parser("init", help="Initialize project or global configuration")
     init_parser.add_argument(
         "--scope",
         choices=["project", "global"],
@@ -329,9 +325,7 @@ def parse_args():
     setup_mcp_parser(subparsers)
 
     # Config command - view/edit configuration
-    config_parser = subparsers.add_parser(
-        "config", help="View or edit configuration (non-secret)"
-    )
+    config_parser = subparsers.add_parser("config", help="View or edit configuration (non-secret)")
     config_parser.add_argument(
         "config_command",
         nargs="?",
@@ -371,9 +365,7 @@ def parse_args():
         "paths",
         help="Manage approved file system paths",
     )
-    paths_subparsers = paths_parser.add_subparsers(
-        dest="paths_command", help="Paths command"
-    )
+    paths_subparsers = paths_parser.add_subparsers(dest="paths_command", help="Paths command")
 
     # paths list
     paths_subparsers.add_parser(
@@ -421,16 +413,17 @@ def parse_args():
     )
     parser.add_argument(
         "--sandbox",
-        choices=["none", "modal", "daytona", "runloop", "docker"],
+        choices=["none", "os", "modal", "daytona", "runloop", "docker"],
         default=None,
-        help="Sandbox for code execution. Defaults to 'docker' (project bind-mounted "
-        "at /workspace) when omitted; falls back to local if Docker is unavailable. "
-        "Use --no-sandbox to force local mode.",
+        help="Sandbox for code execution. Default: 'os' on Linux/macOS (files on the "
+        "host, shell confined to the workspace via an OS sandbox); host execution + "
+        "approvals on Windows. 'docker' is an opt-in, Windows-only container. Use "
+        "--no-sandbox for unconfined local execution.",
     )
     parser.add_argument(
         "--no-sandbox",
         action="store_true",
-        help="Force local execution on the host (disables the default Docker sandbox)",
+        help="Run shell commands unconfined on the host (disables the OS/Docker sandbox)",
     )
     parser.add_argument(
         "--sandbox-id",
@@ -483,9 +476,7 @@ def parse_args():
         version=format_version_banner(settings.version),
         help="Show the version number and exit",
     )
-    parser.add_argument(
-        "-h", "--help", action="help", help="Show this help message and exit"
-    )
+    parser.add_argument("-h", "--help", action="help", help="Show this help message and exit")
 
     return parser.parse_args()
 
@@ -521,6 +512,57 @@ def parse_ports(ports_str: str | None) -> dict[int, int] | None:
         ports[container_port] = host_port
 
     return ports if ports else None
+
+
+def resolve_sandbox_type(
+    sandbox_arg: str | None,
+    no_sandbox: bool,  # noqa: FBT001
+    platform: str | None = None,
+) -> tuple[str, bool]:
+    """Resolve the effective sandbox mode and whether the user chose it explicitly.
+
+    The default depends on platform. Linux/macOS get Pattern A (``"os"`` — host
+    files + an OS-confined shell). Windows has no lightweight OS sandbox primitive,
+    so the default is plain host execution (``"none"``) gated by the
+    dangerous-command blocklist + HITL approval — the same baseline Claude Code /
+    Cursor use on Windows. Docker stays available there as an explicit opt-in
+    (``--sandbox docker``); it is Windows-only and rejected elsewhere (Linux/macOS
+    should use the ``"os"`` default or ``--no-sandbox``).
+
+    Args:
+        sandbox_arg: The ``--sandbox`` value, or None when unset.
+        no_sandbox: Whether ``--no-sandbox`` was passed.
+        platform: ``sys.platform`` override (for tests). Defaults to the host.
+
+    Returns:
+        ``(sandbox_type, explicit)`` — ``explicit`` is True when the user chose
+        the mode (so a creation failure should not silently fall back).
+
+    Raises:
+        ValueError: On invalid combinations (caller maps these to a user error).
+    """
+    is_windows = (platform or sys.platform) == "win32"
+
+    if no_sandbox:
+        if sandbox_arg and sandbox_arg != "none":
+            msg = "--no-sandbox conflicts with --sandbox."
+            raise ValueError(msg)
+        return "none", True
+
+    if sandbox_arg is not None:
+        if sandbox_arg == "docker" and not is_windows:
+            msg = (
+                "--sandbox docker is Windows-only. On Linux/macOS, Nova confines the "
+                "shell with an OS sandbox by default (--sandbox os). Use --no-sandbox "
+                "for unconfined local execution."
+            )
+            raise ValueError(msg)
+        return sandbox_arg, True
+
+    # Implicit default: host execution + approvals on Windows (no lightweight OS
+    # sandbox primitive — Docker is opt-in via --sandbox docker); Pattern A
+    # (OS-confined shell) on Linux/macOS.
+    return ("none" if is_windows else "os"), False
 
 
 async def simple_cli(
@@ -576,9 +618,7 @@ async def simple_cli(
             "[red]Cannot start nova without path approval.[/red]",
             style=COLORS["dim"],
         )
-        console.print(
-            "[dim]Path approval is required to ensure safe file system access.[/dim]"
-        )
+        console.print("[dim]Path approval is required to ensure safe file system access.[/dim]")
         console.print()
         sys.exit(1)
 
@@ -646,9 +686,7 @@ async def simple_cli(
     token_tracker = TokenTracker()
     image_tracker = ImageTracker()
     paste_tracker = PasteTracker()
-    session = create_prompt_session(
-        assistant_id, session_state, image_tracker, paste_tracker
-    )
+    session = create_prompt_session(assistant_id, session_state, image_tracker, paste_tracker)
     token_tracker.set_baseline(baseline_tokens)
     if model_name:
         token_tracker.set_model(model_name)
@@ -688,9 +726,7 @@ async def simple_cli(
             if messages:
                 # Scan current workspace state
                 workspace_state = (
-                    scan_workspace(settings.project_root)
-                    if settings.project_root
-                    else None
+                    scan_workspace(settings.project_root) if settings.project_root else None
                 )
 
                 # Extract current task from session state (if available)
@@ -760,9 +796,7 @@ async def simple_cli(
                 return True
         except Exception as e:
             error_msg = f"[red]Error saving session: {type(e).__name__}: {e}[/red]"
-            console.print(
-                error_msg
-            )  # Always show save errors regardless of silent flag
+            console.print(error_msg)  # Always show save errors regardless of silent flag
         return False
 
     # Helper to clean up and save session on exit
@@ -801,9 +835,7 @@ async def simple_cli(
                 manager = ProcessManager.get_instance()
                 stopped_count = await asyncio.wait_for(manager.stop_all(), timeout=15.0)
                 if stopped_count > 0:
-                    console.print(
-                        f"[dim]Stopped {stopped_count} managed process(es).[/dim]"
-                    )
+                    console.print(f"[dim]Stopped {stopped_count} managed process(es).[/dim]")
             except Exception as e:
                 console.print(f"[dim]Could not stop processes: {e}[/dim]")
 
@@ -922,10 +954,7 @@ async def simple_cli(
                 )
                 should_compact = (
                     usage_pct >= CONTEXT_CRITICAL_THRESHOLD * 100
-                    or (
-                        usage_pct >= CONTEXT_WARNING_THRESHOLD * 100
-                        and total_messages >= 20
-                    )
+                    or (usage_pct >= CONTEXT_WARNING_THRESHOLD * 100 and total_messages >= 20)
                     or (usage_pct >= 50 and total_messages >= 50)
                     or total_messages >= 100
                 )
@@ -969,9 +998,7 @@ async def simple_cli(
             # Perform compaction with a per-step timeout so the LLM
             # summarization call can't stall exit indefinitely.
             model = create_model()
-            with console.status(
-                "[bold]Compacting conversation...[/bold]", spinner="dots"
-            ):
+            with console.status("[bold]Compacting conversation...[/bold]", spinner="dots"):
                 result = await asyncio.wait_for(
                     compact_conversation(
                         agent=agent,
@@ -1155,9 +1182,7 @@ async def simple_cli(
                 # The named agent is already registered in SubAgentMiddleware (via
                 # build_named_subagents → create_agent_with_config). Route the request
                 # through the main agent so it dispatches via the task tool.
-                task_input = (
-                    f"Call the '{agent_name}' subagent to do the following:\n\n{query}"
-                )
+                task_input = f"Call the '{agent_name}' subagent to do the following:\n\n{query}"
                 _exec_task = asyncio.create_task(
                     execute_task(
                         task_input,
@@ -1248,9 +1273,7 @@ async def simple_cli(
                         f"[bold red]⚠ Context critical: {pct:.0f}% used![/bold red] "
                         f"[red]Use /compact now or risk errors.[/red]"
                     )
-                    console.print(
-                        f"[dim red]  Use /context to see detailed breakdown.[/dim red]"
-                    )
+                    console.print(f"[dim red]  Use /context to see detailed breakdown.[/dim red]")
                     dispatch_hook_fire_and_forget(
                         HookEvent.CONTEXT_WARNING,
                         {
@@ -1264,9 +1287,7 @@ async def simple_cli(
                         f"[yellow]⚠ Context usage high: {pct:.0f}%[/yellow] "
                         f"[dim]Consider /compact soon.[/dim]"
                     )
-                    console.print(
-                        f"[dim]  Use /context to see detailed breakdown.[/dim]"
-                    )
+                    console.print(f"[dim]  Use /context to see detailed breakdown.[/dim]")
                     dispatch_hook_fire_and_forget(
                         HookEvent.CONTEXT_WARNING,
                         {
@@ -1295,9 +1316,7 @@ async def simple_cli(
             if _exit_code.code == 2:
                 _exec_task = None
                 # Rate-limit/API messages were already printed by the handler above
-                console.print(
-                    "[dim]Press Enter to continue or type 'exit' to quit.[/dim]"
-                )
+                console.print("[dim]Press Enter to continue or type 'exit' to quit.[/dim]")
                 console.print()
                 continue
             # sys.exit(1) = fatal error — let it propagate
@@ -1319,9 +1338,7 @@ async def simple_cli(
             if _is_api_error(_api_err):
                 console.print()
                 console.print(f"[bold red]API Error[/bold red]: {str(_api_err)[:300]}")
-                console.print(
-                    "[dim]The request failed. Try again or use a different model.[/dim]"
-                )
+                console.print("[dim]The request failed. Try again or use a different model.[/dim]")
                 console.print()
                 continue
             # Unknown error — re-raise for the top-level crash handler
@@ -1331,10 +1348,7 @@ async def simple_cli(
 def _is_rate_limit_error(e: Exception) -> bool:
     """Check if an exception is a rate limit or API quota error."""
     msg = str(e).lower()
-    if any(
-        kw in msg
-        for kw in ("429", "rate limit", "usage limit", "quota", "too many requests")
-    ):
+    if any(kw in msg for kw in ("429", "rate limit", "usage limit", "quota", "too many requests")):
         return True
     try:
         from openai import RateLimitError, APIStatusError
@@ -1346,10 +1360,7 @@ def _is_rate_limit_error(e: Exception) -> bool:
     try:
         from httpx import HTTPStatusError
 
-        if (
-            isinstance(e, HTTPStatusError)
-            and getattr(e.response, "status_code", 0) == 429
-        ):
+        if isinstance(e, HTTPStatusError) and getattr(e.response, "status_code", 0) == 429:
             return True
     except ImportError:
         pass
@@ -1368,10 +1379,7 @@ def _is_api_error(e: Exception) -> bool:
     try:
         from httpx import HTTPStatusError
 
-        if (
-            isinstance(e, HTTPStatusError)
-            and getattr(e.response, "status_code", 0) >= 400
-        ):
+        if isinstance(e, HTTPStatusError) and getattr(e.response, "status_code", 0) >= 400:
             return True
     except ImportError:
         pass
@@ -1429,9 +1437,7 @@ async def _shutdown_background_services(session_state) -> None:
 
     if steps:
         try:
-            await asyncio.wait_for(
-                asyncio.gather(*steps, return_exceptions=True), timeout=8.0
-            )
+            await asyncio.wait_for(asyncio.gather(*steps, return_exceptions=True), timeout=8.0)
         except BaseException:  # noqa: BLE001
             pass
 
@@ -1471,6 +1477,7 @@ async def _run_agent_session(
     store: BaseStore | None = None,
     checkpointer: InMemorySaver | None = None,
     restored_session_data: tuple | None = None,
+    exec_sandbox: bool = False,
 ) -> None:
     """Helper to create agent and run CLI session.
 
@@ -1482,6 +1489,8 @@ async def _run_agent_session(
         session_state: Session state with auto-approve settings
         sandbox_backend: Optional sandbox backend for remote execution
         sandbox_type: Type of sandbox being used
+        exec_sandbox: When True (Pattern A, local mode), confine local shell
+            execution to the workspace via an OS kernel sandbox.
         setup_script_path: Path to setup script that was run (if any)
         initial_messages: Optional messages to inject for session continuation
         session_manager: SessionManager for session persistence
@@ -1552,30 +1561,39 @@ async def _run_agent_session(
     )
     tools.extend([list_trash, restore_file])
 
-    agent, composite_backend = create_agent_with_config(
-        model,
-        assistant_id,
-        tools,
-        sandbox=sandbox_backend,
-        sandbox_type=sandbox_type,
-        store=store,
-        checkpointer=checkpointer,
-        is_continuation=bool(initial_messages),
-        steering_instructions=session_state.steering_instructions,
-    )
+    # Heavy initialization with live animated boot status.
+    # The BootAnimation context wraps all boot_status() calls from agent
+    # creation, MCP discovery, session restore, and token calculation.
+    # transient=True means the animation disappears cleanly before simple_cli
+    # displays the splash screen.
+    from novacode_cli.config.config import BootAnimation
 
-    # Set agent context in session state for dynamic model switching
-    session_state.set_agent_context(
-        agent=agent,
-        backend=composite_backend,
-        checkpointer=checkpointer,
-        store=store,
-        tools=tools,
-        assistant_id=assistant_id,
-        model=model,
-        sandbox_type=sandbox_type,
-        sandbox_id=getattr(sandbox_backend, "id", None) if sandbox_backend else None,
-    )
+    with BootAnimation.start():
+        agent, composite_backend = create_agent_with_config(
+            model,
+            assistant_id,
+            tools,
+            sandbox=sandbox_backend,
+            sandbox_type=sandbox_type,
+            store=store,
+            checkpointer=checkpointer,
+            is_continuation=bool(initial_messages),
+            steering_instructions=session_state.steering_instructions,
+            exec_sandbox=exec_sandbox,
+        )
+
+        # Set agent context in session state for dynamic model switching
+        session_state.set_agent_context(
+            agent=agent,
+            backend=composite_backend,
+            checkpointer=checkpointer,
+            store=store,
+            tools=tools,
+            assistant_id=assistant_id,
+            model=model,
+            sandbox_type=sandbox_type,
+            sandbox_id=getattr(sandbox_backend, "id", None) if sandbox_backend else None,
+        )
 
     # Wire the SteeringMiddleware's instruction list to the session state.
     #
@@ -1598,14 +1616,10 @@ async def _run_agent_session(
     # NOTE: This must be set up BEFORE the processor task starts, otherwise
     # the processor gets a None reference and silently crashes
     session_state._remote_message_queue: asyncio.Queue = asyncio.Queue()
-    session_state._remote_message_lock = (
-        asyncio.Lock()
-    )  # serialize remote+local agent calls
+    session_state._remote_message_lock = asyncio.Lock()  # serialize remote+local agent calls
     from novacode_cli.remote.bridge import RemoteBridgeManager
 
-    session_state._remote_bridge_manager = RemoteBridgeManager(
-        session_state._remote_message_queue
-    )
+    session_state._remote_bridge_manager = RemoteBridgeManager(session_state._remote_message_queue)
 
     # Wire status callback so bridge events (connect, disconnect, messages)
     # show in the local CLI console
@@ -1650,9 +1664,7 @@ async def _run_agent_session(
             except asyncio.CancelledError:
                 _proc_logger.info("Remote message processor cancelled")
             except Exception as e:
-                _proc_logger.error(
-                    f"Remote message processor crashed: {e}", exc_info=True
-                )
+                _proc_logger.error(f"Remote message processor crashed: {e}", exc_info=True)
                 _session_state._console.print(
                     f"\n  [red]\u274c Remote message processor crashed: {e}[/red]\n"
                 )
@@ -1664,9 +1676,7 @@ async def _run_agent_session(
             except asyncio.CancelledError:
                 return
             if exc:
-                console.print(
-                    f"\n  [red]\u274c Remote processor task died: {exc}[/red]\n"
-                )
+                console.print(f"\n  [red]\u274c Remote processor task died: {exc}[/red]\n")
 
         # In TUI mode the Textual app runs its own remote consumer that renders
         # remote prompts through the event stream; skip the legacy console
@@ -1708,16 +1718,12 @@ async def _run_agent_session(
 
     agent_dir = settings.get_agent_dir(assistant_id)
     system_prompt = get_system_prompt(
-        assistant_id=assistant_id, sandbox_type=sandbox_type
+        assistant_id=assistant_id, sandbox_type=sandbox_type, exec_sandbox=exec_sandbox
     )
-    baseline_tokens = calculate_baseline_tokens(
-        model, agent_dir, system_prompt, assistant_id
-    )
+    baseline_tokens = calculate_baseline_tokens(model, agent_dir, system_prompt, assistant_id)
 
     # Extract model name for context window calculation
-    model_name = getattr(model, "model_name", None) or getattr(
-        model, "model", "unknown"
-    )
+    model_name = getattr(model, "model_name", None) or getattr(model, "model", "unknown")
 
     # Experimental Textual TUI (Phase 1). Opt-in via --tui; the classic REPL
     # The TUI shares the same agent/backend/session
@@ -1785,9 +1791,7 @@ async def _run_agent_session(
         # Failsafe: session crashed unexpectedly — save whatever we have before dying
         if session_manager and session_state.session_id and session_state.thread_id:
             try:
-                console.print(
-                    "\n[bold yellow]⚠ Unexpected crash — saving session...[/bold yellow]"
-                )
+                console.print("\n[bold yellow]⚠ Unexpected crash — saving session...[/bold yellow]")
                 # Pull the latest messages straight from the LangGraph checkpointer
                 _crash_messages: list = []
                 try:
@@ -1810,11 +1814,7 @@ async def _run_agent_session(
                     model_name=_crash_model,
                     project_root=Path.cwd(),
                     task_status="crashed",
-                    sandbox_id=(
-                        getattr(sandbox_backend, "id", None)
-                        if sandbox_backend
-                        else None
-                    ),
+                    sandbox_id=(getattr(sandbox_backend, "id", None) if sandbox_backend else None),
                     sandbox_type=sandbox_type,
                 )
                 console.print(f"[dim]Session saved → {_crash_dir}[/dim]")
@@ -1871,9 +1871,7 @@ async def main(
             "[red]Cannot start nova without path approval.[/red]",
             style="dim",
         )
-        console.print(
-            "[dim]Path approval is required to ensure safe file system access.[/dim]"
-        )
+        console.print("[dim]Path approval is required to ensure safe file system access.[/dim]")
         console.print()
         sys.exit(1)
 
@@ -1997,9 +1995,7 @@ async def main(
             )
 
             if session_data.workspace_state:
-                drift_warnings = detect_drift(
-                    session_data.workspace_state, current_workspace
-                )
+                drift_warnings = detect_drift(session_data.workspace_state, current_workspace)
                 warnings.extend(drift_warnings)
 
             base_system_prompt = get_default_coding_instructions()
@@ -2063,7 +2059,12 @@ async def main(
         restored_session_data = None
 
     async def _run_local_session() -> None:
-        """Run the agent locally on the host (no sandbox)."""
+        """Run the agent locally on the host.
+
+        ``sandbox_type == "os"`` selects Pattern A — files on the host, but shell
+        commands confined to the workspace by an OS kernel sandbox. ``"none"``
+        (and the Windows Docker-unavailable fallback) runs unconfined.
+        """
         try:
             await _run_agent_session(
                 model,
@@ -2075,6 +2076,7 @@ async def main(
                 store=store,
                 checkpointer=checkpointer,
                 restored_session_data=restored_session_data,
+                exec_sandbox=(sandbox_type == "os"),
             )
         except KeyboardInterrupt:
             console.print("\n\n[yellow]Interrupted[/yellow]")
@@ -2093,9 +2095,7 @@ async def main(
             if _is_api_error(e):
                 console.print()
                 console.print(f"[bold red]API Error[/bold red]: {str(e)[:300]}")
-                console.print(
-                    "[dim]The request failed. Try again or use a different model.[/dim]"
-                )
+                console.print("[dim]The request failed. Try again or use a different model.[/dim]")
                 console.print()
                 sys.exit(2)
             console.print("[bold red]Fatal error:[/bold red]", str(e))
@@ -2117,8 +2117,9 @@ async def main(
                 )
             sys.exit(1)
 
-    # Branch 1: User wants a sandbox
-    if sandbox_type != "none":
+    # Branch 1: User wants a container/cloud sandbox. "none" and "os" both run
+    # locally (os = host files + OS-confined shell) and take the local branch.
+    if sandbox_type not in ("none", "os"):
         # Try to create sandbox
         try:
             console.print()
@@ -2134,9 +2135,7 @@ async def main(
                 and restored_sandbox_id
             ):
                 effective_sandbox_id = restored_sandbox_id
-                boot_status(
-                    f"sandbox: reconnecting to docker {restored_sandbox_id[:12]}…"
-                )
+                boot_status(f"sandbox: reconnecting to docker {restored_sandbox_id[:12]}…")
 
             sandbox_kwargs = {
                 "sandbox_id": effective_sandbox_id,
@@ -2219,9 +2218,7 @@ async def main(
             if _is_api_error(e):
                 console.print()
                 console.print(f"[bold red]API Error[/bold red]: {str(e)[:300]}")
-                console.print(
-                    "[dim]The request failed. Try again or use a different model.[/dim]"
-                )
+                console.print("[dim]The request failed. Try again or use a different model.[/dim]")
                 console.print()
                 sys.exit(2)
             console.print("[bold red]Fatal error:[/bold red]", str(e))
@@ -2294,9 +2291,7 @@ def _execute_paths_command(args) -> None:
 
         console.print()
         console.print("[yellow]⚠ This will clear ALL approved paths.[/yellow]")
-        console.print(
-            "[dim]You'll need to re-approve paths when you next run nova.[/dim]"
-        )
+        console.print("[dim]You'll need to re-approve paths when you next run nova.[/dim]")
         console.print()
 
         confirm = prompt("Are you sure? (yes/no): ").strip().lower()
@@ -2314,9 +2309,7 @@ def _execute_paths_command(args) -> None:
             console.print()
     else:
         console.print()
-        console.print(
-            "[yellow]Please specify a subcommand: list, revoke, or clear[/yellow]"
-        )
+        console.print("[yellow]Please specify a subcommand: list, revoke, or clear[/yellow]")
         console.print()
         console.print("[bold]Usage:[/bold]", style=COLORS["primary"])
         console.print("  nova paths list         List all approved paths")
@@ -2439,9 +2432,7 @@ def _execute_secrets_command(args) -> None:
         # Set API key
         if not args.key:
             console.print("[red]✗ Key name required for 'set' command[/red]")
-            console.print(
-                "[dim]Usage: nova secrets set <key> (e.g., 'openai_api_key')[/dim]"
-            )
+            console.print("[dim]Usage: nova secrets set <key> (e.g., 'openai_api_key')[/dim]")
             return
 
         console.print()
@@ -2466,9 +2457,7 @@ def _execute_secrets_command(args) -> None:
         # Delete API key
         if not args.key:
             console.print("[red]✗ Key name required for 'delete' command[/red]")
-            console.print(
-                "[dim]Usage: nova secrets delete <key> (e.g., 'openai_api_key')[/dim]"
-            )
+            console.print("[dim]Usage: nova secrets delete <key> (e.g., 'openai_api_key')[/dim]")
             return
 
         console.print()
@@ -2545,9 +2534,7 @@ def cli_main() -> None:
             # Check if --reset flag is set (re-run onboarding)
             if args.reset:
                 console.print()
-                console.print(
-                    "[yellow]⚠ This will overwrite your current configuration.[/yellow]"
-                )
+                console.print("[yellow]⚠ This will overwrite your current configuration.[/yellow]")
                 from prompt_toolkit import prompt
 
                 confirm = prompt("Continue? [y/N]: ").strip().lower()
@@ -2581,9 +2568,7 @@ def cli_main() -> None:
             sys.exit(run_doctor())
         else:
             # Create session state from args
-            session_state = SessionState(
-                auto_approve=args.auto_approve, no_splash=args.no_splash
-            )
+            session_state = SessionState(auto_approve=args.auto_approve, no_splash=args.no_splash)
             # Textual TUI is the default UI. Use --legacy-ui to opt out.
             session_state.use_tui = not bool(args.legacy_ui)
 
@@ -2602,30 +2587,18 @@ def cli_main() -> None:
             ports = parse_ports(args.ports)
 
             # Resolve the effective sandbox and whether the user chose it
-            # explicitly. Docker is the default when nothing is specified; an
+            # explicitly. Default is OS-confined local execution (Pattern A) on
+            # Linux/macOS, and plain host execution + approvals on Windows. An
             # explicit choice (or --no-sandbox) is honored without fallback.
-            if args.no_sandbox:
-                if args.sandbox and args.sandbox != "none":
-                    console.print(
-                        "[red]Error: --no-sandbox conflicts with --sandbox.[/red]"
-                    )
-                    sys.exit(1)
-                sandbox_type = "none"
-                explicit_sandbox = True
-            elif args.sandbox is not None:
-                sandbox_type = args.sandbox
-                explicit_sandbox = True
-            else:
-                # Default: bind-mounted Docker sandbox, with graceful fallback
-                # to local mode if Docker is unavailable.
-                sandbox_type = "docker"
-                explicit_sandbox = False
+            try:
+                sandbox_type, explicit_sandbox = resolve_sandbox_type(args.sandbox, args.no_sandbox)
+            except ValueError as e:
+                console.print(f"[red]Error: {e}[/red]")
+                sys.exit(1)
 
             # --resume and --continue are mutually exclusive
             if args.resume and args.continue_session:
-                console.print(
-                    "[red]Error: --resume and --continue are mutually exclusive.[/red]"
-                )
+                console.print("[red]Error: --resume and --continue are mutually exclusive.[/red]")
                 console.print(
                     "[dim]Use --resume to pick a session interactively, or --continue <id> to resume a specific session.[/dim]"
                 )

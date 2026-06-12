@@ -17,6 +17,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("nova.hermes.skill_manager")
 
+# Minimum wall-clock gap between curation passes (curation is piggybacked on the
+# review cycle but gated to roughly daily so cadence doesn't depend on chattiness).
+_CURATION_INTERVAL_SECS = 86_400.0  # 24h
+
 
 class SkillManager:
     """Manages skill lifecycle: creation from reviews, legacy cleanup, refinement.
@@ -115,12 +119,12 @@ class SkillManager:
     # -- Skill refinement ---------------------------------------------------
 
     async def maybe_refine_skills(self) -> None:
-        """Refine an existing skill flagged as ineffective (one per cycle).
+        """Refine one high-failure skill per cycle, grounded in its failures.
 
-        Handles both issue kinds from ``check_skill_effectiveness``:
-        ``high_failure`` (revise steps, grounded in captured failure samples) and
-        ``low_usage`` (sharpen the trigger/description). High-failure is
-        prioritized when both are present.
+        ``check_skill_effectiveness`` only surfaces ``high_failure`` candidates
+        (with a cooldown + attempt cap baked in), so a skill can't be re-refined
+        on every cycle. Chronically-unused skills are handled by the curator
+        (archival), not by rewriting — see ``check_skill_effectiveness``.
         """
         if not self._enabled or not self._skills_dir:
             return
@@ -131,25 +135,21 @@ class SkillManager:
             )
 
             candidates = await check_skill_effectiveness(self._store)
-            # Prioritize high_failure over low_usage; act on one per cycle.
-            candidates.sort(key=lambda c: 0 if c[1] == "high_failure" else 1)
             for skill_name, issue in candidates:
-                if issue not in ("high_failure", "low_usage"):
+                if issue != "high_failure":
                     continue
                 if not (self._skills_dir / skill_name / "SKILL.md").exists():
                     continue
 
-                # For high_failure, pull captured failure samples so refinement
-                # is grounded in what actually went wrong. low_usage is about the
-                # trigger, so no samples are needed.
+                # Pull captured failure samples so the refinement is grounded in
+                # what actually went wrong, not a blind regenerate.
                 failure_samples: list = []
-                if issue == "high_failure":
-                    try:
-                        entry = await self._store.aget(("nova", "skill_usage"), skill_name)
-                        if entry and isinstance(entry.value, dict):
-                            failure_samples = list(entry.value.get("failure_samples") or [])
-                    except Exception:  # noqa: BLE001
-                        failure_samples = []
+                try:
+                    entry = await self._store.aget(("nova", "skill_usage"), skill_name)
+                    if entry and isinstance(entry.value, dict):
+                        failure_samples = list(entry.value.get("failure_samples") or [])
+                except Exception:  # noqa: BLE001
+                    failure_samples = []
 
                 from novacode_cli.events import nova_event_log
 
@@ -167,6 +167,7 @@ class SkillManager:
                         self._skills_dir,
                         issue,
                         failure_samples=failure_samples,
+                        store=self._store,
                     )
                 )
                 break  # one refinement per cycle
@@ -176,10 +177,31 @@ class SkillManager:
     # -- Skill curation -----------------------------------------------------
 
     async def maybe_curate(self) -> None:
-        """Run a background curation pass (archive unused, flag overlaps)."""
+        """Run a background curation pass on a real schedule (≥ once/24h).
+
+        Called opportunistically (every Nth review), but a time gate makes the
+        cadence wall-clock-based, not review-count-based — so curation runs about
+        daily regardless of how chatty a session is.
+        """
         if not self._enabled or not self._skills_dir:
             return
         try:
+            import time
+
+            now = time.time()
+            last = 0.0
+            try:
+                rec = await self._store.aget(("nova", "meta"), "last_curation_ts")
+                if rec and isinstance(rec.value, dict):
+                    last = float(rec.value.get("ts", 0.0))
+            except Exception:  # noqa: BLE001
+                last = 0.0
+            if now - last < _CURATION_INTERVAL_SECS:
+                return
+
+            # Stamp before spawning so a slow pass can't trigger a duplicate.
+            await self._store.aput(("nova", "meta"), "last_curation_ts", {"ts": now})
+
             from novacode_cli.hermes.curator import run_curation
 
             self.spawn_task(run_curation(self._store, self._skills_dir))

@@ -30,6 +30,7 @@ logger = logging.getLogger("nova.hermes.curator")
 
 _DEFAULT_UNUSED_AGE_DAYS = 14
 _DEFAULT_OVERLAP_THRESHOLD = 0.6
+_TOP_USED_N = 5  # how many most-used skills to surface per curation pass
 _STOPWORDS = frozenset(
     {"the", "a", "an", "to", "for", "of", "and", "or", "with", "when", "use",
      "this", "skill", "using", "your", "you", "in", "on", "it", "is", "that"}
@@ -43,6 +44,7 @@ def _emit(event_type: str, message: str) -> None:
         icons = {
             "nova_skill_archived": ("🗄", "yellow"),
             "nova_skill_overlap": ("🔀", "cyan"),
+            "nova_skill_topused": ("⭐", "cyan"),
         }
         icon, color = icons.get(event_type, ("•", "cyan"))
         nova_event_log.append((event_type, icon, color, message))
@@ -161,18 +163,35 @@ async def run_curation(
                     f"({score:.0%}) — consider merging",
                 )
 
+    # Most-used skills (visibility into what's actually earning its keep).
+    top_used = [
+        {"name": name, "invocations": int(u.get("invocations", 0))}
+        for name, u in usage.items()
+        if int(u.get("invocations", 0)) > 0
+    ]
+    top_used.sort(key=lambda x: x["invocations"], reverse=True)
+    top_used = top_used[:_TOP_USED_N]
+    if top_used:
+        summary = ", ".join(f"{t['name']} ({t['invocations']})" for t in top_used)
+        _emit("nova_skill_topused", f"⭐ Most-used skills: {summary}")
+
     # Continuous tracking: append to the curation log.
-    if archived or overlaps:
+    if archived or overlaps or top_used:
         try:
             await store.aput(
                 ("nova", "curation_log"),
                 f"curation_{int(now)}",
-                {"ts": now, "archived": archived, "overlaps": overlaps},
+                {
+                    "ts": now,
+                    "archived": archived,
+                    "overlaps": overlaps,
+                    "top_used": top_used,
+                },
             )
         except Exception:  # noqa: BLE001
             logger.debug("Could not write curation_log", exc_info=True)
 
-    return {"archived": archived, "overlaps": overlaps}
+    return {"archived": archived, "overlaps": overlaps, "top_used": top_used}
 
 
 __all__ = ["run_curation"]

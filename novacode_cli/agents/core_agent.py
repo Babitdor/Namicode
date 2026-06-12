@@ -22,7 +22,6 @@ The agent is built using LangGraph's Pregel architecture with:
 - Middleware for memory, skills, MCP, and shell execution
 - Checkpointing for conversation state persistence
 """
-
 import os
 import re
 import shutil
@@ -371,12 +370,15 @@ def reset_agent(agent_name: str, source_agent: str | None = None) -> None:
     console.print(f"Location: {agent_dir}\n", style=COLORS["dim"])
 
 
-def _get_shell_platform_info(sandbox_type: str | None) -> dict:
+def _get_shell_platform_info(sandbox_type: str | None, exec_sandbox: bool = False) -> dict:  # noqa: FBT001, FBT002
     """Return shell/platform metadata for the current execution environment.
 
     Sandbox environments are always Linux regardless of the host OS.
     For local execution the real OS is detected so the LLM never uses
     bash syntax on Windows or PowerShell syntax on macOS/Linux.
+
+    When ``exec_sandbox`` is set (Pattern A, local mode), a note is added so the
+    model knows shell writes are confined to the workspace.
 
     Returns a dict with keys:
         platform    – "windows" | "macos" | "linux"
@@ -385,6 +387,16 @@ def _get_shell_platform_info(sandbox_type: str | None) -> dict:
         shell_notes – list of platform-specific shell rules (strings)
     """
     import platform as _platform
+
+    def _with_confinement(info: dict) -> dict:
+        if exec_sandbox and not sandbox_type:
+            info["shell_notes"] = [
+                *info["shell_notes"],
+                "The shell is confined by an OS sandbox: filesystem writes are "
+                "restricted to the workspace. Writes outside it (e.g. /etc, $HOME) "
+                "will fail — keep file changes inside the project.",
+            ]
+        return info
 
     if sandbox_type:
         # All supported sandbox providers (Modal, Runloop, Daytona) are Linux
@@ -402,53 +414,65 @@ def _get_shell_platform_info(sandbox_type: str | None) -> dict:
     system = _platform.system().lower()
 
     if system == "windows":
-        return {
-            "platform": "windows",
-            "shell_name": "PowerShell",
-            "path_sep": "\\",
-            "shell_notes": [
-                "The user is on **Windows** — always use PowerShell syntax, NEVER bash.",
-                "Use `;` to chain commands (not `&&`, which is unreliable in older PowerShell).",
-                "Use `$env:VAR` for environment variables, not `$VAR` or `export VAR=`.",
-                "Use backslashes in Windows paths, or wrap paths in double quotes.",
-                "Do NOT use `rm -rf`, `cat`, `chmod`, `sudo`, `which`, or any Unix-only commands.",
-                "Use `Get-ChildItem` instead of `ls`/`find`; `Select-String` instead of `grep`.",
-                "Use `Remove-Item -Recurse -Force` instead of `rm -rf`.",
-            ],
-        }
+        return _with_confinement(
+            {
+                "platform": "windows",
+                "shell_name": "PowerShell",
+                "path_sep": "\\",
+                "shell_notes": [
+                    "The user is on **Windows** — always use PowerShell syntax, NEVER bash.",
+                    "Use `;` to chain commands (not `&&`, which is unreliable in older PowerShell).",
+                    "Use `$env:VAR` for environment variables, not `$VAR` or `export VAR=`.",
+                    "Use backslashes in Windows paths, or wrap paths in double quotes.",
+                    "Do NOT use `rm -rf`, `cat`, `chmod`, `sudo`, `which`, or any Unix-only commands.",
+                    "Use `Get-ChildItem` instead of `ls`/`find`; `Select-String` instead of `grep`.",
+                    "Use `Remove-Item -Recurse -Force` instead of `rm -rf`.",
+                ],
+            }
+        )
 
     if system == "darwin":
-        return {
-            "platform": "macos",
-            "shell_name": "zsh",
+        return _with_confinement(
+            {
+                "platform": "macos",
+                "shell_name": "zsh",
+                "path_sep": "/",
+                "shell_notes": [
+                    "The user is on **macOS** — the default shell is `zsh`.",
+                    "Chain commands with `&&`.",
+                    "Use forward slashes in all paths.",
+                    "Prefer `brew` for package management when available.",
+                ],
+            }
+        )
+
+    return _with_confinement(
+        {
+            "platform": "linux",
+            "shell_name": "bash",
             "path_sep": "/",
             "shell_notes": [
-                "The user is on **macOS** — the default shell is `zsh`.",
+                "The user is on **Linux** — use `bash` syntax.",
                 "Chain commands with `&&`.",
                 "Use forward slashes in all paths.",
-                "Prefer `brew` for package management when available.",
             ],
         }
-
-    return {
-        "platform": "linux",
-        "shell_name": "bash",
-        "path_sep": "/",
-        "shell_notes": [
-            "The user is on **Linux** — use `bash` syntax.",
-            "Chain commands with `&&`.",
-            "Use forward slashes in all paths.",
-        ],
-    }
+    )
 
 
-def get_system_prompt(assistant_id: str, sandbox_type: str | None = None) -> str:
+def get_system_prompt(
+    assistant_id: str,
+    sandbox_type: str | None = None,
+    exec_sandbox: bool = False,  # noqa: FBT001, FBT002
+) -> str:
     """Get the base system prompt for the agent.
 
     Args:
         assistant_id: The agent identifier for path references
         sandbox_type: Type of sandbox provider ("modal", "runloop", "daytona").
                      If None, agent is operating in local mode.
+        exec_sandbox: When True (Pattern A, local mode), note in the prompt that
+                     shell writes are confined to the workspace.
 
     Returns:
         The system prompt string (without NOVA.md content)
@@ -471,7 +495,7 @@ def get_system_prompt(assistant_id: str, sandbox_type: str | None = None) -> str
 
     has_tavily = getattr(settings, "has_tavily", False)
     has_graph = getattr(settings, "has_graph", False)
-    shell_info = _get_shell_platform_info(sandbox_type)
+    shell_info = _get_shell_platform_info(sandbox_type, exec_sandbox=exec_sandbox)
 
     return render_template(
         "core_agent_system.jinja",
@@ -588,6 +612,7 @@ def create_agent_with_config(
     checkpointer: BaseCheckpointSaver | None = None,
     is_continuation: bool = False,
     steering_instructions: list | None = None,
+    exec_sandbox: bool = False,
 ) -> tuple[Pregel, CompositeBackend]:
     """Create and configure an agent with the specified model and tools.
 
@@ -598,6 +623,9 @@ def create_agent_with_config(
         sandbox: Optional sandbox backend for remote execution (e.g., ModalBackend).
                  If None, uses local filesystem + shell.
         sandbox_type: Type of sandbox provider ("modal", "runloop", "daytona")
+        exec_sandbox: When True (Pattern A, local mode), confine locally-executed
+                 shell commands to the workspace via an OS kernel sandbox
+                 (bwrap/sandbox-exec). No effect when a sandbox backend is used.
         store: Optional durable store (BaseStore). If None, the caller is
                expected to pass the shared store from get_shared_store() so
                subagents can also access it.
@@ -869,7 +897,7 @@ This file stores your preferences and context that persist across sessions.
 
     # Lazy imports for middleware (speeds up startup)
     from langchain.agents.middleware import ModelRetryMiddleware
-    from novacode_cli.bootstrap import BootstrapMiddleware, GraphContextMiddleware
+    from novacode_cli.bootstrap import BootstrapMiddleware, GraphContextMiddleware, VisionCaptionMiddleware
     from novacode_cli.bootstrap.steering import SteeringMiddleware
     from novacode_cli.hermes.middleware import NovaLearningMiddleware
     from novacode_cli.memory.agent_memory import AgentMemoryMiddleware
@@ -901,6 +929,12 @@ This file stores your preferences and context that persist across sessions.
             backoff_factor=2.0,
             initial_delay=1.0,
         ),
+        # Vision captioning — converts images to TEXT so the main (text-only)
+        # model never receives image blocks. A read_file on an image is captioned
+        # by the vision model at the tool-result layer (awrap_tool_call); pasted
+        # images are captioned upstream at ingestion. awrap_model_call here is a
+        # pure safety net that strips any residual image blocks from history.
+        VisionCaptionMiddleware(),
         # Nova — autonomous learning middleware that tracks tool usage,
         # triggers periodic review cycles, and manages memory tiers.
         # Positioned after ModelRetryMiddleware so retried tool calls don't
@@ -934,6 +968,9 @@ This file stores your preferences and context that persist across sessions.
             # When in a sandbox, show the in-sandbox working dir (e.g. /workspace)
             # in the tool description instead of the host path.
             sandbox_working_dir=(get_default_working_dir(sandbox_type) if sandbox_type else None),
+            # Pattern A: confine local shell execution to the workspace via an OS
+            # kernel sandbox. Only meaningful in local mode (no sandbox backend).
+            exec_sandbox=exec_sandbox and sandbox is None,
         ),
         AgentMemoryMiddleware(
             settings=settings,
@@ -995,10 +1032,10 @@ This file stores your preferences and context that persist across sessions.
         # MCP tools (serena, playwright, …) would never be registered or callable.
         if not mcp_middleware._tools_discovered:
             try:
-                boot_status("mcp: connecting to servers…")
+                boot_status("mcp: mustering tool servers…")
                 mcp_middleware._discover_tools_sync()
             except Exception as exc:  # noqa: BLE001
-                boot_status(f"mcp: discovery did not complete ({type(exc).__name__})", "warn")
+                boot_status(f"mcp: some servers are still at large ({type(exc).__name__})", "warn")
         agent_middleware.insert(3, mcp_middleware)
 
     # NOTE: automatic context-window summarization is provided by
@@ -1043,7 +1080,9 @@ This file stores your preferences and context that persist across sessions.
 
     # Get the system prompt (sandbox-aware and with skills)
     if system_prompt is None:
-        system_prompt = get_system_prompt(assistant_id=assistant_id, sandbox_type=sandbox_type)
+        system_prompt = get_system_prompt(
+            assistant_id=assistant_id, sandbox_type=sandbox_type, exec_sandbox=exec_sandbox
+        )
 
     if auto_approve:
         # No interrupts - all tools run automatically
