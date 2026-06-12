@@ -334,6 +334,24 @@ async def handle_plan_approval_interrupt(
         current_todos, session_state, dbg_func, inline_plan=inline_plan
     )
 
+    if getattr(session_state, "auto_approve", False):
+        if dbg_func:
+            dbg_func("PLAN-APPROVE", "auto-approving plan")
+        session_state.plan_mode_enabled = False
+        command_state_update = {"plan_mode_enabled": False}
+        using_separate_plan_agent = (
+            hasattr(session_state, "plan_agent") and session_state.plan_agent is not None
+        )
+        if plan_content and using_separate_plan_agent:
+            session_state.set_approved_plan(plan_content)
+        session_state.plan_content = None
+
+        console.print("[green]Plan auto-approved.[/green]")
+        console.print()
+
+        hitl_response = {"approved": True, "mode": "auto"}
+        return hitl_response, False, spinner_active, command_state_update
+
     # Render plan content inline
     if plan_content:
         render_plan_content(plan_content)

@@ -712,6 +712,9 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
                 text = chunk.decode("utf-8", errors="replace")
                 out_parts.append(text)
                 tail = (tail + text)[-4096:]
+                if tool_call_id:
+                    from novacode_cli.events import emit_tool_output
+                    emit_tool_output(tool_call_id, text)
         except asyncio.CancelledError:
             proc.kill()
             raise
@@ -978,6 +981,9 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
 
                 # Decode and process the chunk
                 decoded = chunk.decode("utf-8", errors="replace")
+                if tool_call_id:
+                    from novacode_cli.events import emit_tool_output
+                    emit_tool_output(tool_call_id, decoded)
 
                 # Collect each line into output_lines — do NOT stream to stdout
                 # (that corrupts the Textual TUI; the agent loop renders the

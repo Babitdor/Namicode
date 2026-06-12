@@ -25,8 +25,10 @@ from typing import Any
 
 from langchain.agents.middleware.human_in_the_loop import HITLRequest
 from langchain_core.messages import HumanMessage, ToolMessage
+from langgraph.errors import GraphInterrupt
 from langgraph.types import Command, Interrupt
 from pydantic import TypeAdapter, ValidationError
+
 
 from novacode_cli.config.config import COLORS, get_agent_color
 from novacode_cli.file_ops import get_session_file_op_tracker
@@ -73,6 +75,21 @@ def default_interrupt_response(kind: str) -> Any:
         }
     # "question" and anything else: an empty response is benign.
     return {}
+
+
+async def _safe_stream(stream_gen: AsyncIterator[Any]) -> AsyncIterator[Any]:
+    """Wraps an async generator and swallows GraphInterrupt.
+
+    This ensures that when the graph execution is suspended due to an interrupt,
+    the resulting GraphInterrupt exception is caught and the stream completes
+    normally instead of crashing the iteration loop.
+    """
+    try:
+        async for chunk in stream_gen:
+            yield chunk
+    except GraphInterrupt:
+        pass
+
 
 
 async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
@@ -201,6 +218,10 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
     stream_input: Any = {"messages": [{"role": "user", "content": message_content}]}
     _current_stream_gen: Any = None
 
+    from novacode_cli.tools.plan_mode_tools import _auto_approve_var
+    auto_approve_val = bool(getattr(session_state, "auto_approve", False))
+    token = _auto_approve_var.set(auto_approve_val)
+
     try:
         while True:
             interrupt_occurred = False
@@ -220,7 +241,7 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
                 durability="exit",
             )
 
-            async for chunk in _current_stream_gen:
+            async for chunk in _safe_stream(_current_stream_gen):
                 # Surface any Nova learning events (review cycles) as they happen
                 # so the UI's live indicator updates mid-turn rather than only at
                 # turn boundaries.
@@ -668,6 +689,8 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
             return
         yield ev.Error(str(e), exception=e)
         return
+    finally:
+        _auto_approve_var.reset(token)
 
     if captured.input_tokens or captured.output_tokens:
         yield captured
@@ -708,6 +731,32 @@ async def _handle_tool_message(
             tool_content and str(tool_content).lower().startswith("error")
         ):
             subagent_tracker.record_error(namespace, tool_name)
+
+        # Resolve subagent task's tool_call_id
+        subagent_cid = None
+        if namespace in subagent_tracker.lg_ns_to_tool_call_id:
+            subagent_cid = subagent_tracker.lg_ns_to_tool_call_id[namespace]
+        elif subagent_tracker.subagent_stack:
+            subagent_cid = subagent_tracker.subagent_stack[-1][0]
+            subagent_tracker.lg_ns_to_tool_call_id[namespace] = subagent_cid
+
+        if subagent_cid and tool_call_id:
+            subagent_type = None
+            if subagent_cid in subagent_tracker.active_subagents:
+                subagent_type = subagent_tracker.active_subagents[subagent_cid][0]
+            elapsed = None
+            start = subagent_tracker.tool_call_start_times.pop(tool_call_id, None)
+            if start is not None:
+                elapsed = time.time() - start
+            preview = format_tool_result_preview(tool_name, tool_content, tool_status, elapsed)
+            yield ev.SubagentActivity(
+                kind="tool_result",
+                subagent_type=subagent_type,
+                message=preview or f"Completed {tool_name}",
+                detail=tool_call_id,
+                call_id=subagent_cid,
+                color="#73daca" if tool_status == "success" else "#f7768e",
+            )
 
     # Completed subagent (task tool)
     if tool_name == "task" and tool_call_id and tool_call_id in subagent_tracker.active_subagents:
@@ -879,6 +928,22 @@ async def _handle_tool_call_chunk(
                 parsed_args,
                 TOOL_CATEGORIES,
             )
+            # Resolve subagent task's tool_call_id
+            subagent_cid = None
+            if namespace in subagent_tracker.lg_ns_to_tool_call_id:
+                subagent_cid = subagent_tracker.lg_ns_to_tool_call_id[namespace]
+            elif subagent_tracker.subagent_stack:
+                subagent_cid = subagent_tracker.subagent_stack[-1][0]
+                subagent_tracker.lg_ns_to_tool_call_id[namespace] = subagent_cid
+
+            if subagent_cid and buffer_id:
+                yield ev.SubagentActivity(
+                    kind="tool_start",
+                    subagent_type=subagent_type_for_ns,
+                    message=f"{icon} {display_str}",
+                    detail=buffer_id,
+                    call_id=subagent_cid,
+                )
 
     if buffer_name == "task" and "subagent_type" in parsed_args:
         subagent_type = parsed_args["subagent_type"]

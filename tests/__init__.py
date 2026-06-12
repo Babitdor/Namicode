@@ -1,0 +1,1 @@
+"""Tests for Nova Code CLI."""

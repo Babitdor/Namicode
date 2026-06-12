@@ -435,6 +435,38 @@ def parse_args():
         help="Path to setup script to run in sandbox after creation",
     )
     parser.add_argument(
+        "--sandbox-vcpus",
+        type=int,
+        default=None,
+        help="Number of virtual CPUs for the sandbox (LangSmith only)",
+    )
+    parser.add_argument(
+        "--sandbox-mem-bytes",
+        type=int,
+        default=None,
+        help="Memory in bytes for the sandbox (LangSmith only). Example: 8589934592 for 8GB",
+    )
+    parser.add_argument(
+        "--sandbox-fs-capacity-bytes",
+        type=int,
+        default=None,
+        help="Filesystem capacity in bytes for the sandbox (LangSmith only)",
+    )
+    parser.add_argument(
+        "--sandbox-snapshot",
+        type=str,
+        default=None,
+        help="Snapshot name to boot the sandbox from (LangSmith only, mutually "
+        "exclusive with --sandbox-snapshot-id)",
+    )
+    parser.add_argument(
+        "--sandbox-snapshot-id",
+        type=str,
+        default=None,
+        help="Snapshot ID to boot the sandbox from (LangSmith only, mutually "
+        "exclusive with --sandbox-snapshot)",
+    )
+    parser.add_argument(
         "--ports",
         type=str,
         help="Port forwarding for Docker sandbox (format: 'PORT' or 'HOST_PORT:CONTAINER_PORT'). "
@@ -630,6 +662,7 @@ async def simple_cli(
 
     # Extract sandbox ID from backend if using sandbox mode
     sandbox_id: str | None = None
+    sandbox_meta: dict | None = None
     if backend:
         from deepagents.backends.composite import CompositeBackend
 
@@ -637,11 +670,15 @@ async def simple_cli(
         if isinstance(backend, CompositeBackend):
             if isinstance(backend.default, SandboxBackendProtocol):
                 sandbox_id = backend.default.id
+                sandbox_meta = getattr(backend.default, "_nova_meta", None)
         elif isinstance(backend, SandboxBackendProtocol):
             sandbox_id = backend.id
+            sandbox_meta = getattr(backend, "_nova_meta", None)
 
     # Display sandbox info persistently (survives console.clear())
-    display_sandbox_info(console, sandbox_type, sandbox_id, setup_script_path)
+    display_sandbox_info(
+        console, sandbox_type, sandbox_id, setup_script_path, meta=sandbox_meta
+    )
 
     # Display Tavily warning if API key not configured
     display_tavily_warning(console)
@@ -1749,8 +1786,10 @@ async def _run_agent_session(
                 _restored_msgs = None
         # Extract sandbox_id from backend for TUI's session save
         _tui_sandbox_id: str | None = None
+        _tui_sandbox_meta: dict | None = None
         if sandbox_backend:
             _tui_sandbox_id = getattr(sandbox_backend, "id", None)
+            _tui_sandbox_meta = getattr(sandbox_backend, "_nova_meta", None)
 
         try:
             await run_tui(
@@ -1765,6 +1804,7 @@ async def _run_agent_session(
                 restored_messages=_restored_msgs,
                 sandbox_id=_tui_sandbox_id,
                 sandbox_type=sandbox_type,
+                sandbox_meta=_tui_sandbox_meta,
             )
         finally:
             # Always tear down background services so quitting can't crash on
@@ -1847,6 +1887,11 @@ async def main(
     resume: bool = False,
     ports: dict[int, int] | None = None,
     explicit_sandbox: bool = True,
+    sandbox_vcpus: int | None = None,
+    sandbox_mem_bytes: int | None = None,
+    sandbox_fs_capacity_bytes: int | None = None,
+    sandbox_snapshot: str | None = None,
+    sandbox_snapshot_id: str | None = None,
 ) -> None:
     """Main entry point with conditional sandbox support.
 
@@ -1862,6 +1907,11 @@ async def main(
         explicit_sandbox: Whether the user explicitly chose the sandbox. When False
             (the implicit Docker default), a sandbox-creation failure falls back to
             local mode instead of exiting.
+        sandbox_vcpus: Number of virtual CPUs (LangSmith only)
+        sandbox_mem_bytes: Memory in bytes (LangSmith only)
+        sandbox_fs_capacity_bytes: Filesystem capacity in bytes (LangSmith only)
+        sandbox_snapshot: Snapshot name to boot from (LangSmith only)
+        sandbox_snapshot_id: Snapshot ID to boot from (LangSmith only)
     """
     # Check path approval before creating any resources (model, sandbox, store,
     # checkpointer, Vixie server, etc.). If the user denies access, nothing
@@ -2154,6 +2204,21 @@ async def main(
                 # later resume can reconnect (preserving installed deps/state).
                 sandbox_kwargs["persist"] = True  # type: ignore
                 sandbox_kwargs["session_id"] = session_state.session_id  # type: ignore
+
+            # LangSmith-specific options: resource config, snapshots, ports.
+            if sandbox_type == "langsmith":
+                if ports:
+                    sandbox_kwargs["ports"] = ports  # type: ignore
+                if sandbox_vcpus is not None:
+                    sandbox_kwargs["vcpus"] = sandbox_vcpus
+                if sandbox_mem_bytes is not None:
+                    sandbox_kwargs["mem_bytes"] = sandbox_mem_bytes
+                if sandbox_fs_capacity_bytes is not None:
+                    sandbox_kwargs["fs_capacity_bytes"] = sandbox_fs_capacity_bytes
+                if sandbox_snapshot is not None:
+                    sandbox_kwargs["snapshot_name"] = sandbox_snapshot
+                if sandbox_snapshot_id is not None:
+                    sandbox_kwargs["snapshot_id"] = sandbox_snapshot_id
 
             with create_sandbox(sandbox_type, **sandbox_kwargs) as sandbox_backend:  # type: ignore
                 boot_status(f"sandbox: isolated execution ({sandbox_type})", "ok")
@@ -2617,6 +2682,11 @@ def cli_main() -> None:
                     resume=args.resume,
                     ports=ports,
                     explicit_sandbox=explicit_sandbox,
+                    sandbox_vcpus=args.sandbox_vcpus,
+                    sandbox_mem_bytes=args.sandbox_mem_bytes,
+                    sandbox_fs_capacity_bytes=args.sandbox_fs_capacity_bytes,
+                    sandbox_snapshot=args.sandbox_snapshot,
+                    sandbox_snapshot_id=args.sandbox_snapshot_id,
                 )
             )
             # main() returned normally — every teardown step has run (session

@@ -58,19 +58,28 @@ class LangSmithBackend(BaseSandbox):
     def execute(
         self,
         command: str,
+        *,
+        timeout: int | None = None,
+        env: dict[str, str] | None = None,
+        cwd: str | None = None,
     ) -> ExecuteResponse:
         """Execute a command in the sandbox and return ExecuteResponse.
 
         Args:
             command: Full shell command string to execute.
+            timeout: Maximum execution time in seconds. Defaults to 30 minutes.
+            env: Optional environment variables to set for this command.
+            cwd: Optional working directory for this command.
 
         Returns:
             ExecuteResponse with combined output, exit code, and truncation flag.
         """
         result = self._sandbox.run(  # noqa: S604 — LangSmith SDK arg, not subprocess shell
             command,
-            timeout=self._timeout,
+            timeout=timeout or self._timeout,
             shell="/bin/bash",
+            env=env,
+            cwd=cwd,
         )
 
         # Combine stdout and stderr (same pattern as RunloopBackend)

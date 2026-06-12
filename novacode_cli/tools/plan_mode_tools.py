@@ -12,6 +12,7 @@ functions so they can be registered directly without requiring middleware.
 
 from __future__ import annotations
 
+import contextvars
 from typing import Any
 
 from langchain.tools import tool
@@ -19,7 +20,11 @@ from langgraph.types import interrupt
 
 from novacode_cli.prompts import render_template
 
+
 _PLAN_MODE_PROMPT = render_template("planning.jinja")
+
+_auto_approve_var: contextvars.ContextVar[bool] = contextvars.ContextVar("_auto_approve_var", default=False)
+
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +139,9 @@ def exit_plan_mode(plan: str = "") -> str:
         "Plan approved. Proceed with implementation." or
         "Plan rejected. Revise the plan based on user feedback."
     """
+    if _auto_approve_var.get():
+        return "Plan approved. Proceed with implementation."
+
     response = interrupt(
         {
             "type": "plan_approval",

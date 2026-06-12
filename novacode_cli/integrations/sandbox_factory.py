@@ -458,14 +458,28 @@ def create_daytona_sandbox(
 
 
 @contextmanager
-def create_langsmith_sandbox(
-    *, sandbox_id: str | None = None, setup_script_path: str | None = None
+def create_langsmith_sandbox(  # noqa: PLR0912, PLR0915
+    *,
+    sandbox_id: str | None = None,
+    setup_script_path: str | None = None,
+    vcpus: int | None = None,
+    mem_bytes: int | None = None,
+    fs_capacity_bytes: int | None = None,
+    snapshot_id: str | None = None,
+    snapshot_name: str | None = None,
+    ports: dict[int, int] | None = None,
 ) -> Generator[SandboxBackendProtocol, None, None]:
     """Create LangSmith sandbox.
 
     Args:
         sandbox_id: Optional existing sandbox name to reuse
         setup_script_path: Optional path to setup script to run after sandbox starts
+        vcpus: Number of virtual CPUs for the sandbox
+        mem_bytes: Memory in bytes for the sandbox
+        fs_capacity_bytes: Filesystem capacity in bytes
+        snapshot_id: Snapshot ID to boot from (mutually exclusive with snapshot_name)
+        snapshot_name: Snapshot name to boot from (resolved server-side)
+        ports: Port mappings for tunnel creation {container_port: host_port}
 
     Yields:
         SandboxBackendProtocol instance.
@@ -490,6 +504,7 @@ def create_langsmith_sandbox(
 
     client = SandboxClient()
     sandbox = None
+    tunnels: list[object] = []
 
     try:
         if sandbox_id:
@@ -500,14 +515,85 @@ def create_langsmith_sandbox(
                 sandbox.start()
         else:
             console.print("[yellow]Creating LangSmith sandbox...[/yellow]")
-            sandbox = client.create_sandbox(
-                timeout=120,
-                idle_ttl_seconds=0,  # Disable idle auto-stop
-            )
+
+            create_kwargs: dict = {
+                "timeout": 120,
+                "idle_ttl_seconds": 0,  # Disable idle auto-stop
+            }
+            if snapshot_id:
+                create_kwargs["snapshot_id"] = snapshot_id
+            if snapshot_name:
+                create_kwargs["snapshot_name"] = snapshot_name
+            if vcpus is not None:
+                create_kwargs["vcpus"] = vcpus
+            if mem_bytes is not None:
+                create_kwargs["mem_bytes"] = mem_bytes
+            if fs_capacity_bytes is not None:
+                create_kwargs["fs_capacity_bytes"] = fs_capacity_bytes
+            if snapshot_id and snapshot_name:
+                msg = "snapshot_id and snapshot_name are mutually exclusive"
+                raise ValueError(msg)
+
+            sandbox = client.create_sandbox(**create_kwargs)
+
+            _resource_summary_parts = []
+            if vcpus is not None:
+                _resource_summary_parts.append(f"{vcpus} vCPU")
+            if mem_bytes is not None:
+                _resource_summary_parts.append(f"{mem_bytes // (1024**3)}GB RAM")
+            if fs_capacity_bytes is not None:
+                _resource_summary_parts.append(f"{fs_capacity_bytes // (1024**3)}GB disk")
+            if snapshot_id or snapshot_name:
+                _resource_summary_parts.append(
+                    f"snapshot: {snapshot_name or snapshot_id}"
+                )
+            if _resource_summary_parts:
+                console.print(
+                    f"[dim]  {', '.join(_resource_summary_parts)}[/dim]"
+                )
 
         sandbox_id = sandbox.name
         backend = LangSmithBackend(sandbox)
         console.print(f"[green]✓ LangSmith sandbox ready: {backend.id}[/green]")
+
+        # Attach metadata for the startup banner display
+        meta: dict[str, object] = {
+            "id": backend.id,
+            "provider": "langsmith",
+        }
+        if vcpus is not None:
+            meta["vcpus"] = vcpus
+        if mem_bytes is not None:
+            meta["mem_bytes"] = mem_bytes
+            meta["mem_gb"] = f"{mem_bytes // (1024**3)}GB"
+        if fs_capacity_bytes is not None:
+            meta["fs_capacity_bytes"] = fs_capacity_bytes
+            meta["fs_capacity_gb"] = f"{fs_capacity_bytes // (1024**3)}GB"
+        if snapshot_id:
+            meta["snapshot"] = snapshot_id
+        if snapshot_name:
+            meta["snapshot"] = snapshot_name
+        backend._nova_meta = meta  # type: ignore[attr-defined]
+
+        # Create tunnels for port forwarding
+        tunnels_list: list[dict[str, int]] = []
+        if ports:
+            for container_port, host_port in ports.items():
+                try:
+                    tunnel = sandbox.tunnel(container_port, local_port=host_port)
+                    tunnels.append(tunnel)
+                    tunnels_list.append({"host": host_port, "container": container_port})
+                    console.print(
+                        f"[dim]Tunnel: localhost:{host_port} -> "
+                        f"sandbox:{container_port}[/dim]"
+                    )
+                except Exception as e:  # noqa: BLE001
+                    console.print(
+                        f"[yellow]⚠ Tunnel for port {container_port} failed: {e}[/yellow]"
+                    )
+
+        if tunnels_list:
+            meta["tunnels"] = tunnels_list
 
         # Run setup script if provided
         if setup_script_path:
@@ -520,7 +606,7 @@ def create_langsmith_sandbox(
             console.print(f"[dim]Deleting LangSmith sandbox {sandbox_id}...[/dim]")
             try:
                 sandbox.delete()
-                console.print(f"[dim]✓ LangSmith sandbox terminated[/dim]")
+                console.print("[dim]✓ LangSmith sandbox terminated[/dim]")
             except Exception as e:  # noqa: BLE001
                 console.print(f"[yellow]⚠ Cleanup failed: {e}[/yellow]")
 
@@ -932,7 +1018,7 @@ def _install_exit_net() -> None:
 
 
 @contextmanager
-def create_sandbox(
+def create_sandbox(  # noqa: PLR0912
     provider: str,
     *,
     sandbox_id: str | None = None,
@@ -941,6 +1027,11 @@ def create_sandbox(
     mount_dir: str | None = None,
     persist: bool = False,
     session_id: str | None = None,
+    vcpus: int | None = None,
+    mem_bytes: int | None = None,
+    fs_capacity_bytes: int | None = None,
+    snapshot_id: str | None = None,
+    snapshot_name: str | None = None,
 ) -> Generator[SandboxBackendProtocol, None, None]:
     """Create or connect to a sandbox of the specified provider.
 
@@ -948,13 +1039,18 @@ def create_sandbox(
     the appropriate provider-specific context manager.
 
     Args:
-        provider: Sandbox provider ("modal", "runloop", "daytona", "docker")
+        provider: Sandbox provider ("modal", "runloop", "daytona", "docker", "langsmith")
         sandbox_id: Optional existing sandbox ID to reuse
         setup_script_path: Optional path to setup script to run after sandbox starts
-        ports: Optional port mapping for Docker sandbox {container_port: host_port}
+        ports: Optional port mapping {container_port: host_port} (Docker/LangSmith)
         mount_dir: Optional host directory to bind-mount at /workspace (Docker only)
         persist: Keep the container on exit for later reconnect (Docker only)
         session_id: Session id used to name/label the container (Docker only)
+        vcpus: Number of virtual CPUs (LangSmith only)
+        mem_bytes: Memory in bytes (LangSmith only)
+        fs_capacity_bytes: Filesystem capacity in bytes (LangSmith only)
+        snapshot_id: Snapshot ID to boot from (LangSmith only)
+        snapshot_name: Snapshot name to boot from (LangSmith only)
 
     Yields:
         (SandboxBackend, sandbox_id)
@@ -981,14 +1077,12 @@ def create_sandbox(
     sandbox_provider = _SANDBOX_PROVIDERS[provider]
 
     # Build kwargs for sandbox provider
-    sandbox_kwargs = {
+    sandbox_kwargs: dict = {
         "sandbox_id": sandbox_id,
         "setup_script_path": setup_script_path,
     }
 
-    # Only pass Docker-specific options (ports, bind-mount, persistence) to the
-    # Docker sandbox. Cloud providers (modal/runloop/daytona) cannot bind-mount a
-    # local directory or persist/reconnect by container id the same way.
+    # Docker-specific options
     if provider == "docker":
         if ports:
             sandbox_kwargs["ports"] = ports
@@ -997,6 +1091,21 @@ def create_sandbox(
         sandbox_kwargs["persist"] = persist
         if session_id:
             sandbox_kwargs["session_id"] = session_id
+
+    # LangSmith-specific options
+    if provider == "langsmith":
+        if ports:
+            sandbox_kwargs["ports"] = ports
+        if vcpus is not None:
+            sandbox_kwargs["vcpus"] = vcpus
+        if mem_bytes is not None:
+            sandbox_kwargs["mem_bytes"] = mem_bytes
+        if fs_capacity_bytes is not None:
+            sandbox_kwargs["fs_capacity_bytes"] = fs_capacity_bytes
+        if snapshot_id is not None:
+            sandbox_kwargs["snapshot_id"] = snapshot_id
+        if snapshot_name is not None:
+            sandbox_kwargs["snapshot_name"] = snapshot_name
 
     with sandbox_provider(**sandbox_kwargs) as backend:
         # Register ownership + start the liveness heartbeat so an abrupt end is

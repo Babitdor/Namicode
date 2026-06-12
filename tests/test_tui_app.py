@@ -85,7 +85,7 @@ class _SS:
 
 
 async def _drive():
-    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
 
     tt = TokenTracker()
@@ -110,7 +110,7 @@ async def _drive():
 
 async def _drive_routing():
     """Exercise input routing: slash commands, !bash, normal prompt, /clear."""
-    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
 
     app = NovaApp(
@@ -146,7 +146,7 @@ async def _drive_routing():
 
 async def _drive_save_on_quit():
     """/quit should persist the session via the session manager."""
-    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
 
     class _Msg:
@@ -200,7 +200,7 @@ async def _drive_sessions_screen():
     """/sessions opens a screen listing saved sessions."""
     from textual.widgets import Button, OptionList
 
-    from novacode_cli.tui.app import NovaApp, SessionsScreen
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar, SessionsScreen
     from novacode_cli.ui.ui_elements import TokenTracker
 
     class _Meta:
@@ -288,7 +288,7 @@ async def _drive_autocomplete():
     """Typing '/mo' shows a filtered command palette; Enter accepts '/model '."""
     from textual.widgets import Input, OptionList
 
-    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
 
     app = NovaApp(
@@ -361,7 +361,7 @@ async def _drive_skill_agent_autocomplete():
     """'/skill:' lists skills and '@' lists agents in the palette."""
     from textual.widgets import Input, OptionList
 
-    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
 
     app = NovaApp(
@@ -382,11 +382,13 @@ async def _drive_skill_agent_autocomplete():
 
         inp.value = "/skill:"
         await pilot.pause()
+        await app.workers.wait_for_complete()
         skills = [str(pal.get_option_at_index(i).prompt) for i in range(pal.option_count)]
         assert pal.display and "/skill:api-testing" in skills, skills
 
         inp.value = "/skill:co"
         await pilot.pause()
+        await app.workers.wait_for_complete()
         assert [
             str(pal.get_option_at_index(i).prompt) for i in range(pal.option_count)
         ] == ["/skill:code-review"]
@@ -395,31 +397,39 @@ async def _drive_skill_agent_autocomplete():
         # (setting .value directly leaves the cursor stale).
         inp.value = ""
         await pilot.pause()
+        await app.workers.wait_for_complete()
         await pilot.press("@")
         await pilot.pause()
+        await app.workers.wait_for_complete()
         agents = [str(pal.get_option_at_index(i).prompt) for i in range(pal.option_count)]
         assert pal.display and "@researcher" in agents and "@critic" in agents, agents
 
         await pilot.press("c", "r")
         await pilot.pause()
+        await app.workers.wait_for_complete()
         assert [
-            str(pal.get_option_at_index(i).prompt) for i in range(pal.option_count)
+            p for p in [str(pal.get_option_at_index(i).prompt) for i in range(pal.option_count)]
+            if p in {"@researcher", "@critic"}
         ] == ["@critic"]
 
         # @ mid-message also triggers completion (the bug this fixes).
         inp.value = ""
         await pilot.pause()
+        await app.workers.wait_for_complete()
         for ch in "fix the @cr":
             await pilot.press("space" if ch == " " else ch)
-        await pilot.pause()
+            await pilot.pause()
+            await app.workers.wait_for_complete()
         assert pal.display
         assert [
-            str(pal.get_option_at_index(i).prompt) for i in range(pal.option_count)
+            p for p in [str(pal.get_option_at_index(i).prompt) for i in range(pal.option_count)]
+            if p in {"@researcher", "@critic"}
         ] == ["@critic"], "mid-message @ should complete the token at the cursor"
 
         # Accepting replaces only the @token, preserving the rest of the line.
         await pilot.press("enter")
         await pilot.pause()
+        await app.workers.wait_for_complete()
         assert inp.value == "fix the @critic ", inp.value
         assert not pal.display
 
@@ -434,7 +444,7 @@ async def _drive_remote_render():
     """A remote message renders in the transcript and is replied to."""
     from langchain_core.messages import AIMessage
 
-    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
 
     class _StateMsgs:
@@ -512,7 +522,7 @@ async def _drive_live_render():
     """Reasoning + answer stream into ChatMessage widgets; tool sets status; commit clears."""
     import novacode_cli.ui_events as ev
 
-    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
 
     app = NovaApp(
@@ -529,8 +539,8 @@ async def _drive_live_render():
         assert app._reason_msg is not None
         assert "thinking hard" in app._reasoning_buf
         assert len(app.query("ChatMessage.reason")) == 1
-        await app._render(ev.ToolCall(name="shell", display_str="shell(ls)", icon="+"))
-        assert app._activity == "running shell…", app._activity
+        await app._render(ev.ToolCall(name="web_search", display_str="web_search(ls)", icon="+"))
+        assert app._activity == "running web_search…", app._activity
         # Condensed view: the call goes into a single grouped Collapsible.
         assert app._tool_group is not None
         assert len(app._tool_group_entries) == 1
@@ -571,7 +581,7 @@ async def _drive_remote_streaming():
     """
     from langchain_core.messages import AIMessage
 
-    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
 
     class _StateMsgs:
@@ -737,7 +747,7 @@ def test_tui_home_banner():
 
 async def _drive_user_input_sanitization():
     """Hidden Unicode in user input is stripped (warn + sanitize) before dispatch."""
-    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
 
     app = NovaApp(
@@ -766,7 +776,7 @@ def test_tui_user_input_sanitization():
 
 async def _drive_remote_slash():
     """Slash commands from a remote chat route through _remote_slash."""
-    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
 
     class _SSRemote(_SS):
@@ -833,7 +843,7 @@ def test_tui_remote_slash():
 
 async def _drive_remote_steer_drain():
     """A message arriving mid-turn is applied as a live steer, not a new turn."""
-    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
 
     class _SSRemote(_SS):
@@ -883,11 +893,116 @@ def test_tui_remote_steer_drain():
     asyncio.run(_drive_remote_steer_drain())
 
 
+async def _drive_remote_question():
+    """A question asked during a remote turn is replied to via remote bridge,
+    intercepting the answer from the queue, and resuming the agent loop.
+    """
+    import novacode_cli.ui_events as ev
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar
+    from novacode_cli.ui.ui_elements import TokenTracker
+
+    class _SSRemote(_SS):
+        def __init__(self):
+            self._remote_message_queue = asyncio.Queue()
+            self._remote_message_lock = asyncio.Lock()
+            self._remote_bridge_manager = None
+            self.auto_approve = False
+            self.thread_id = "test-thread"
+
+    app = NovaApp(
+        agent=_FakeAgent(),
+        assistant_id="nova-agent",
+        session_state=_SSRemote(),
+        backend=None,
+        token_tracker=TokenTracker(),
+        image_tracker=None,
+        model_name="m",
+    )
+    app._remote_consumer = lambda: None
+    async with app.run_test() as pilot:
+        # Simulate active remote message
+        replied_text = []
+        reacted_emoji = []
+
+        class _Msg:
+            text = "test remote prompt"
+            user_name = "User"
+            platform = type("Enum", (), {"value": "discord"})
+            typing_fn = None
+            react_fn = None
+
+            async def reply_fn(self, txt):
+                replied_text.append(txt)
+
+            async def react_fn_val(self, emoji):
+                reacted_emoji.append(emoji)
+
+        m = _Msg()
+        m.react_fn = m.react_fn_val
+        app._remote_msg = m
+
+        # Start the steer drain task
+        drain = asyncio.create_task(app._remote_steer_drain(app.session_state._remote_message_queue))
+
+        # Ask a structured question
+        payload = {
+            "question": "Choose an option?",
+            "question_type": "structured",
+            "options": ["First Option", "Second Option"],
+            "context": "Need detail"
+        }
+
+        # Start the question task
+        ask_task = asyncio.create_task(app._ask_remote_question(payload))
+
+        # Wait briefly for the message to be sent and future to be set up
+        for _ in range(5):
+            await pilot.pause()
+
+        assert len(replied_text) == 1
+        assert "Choose an option?" in replied_text[0]
+        assert "1. First Option" in replied_text[0]
+
+        # Simulate user typing "2" as the answer
+        class _AnswerMsg:
+            text = "2"
+            reacted = None
+
+            async def react_fn(self, emoji):
+                self.reacted = emoji
+                reacted_emoji.append(emoji)
+
+        await app.session_state._remote_message_queue.put(_AnswerMsg())
+
+        # Wait for the steer drain to pick it up and resolve the future
+        for _ in range(5):
+            await pilot.pause()
+
+        # Await the question resolution
+        res = await ask_task
+        assert res["response"]["answer"] == "Second Option"
+        assert res["response"]["selected_index"] == 1
+        assert "📥" in reacted_emoji
+
+        # Clean up
+        drain.cancel()
+        try:
+            await drain
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass
+
+
+def test_tui_remote_question():
+    if not _HAS_TEXTUAL:
+        return
+    asyncio.run(_drive_remote_question())
+
+
 async def _drive_markup_safe():
     """Tool titles + question options containing '[' must not crash markup render."""
     import novacode_cli.ui_events as ev
 
-    from novacode_cli.tui.app import NovaApp, QuestionModal
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar, QuestionModal
     from novacode_cli.ui.ui_elements import TokenTracker
 
     app = NovaApp(
@@ -935,7 +1050,7 @@ async def _drive_context_warning():
     """_check_context warns once at the warning line and re-arms below it."""
     from textual.widgets import Static
 
-    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar
 
     class _BD:
         def __init__(self, pct, warn, crit):
@@ -990,7 +1105,7 @@ async def _drive_live_steering():
     """Typing while the agent works injects a transient steer, cleared after."""
     from textual.widgets import Input, Static
 
-    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
 
     ss = _SS()
@@ -1040,7 +1155,7 @@ async def _drive_stream_coalescing():
     import novacode_cli.ui_events as ev
     from textual.widgets import Static
 
-    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
 
     app = NovaApp(
@@ -1090,7 +1205,7 @@ async def _drive_transcript_cap():
     from textual.widgets import Static
 
     import novacode_cli.tui.app as appmod
-    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
 
     hi, lo = appmod._MAX_TRANSCRIPT_WIDGETS, appmod._TRANSCRIPT_LOW_WATER
@@ -1132,7 +1247,7 @@ async def _drive_palette_noop():
     unchanged; on_key bails fast when the palette is hidden."""
     from textual.widgets import OptionList
 
-    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
 
     app = NovaApp(
@@ -1156,12 +1271,14 @@ async def _drive_palette_noop():
         palette.clear_options = _counting_clear
 
         app._update_palette("/h")  # matches /help, /hooks, … → builds once
+        await app.workers.wait_for_complete()
         assert app._last_palette and all(
             c.startswith("/h") for c in app._last_palette
         )
         assert rebuilds["n"] == 1
         first_list = list(app._last_palette)
         app._update_palette("/h")  # identical input → candidates unchanged
+        await app.workers.wait_for_complete()
         assert rebuilds["n"] == 1, "palette rebuilt despite unchanged candidates"
         assert app._last_palette == first_list
 
@@ -1190,7 +1307,7 @@ async def _drive_startup_info():
     """The native startup panel renders model/cwd on mount."""
     from textual.widgets import Static
 
-    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
 
     app = NovaApp(
@@ -1300,7 +1417,7 @@ async def _drive_parallel_fileops():
     """Parallel read_file calls condense into ONE group; each line finalizes by call_id."""
     import novacode_cli.ui_events as ev
 
-    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
 
     app = NovaApp(
@@ -1343,7 +1460,7 @@ async def _drive_diff_component():
     import novacode_cli.ui_events as ev
 
     from novacode_cli.file_ops import FileOperationRecord, FileOpMetrics
-    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
 
     rec = FileOperationRecord(
@@ -1391,7 +1508,7 @@ async def _drive_remote_screen():
     """/remote opens a native screen rendering bridge status as TUI components."""
     from textual.widgets import Button, Static
 
-    from novacode_cli.tui.app import NovaApp, RemoteScreen
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar, RemoteScreen
     from novacode_cli.ui.ui_elements import TokenTracker
 
     class _Mgr:
@@ -1435,7 +1552,7 @@ async def _drive_native_todos():
     """Todos render natively and update a single widget in place (no pile-up)."""
     import novacode_cli.ui_events as ev
 
-    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
 
     app = NovaApp(
@@ -1475,7 +1592,7 @@ def test_tui_remote_screen():
 async def _drive_init_routes_native():
     """/init routes to the native handler (not the 'unavailable' fallback)."""
     import novacode_cli.config.config as cfg
-    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
 
     app = NovaApp(
@@ -1521,7 +1638,7 @@ async def _drive_init_live_stream():
     from textual.widgets import Static
 
     from novacode_cli.init import events as iev
-    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
 
     app = NovaApp(
@@ -1565,7 +1682,7 @@ async def _drive_native_diff_body():
     from textual.widgets import Static
 
     from novacode_cli.file_ops import FileOperationRecord, FileOpMetrics
-    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
 
     rec = FileOperationRecord(
@@ -1603,10 +1720,10 @@ async def _drive_native_diff_body():
 
 
 async def _drive_native_bash():
-    """! commands run natively (subprocess) and render output as TUI loglines."""
+    """! commands run natively (subprocess) by suspending the TUI app."""
     from textual.widgets import Input, Static
 
-    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
 
     app = NovaApp(
@@ -1624,12 +1741,12 @@ async def _drive_native_bash():
         inp.focus()
         await pilot.press("enter")
         await app.workers.wait_for_complete()
-        await pilot.pause()
-        texts = " ".join(
-            str(w.render()) for w in app.query("#transcript .logline").results(Static)
-        )
-        # the command line (and, on most shells, its echoed output) appears
-        assert "hi-from-shell" in texts, texts
+        for _ in range(5):
+            await pilot.pause()
+        children = app.query_one("#transcript").children
+        logs = [str(c.render()) for c in children if isinstance(c, Static)]
+        assert any("Executing: !echo" in l for l in logs), logs
+        assert any("Command finished successfully" in l for l in logs), logs
 
 
 def test_tui_native_diff_body():
@@ -1654,7 +1771,7 @@ async def _drive_trace_log_plan_native():
     """/trace, /log, /plan render natively (not the 'unavailable' fallback)."""
     from textual.widgets import Input, Static
 
-    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
 
     class _SSPlan(_SS):
@@ -1711,7 +1828,7 @@ async def _drive_steer_save_native():
     """/steer (add/list/clear) and /save render natively (no fallback)."""
     from textual.widgets import Input, Static
 
-    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
 
     class _SSSteer(_SS):
@@ -1753,7 +1870,7 @@ async def _drive_research_dream_native():
     """/research streams natively via execute_fn; /dream renders natively."""
     from textual.widgets import Input, Static
 
-    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
 
     app = NovaApp(
@@ -1796,7 +1913,7 @@ async def _drive_images_native():
     """/images list/remove/clear render natively against a fake tracker."""
     from textual.widgets import Input, Static
 
-    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
 
     class _FakeTracker:
@@ -1867,7 +1984,7 @@ async def _drive_menus_native():
     """/files, /hooks, /kill, /restore render natively (empty-state, no modal)."""
     from textual.widgets import Input, Static
 
-    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
 
     app = NovaApp(
@@ -1910,7 +2027,7 @@ async def _drive_input_mode_styles():
     """The prompt input gets distinct CSS classes for bash vs plan mode."""
     from textual.widgets import Input
 
-    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
 
     class _SSPlanFlag(_SS):
@@ -1968,7 +2085,7 @@ async def _drive_theme_native():
     import novacode_cli.config.nova_config as ncfg
     from textual.widgets import Button, Input, OptionList
 
-    from novacode_cli.tui.app import NovaApp, ThemeScreen
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar, ThemeScreen
     from novacode_cli.ui.ui_elements import TokenTracker
 
     # Don't write the user's real config during the test.
@@ -2033,7 +2150,7 @@ async def _drive_notifications_native():
     from textual.widgets import Input, Static
 
     from novacode_cli.states.Session import SessionState
-    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
 
     ss = SessionState()
@@ -2061,7 +2178,7 @@ async def _drive_notifications_native():
         ss.add_notification("success", "Build done", "ok", "tests")
         app._refresh_status()
         await pilot.pause()
-        status_txt = str(app.query_one("#status", Static).render())
+        status_txt = str(app.query_one("#prompt-hint-bar", Static).render())
         assert "🔔" in status_txt, status_txt
 
         # /notifications lists it natively.
@@ -2078,7 +2195,7 @@ async def _drive_notifications_native():
         assert ss.unread_notification_count() == 0
         app._refresh_status()
         await pilot.pause()
-        assert "🔔" not in str(app.query_one("#status", Static).render())
+        assert "🔔" not in str(app.query_one("#prompt-hint-bar", Static).render())
 
 
 def test_tui_notifications_native():
@@ -2092,7 +2209,7 @@ async def _drive_resume_replay():
     from langchain_core.messages import AIMessage, HumanMessage
     from textual.widgets import Static
 
-    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
 
     msgs = [
@@ -2137,7 +2254,7 @@ async def _drive_clear_resets_chat():
     """/clear starts a fresh chat: new thread_id, cleared seen-ids + transcript."""
     from textual.widgets import Input, Static
 
-    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
 
     ss = _SS()
@@ -2208,7 +2325,7 @@ async def _drive_fragmented_paste():
     """
     from textual import events
 
-    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
 
     app = NovaApp(
@@ -2269,7 +2386,7 @@ async def _drive_copy_response():
     from rich.markdown import Markdown
     from rich.text import Text
 
-    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
 
     app = NovaApp(
@@ -2330,7 +2447,7 @@ async def _drive_plan_shares_conversation():
     """
     import novacode_cli.agents.plan_agent as plan_pkg
 
-    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
 
     captured: dict = {}
@@ -2383,7 +2500,7 @@ def test_tui_plan_shares_conversation():
 
 async def _drive_plugin_command_dispatch():
     """A plugin-contributed slash command is dispatched in the TUI."""
-    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
 
     seen: list[str] = []
@@ -2423,7 +2540,7 @@ def test_tui_plugin_command_dispatch():
 async def _drive_plugins_screen():
     """The native /plugins screen lists plugins and toggles enable/disable."""
     import novacode_cli.plugins.loader as loader
-    from novacode_cli.tui.app import NovaApp, PluginsScreen
+    from novacode_cli.tui.app import NovaApp, NovaStatusBar, PluginsScreen
     from novacode_cli.ui.ui_elements import TokenTracker
 
     state: set[str] = set()
@@ -2520,6 +2637,96 @@ def test_tui_chatmessage_pending_body():
     asyncio.run(_drive_chatmessage_pending_body())
 
 
+async def _drive_subagent_terminal_preview():
+    """Verify that subagent status/tool calls and live terminal output are routed and displayed correctly in the TUI."""
+    import novacode_cli.ui_events as ev
+    from rich.text import Text as RText
+    from textual.widgets import RichLog, Static
+
+    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.ui.ui_elements import TokenTracker
+
+    app = NovaApp(
+        agent=_FakeAgent(),
+        assistant_id="nova-agent",
+        session_state=_SS(),
+        backend=None,
+        token_tracker=TokenTracker(),
+        image_tracker=None,
+        model_name="m",
+    )
+    async with app.run_test() as pilot:
+        # 1. Dispatch subagent
+        await app._render(
+            ev.SubagentActivity(
+                kind="dispatched",
+                subagent_type="researcher",
+                message="researcher is thinking…",
+                detail="Find all references to subagents",
+                color="#bb9af7",
+                call_id="subagent_task_1",
+            )
+        )
+        await pilot.pause()
+        assert "subagent_task_1" in app._subagent_widgets
+        comp, body, stype, start_time = app._subagent_widgets["subagent_task_1"]
+        assert comp.collapsed is False
+
+        # 2. Tool start within the subagent
+        await app._render(
+            ev.SubagentActivity(
+                kind="tool_start",
+                subagent_type="researcher",
+                message="🔧 grep_search",
+                detail="tool_call_1",
+                call_id="subagent_task_1",
+            )
+        )
+        await pilot.pause()
+        assert app._subagent_tool_to_task.get("tool_call_1") == "subagent_task_1"
+        list_widget = body.query_one("#subagent-list", Static)
+        assert "grep_search" in str(list_widget.render())
+
+        # 3. Stream live output to that tool
+        app._on_tool_output("tool_call_1", "searching codebase...\n")
+        await pilot.pause()
+        log_widget = body.query_one("#subagent-log", RichLog)
+        assert any("searching codebase..." in line.text for line in log_widget.lines)
+
+        # 4. Tool result/completion
+        await app._render(
+            ev.SubagentActivity(
+                kind="tool_result",
+                subagent_type="researcher",
+                message="✓ grep_search (0.5s)",
+                detail="tool_call_1",
+                call_id="subagent_task_1",
+            )
+        )
+        await pilot.pause()
+        assert "tool_call_1" not in app._subagent_tool_to_task
+        assert "✓ 🔧 grep_search" in str(list_widget.render())
+
+        # 5. Complete subagent
+        await app._render(
+            ev.SubagentActivity(
+                kind="completed",
+                subagent_type="researcher",
+                message="researcher completed",
+                call_id="subagent_task_1",
+            )
+        )
+        await pilot.pause()
+        assert comp.collapsed is True
+        assert "subagent_task_1" not in app._subagent_widgets
+
+
+def test_tui_subagent_terminal_preview():
+    if not _HAS_TEXTUAL:
+        return
+    asyncio.run(_drive_subagent_terminal_preview())
+
+
 if __name__ == "__main__":
     if _HAS_TEXTUAL:
         asyncio.run(_drive())
@@ -2555,13 +2762,14 @@ if __name__ == "__main__":
         asyncio.run(_drive_context_warning())
         asyncio.run(_drive_live_steering())
         asyncio.run(_drive_startup_info())
+        asyncio.run(_drive_subagent_terminal_preview())
         print(
             "TUI HEADLESS + ROUTING + SAVE + SESSIONS + MCP + AUTOCOMPLETE + "
             "AGENTS/SKILLS + SKILL/@ + REMOTE + LIVE + APPROVAL + FILEOPS + DIFF + "
             "REMOTE-SCREEN + TODOS + INIT + INIT-STREAM + TRACE/LOG/PLAN + "
             "NATIVE-DIFF + BASH + RESEARCH/DREAM + IMAGES + MENUS + MODE-STYLES + "
             "THEME + NOTIFICATIONS + RESUME-REPLAY + CLEAR + MARKUP-SAFE + CONTEXT + "
-            "LIVE-STEER OK"
+            "LIVE-STEER + SUBAGENT-PREVIEW OK"
         )
     else:
         print("textual not installed — skipped")

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from unittest.mock import MagicMock, PropertyMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -63,6 +63,8 @@ class TestLangSmithBackendExecute:
             "echo hello world",
             timeout=backend._timeout,
             shell="/bin/bash",
+            env=None,
+            cwd=None,
         )
         assert response.output == "hello world\n"
         assert response.exit_code == 0
@@ -266,3 +268,254 @@ class TestRegistryTermination:
         with patch.dict(os.environ, {}, clear=True):
             result = _terminate_record(record)
             assert result is False
+
+
+class TestExecuteWithEnvCwd:
+    """Tests for env/cwd passthrough on LangSmithBackend.execute()."""
+
+    @pytest.fixture
+    def mock_sandbox(self):
+        sb = MagicMock()
+        sb.name = "env-test-box"
+        return sb
+
+    @pytest.fixture
+    def backend(self, mock_sandbox):
+        from novacode_cli.integrations.langsmith import LangSmithBackend
+
+        return LangSmithBackend(mock_sandbox)
+
+    def test_execute_passes_env(self, backend, mock_sandbox):
+        result = MagicMock()
+        result.stdout = "ok"
+        result.stderr = ""
+        result.exit_code = 0
+        mock_sandbox.run.return_value = result
+
+        env = {"MY_VAR": "my_value", "PATH": "/custom/bin"}
+        backend.execute("echo $MY_VAR", env=env)
+
+        mock_sandbox.run.assert_called_once_with(
+            "echo $MY_VAR",
+            timeout=backend._timeout,
+            shell="/bin/bash",
+            env=env,
+            cwd=None,
+        )
+
+    def test_execute_passes_cwd(self, backend, mock_sandbox):
+        result = MagicMock()
+        result.stdout = "ok"
+        result.stderr = ""
+        result.exit_code = 0
+        mock_sandbox.run.return_value = result
+
+        backend.execute("pwd", cwd="/workspace")
+
+        mock_sandbox.run.assert_called_once_with(
+            "pwd",
+            timeout=backend._timeout,
+            shell="/bin/bash",
+            env=None,
+            cwd="/workspace",
+        )
+
+    def test_execute_with_timeout_override(self, backend, mock_sandbox):
+        result = MagicMock()
+        result.stdout = "ok"
+        result.stderr = ""
+        result.exit_code = 0
+        mock_sandbox.run.return_value = result
+
+        backend.execute("sleep 5", timeout=10)
+
+        mock_sandbox.run.assert_called_once_with(
+            "sleep 5",
+            timeout=10,
+            shell="/bin/bash",
+            env=None,
+            cwd=None,
+        )
+
+
+class TestFactoryResourceConfig:
+    """Tests for LangSmith factory resource configuration."""
+
+    @patch.dict(os.environ, {"LANGSMITH_API_KEY": "test-key-123"}, clear=True)
+    @patch("langsmith.sandbox.SandboxClient")
+    def test_factory_passes_vcpus(self, mock_client_cls):
+        from novacode_cli.integrations.sandbox_factory import create_langsmith_sandbox
+
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+        mock_sb = MagicMock()
+        mock_sb.name = "ls-sandbox-vcpus"
+        mock_sb.status = "ready"
+        mock_client.create_sandbox.return_value = mock_sb
+
+        with create_langsmith_sandbox(vcpus=4):
+            pass
+
+        mock_client.create_sandbox.assert_called_once_with(
+            timeout=120, idle_ttl_seconds=0, vcpus=4
+        )
+
+    @patch.dict(os.environ, {"LANGSMITH_API_KEY": "test-key-123"}, clear=True)
+    @patch("langsmith.sandbox.SandboxClient")
+    def test_factory_passes_mem_bytes(self, mock_client_cls):
+        from novacode_cli.integrations.sandbox_factory import create_langsmith_sandbox
+
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+        mock_sb = MagicMock()
+        mock_sb.name = "ls-sandbox-mem"
+        mock_sb.status = "ready"
+        mock_client.create_sandbox.return_value = mock_sb
+
+        mem = 8 * 1024**3  # 8GB
+        with create_langsmith_sandbox(mem_bytes=mem):
+            pass
+
+        mock_client.create_sandbox.assert_called_once_with(
+            timeout=120, idle_ttl_seconds=0, mem_bytes=mem
+        )
+
+    @patch.dict(os.environ, {"LANGSMITH_API_KEY": "test-key-123"}, clear=True)
+    @patch("langsmith.sandbox.SandboxClient")
+    def test_factory_passes_fs_capacity(self, mock_client_cls):
+        from novacode_cli.integrations.sandbox_factory import create_langsmith_sandbox
+
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+        mock_sb = MagicMock()
+        mock_sb.name = "ls-sandbox-disk"
+        mock_sb.status = "ready"
+        mock_client.create_sandbox.return_value = mock_sb
+
+        disk = 50 * 1024**3  # 50GB
+        with create_langsmith_sandbox(fs_capacity_bytes=disk):
+            pass
+
+        mock_client.create_sandbox.assert_called_once_with(
+            timeout=120, idle_ttl_seconds=0, fs_capacity_bytes=disk
+        )
+
+    @patch.dict(os.environ, {"LANGSMITH_API_KEY": "test-key-123"}, clear=True)
+    @patch("langsmith.sandbox.SandboxClient")
+    def test_factory_passes_all_resources(self, mock_client_cls):
+        from novacode_cli.integrations.sandbox_factory import create_langsmith_sandbox
+
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+        mock_sb = MagicMock()
+        mock_sb.name = "ls-sandbox-all"
+        mock_sb.status = "ready"
+        mock_client.create_sandbox.return_value = mock_sb
+
+        with create_langsmith_sandbox(
+            vcpus=2, mem_bytes=8589934592, fs_capacity_bytes=107374182400
+        ):
+            pass
+
+        mock_client.create_sandbox.assert_called_once_with(
+            timeout=120, idle_ttl_seconds=0, vcpus=2, mem_bytes=8589934592,
+            fs_capacity_bytes=107374182400,
+        )
+
+
+class TestFactorySnapshot:
+    """Tests for LangSmith factory snapshot boot support."""
+
+    @patch.dict(os.environ, {"LANGSMITH_API_KEY": "test-key-123"}, clear=True)
+    @patch("langsmith.sandbox.SandboxClient")
+    def test_factory_boots_from_snapshot_id(self, mock_client_cls):
+        from novacode_cli.integrations.sandbox_factory import create_langsmith_sandbox
+
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+        mock_sb = MagicMock()
+        mock_sb.name = "ls-snapshot-box"
+        mock_sb.status = "ready"
+        mock_client.create_sandbox.return_value = mock_sb
+
+        with create_langsmith_sandbox(snapshot_id="snap-abc-123"):
+            pass
+
+        mock_client.create_sandbox.assert_called_once_with(
+            timeout=120, idle_ttl_seconds=0, snapshot_id="snap-abc-123"
+        )
+
+    @patch.dict(os.environ, {"LANGSMITH_API_KEY": "test-key-123"}, clear=True)
+    @patch("langsmith.sandbox.SandboxClient")
+    def test_factory_boots_from_snapshot_name(self, mock_client_cls):
+        from novacode_cli.integrations.sandbox_factory import create_langsmith_sandbox
+
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+        mock_sb = MagicMock()
+        mock_sb.name = "ls-snapshot-name-box"
+        mock_sb.status = "ready"
+        mock_client.create_sandbox.return_value = mock_sb
+
+        with create_langsmith_sandbox(snapshot_name="my-python-env"):
+            pass
+
+        mock_client.create_sandbox.assert_called_once_with(
+            timeout=120, idle_ttl_seconds=0, snapshot_name="my-python-env"
+        )
+
+    @patch.dict(os.environ, {"LANGSMITH_API_KEY": "test-key-123"}, clear=True)
+    @patch("langsmith.sandbox.SandboxClient")
+    def test_factory_rejects_mutually_exclusive_snapshots(self, mock_client_cls):
+        from novacode_cli.integrations.sandbox_factory import create_langsmith_sandbox
+
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            with create_langsmith_sandbox(
+                snapshot_id="snap-abc",
+                snapshot_name="my-env",
+            ):
+                pass
+
+
+class TestFactoryTunnel:
+    """Tests for LangSmith factory tunnel/port-forwarding support."""
+
+    @patch.dict(os.environ, {"LANGSMITH_API_KEY": "test-key-123"}, clear=True)
+    @patch("langsmith.sandbox.SandboxClient")
+    def test_factory_creates_tunnels(self, mock_client_cls):
+        from novacode_cli.integrations.sandbox_factory import create_langsmith_sandbox
+
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+        mock_sb = MagicMock()
+        mock_sb.name = "ls-tunnel-box"
+        mock_sb.status = "ready"
+        mock_client.create_sandbox.return_value = mock_sb
+
+        ports = {8080: 8080, 3000: 3000}
+        with create_langsmith_sandbox(ports=ports):
+            pass
+
+        # Should call tunnel for each port mapping
+        assert mock_sb.tunnel.call_count == 2
+        mock_sb.tunnel.assert_any_call(8080, local_port=8080)
+        mock_sb.tunnel.assert_any_call(3000, local_port=3000)
+
+    @patch.dict(os.environ, {"LANGSMITH_API_KEY": "test-key-123"}, clear=True)
+    @patch("langsmith.sandbox.SandboxClient")
+    def test_factory_tunnel_with_different_host_port(self, mock_client_cls):
+        from novacode_cli.integrations.sandbox_factory import create_langsmith_sandbox
+
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+        mock_sb = MagicMock()
+        mock_sb.name = "ls-tunnel-box-2"
+        mock_sb.status = "ready"
+        mock_client.create_sandbox.return_value = mock_sb
+
+        # Map host port 9000 -> container port 8080
+        ports = {8080: 9000}
+        with create_langsmith_sandbox(ports=ports):
+            pass
+
+        mock_sb.tunnel.assert_called_once_with(8080, local_port=9000)

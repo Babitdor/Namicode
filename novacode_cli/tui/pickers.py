@@ -28,7 +28,7 @@ class SessionPickerApp(App[str | None]):
     Screen { align: center middle; background: $surface; }
     #box {
         width: 90%; max-width: 120; height: auto; max-height: 90%;
-        border: thick $accent; background: $panel; padding: 1 2;
+        border: thick $accent; background: $panel; padding: 1 4;
     }
     #title { text-style: bold; color: $accent; margin-bottom: 1; }
     #sessions { height: auto; max-height: 70%; }
@@ -120,7 +120,7 @@ class OnboardingApp(App[bool]):
     Screen { align: center middle; background: $surface; }
     #box {
         width: 90%; max-width: 100; height: auto; max-height: 95%;
-        border: thick $accent; background: $panel; padding: 1 2;
+        border: thick $accent; background: $panel; padding: 1 4;
     }
     #title { text-style: bold; color: $accent; margin-bottom: 1; }
     .lbl { margin-top: 1; }

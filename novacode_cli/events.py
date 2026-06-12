@@ -50,3 +50,36 @@ def cap_event_log() -> None:
     """
     if len(nova_event_log) > _MAX_EVENT_LOG:
         del nova_event_log[: len(nova_event_log) - _MAX_EVENT_LOG]
+
+
+# --- Callback registry for live tool output streaming ---
+import threading
+from typing import Callable
+
+_output_callbacks: list[Callable[[str, str], None]] = []
+_callbacks_lock = threading.Lock()
+
+
+def register_tool_output_callback(cb: Callable[[str, str], None]) -> None:
+    """Register a callback to receive live tool stdout/stderr updates."""
+    with _callbacks_lock:
+        if cb not in _output_callbacks:
+            _output_callbacks.append(cb)
+
+
+def unregister_tool_output_callback(cb: Callable[[str, str], None]) -> None:
+    """Unregister a live tool output callback."""
+    with _callbacks_lock:
+        if cb in _output_callbacks:
+            _output_callbacks.remove(cb)
+
+
+def emit_tool_output(call_id: str, text: str) -> None:
+    """Emit a chunk of tool output to all registered callbacks."""
+    with _callbacks_lock:
+        callbacks = list(_output_callbacks)
+    for cb in callbacks:
+        try:
+            cb(call_id, text)
+        except Exception:
+            pass
