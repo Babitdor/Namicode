@@ -91,3 +91,30 @@ class TestTodosToMarkdown:
     def test_no_depends_on_does_not_add_suffix(self):
         result = todos_to_markdown([{"content": "Alone", "status": "pending"}])
         assert "depends on" not in result
+
+
+class TestExitPlanMode:
+    """Tests for exit_plan_mode tool persistence."""
+
+    def test_exit_plan_mode_writes_file(self, tmp_path, monkeypatch):
+        from unittest.mock import MagicMock
+        import novacode_cli.tools.plan_mode_tools as pmt
+        from novacode_cli.config.config import settings
+
+        # Mock project_root to use tmp_path
+        monkeypatch.setattr(settings, "project_root", tmp_path)
+
+        # Mock interrupt to avoid LangGraph loop issues
+        mock_interrupt = MagicMock(return_value={"approved": True})
+        monkeypatch.setattr(pmt, "interrupt", mock_interrupt)
+
+        # Run exit_plan_mode with a plan
+        res = pmt.exit_plan_mode.func(plan="# My test plan")
+        assert "approved" in res.lower()
+
+        # Verify plan file creation
+        plans_dir = tmp_path / ".nova" / "plans"
+        assert plans_dir.exists()
+        plan_files = list(plans_dir.glob("plan-*.md"))
+        assert len(plan_files) == 1
+        assert plan_files[0].read_text(encoding="utf-8") == "# My test plan"
