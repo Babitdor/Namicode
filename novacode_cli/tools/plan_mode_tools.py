@@ -117,37 +117,9 @@ def enter_plan_mode(reason: str = "") -> str:
     return header + _PLAN_MODE_PROMPT
 
 
-def _extract_plan_title(plan: str) -> str:
-    """Extract a clean, filesystem-friendly slug for the plan's filename."""
-    import re
-    if not plan:
-        return "plan"
-
-    first_line = ""
-    for line in plan.splitlines():
-        line_strip = line.strip()
-        if line_strip:
-            first_line = line_strip
-            break
-
-    if not first_line:
-        return "plan"
-
-    # If it is a header, strip leading '#' and whitespace
-    if first_line.startswith("#"):
-        first_line = first_line.lstrip("#").strip()
-
-    # Clean typical prefixes
-    final_title = re.sub(r"(?i)^(plan|task|proposal|todo|design|doc)\b[:\s\-]*", "", first_line).strip()
-
-    # Slugify: lowercase, replace non-alphanumeric characters with hyphens
-    slug = final_title.lower()
-    slug = re.sub(r"[^a-z0-9_\-]+", "-", slug)
-    slug = re.sub(r"\-+", "-", slug)  # collapse consecutive hyphens
-    slug = slug.strip("-")            # strip leading/trailing hyphens
-
-    # Cap length at 50 chars for a clean filename
-    return slug[:50] or "plan"
+# ---------------------------------------------------------------------------
+# ExitPlanMode
+# ---------------------------------------------------------------------------
 
 
 @tool
@@ -169,13 +141,14 @@ def exit_plan_mode(plan: str = "") -> str:
     """
     if plan:
         try:
+            import datetime
             from novacode_cli.config.config import settings
             project_dir = settings.ensure_project_deepagents_dir()
             if project_dir:
                 plans_dir = project_dir / "plans"
                 plans_dir.mkdir(parents=True, exist_ok=True)
-                slug = _extract_plan_title(plan)
-                plan_file = plans_dir / f"plan-{slug}.md"
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                plan_file = plans_dir / f"plan-{timestamp}.md"
                 plan_file.write_text(plan, encoding="utf-8")
         except Exception:  # noqa: BLE001
             pass
