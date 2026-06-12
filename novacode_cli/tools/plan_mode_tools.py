@@ -139,20 +139,6 @@ def exit_plan_mode(plan: str = "") -> str:
         "Plan approved. Proceed with implementation." or
         "Plan rejected. Revise the plan based on user feedback."
     """
-    if plan:
-        try:
-            import datetime
-            from novacode_cli.config.config import settings
-            project_dir = settings.ensure_project_deepagents_dir()
-            if project_dir:
-                plans_dir = project_dir / "plans"
-                plans_dir.mkdir(parents=True, exist_ok=True)
-                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                plan_file = plans_dir / f"plan-{timestamp}.md"
-                plan_file.write_text(plan, encoding="utf-8")
-        except Exception:  # noqa: BLE001
-            pass
-
     if _auto_approve_var.get():
         return "Plan approved. Proceed with implementation."
 
