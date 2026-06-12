@@ -117,4 +117,19 @@ class TestExitPlanMode:
         assert plans_dir.exists()
         plan_files = list(plans_dir.glob("plan-*.md"))
         assert len(plan_files) == 1
+        assert plan_files[0].name == "plan-my-test-plan.md"
         assert plan_files[0].read_text(encoding="utf-8") == "# My test plan"
+
+    def test_extract_plan_title_slugification(self):
+        import novacode_cli.tools.plan_mode_tools as pmt
+
+        # Test case: header line
+        assert pmt._extract_plan_title("# Plan: Refactor the UI") == "refactor-the-ui"
+        # Test case: normal title line
+        assert pmt._extract_plan_title("# task: add checkout screen") == "add-checkout-screen"
+        # Test case: backup non-header first line
+        assert pmt._extract_plan_title("Implement search bar\n## Details") == "implement-search-bar"
+        # Test case: empty/whitespace fallback
+        assert pmt._extract_plan_title("\n   \n") == "plan"
+        # Test case: special character filtering
+        assert pmt._extract_plan_title("# Fix bugs & errors!!!") == "fix-bugs-errors"
