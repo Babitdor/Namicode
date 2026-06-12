@@ -2847,15 +2847,7 @@ class NovaApp(App):
         """Render a compact native session-info panel (replaces the legacy
         pre-TUI Rich panels, which never appeared in TUI mode)."""
         from pathlib import Path
-        from rich.panel import Panel
-        from rich import box
         from rich.text import Text
-
-        class SessionPanel(Panel):
-            def __str__(self) -> str:
-                return f"session {self.renderable}"
-            def __repr__(self) -> str:
-                return f"session {self.renderable}"
 
         try:
             from novacode_cli.config.config import settings
@@ -2865,42 +2857,13 @@ class NovaApp(App):
         sandbox_type = getattr(self.session_state, "_sandbox_type", None)
         meta = self._sandbox_meta
 
-        panel_text = Text()
-        panel_text.append("\n")
-
-        # 1. System/Sandbox Isolation
-        panel_text.append("  [ISOLATION]   ", style="bold magenta")
-        panel_text.append("❖ Host    : ", style="bold #00f0ff")
-        host_title = sandbox_type.capitalize() if sandbox_type else "Local Machine"
-        panel_text.append(host_title, style="bold green")
-        if self._sandbox_id:
-            panel_text.append(f" (ID: {self._sandbox_id})", style="dim")
-        panel_text.append("\n")
-
-        # 2. Cognitive Layer / Model
-        panel_text.append("  [COGNITIVE]   ", style="bold magenta")
-        panel_text.append("❖ Model   : ", style="bold #00f0ff")
-        panel_text.append(f"{self.model_name}\n", style="white")
-
-        # 3. Workspace / Directory
-        panel_text.append("  [WORKSPACE]   ", style="bold magenta")
-        panel_text.append("❖ Path    : ", style="bold #00f0ff")
-        if sandbox_type:
-            try:
-                from novacode_cli.integrations.sandbox_factory import (
-                    get_default_working_dir,
-                )
-                wd = get_default_working_dir(sandbox_type)
-            except Exception:
-                wd = "?"
-            panel_text.append(f"{wd}", style="white")
-            panel_text.append(f" (Local: {Path.cwd()})", style="dim")
-        else:
-            panel_text.append(f"{Path.cwd()}", style="white")
-        panel_text.append("\n")
-
-        # 4. Specs / Metadata (if LangSmith sandbox has specs)
         if sandbox_type and meta:
+            # ── Heroku-style TUI list for LangSmith ──
+            lines: list[tuple[str, str]] = []
+
+            if snapshot := meta.get("snapshot"):
+                lines.append(("snapshot", str(snapshot)))
+
             specs = []
             if v := meta.get("vcpus"):
                 specs.append(f"{v} vCPU")
@@ -2909,68 +2872,90 @@ class NovaApp(App):
             if g := meta.get("fs_capacity_gb"):
                 specs.append(str(g))
             if specs:
-                panel_text.append("  [HARDWARE]    ", style="bold magenta")
-                panel_text.append("❖ Specs   : ", style="bold #00f0ff")
-                panel_text.append(" · ".join(specs) + "\n", style="white")
+                lines.append(("specs", " · ".join(specs)))
 
             if tunnels := meta.get("tunnels"):
-                for tn in tunnels:
-                    panel_text.append("  [NETWORK]     ", style="bold magenta")
-                    panel_text.append("❖ Tunnel  : ", style="bold #00f0ff")
-                    panel_text.append(f"localhost:{tn['host']} → sandbox:{tn['container']}\n", style="white")
+                for tn in tunnels:  # type: ignore[union-attr]
+                    lines.append(
+                        ("tunnel", f"localhost:{tn['host']} → sandbox:{tn['container']}")
+                    )
 
-        # 5. Memory status
-        try:
-            aid = self.assistant_id
-            has_user = bool(aid) and settings.get_user_agent_md_path(aid).exists()
-            proj = settings.get_project_agent_md_paths()
-            if has_user or proj:
-                mem_parts = []
-                if has_user:
-                    mem_parts.append(f"~/.nova/agents/{aid}/agent.md")
-                if proj:
-                    mem_parts.append("project: " + ", ".join(p.name for p in proj))
-                panel_text.append("  [MEMORY]      ", style="bold magenta")
-                panel_text.append("❖ Core    : ", style="bold #00f0ff")
-                panel_text.append(f"{' · '.join(mem_parts)}\n", style="white")
+            t = Text()
+            t.append("● session\n", style="bold yellow")
+            t.append("  sandbox : ", style="dim")
+            t.append(f"{sandbox_type}", style="yellow")
+            t.append(f" ({self._sandbox_id or '?'})\n", style="dim")
+
+            for label, value in lines:
+                t.append(f"  {label.ljust(8)}: ", style="dim")
+                t.append(f"{value}\n", style="white")
+
+            if t.plain.endswith("\n"):
+                t = t[:-1]
+
+            self._log(t)
+        else:
+            # ── Premium Minimalist Session Details (Pi Coding Agent Style) ──
+            t = Text()
+            t.append("● session\n", style="bold cyan")
+
+            # model
+            t.append("  model   : ", style="dim")
+            t.append(f"{self.model_name}\n", style="white")
+
+            # sandbox
+            t.append("  sandbox : ", style="dim")
+            if sandbox_type:
+                try:
+                    from novacode_cli.integrations.sandbox_factory import (
+                        get_default_working_dir,
+                    )
+                    wd = get_default_working_dir(sandbox_type)
+                except Exception:
+                    wd = "?"
+                t.append(f"{sandbox_type}", style="yellow")
+                t.append(f" (default wd: {wd})\n", style="dim")
             else:
-                panel_text.append("  [MEMORY]      ", style="bold magenta")
-                panel_text.append("❖ Core    : ", style="bold #00f0ff")
-                panel_text.append("none (use /init to compile agent matrix)\n", style="dim italic")
-        except Exception:
-            pass
+                t.append("local\n", style="green")
 
-        # 6. Web Search Link
-        try:
-            panel_text.append("  [NETWORK]     ", style="bold magenta")
-            panel_text.append("❖ Search  : ", style="bold #00f0ff")
-            if not settings.has_tavily:
-                panel_text.append("OFFLINE (Tavily key missing)\n", style="bold yellow")
-            else:
-                panel_text.append("ONLINE (Tavily query channel active)\n", style="bold green")
-        except Exception:
-            pass
+            # cwd
+            t.append("  cwd     : ", style="dim")
+            t.append(f"{Path.cwd()}\n", style="white")
 
-        # 7. Grid Divider
-        panel_text.append("  " + "▰ " * 22 + "\n", style="cyan dim")
+            # memory
+            try:
+                aid = self.assistant_id
+                has_user = bool(aid) and settings.get_user_agent_md_path(aid).exists()
+                proj = settings.get_project_agent_md_paths()
+                if has_user or proj:
+                    parts = []
+                    if has_user:
+                        parts.append(f"~/.nova/agents/{aid}/agent.md")
+                    if proj:
+                        parts.append("project: " + ", ".join(p.name for p in proj))
+                    t.append("  memory  : ", style="dim")
+                    t.append(f"{' · '.join(parts)}\n", style="white")
+                else:
+                    t.append("  memory  : ", style="dim")
+                    t.append("none (use /init to create project memory)\n", style="dim italic")
+            except Exception:
+                pass
 
-        # 8. Diagnostic Footer
-        panel_text.append("  [DIAGNOSTIC]  ", style="bold green")
-        panel_text.append("STATUS: ", style="dim")
-        panel_text.append("SYSTEM_READY", style="bold green")
-        panel_text.append(" // SECURE_LINK: ", style="dim")
-        panel_text.append("ACTIVE" if sandbox_type else "DIRECT", style="bold yellow" if sandbox_type else "bold green")
+            # search
+            try:
+                t.append("  search  : ", style="dim")
+                if not settings.has_tavily:
+                    t.append("disabled — set TAVILY_API_KEY to enable\n", style="yellow dim")
+                else:
+                    t.append("enabled via Tavily\n", style="green")
+            except Exception:
+                pass
 
-        # Create and log the futuristic panel
-        panel = SessionPanel(
-            panel_text,
-            title="[bold #ff007f] ❖ NOVA//CORE_ACTIVE ❖ [/]" if sandbox_type else "[bold cyan] ❖ NOVA//CORE_INITIALIZED ❖ [/]",
-            border_style="#ff007f" if sandbox_type else "cyan",
-            box=box.DOUBLE,
-            padding=(1, 2),
-            expand=False,
-        )
-        self._log(panel)
+            # Strip trailing newline
+            if t.plain.endswith("\n"):
+                t = t[:-1]
+
+            self._log(t)
 
     @work
     async def _replay_history(self) -> None:
