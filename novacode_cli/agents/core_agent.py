@@ -535,6 +535,8 @@ def _harden_subagent_specs(specs: list) -> list:
       build; skipped if the spec already carries a retry middleware.
     """
     from langchain.agents.middleware import ModelRetryMiddleware
+    from novacode_cli.bootstrap import VisionCaptionMiddleware
+    from novacode_cli.security.middleware import SecurityMiddleware
 
     # Tools that raise a HITL ``interrupt()`` directly in their body (not via
     # ``interrupt_on``). Clearing ``interrupt_on`` below doesn't neutralise these,
@@ -557,15 +559,22 @@ def _harden_subagent_specs(specs: list) -> list:
             new_spec["tools"] = [
                 t for t in spec_tools if getattr(t, "name", None) not in _interrupting_tools
             ]
+
         has_retry = any(type(m).__name__ == "ModelRetryMiddleware" for m in existing)
-        new_spec["middleware"] = (
-            existing
-            if has_retry
-            else [
-                ModelRetryMiddleware(max_retries=3, backoff_factor=2.0, initial_delay=1.0),
-                *existing,
-            ]
-        )
+        has_vision = any(type(m).__name__ == "VisionCaptionMiddleware" for m in existing)
+        has_security = any(type(m).__name__ == "SecurityMiddleware" for m in existing)
+
+        mw_to_add = []
+        if not has_retry:
+            mw_to_add.append(
+                ModelRetryMiddleware(max_retries=3, backoff_factor=2.0, initial_delay=1.0)
+            )
+        if not has_vision:
+            mw_to_add.append(VisionCaptionMiddleware())
+        if not has_security:
+            mw_to_add.append(SecurityMiddleware())
+
+        new_spec["middleware"] = mw_to_add + existing
         out.append(new_spec)
     return out
 

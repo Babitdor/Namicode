@@ -457,6 +457,74 @@ def create_daytona_sandbox(
             console.print(f"[yellow]⚠ Cleanup failed: {e}[/yellow]")
 
 
+@contextmanager
+def create_langsmith_sandbox(
+    *, sandbox_id: str | None = None, setup_script_path: str | None = None
+) -> Generator[SandboxBackendProtocol, None, None]:
+    """Create LangSmith sandbox.
+
+    Args:
+        sandbox_id: Optional existing sandbox name to reuse
+        setup_script_path: Optional path to setup script to run after sandbox starts
+
+    Yields:
+        SandboxBackendProtocol instance.
+
+    Note:
+        LangSmith sandboxes can be reconnected to by name (get_sandbox).
+        If the sandbox was previously stopped, it will be started automatically.
+    """
+    from langsmith.sandbox import SandboxClient
+
+    from novacode_cli.integrations.langsmith import LangSmithBackend
+
+    api_key = os.environ.get("LANGSMITH_API_KEY") or os.environ.get(
+        "LANGCHAIN_API_KEY"
+    )
+    if not api_key:
+        msg = (
+            "LANGSMITH_API_KEY environment variable not set. "
+            "Get your API key from https://smith.langchain.com"
+        )
+        raise ValueError(msg)
+
+    client = SandboxClient()
+    sandbox = None
+
+    try:
+        if sandbox_id:
+            console.print(f"[yellow]Reconnecting to LangSmith sandbox: {sandbox_id}[/yellow]")
+            sandbox = client.get_sandbox(sandbox_id)
+            if sandbox.status == "stopped":
+                console.print("[yellow]Sandbox is stopped. Starting...[/yellow]")
+                sandbox.start()
+        else:
+            console.print("[yellow]Creating LangSmith sandbox...[/yellow]")
+            sandbox = client.create_sandbox(
+                timeout=120,
+                idle_ttl_seconds=0,  # Disable idle auto-stop
+            )
+
+        sandbox_id = sandbox.name
+        backend = LangSmithBackend(sandbox)
+        console.print(f"[green]✓ LangSmith sandbox ready: {backend.id}[/green]")
+
+        # Run setup script if provided
+        if setup_script_path:
+            _run_sandbox_setup(backend, setup_script_path)
+
+        yield backend
+
+    finally:
+        if sandbox is not None:
+            console.print(f"[dim]Deleting LangSmith sandbox {sandbox_id}...[/dim]")
+            try:
+                sandbox.delete()
+                console.print(f"[dim]✓ LangSmith sandbox terminated[/dim]")
+            except Exception as e:  # noqa: BLE001
+                console.print(f"[yellow]⚠ Cleanup failed: {e}[/yellow]")
+
+
 def _saved_session_ids() -> set[str]:
     """Return the set of session ids that still exist on disk."""
     from pathlib import Path
@@ -790,6 +858,7 @@ _PROVIDER_TO_WORKING_DIR = {
     "docker": "/workspace",
     "harbor": "/app",
     "inmemory": "/workspace",
+    "langsmith": "/home/user",
 }
 
 
@@ -799,6 +868,7 @@ _SANDBOX_PROVIDERS = {
     "runloop": create_runloop_sandbox,
     "daytona": create_daytona_sandbox,
     "docker": create_docker_sandbox,
+    "langsmith": create_langsmith_sandbox,
 }
 
 

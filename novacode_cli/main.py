@@ -413,11 +413,12 @@ def parse_args():
     )
     parser.add_argument(
         "--sandbox",
-        choices=["none", "os", "modal", "daytona", "runloop", "docker"],
+        choices=["none", "os", "modal", "daytona", "runloop", "docker", "langsmith"],
         default=None,
         help="Sandbox for code execution. Default: 'os' on Linux/macOS (files on the "
         "host, shell confined to the workspace via an OS sandbox); host execution + "
-        "approvals on Windows. 'docker' is an opt-in, Windows-only container. Use "
+        "approvals on Windows. 'docker' is an opt-in, Windows-only container. "
+        "'langsmith' uses LangSmith Sandboxes (hardware-virtualized microVMs). Use "
         "--no-sandbox for unconfined local execution.",
     )
     parser.add_argument(
@@ -588,7 +589,7 @@ async def simple_cli(
         session_state: Session state with auto-approve settings
         baseline_tokens: Baseline token count for tracking
         backend: Backend for file operations (CompositeBackend)
-        sandbox_type: Type of sandbox being used (e.g., "modal", "runloop", "daytona").
+        sandbox_type: Type of sandbox being used (e.g., "modal", "runloop", "daytona", "docker", "langsmith").
         model_name: Name of the model being used for context window calculation.
                      If None, running in local mode.
         setup_script_path: Path to setup script that was run (if any)
@@ -1852,7 +1853,7 @@ async def main(
     Args:
         assistant_id: Agent identifier for memory storage
         session_state: Session state with auto-approve settings
-        sandbox_type: Type of sandbox ("none", "modal", "runloop", "daytona", "docker")
+        sandbox_type: Type of sandbox ("none", "modal", "runloop", "daytona", "docker", "langsmith")
         sandbox_id: Optional existing sandbox ID to reuse
         setup_script_path: Optional path to setup script to run in sandbox
         continue_session: If True, continue last session. If string, use as session ID.

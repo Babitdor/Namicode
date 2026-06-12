@@ -167,51 +167,80 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
             f"piped stdin cannot support TUI navigation."
         )
 
-        def _shell_impl(
-            command: str,
-            runtime: ToolRuntime[None, AgentState],
-            interactive: bool = False,  # noqa: FBT001, FBT002
-            background: bool = False,  # noqa: FBT001, FBT002
-        ) -> ToolMessage | str:
-            """Execute a shell command.
+        # ── Resolve the program each tool ACTUALLY executes locally ──────
+        # `shell` → the host's native interactive shell: **PowerShell on Windows**
+        # (matching the description above), instead of cmd.exe — which is what
+        # asyncio's create_subprocess_shell would otherwise use, silently
+        # contradicting "use PowerShell syntax". `bash` → the **real bash** binary
+        # (Git Bash / WSL on Windows). ``None`` ⇒ fall back to
+        # create_subprocess_shell (POSIX sh on Unix, cmd.exe on Windows).
+        import shutil
 
-            Args:
-                command: The shell command to execute.
-                interactive: If True, run in interactive mode allowing user to
-                    respond to prompts. Use for commands like npx create-next-app,
-                    npm init, or any command that may ask for user input.
-                    Note: Many interactive commands are auto-detected and will
-                    automatically use interactive mode.
-                background: If True, run as a background process and return when
-                    server is ready (for long-running commands like npm run dev,
-                    vite, flask run). The process continues running in background.
-            """
-            # Auto-detect interactive commands
-            if not interactive and is_interactive_command(command):
-                interactive = True
+        self._native_prog: list[str] | None = None
+        if sys.platform == "win32":
+            _pwsh = shutil.which("pwsh") or shutil.which("powershell")
+            if _pwsh:
+                self._native_prog = [_pwsh, "-NoProfile", "-Command"]
+        _bash_exe = shutil.which("bash")
+        self._bash_prog: list[str] | None = [_bash_exe, "-c"] if _bash_exe else None
 
-            if background or is_long_running_command(command):
-                return self._run_background_shell_command(
-                    command, tool_call_id=runtime.tool_call_id
+        bash_description = (
+            "Execute a command in the **bash** shell — use POSIX/bash syntax "
+            "(`rm -rf`, `chmod`, `export`, `&&`, `$VAR`, `ls`, `cat`, …). Use this "
+            "when you specifically want bash; for the host's native shell "
+            f"(**{_shell_name}**) use `shell`. Same interactive=/background= options "
+            "as `shell`."
+        )
+
+        def _make_impl(prog: list[str] | None, *, is_bash: bool = False) -> Callable[..., ToolMessage | str]:
+            """Build a tool body bound to the program it should execute."""
+
+            def _impl(
+                command: str,
+                runtime: ToolRuntime[None, AgentState],
+                interactive: bool = False,  # noqa: FBT001, FBT002
+                background: bool = False,  # noqa: FBT001, FBT002
+            ) -> ToolMessage | str:
+                """Execute a command (see the tool description for which shell + syntax)."""
+                # `bash` with no bash on the host (and no sandbox to run it in) —
+                # fail clearly instead of silently running it in another shell.
+                if is_bash and prog is None and not self._supports_sandbox_execution():
+                    return ToolMessage(
+                        content=(
+                            "bash is not available on this host. Install Git Bash or "
+                            "WSL, or use the `shell` tool (PowerShell on Windows)."
+                        ),
+                        tool_call_id=runtime.tool_call_id,
+                        name="bash",
+                        status="error",
+                    )
+                if not interactive and is_interactive_command(command):
+                    interactive = True
+                if background or is_long_running_command(command):
+                    return self._run_background_shell_command(
+                        command, tool_call_id=runtime.tool_call_id, prog=prog
+                    )
+                if interactive:
+                    return self._run_interactive_shell_command(
+                        command, tool_call_id=runtime.tool_call_id, prog=prog
+                    )
+                return self._run_shell_command(
+                    command, tool_call_id=runtime.tool_call_id, prog=prog
                 )
-            if interactive:
-                return self._run_interactive_shell_command(
-                    command, tool_call_id=runtime.tool_call_id
-                )
-            return self._run_shell_command(command, tool_call_id=runtime.tool_call_id)
 
-        self._shell_tool = tool(self._tool_name, description=description)(_shell_impl)
+            return _impl
 
-        # Alias: Claude-family models habitually call `bash` (a reflex from
-        # Claude Code's Bash tool), which otherwise errors with "bash is not a
-        # valid tool". Register a same-behavior `bash` alias so those calls
-        # resolve. (We intentionally do NOT alias `execute` — deepagents already
-        # registers an `execute` tool and a duplicate name would break the build.)
+        self._shell_tool = tool(self._tool_name, description=description)(
+            _make_impl(self._native_prog)
+        )
         self.tools = [self._shell_tool]
+        # `bash` is a real, separate tool (not a same-behavior alias) so Claude's
+        # reflexive bash calls run actual bash. We intentionally do NOT register
+        # `execute` — deepagents already provides one and a duplicate breaks build.
         if self._tool_name != "bash":
-            self._bash_alias = tool(
-                "bash", description=f"Alias for `{self._tool_name}`. {description}"
-            )(_shell_impl)
+            self._bash_alias = tool("bash", description=bash_description)(
+                _make_impl(self._bash_prog, is_bash=True)
+            )
             self.tools.append(self._bash_alias)
 
     def _init_os_sandbox(self, exec_sandbox: bool, allow_network: bool) -> None:  # noqa: FBT001
@@ -358,6 +387,7 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         command: str,
         *,
         tool_call_id: str | None,
+        prog: list[str] | None = None,
     ) -> ToolMessage | str:
         """Execute a shell command and return the result.
 
@@ -372,6 +402,7 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         Args:
             command: The shell command to execute.
             tool_call_id: The tool call ID for creating a ToolMessage.
+            prog: argv prefix used to exec the command (e.g. PowerShell / bash); ``None`` runs it in the platform default shell.
 
         Returns:
             A ToolMessage with the command output or an error message.
@@ -380,8 +411,10 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
             msg = "Shell tool expects a non-empty command string."
             raise ToolException(msg)
 
-        # Convert Unix commands to Windows-compatible commands (for local execution)
-        command = _convert_unix_command_to_windows(command)
+        # Convert Unix→cmd.exe ONLY for the native fallback path (prog is None on
+        # Windows ⇒ cmd.exe). PowerShell/bash (prog set) run the syntax as-is.
+        if prog is None:
+            command = _convert_unix_command_to_windows(command)
 
         dangerous, reason = is_dangerous_command(command)
         if dangerous:
@@ -416,7 +449,7 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
             return self._run_sandbox_command(command, tool_call_id=tool_call_id)
 
         # Local execution (original behavior)
-        return self._run_local_command(command, tool_call_id=tool_call_id)
+        return self._run_local_command(command, tool_call_id=tool_call_id, prog=prog)
 
     def _run_sandbox_command(
         self,
@@ -532,6 +565,7 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         command: str,
         *,
         tool_call_id: str | None,
+        prog: list[str] | None = None,
     ) -> ToolMessage:
         """Execute a shell command locally, streaming to completion.
 
@@ -545,6 +579,7 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         Args:
             command: The shell command to execute.
             tool_call_id: The tool call ID for creating a ToolMessage.
+            prog: argv prefix used to exec the command (e.g. PowerShell / bash); ``None`` runs it in the platform default shell.
 
         Returns:
             A ToolMessage with the command output or an error message.
@@ -552,7 +587,7 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         command = self._preprocess_command(command)
         try:
             return self._run_async(
-                lambda: self._async_local_shell(command, tool_call_id=tool_call_id),
+                lambda: self._async_local_shell(command, tool_call_id=tool_call_id, prog=prog),
                 timeout=self._timeout + 15,
             )
         except TimeoutError:
@@ -570,12 +605,41 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
                 status="error",
             )
 
+    async def _spawn(
+        self,
+        command: str,
+        prog: list[str] | None,
+        *,
+        stdin: int,
+        stdout: int,
+        stderr: int,
+    ) -> asyncio.subprocess.Process:
+        """Create the subprocess in the correct shell.
+
+        When *prog* is set (e.g. ``[pwsh, "-NoProfile", "-Command"]`` or
+        ``[bash, "-c"]``) the command runs in that exact shell via
+        ``create_subprocess_exec`` — no cmd.exe wrapper, no quoting surprises.
+        When *prog* is ``None`` it falls back to the platform default shell
+        (POSIX ``sh`` on Unix, ``cmd.exe`` on Windows).
+        """
+        kwargs = {
+            "stdin": stdin,
+            "stdout": stdout,
+            "stderr": stderr,
+            "cwd": self._workspace_root,
+            "env": self._env,
+        }
+        if prog is not None:
+            return await asyncio.create_subprocess_exec(*prog, command, **kwargs)
+        return await asyncio.create_subprocess_shell(command, **kwargs)
+
     async def _async_local_shell(  # noqa: PLR0912, PLR0915
         self,
         command: str,
         *,
         tool_call_id: str | None,
         prompt_window: float = 5.0,
+        prog: list[str] | None = None,
     ) -> ToolMessage:
         """Stream a local command to completion (up to ``self._timeout``).
 
@@ -591,13 +655,12 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         # launch point, so interactive + non-interactive paths are both covered.
         command = wrap_command(command, self._os_policy)
 
-        proc = await asyncio.create_subprocess_shell(
+        proc = await self._spawn(
             command,
+            prog,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
-            cwd=self._workspace_root,
-            env=self._env,
         )
 
         out_parts: list[str] = []
@@ -687,6 +750,7 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         command: str,
         *,
         tool_call_id: str | None,
+        prog: list[str] | None = None,
     ) -> ToolMessage:
         """Run a command that may prompt for input, handling prompts non-blockingly.
 
@@ -700,6 +764,7 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         Args:
             command: The shell command to execute.
             tool_call_id: The tool call ID for creating a ToolMessage.
+            prog: argv prefix used to exec the command (e.g. PowerShell / bash); ``None`` runs it in the platform default shell.
 
         Returns:
             A ToolMessage with the command output or an error message.
@@ -708,7 +773,8 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
             msg = "Shell tool expects a non-empty command string."
             raise ToolException(msg)
 
-        command = _convert_unix_command_to_windows(command)
+        if prog is None:
+            command = _convert_unix_command_to_windows(command)
         command = self._preprocess_command(command)
 
         dangerous, reason = is_dangerous_command(command)
@@ -726,7 +792,7 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         try:
             return self._run_async(
                 lambda: self._async_local_shell(
-                    command, tool_call_id=tool_call_id, prompt_window=self._timeout
+                    command, tool_call_id=tool_call_id, prompt_window=self._timeout, prog=prog
                 ),
                 timeout=self._timeout + 15,
             )
@@ -751,6 +817,7 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         *,
         tool_call_id: str | None,
         startup_timeout: float = 60.0,
+        prog: list[str] | None = None,
     ) -> ToolMessage | str:
         """Execute a long-running shell command in the background.
 
@@ -764,6 +831,7 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         Args:
             command: The shell command to execute.
             tool_call_id: The tool call ID for creating a ToolMessage.
+            prog: argv prefix used to exec the command (e.g. PowerShell / bash); ``None`` runs it in the platform default shell.
             startup_timeout: Maximum time to wait for server to be ready.
 
         Returns:
@@ -773,8 +841,9 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
             msg = "Shell tool expects a non-empty command string."
             raise ToolException(msg)
 
-        # Convert Unix commands to Windows-compatible commands
-        command = _convert_unix_command_to_windows(command)
+        # Convert Unix→cmd.exe only for the native fallback (prog is None).
+        if prog is None:
+            command = _convert_unix_command_to_windows(command)
         command = self._preprocess_command(command)
 
         dangerous, reason = is_dangerous_command(command)
@@ -801,7 +870,7 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         try:
             return self._run_async(
                 lambda: self._async_background_shell(
-                    command, tool_call_id=tool_call_id, startup_timeout=startup_timeout
+                    command, tool_call_id=tool_call_id, startup_timeout=startup_timeout, prog=prog
                 ),
                 timeout=startup_timeout + 10,
             )
@@ -826,6 +895,7 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         *,
         tool_call_id: str | None,
         startup_timeout: float = 60.0,
+        prog: list[str] | None = None,
     ) -> ToolMessage:
         """Async implementation of background shell execution.
 
@@ -835,6 +905,7 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         Args:
             command: The shell command to execute.
             tool_call_id: The tool call ID for creating a ToolMessage.
+            prog: argv prefix used to exec the command (e.g. PowerShell / bash); ``None`` runs it in the platform default shell.
             startup_timeout: Maximum time to wait for server to be ready.
 
         Returns:
@@ -859,13 +930,12 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         # ties the server's sandbox to Nova so it isn't orphaned on exit.
         command = wrap_command(command, self._os_policy)
 
-        process = await asyncio.create_subprocess_shell(
+        process = await self._spawn(
             command,
+            prog,
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
-            cwd=self._workspace_root,
-            env=self._env,
         )
 
         # Track background process for cleanup

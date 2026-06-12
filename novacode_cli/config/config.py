@@ -298,6 +298,7 @@ COMMANDS = {
     "ralph": "Run autonomous looping mode (e.g., /ralph <task>, /ralph <task> --iterations 5)",
     "browser-use": "Run browser automation with AI (e.g., /browser-use <task>, /browser-use <task> --model llama3.2)",
     "council": "Open the Council web UI (5 agents answer independently, then vote — majority wins)",
+    "create": "Open the Skills & Agents web UI (browse, preview, edit, create skills and agents)",
     "dream": "Run memory consolidation to organize and clean up memory files",
     "research": "Run agent swarm research (e.g., /research <query>, /research academic <query>, /research market <query>)",
     "reindex": "Rebuild the semantic code search index (after significant code changes)",

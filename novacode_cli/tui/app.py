@@ -155,8 +155,8 @@ class MatrixRain(Static):
 
     def on_mount(self) -> None:
         self._init_columns()
-        # ~7.5 fps: slow, calm rain that's also cheap to render.
-        self._timer = self.set_interval(0.13, self._tick)
+        # ~4 fps: very slow, calm rain that's extremely cheap to render.
+        self._timer = self.set_interval(0.25, self._tick)
 
     def pause(self) -> None:
         """Pause the rain timer (called when the app loses OS focus or rain is
@@ -340,6 +340,7 @@ _TUI_SLASH_COMMANDS = [
     "/browser-use",
     "/ralph",
     "/trello",
+    "/create",
     "/council",
     "/clear",
     "/tokens",
@@ -3164,17 +3165,32 @@ class NovaApp(App):
                 auto_clear, lambda: self._set_nova_indicator("")
             )
 
+    @staticmethod
+    def _ctx_gauge(percent: float, width: int = 10) -> str:
+        """A unicode fill gauge like ▕█▉░░░░░░░▏ for *percent* across *width* cells."""
+        percent = max(0.0, min(100.0, percent))
+        filled = percent / 100.0 * width
+        full = int(filled)
+        eighths = " ▏▎▍▌▋▊▉█"
+        cells = ["█"] * full
+        rem = round((filled - full) * 8)
+        if full < width and rem > 0:
+            cells.append(eighths[min(8, rem)])
+        cells += ["░"] * (width - len(cells))
+        return "▕" + "".join(cells[:width]) + "▏"
+
     def _refresh_status(self) -> None:
         line = Text()
 
-        def _sep() -> None:
-            line.append(" · ", style="dim")
+        def _divider() -> None:
+            line.append("  │  ", style="#3b4261")
 
-        # Model name — a subtle accent so it reads as a label, not noise.
-        line.append(str(self.model_name or "—"), style="#7aa2f7")
+        # Model segment — a diamond marker + the model name in accent.
+        line.append("◆ ", style="#7aa2f7")
+        line.append(str(self.model_name or "—"), style="bold #7aa2f7")
 
-        # Context usage — color-coded by how full the window is, so it's
-        # glanceable: green (healthy) → yellow (warning ≥75%) → red (critical ≥90%).
+        # Context segment — a filling gauge that recolors green→amber→red so
+        # window pressure is glanceable: green (healthy) → amber (≥75%) → red (≥90%).
         if self.token_tracker is not None:
             try:
                 bd = self.token_tracker.get_breakdown()
@@ -3183,39 +3199,41 @@ class NovaApp(App):
             if bd is not None:
                 p = bd.usage_percentage
                 if p >= 90:
-                    ctx_style = "bold #f7768e"
+                    ctx_color = "#f7768e"
                 elif p >= 75:
-                    ctx_style = "#e0af68"
+                    ctx_color = "#e0af68"
                 else:
-                    ctx_style = "#9ece6a"
-                _sep()
-                line.append(f"ctx {p:.0f}%", style=ctx_style)
+                    ctx_color = "#9ece6a"
+                _divider()
+                line.append("ctx ", style="dim")
+                line.append(self._ctx_gauge(p), style=ctx_color)
+                line.append(f" {p:.0f}%", style=f"bold {ctx_color}")
 
-        # Activity — spinner + label + elapsed while a turn is live.
-        _sep()
+        # Activity segment — animated spinner + elapsed while live, else a ● dot.
+        _divider()
         if self._turn_active:
             frame = self._SPINNER[self._spinner_frame % len(self._SPINNER)]
             elapsed = time.monotonic() - self._turn_start
-            line.append(f"{frame} ", style="#7aa2f7")
-            line.append(str(self._activity), style="dim")
-            line.append(f" · {elapsed:0.1f}s", style="dim")
+            line.append(f"{frame} ", style="bold #bb9af7")
+            line.append(str(self._activity), style="#c0caf5")
+            line.append(f"  {elapsed:0.1f}s", style="dim")
         else:
-            line.append(str(self._activity), style="dim")
+            line.append("● ", style="#9ece6a")
+            line.append(str(self._activity), style="#9ece6a")
 
-        # Nova learning status (review cycle) — lives in the status line so it
-        # never overlaps the input box.
+        # Nova learning status (review cycle) — kept here so it never overlaps input.
         if self._nova_status:
-            line.append("  ", style="dim")
+            _divider()
             line.append(self._nova_status, style=self._nova_status_style)
 
         notif = self._unread_count()
         if notif:
-            line.append("  🔔 ", style="bold #e0af68")
+            line.append("   🔔 ", style="bold #e0af68")
             line.append(str(notif), style="bold #e0af68")
 
         pending = self._pending_approval_count()
         if pending:
-            line.append("  ⚡", style="bold yellow")
+            line.append("   ⚡", style="bold yellow")
             line.append(str(pending), style="bold yellow")
 
         try:
@@ -4391,6 +4409,8 @@ class NovaApp(App):
             await self._run_ralph(text)
         elif cmd == "trello":
             await self._run_trello(text)
+        elif cmd == "create":
+            await self._run_create(text)
         elif cmd == "council":
             await self._run_chat(text)
         elif cmd in ("plugins", "plugin"):
@@ -6361,6 +6381,56 @@ class NovaApp(App):
 
         # Launch the processing loop as a background task so the TUI stays responsive
         asyncio.create_task(self._trello_watch_loop(server))
+
+    async def _run_create(self, text: str) -> None:
+        """Run /create; start the Skills & Agents web UI server."""
+        from novacode_cli.commands.create_server import CreateServer
+
+        parts = text.split(maxsplit=1)
+        args = parts[1].strip() if len(parts) > 1 else ""
+
+        # Subcommand: stop
+        if args == "stop":
+            server: CreateServer | None = getattr(
+                self.session_state, "create_server", None
+            )
+            if server and server.is_running:
+                server.stop()
+                self.session_state.create_server = None
+                self._log(Text("Create UI stopped.", style="green"))
+            else:
+                self._log(Text("Create UI is not running.", style="yellow"))
+            return
+
+        # Check if already running
+        existing_server: CreateServer | None = getattr(
+            self.session_state, "create_server", None
+        )
+        if existing_server and existing_server.is_running:
+            self._log(
+                Text(
+                    f"Create UI already running at http://localhost:{existing_server.port}",
+                    style="yellow",
+                )
+            )
+            return
+
+        # Start the server
+        server = CreateServer()
+        port = await server.start()
+        self.session_state.create_server = server
+        self._log(
+            Text(
+                f"Create UI started at http://localhost:{port}",
+                style="bold green",
+            )
+        )
+        self._log(
+            Text(
+                "Browse, preview, edit, and create skills & agents in the browser.",
+                style="dim",
+            )
+        )
 
     async def _trello_watch_loop(self, server: Any) -> None:
         """Background loop: poll for processing tasks and execute them."""

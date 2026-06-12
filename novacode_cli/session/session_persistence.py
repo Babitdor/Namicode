@@ -398,11 +398,20 @@ class SessionManager:
             shared_memory=shared_memory,
         )
 
-    def list_sessions(self, limit: int = 10) -> list[SessionMeta]:
+    def list_sessions(
+        self, limit: int = 10, *, include_cleared: bool = False
+    ) -> list[SessionMeta]:
         """List available sessions, sorted by last_active (most recent first).
 
+        ``/clear``-ed sessions are **excluded by default** so they don't reappear
+        in the ``/sessions`` menu or the ``--resume`` picker — matching the
+        ``--continue`` auto-resume filter. They remain on disk and are still
+        recoverable via ``nova --continue <id>``. Pass ``include_cleared=True`` to
+        get every session (e.g. for maintenance/cleanup).
+
         Args:
-            limit: Maximum number of sessions to return
+            limit: Maximum number of sessions to return.
+            include_cleared: When True, also return ``/clear``-ed sessions.
 
         Returns:
             List of SessionMeta objects
@@ -423,9 +432,11 @@ class SessionManager:
             try:
                 with open(meta_path) as f:
                     meta = SessionMeta.from_dict(json.load(f))
-                    sessions.append(meta)
             except (json.JSONDecodeError, TypeError, KeyError):
                 continue
+            if not include_cleared and getattr(meta, "cleared", False):
+                continue
+            sessions.append(meta)
 
         # Sort by last_active descending
         sessions.sort(key=lambda s: s.last_active, reverse=True)

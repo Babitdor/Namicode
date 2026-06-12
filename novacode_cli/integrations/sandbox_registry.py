@@ -266,6 +266,18 @@ def _terminate_record(rec: dict[str, Any]) -> bool:
             # Reconnect-by-id is not generally supported; best-effort only.
             logger.debug("daytona reclaim by id unsupported: %s", sandbox_id)
             return True
+        if provider == "langsmith":
+            from langsmith.sandbox import SandboxClient
+
+            token = os.environ.get("LANGSMITH_API_KEY") or os.environ.get(
+                "LANGCHAIN_API_KEY"
+            )
+            if not token:
+                return False
+            client = SandboxClient()
+            sb = client.get_sandbox(sandbox_id)
+            sb.delete()
+            return True
     except Exception:  # noqa: BLE001
         logger.debug("Reclaim failed for %s/%s", provider, sandbox_id, exc_info=True)
         return False

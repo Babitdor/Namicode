@@ -12,9 +12,11 @@ middleware and langchain aborts with "duplicate middleware instances".
 from langchain.agents.middleware import ModelRetryMiddleware
 
 from novacode_cli.agents.core_agent import _harden_subagent_specs
+from novacode_cli.bootstrap import VisionCaptionMiddleware
+from novacode_cli.security.middleware import SecurityMiddleware
 
 
-def test_declarative_specs_get_retry_first_and_no_interrupts():
+def test_declarative_specs_get_retry_vision_security_first_and_no_interrupts():
     specs = [
         {"name": "bug-fix", "description": "d", "system_prompt": "p", "tools": []},
         {"name": "general-purpose", "description": "d", "system_prompt": "p"},
@@ -24,21 +26,25 @@ def test_declarative_specs_get_retry_first_and_no_interrupts():
     for s in out:
         # interrupt_on cleared (subagents never raise nested HITL).
         assert s["interrupt_on"] == {}
-        # A ModelRetryMiddleware is present and FIRST (outermost of the user mw).
+        # ModelRetryMiddleware, VisionCaptionMiddleware, and SecurityMiddleware are present.
         mw = s["middleware"]
         assert isinstance(mw[0], ModelRetryMiddleware)
+        assert isinstance(mw[1], VisionCaptionMiddleware)
+        assert isinstance(mw[2], SecurityMiddleware)
 
 
-def test_existing_subagent_middleware_is_preserved_after_retry():
+def test_existing_subagent_middleware_is_preserved_after_hardening():
     sentinel = object()
     specs = [{"name": "x", "system_prompt": "p", "middleware": [sentinel]}]
     out = _harden_subagent_specs(specs)
     mw = out[0]["middleware"]
     assert isinstance(mw[0], ModelRetryMiddleware)
-    assert mw[1] is sentinel
+    assert isinstance(mw[1], VisionCaptionMiddleware)
+    assert isinstance(mw[2], SecurityMiddleware)
+    assert mw[3] is sentinel
 
 
-def test_fresh_retry_instance_per_spec_not_shared():
+def test_fresh_middleware_instances_per_spec_not_shared():
     specs = [
         {"name": "a", "system_prompt": "p"},
         {"name": "b", "system_prompt": "p"},
@@ -46,6 +52,8 @@ def test_fresh_retry_instance_per_spec_not_shared():
     out = _harden_subagent_specs(specs)
     # Middleware binds to a graph; each spec must get its own instance.
     assert out[0]["middleware"][0] is not out[1]["middleware"][0]
+    assert out[0]["middleware"][1] is not out[1]["middleware"][1]
+    assert out[0]["middleware"][2] is not out[1]["middleware"][2]
 
 
 def test_does_not_mutate_input_specs():
@@ -57,7 +65,7 @@ def test_does_not_mutate_input_specs():
     assert "interrupt_on" not in original
 
 
-def test_repeated_hardening_never_accumulates_retry_middleware():
+def test_repeated_hardening_never_accumulates_middleware():
     # Simulate two create_agent_with_config builds reusing the SAME cached spec.
     cached = {"name": "a", "system_prompt": "p"}
     cache = [cached]
@@ -68,10 +76,36 @@ def test_repeated_hardening_never_accumulates_retry_middleware():
             m for m in built[0]["middleware"]
             if isinstance(m, ModelRetryMiddleware)
         ]
-        # Exactly one retry middleware — never two (the duplicate-name crash).
+        visions = [
+            m for m in built[0]["middleware"]
+            if isinstance(m, VisionCaptionMiddleware)
+        ]
+        securities = [
+            m for m in built[0]["middleware"]
+            if isinstance(m, SecurityMiddleware)
+        ]
+        # Exactly one of each — never duplicates.
         assert len(retries) == 1
-    # And the two builds get distinct instances (not a shared/bound one).
+        assert len(visions) == 1
+        assert len(securities) == 1
+    # And the two builds get distinct instances.
     assert first[0]["middleware"][0] is not second[0]["middleware"][0]
+    assert first[0]["middleware"][1] is not second[0]["middleware"][1]
+    assert first[0]["middleware"][2] is not second[0]["middleware"][2]
+
+
+def test_spec_already_carrying_vision_is_not_doubled():
+    specs = [{"name": "a", "system_prompt": "p", "middleware": [VisionCaptionMiddleware()]}]
+    out = _harden_subagent_specs(specs)
+    visions = [m for m in out[0]["middleware"] if isinstance(m, VisionCaptionMiddleware)]
+    assert len(visions) == 1
+
+
+def test_spec_already_carrying_security_is_not_doubled():
+    specs = [{"name": "a", "system_prompt": "p", "middleware": [SecurityMiddleware()]}]
+    out = _harden_subagent_specs(specs)
+    securities = [m for m in out[0]["middleware"] if isinstance(m, SecurityMiddleware)]
+    assert len(securities) == 1
 
 
 def test_spec_already_carrying_retry_is_not_doubled():

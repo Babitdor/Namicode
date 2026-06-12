@@ -116,7 +116,7 @@ def pulse_soft(widget: Widget, period: float = 1.5) -> Any:
         alpha = trough + (peak - trough) * normalized
         widget.styles.opacity = alpha
 
-    t = widget.set_interval(0.05, _tick)
+    t = widget.set_interval(0.1, _tick)
     return t
 
 
@@ -136,7 +136,7 @@ def shimmer_bar(widget: Widget) -> Any:
 
     def _tick() -> None:
         nonlocal forward
-        step = 0.04
+        step = 0.08
         if forward:
             intensity[0] = min(intensity[0] + step, 0.35)
             if intensity[0] >= 0.35:
@@ -147,7 +147,7 @@ def shimmer_bar(widget: Widget) -> Any:
                 forward = True
         widget.styles.tint = accent.with_alpha(intensity[0])
 
-    t = widget.set_interval(0.04, _tick)
+    t = widget.set_interval(0.08, _tick)
     return t
 
 
@@ -166,13 +166,13 @@ def glow_breathe(widget: Widget, period: float = 2.5) -> Any:
     trough = 0.05
 
     def _tick() -> None:
-        t_val = getattr(_tick, "_time", 0.0) + 0.04
+        t_val = getattr(_tick, "_time", 0.0) + 0.08
         setattr(_tick, "_time", t_val)
         normalized = (math.sin(t_val * math.pi) + 1) / 2
         alpha = trough + (peak - trough) * normalized
         widget.styles.tint = accent.with_alpha(alpha)
 
-    t_ref = widget.set_interval(0.04, _tick)
+    t_ref = widget.set_interval(0.08, _tick)
     return t_ref
 
 
