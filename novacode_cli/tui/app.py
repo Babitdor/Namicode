@@ -5218,6 +5218,12 @@ class NovaApp(App):
                 return f"Error: no research query provided.\nUsage: /research {mode} <your question>", None
 
             async def run_res(msg_obj=self._remote_msg):
+                self._log(
+                    Text(
+                        f"📡 Remote ({msg_obj.platform.value if msg_obj else 'Remote'}) triggered research swarm: {query}",
+                        style="bold cyan"
+                    )
+                )
                 base_agents = _MODE_AGENTS[mode]
                 agents = (base_agents * ((agent_count // len(base_agents)) + 1))[:agent_count]
                 base_dir = Path(".nova") / "research"
@@ -5319,16 +5325,28 @@ class NovaApp(App):
 
             # For running ralph task, run it in the turn context
             async def run_ralph(msg_obj=self._remote_msg):
-                # We want to forward ralph's emit events to the remote user as replies
-                # so they can see iterations progressing in real time.
+                self._log(
+                    Text(
+                        f"📡 Remote ({msg_obj.platform.value if msg_obj else 'Remote'}) triggered autonomous Ralph run: {arg or '(resume)'}",
+                        style="bold cyan"
+                    )
+                )
+                # We want to forward ralph's emit events to both the local TUI and the remote user
                 async def _emit_remote(message: str = "") -> None:
                     if not message:
                         return
                     from rich.text import Text
-                    plain = Text.from_markup(message).plain.strip()
-                    if not plain:
-                        return
-                    if msg_obj is not None:
+                    try:
+                        renderable = Text.from_markup(message)
+                    except Exception:
+                        renderable = Text(message)
+                    
+                    # Log to TUI locally
+                    self._log(renderable)
+                    
+                    # Reply to remote user
+                    plain = renderable.plain.strip()
+                    if plain and msg_obj is not None:
                         try:
                             await msg_obj.reply_fn(plain)
                         except Exception:
