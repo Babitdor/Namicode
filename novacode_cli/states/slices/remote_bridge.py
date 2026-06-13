@@ -16,7 +16,7 @@ class RemoteBridgeState:
 
     def __init__(self) -> None:
         self._remote_message_queue: asyncio.Queue | None = None
-        self._remote_message_lock: asyncio.Lock | None = None
+        self._remote_message_lock: asyncio.Lock = asyncio.Lock()
         self._remote_bridge_manager: Any = None  # RemoteBridgeManager
         self._pre_remote_auto_approve: bool | None = None
         self._image_tracker: Any = None  # ImageTracker

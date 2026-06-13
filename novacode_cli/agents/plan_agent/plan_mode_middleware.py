@@ -38,7 +38,9 @@ class PlanModeMiddleware(AgentMiddleware):
             return ToolMessage(
                 content=(
                     f"[Plan Mode] `{tool_name}` is blocked during planning. "
-                    "Call `exit_plan_mode` and receive user approval before running commands."
+                    "You are currently in the planning phase and cannot execute commands or modify task state yet. "
+                    "Please research the codebase using read-only tools, design a plan, and call `exit_plan_mode(plan=...)` "
+                    "to request user approval. Do NOT attempt to run implementation tools or write todos yet."
                 ),
                 tool_call_id=request.tool_call["id"],
                 status="error",
@@ -53,7 +55,8 @@ class PlanModeMiddleware(AgentMiddleware):
                     content=(
                         f"[Plan Mode] Cannot call `{tool_name}` on `{path or '(unknown path)'}`. "
                         "During planning, writes are only allowed to `.nova/plans/`. "
-                        "Write your plan there, then call `exit_plan_mode` to request user approval."
+                        "Write your plan there, then call `exit_plan_mode(plan=...)` to request user approval. "
+                        "Do NOT modify project code files before approval."
                     ),
                     tool_call_id=request.tool_call["id"],
                     status="error",
