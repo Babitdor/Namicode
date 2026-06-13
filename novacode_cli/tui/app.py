@@ -5283,7 +5283,6 @@ class NovaApp(App):
                     from novacode_cli.commands.evolution_handler import handle_evolution_command
                     await handle_evolution_command(emit=_emit)
                 text_out = "\n".join(lines)
-                from rich.text import Text
                 plain = Text.from_markup(text_out).plain.strip()
                 if msg_obj is not None:
                     try:
@@ -5300,7 +5299,6 @@ class NovaApp(App):
                 from novacode_cli.commands.dream_handler import handle_dream_command
                 result = await handle_dream_command(self.session_state, self.assistant_id, emit=_emit)
                 if status_lines and msg_obj is not None:
-                    from rich.text import Text
                     plain = Text.from_markup("\n".join(status_lines)).plain.strip()
                     try:
                         await msg_obj.reply_fn(plain)
@@ -5319,7 +5317,6 @@ class NovaApp(App):
                 from novacode_cli.commands.ralph_handler import handle_ralph_status
                 await handle_ralph_status(self.session_state, emit=_emit)
                 text_out = "\n".join(lines)
-                from rich.text import Text
                 plain = Text.from_markup(text_out).plain
                 return plain, None
 
@@ -5335,7 +5332,6 @@ class NovaApp(App):
                 async def _emit_remote(message: str = "") -> None:
                     if not message:
                         return
-                    from rich.text import Text
                     try:
                         renderable = Text.from_markup(message)
                     except Exception:
