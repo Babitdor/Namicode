@@ -26,6 +26,9 @@ class PlanModeMiddleware(AgentMiddleware):
         self._plan_dir = (
             (workspace_root / ".nova" / "plans").resolve() if workspace_root else None
         )
+        self._ralph_dir = (
+            (workspace_root / ".nova" / "ralph").resolve() if workspace_root else None
+        )
 
     async def awrap_tool_call(
         self,
@@ -54,7 +57,7 @@ class PlanModeMiddleware(AgentMiddleware):
                 return ToolMessage(
                     content=(
                         f"[Plan Mode] Cannot call `{tool_name}` on `{path or '(unknown path)'}`. "
-                        "During planning, writes are only allowed to `.nova/plans/`. "
+                        "During planning, writes are only allowed to `.nova/plans/` and `.nova/ralph/`. "
                         "Write your plan there, then call `exit_plan_mode(plan=...)` to request user approval. "
                         "Do NOT modify project code files before approval."
                     ),
@@ -74,16 +77,23 @@ class PlanModeMiddleware(AgentMiddleware):
         # This handles paths like /.nova/plans/plan.md correctly regardless
         # of the OS, since virtual paths always use forward slashes.
         VIRTUAL_PLAN_PREFIX = "/.nova/plans/"
+        VIRTUAL_RALPH_PREFIX = "/.nova/ralph/"
         if path.startswith("/"):
             normalized = path.rstrip("/") + "/"
-            return normalized.startswith(VIRTUAL_PLAN_PREFIX) or normalized == VIRTUAL_PLAN_PREFIX.rstrip("/")
+            if normalized.startswith(VIRTUAL_PLAN_PREFIX) or normalized == VIRTUAL_PLAN_PREFIX.rstrip("/"):
+                return True
+            if normalized.startswith(VIRTUAL_RALPH_PREFIX) or normalized == VIRTUAL_RALPH_PREFIX.rstrip("/"):
+                return True
+            return False
 
         try:
             resolved = Path(path).resolve()
-            if self._plan_dir is not None:
-                return resolved.is_relative_to(self._plan_dir)
-            # Fallback: check if any path component sequence matches .nova/plans
+            if self._plan_dir is not None and resolved.is_relative_to(self._plan_dir):
+                return True
+            if self._ralph_dir is not None and resolved.is_relative_to(self._ralph_dir):
+                return True
+            # Fallback: check if any path component sequence matches .nova/plans or .nova/ralph
             normalized = resolved.as_posix()
-            return ".nova/plans" in normalized
+            return ".nova/plans" in normalized or ".nova/ralph" in normalized
         except (ValueError, OSError):
             return False

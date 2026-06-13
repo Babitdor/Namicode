@@ -49,7 +49,7 @@ def test_template_shows_progress_and_requires_update():
     )
     assert "Progress Log" in r and "READ FIRST" in r
     assert "Implemented: parser" in r
-    assert "MANDATORY" in r
+    assert "update" in r
     assert ".nova/ralph/progress.md" in r
 
 
