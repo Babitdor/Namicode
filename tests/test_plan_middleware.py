@@ -77,3 +77,44 @@ async def test_plan_mode_middleware_blocks_outside_plans_and_ralph():
 
     res = await middleware.awrap_tool_call(FakeVirtualRalph(), fake_handler)
     assert res == "success"
+
+
+def test_hitl_approval_allows_ralph_and_plans_in_plan_mode():
+    from novacode_cli.ui.hitl_approval import check_plan_mode_blocked
+
+    # 1. Blocked when writing outside
+    outside_request = {
+        "action_requests": [
+            {
+                "name": "write_file",
+                "args": {"file_path": "src/main.py"}
+            }
+        ]
+    }
+    blocked, resp = check_plan_mode_blocked(outside_request, plan_mode_enabled=True)
+    assert blocked is True
+    assert "writes/edits are only allowed" in resp["decisions"][0]["message"]
+
+    # 2. Allowed when writing to .nova/plans/
+    plans_request = {
+        "action_requests": [
+            {
+                "name": "write_file",
+                "args": {"file_path": ".nova/plans/plan.md"}
+            }
+        ]
+    }
+    blocked, resp = check_plan_mode_blocked(plans_request, plan_mode_enabled=True)
+    assert blocked is False
+
+    # 3. Allowed when writing to .nova/ralph/
+    ralph_request = {
+        "action_requests": [
+            {
+                "name": "write_file",
+                "args": {"file_path": ".nova/ralph/progress.md"}
+            }
+        ]
+    }
+    blocked, resp = check_plan_mode_blocked(ralph_request, plan_mode_enabled=True)
+    assert blocked is False

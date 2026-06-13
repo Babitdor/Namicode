@@ -10,16 +10,20 @@ from novacode_cli.file_ops import get_session_file_op_tracker
 
 
 def _is_plan_file_path(file_path: str) -> bool:
-    """Return True if the path targets a plan file, which is allowed in plan mode.
+    """Return True if the path targets an allowed plan or metadata file, which is allowed in plan mode.
 
-    Matches any file inside `.nova/plans/` directory, or any file whose
+    Matches any file inside `.nova/plans/` or `.nova/ralph/` directory, or any file whose
     basename starts with "plan" (supports both plan.md and plan-<name>.md).
     """
     import os
 
     normalized = file_path.replace("\\", "/").lower()
     basename = os.path.basename(normalized)
-    return ".nova/plans/" in normalized or basename.startswith("plan") and basename.endswith(".md")
+    return (
+        ".nova/plans/" in normalized
+        or ".nova/ralph/" in normalized
+        or (basename.startswith("plan") and basename.endswith(".md"))
+    )
 
 
 def check_plan_mode_blocked(
@@ -73,7 +77,7 @@ def check_plan_mode_blocked(
                 file_path = str(action_request.get("args", {}).get("file_path", ""))
                 msg = (
                     f"[Plan Mode Blocked] `{tool_name}` on `{file_path or '(unknown path)'}` is blocked during planning. "
-                    "During planning, writes/edits are only allowed to `.nova/plans/`. "
+                    "During planning, writes/edits are only allowed to `.nova/plans/` and `.nova/ralph/`. "
                     "Write your plan there, then call `exit_plan_mode(plan=...)` to request user approval. "
                     "Do NOT modify project code files before approval."
                 )
