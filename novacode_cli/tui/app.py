@@ -5003,7 +5003,16 @@ class NovaApp(App):
                         # live steers so the user can "add to the previous prompt".
                         steer_drain = asyncio.create_task(self._remote_steer_drain(queue))
                         try:
-                            await self._stream_prompt(prompt_text)
+                            if isinstance(prompt_text, str):
+                                await self._stream_prompt(prompt_text)
+                            elif callable(prompt_text):
+                                import inspect
+                                if inspect.iscoroutinefunction(prompt_text):
+                                    await prompt_text()
+                                else:
+                                    res = prompt_text()
+                                    if inspect.iscoroutine(res):
+                                        await res
                         finally:
                             steer_drain.cancel()
                             try:
@@ -5058,7 +5067,6 @@ class NovaApp(App):
             "files",
             "images",
             "vision",
-            "ralph",
             "kill",
             "restore",
             "reindex",
@@ -5067,9 +5075,6 @@ class NovaApp(App):
             "notifications",
             "trace",
             "log",
-            "research",
-            "dream",
-            "evolution",
             "tests",
             "fast",
         }
@@ -5088,17 +5093,22 @@ class NovaApp(App):
             "• /verbose — toggle settings\n"
             "• /ingest <path> — ingest a raw source into the wiki\n"
             "• /ask <question> — ask with wiki context\n"
+            "• /research <query> — launch multi-agent research swarm\n"
+            "• /ralph <task> — run autonomously (looping mode)\n"
+            "• /evolution — view self-evolution logs\n"
+            "• /dream — consolidate memory from previous sessions\n"
             "• /<skill> (e.g. /graphify) — run a skill\n"
             "Anything without a leading / is sent to the agent. Interactive "
             "panels (/model picker, /sessions, /mcp, /theme…) are local-only."
         )
 
-    async def _remote_slash(self, text: str) -> "tuple[str | None, str | None]":
+    async def _remote_slash(self, text: str) -> "tuple[str | None, Any]":
         """Route a slash command arriving from Discord/Telegram.
 
-        Returns ``(reply_text, stream_prompt)``:
+        Returns ``(reply_text, stream_prompt_or_callable)``:
           * ``(str, None)`` — send this text back; no agent turn.
           * ``(None, str)`` — stream this prompt as an agent turn (skills).
+          * ``(None, callable)`` — execute this coroutine/callable in the turn context.
         Interactive / local-only commands return an explanatory reply.
         """
         parts = text[1:].split(maxsplit=1)
@@ -5191,6 +5201,153 @@ class NovaApp(App):
                 return None, prompt
             except Exception as ex:  # noqa: BLE001
                 return f"/ask error: {ex}", None
+
+        if cmd == "research":
+            from novacode_cli.commands.research_handler import handle_research_command
+            if not arg:
+                with _rich_console.capture() as cap:
+                    await handle_research_command(
+                        self.agent, self.session_state, self.token_tracker, cmd_args=None
+                    )
+                out = Text.from_ansi(cap.get()).plain.strip()
+                return out, None
+
+            from novacode_cli.commands.research_handler import _parse_args, _MODE_AGENTS, _MODE_DESCRIPTIONS
+            mode, query, agent_count, fast_mode = _parse_args(arg)
+            if not query:
+                return f"Error: no research query provided.\nUsage: /research {mode} <your question>", None
+
+            async def run_res(msg_obj=self._remote_msg):
+                base_agents = _MODE_AGENTS[mode]
+                agents = (base_agents * ((agent_count // len(base_agents)) + 1))[:agent_count]
+                base_dir = Path(".nova") / "research"
+                try:
+                    base_dir.mkdir(parents=True, exist_ok=True)
+                except Exception:
+                    pass
+
+                conversation_context = ""
+                try:
+                    from novacode_cli.context import ContextManager
+                    conversation_context = await ContextManager().digest(
+                        self.agent, self.session_state.thread_id
+                    )
+                except Exception:
+                    pass
+
+                prompt = render_template(
+                    "research_swarm.jinja",
+                    research_query=query,
+                    mode=mode,
+                    mode_description=_MODE_DESCRIPTIONS[mode],
+                    agent_count=agent_count,
+                    agents=agents,
+                    base_dir=base_dir.as_posix(),
+                    fast_mode=fast_mode,
+                    conversation_context=conversation_context,
+                )
+
+                reply_msg = f"🔬 Starting research swarm (mode: {mode}, agents: {agent_count})..."
+                if fast_mode:
+                    reply_msg += " (fast mode)"
+                if msg_obj is not None:
+                    try:
+                        await msg_obj.reply_fn(reply_msg)
+                    except Exception:
+                        pass
+                await self._tui_execute_fn(
+                    prompt,
+                    self.agent,
+                    "dora",
+                    self.session_state,
+                    self.token_tracker,
+                    self.backend,
+                )
+            return None, run_res
+
+        if cmd == "evolution":
+            async def run_evo(msg_obj=self._remote_msg):
+                lines = []
+                def _emit(m=""):
+                    if m: lines.append(m)
+                from novacode_cli.commands.evolution_command import handle_evolution_command
+                try:
+                    await handle_evolution_command(emit=_emit)
+                except ImportError:
+                    from novacode_cli.commands.evolution_handler import handle_evolution_command
+                    await handle_evolution_command(emit=_emit)
+                text_out = "\n".join(lines)
+                from rich.text import Text
+                plain = Text.from_markup(text_out).plain.strip()
+                if msg_obj is not None:
+                    try:
+                        await msg_obj.reply_fn(plain or "No evolution logs yet.")
+                    except Exception:
+                        pass
+            return None, run_evo
+
+        if cmd == "dream":
+            async def run_dream(msg_obj=self._remote_msg):
+                status_lines = []
+                def _emit(m=""):
+                    if m: status_lines.append(m)
+                from novacode_cli.commands.dream_handler import handle_dream_command
+                result = await handle_dream_command(self.session_state, self.assistant_id, emit=_emit)
+                if status_lines and msg_obj is not None:
+                    from rich.text import Text
+                    plain = Text.from_markup("\n".join(status_lines)).plain.strip()
+                    try:
+                        await msg_obj.reply_fn(plain)
+                    except Exception:
+                        pass
+                if isinstance(result, str) and result.strip():
+                    await self._stream_prompt(result)
+            return None, run_dream
+
+        if cmd == "ralph":
+            # For --status, it's fast, so return directly
+            if arg.strip() == "--status":
+                lines = []
+                def _emit(m=""):
+                    if m: lines.append(m)
+                from novacode_cli.commands.ralph_handler import handle_ralph_status
+                await handle_ralph_status(self.session_state, emit=_emit)
+                text_out = "\n".join(lines)
+                from rich.text import Text
+                plain = Text.from_markup(text_out).plain
+                return plain, None
+
+            # For running ralph task, run it in the turn context
+            async def run_ralph(msg_obj=self._remote_msg):
+                # We want to forward ralph's emit events to the remote user as replies
+                # so they can see iterations progressing in real time.
+                async def _emit_remote(message: str = "") -> None:
+                    if not message:
+                        return
+                    from rich.text import Text
+                    plain = Text.from_markup(message).plain.strip()
+                    if not plain:
+                        return
+                    if msg_obj is not None:
+                        try:
+                            await msg_obj.reply_fn(plain)
+                        except Exception:
+                            pass
+
+                from novacode_cli.commands.ralph_handler import handle_ralph_command
+                parts = text.split(maxsplit=1)
+                ralph_args = parts[1].strip() if len(parts) > 1 else ""
+
+                await handle_ralph_command(
+                    self.agent,
+                    self.session_state,
+                    self.assistant_id,
+                    self.token_tracker,
+                    ralph_args or None,
+                    execute_fn=self._tui_execute_fn,
+                    emit=_emit_remote,
+                )
+            return None, run_ralph
 
         if cmd in self._REMOTE_LOCAL_ONLY:
             return f"/{cmd} is only available in the local TUI.", None
