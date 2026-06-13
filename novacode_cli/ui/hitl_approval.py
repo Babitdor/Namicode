@@ -10,16 +10,20 @@ from novacode_cli.file_ops import get_session_file_op_tracker
 
 
 def _is_plan_file_path(file_path: str) -> bool:
-    """Return True if the path targets a plan file, which is allowed in plan mode.
+    """Return True if the path targets an allowed plan or metadata file, which is allowed in plan mode.
 
-    Matches any file inside `.nova/plans/` directory, or any file whose
+    Matches any file inside `.nova/plans/` or `.nova/ralph/` directory, or any file whose
     basename starts with "plan" (supports both plan.md and plan-<name>.md).
     """
     import os
 
     normalized = file_path.replace("\\", "/").lower()
     basename = os.path.basename(normalized)
-    return ".nova/plans/" in normalized or basename.startswith("plan") and basename.endswith(".md")
+    return (
+        ".nova/plans/" in normalized
+        or ".nova/ralph/" in normalized
+        or (basename.startswith("plan") and basename.endswith(".md"))
+    )
 
 
 def check_plan_mode_blocked(
@@ -59,10 +63,27 @@ def check_plan_mode_blocked(
                 "PLAN-MODE-BLOCK",
                 f"blocked {len(blocked_actions)} actions",
             )
-        decisions = [
-            {"type": "reject", "message": "Plan mode active - tool blocked"}
-            for _ in hitl_request.get("action_requests", [])
-        ]
+        decisions = []
+        for action_request in hitl_request.get("action_requests", []):
+            tool_name = action_request.get("name", "")
+            if tool_name in BLOCKED_TOOLS:
+                msg = (
+                    f"[Plan Mode Blocked] `{tool_name}` is blocked during planning. "
+                    "You are currently in the planning phase and cannot execute commands or modify task state yet. "
+                    "Please research the codebase using read-only tools, design a plan, and call `exit_plan_mode(plan=...)` to request user approval. "
+                    "Do NOT attempt to run implementation tools or write todos yet."
+                )
+            elif tool_name in RESTRICTED_WRITE_TOOLS:
+                file_path = str(action_request.get("args", {}).get("file_path", ""))
+                msg = (
+                    f"[Plan Mode Blocked] `{tool_name}` on `{file_path or '(unknown path)'}` is blocked during planning. "
+                    "During planning, writes/edits are only allowed to `.nova/plans/` and `.nova/ralph/`. "
+                    "Write your plan there, then call `exit_plan_mode(plan=...)` to request user approval. "
+                    "Do NOT modify project code files before approval."
+                )
+            else:
+                msg = "Plan mode active - tool blocked"
+            decisions.append({"type": "reject", "message": msg})
         return True, {"decisions": decisions}
 
     return False, None

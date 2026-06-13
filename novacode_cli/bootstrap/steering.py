@@ -80,12 +80,13 @@ class SteeringInstruction:
             exactly once (stable across GC, unlike ``id()``).
     """
 
-    __slots__ = ("label", "instruction", "uid")
+    __slots__ = ("label", "instruction", "uid", "consumed")
 
     def __init__(self, label: str, instruction: str) -> None:
         self.label = label
         self.instruction = instruction
         self.uid = next(_uid_counter)
+        self.consumed = False
 
     def __repr__(self) -> str:
         return f"SteeringInstruction({self.label!r}, {self.instruction!r})"
@@ -261,6 +262,7 @@ class SteeringMiddleware(AgentMiddleware):
         if new:
             for si in new:
                 self._delivered.add(si.uid)
+                si.consumed = True
             nudge = "\n".join(f"- {si.instruction}" for si in new)
             msg = HumanMessage(
                 "[The user added the following while you were working — "

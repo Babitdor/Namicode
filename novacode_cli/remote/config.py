@@ -138,9 +138,9 @@ async def async_get_telegram_config() -> dict[str, str] | None:
     return None
 
 
-async def async_save_discord_config(token: str, channel_id: str) -> None:
+async def async_save_discord_config(token: str, channel_id: str, ping: bool = True) -> None:
     """Async version of :func:`save_discord_config`."""
-    await async_save_remote_config({"discord": {"token": token, "channel_id": str(channel_id)}})
+    await async_save_remote_config({"discord": {"token": token, "channel_id": str(channel_id), "ping": ping}})
 
 
 async def async_save_telegram_config(token: str, chat_id: str | int) -> None:
@@ -148,11 +148,11 @@ async def async_save_telegram_config(token: str, chat_id: str | int) -> None:
     await async_save_remote_config({"telegram": {"token": token, "chat_id": str(chat_id)}})
 
 
-def get_discord_config() -> dict[str, str] | None:
+def get_discord_config() -> dict[str, Any] | None:
     """Get the saved Discord configuration.
 
     Returns:
-        Dict with "token" and "channel_id", or None if not saved.
+        Dict with "token", "channel_id", and optionally "ping", or None if not saved.
     """
     config = load_remote_config()
     discord_cfg = config.get("discord")
@@ -161,7 +161,7 @@ def get_discord_config() -> dict[str, str] | None:
     return None
 
 
-def get_telegram_config() -> dict[str, str] | None:
+def get_telegram_config() -> dict[str, Any] | None:
     """Get the saved Telegram configuration.
 
     Returns:
@@ -174,14 +174,15 @@ def get_telegram_config() -> dict[str, str] | None:
     return None
 
 
-def save_discord_config(token: str, channel_id: str) -> None:
+def save_discord_config(token: str, channel_id: str, ping: bool = True) -> None:
     """Save Discord bridge configuration.
 
     Args:
         token: Discord bot token.
         channel_id: Discord channel ID.
+        ping: Whether to ping/mention the user when the task is done.
     """
-    save_remote_config({"discord": {"token": token, "channel_id": str(channel_id)}})
+    save_remote_config({"discord": {"token": token, "channel_id": str(channel_id), "ping": ping}})
 
 
 def save_telegram_config(token: str, chat_id: str | int) -> None:

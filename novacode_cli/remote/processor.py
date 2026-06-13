@@ -109,17 +109,17 @@ async def remote_message_processor(
     lock = getattr(session_state, "_remote_message_lock", None)
     if lock is None:
         lock = asyncio.Lock()
+        session_state._remote_message_lock = lock
 
     logger.info("Remote message processor started, queue=%s", id(queue))
     await _debug_log(f"PROCESSOR STARTED queue={id(queue)}")
 
     console.print("\n  [dim]\U0001f517 Remote message processor ready[/]\n")
 
-    while True:
-        try:
-            remote_msg = await queue.get()
-            await _debug_log(f"DEQUEUED from queue {id(queue)}: {remote_msg.text[:80]}")
+    active_tasks: set[asyncio.Task] = set()
 
+    async def run_turn(remote_msg: Any) -> None:
+        try:
             logger.info(
                 "Remote message from %s on %s",
                 remote_msg.user_name, remote_msg.platform.value
@@ -235,6 +235,8 @@ async def remote_message_processor(
                             _condense_response(response_text) if response_text else ""
                         )
                         final_text = condensed or "✅ Task completed (no text response)."
+                        if getattr(remote_msg, "user_mention", None):
+                            final_text = f"{remote_msg.user_mention}\n{final_text}"
                         try:
                             await remote_msg.reply_fn(final_text)
                         except Exception:
@@ -267,11 +269,69 @@ async def remote_message_processor(
                         )
                     except Exception:
                         pass
+        except Exception as ex:
+            logger.error(f"Unhandled exception in remote run_turn: {ex}")
+        finally:
+            queue.task_done()
+
+    while True:
+        try:
+            remote_msg = await queue.get()
+            await _debug_log(f"DEQUEUED from queue {id(queue)}: {remote_msg.text[:80]}")
+
+            # Check if there is an active turn (lock is locked)
+            if lock.locked():
+                try:
+                    # Treat as steer!
+                    from novacode_cli.bootstrap.steering import SteeringInstruction
+
+                    text = remote_msg.text.strip()
+                    low = text.lower()
+                    if low.startswith("/steer"):
+                        text = text[len("/steer") :].strip()
+                    elif text.startswith("/"):
+                        try:
+                            await remote_msg.reply_fn(
+                                "⏳ Busy with the current task — send "
+                                "`/steer <text>` (or just text) to add to it."
+                            )
+                        except Exception:
+                            pass
+                        queue.task_done()
+                        continue
+                    if not text:
+                        queue.task_done()
+                        continue
+
+                    if getattr(session_state, "steering_instructions", None) is None:
+                        session_state.steering_instructions = []
+                    si = SteeringInstruction(label="steer", instruction=text)
+                    session_state.steering_instructions.append(si)
+
+                    console.print(
+                        f"  [cyan]↗ Steering injected from Remote ({remote_msg.platform.value}): {text}[/]"
+                    )
+                    try:
+                        await remote_msg.reply_fn(f"↗ Added to the running task: {text}")
+                    except Exception:
+                        pass
+                except Exception as ex:
+                    logger.error(f"Error handling remote steer: {ex}")
                 finally:
                     queue.task_done()
+                continue
+
+            # Start the run in a background task
+            task = asyncio.create_task(run_turn(remote_msg))
+            active_tasks.add(task)
+            task.add_done_callback(active_tasks.discard)
 
         except asyncio.CancelledError:
             logger.info("Remote message processor cancelled")
+            for t in active_tasks:
+                t.cancel()
+            if active_tasks:
+                await asyncio.gather(*active_tasks, return_exceptions=True)
             break
         except Exception as e:
             logger.error(f"Remote message processor error: {e}")

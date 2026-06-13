@@ -114,3 +114,72 @@ class TestStatusLine:
         await asyncio.sleep(0.02)  # let the immediate first paint run
         assert edit.working and edit.working[0] == "⚙️ working…"
         await s.finalize()
+
+
+async def test_processor_prepends_user_mention():
+    from novacode_cli.remote.processor import remote_message_processor
+    from novacode_cli.remote.bridge import RemoteMessage, RemotePlatform
+    from types import SimpleNamespace
+
+    replies = []
+    async def fake_reply(text):
+        replies.append(text)
+
+    # Create a RemoteMessage with a user mention
+    msg = RemoteMessage(
+        platform=RemotePlatform.DISCORD,
+        chat_id="123456",
+        user_name="test_user",
+        text="Hello agent",
+        reply_fn=fake_reply,
+        user_mention="<@123456>",
+    )
+
+    queue = asyncio.Queue()
+    await queue.put(msg)
+
+    # Mock execute_fn to simulate turn completion
+    async def fake_execute(*args, **kwargs):
+        pass
+
+    # Mock agent and state
+    class FakeState:
+        values = {"messages": []}
+
+    class FakeAgent:
+        async def aget_state(self, config):
+            return FakeState()
+
+    session_state = SimpleNamespace(
+        thread_id="test-thread",
+        auto_approve=False,
+        session_id="test-session"
+    )
+
+    # Start processor as a background task, wait for it to process the message, then cancel it
+    task = asyncio.create_task(
+        remote_message_processor(
+            queue=queue,
+            agent=FakeAgent(),
+            assistant_id="assistant-123",
+            session_state=session_state,
+            console=SimpleNamespace(print=lambda *a, **kw: None),
+            token_tracker=SimpleNamespace(),
+            backend=SimpleNamespace(),
+            image_tracker=SimpleNamespace(),
+            seen_message_ids=set(),
+            execute_fn=fake_execute,
+        )
+    )
+
+    # Wait for the queue to be empty
+    await queue.join()
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    # Assert that the final reply starts with the user mention
+    assert len(replies) == 1
+    assert replies[0].startswith("<@123456>\n")

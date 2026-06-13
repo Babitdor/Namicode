@@ -1857,6 +1857,339 @@ class RemoteScreen(ModalScreen[None]):
         self.dismiss(None)
 
 
+class RalphScreen(ModalScreen[None]):
+    """Native /ralph modal: a live dashboard for Ralph autonomous runs.
+
+    Shows a header with task info, a scrollable list of iteration cards
+    that update in real time, action buttons (Stop / Checkpoint / Close),
+    and a summary when the run finishes.  Background ``--status`` is also
+    rendered inside this modal instead of inline in the transcript.
+    """
+
+    BINDINGS = [("escape", "close", "Close")]
+
+    _ITER_GLYPH = {
+        "running": ("▶", "yellow"),
+        "done": ("✓", "green"),
+        "failed": ("✗", "red"),
+    }
+
+    DEFAULT_CSS = """
+    RalphScreen {
+        align: center middle;
+    }
+    RalphScreen #modal-box {
+        width: 80%; max-width: 110; height: auto; max-height: 90%;
+        border: thick $accent; background: $surface;
+        padding: 1 4; layer: overlay;
+    }
+    RalphScreen #ralph-header {
+        margin-bottom: 1; padding: 0 0;
+    }
+    RalphScreen #ralph-iters {
+        height: auto; max-height: 60%;
+        padding: 0 1;
+    }
+    RalphScreen .ralph-iter-card {
+        height: auto; padding: 0 1; margin: 0 0;
+        border-left: thick $accent;
+    }
+    RalphScreen .ralph-iter-card.done {
+        border-left: thick $success;
+    }
+    RalphScreen .ralph-iter-card.failed {
+        border-left: thick $error;
+    }
+    RalphScreen .ralph-iter-card.running {
+        border-left: thick $warning;
+    }
+    RalphScreen #ralph-summary {
+        margin-top: 1; padding: 0 0;
+    }
+    RalphScreen #ralph-status-table {
+        margin-top: 1; padding: 0 0;
+    }
+    RalphScreen #modal-buttons {
+        height: auto; align: center middle;
+        margin-top: 1; padding: 0 0;
+    }
+    RalphScreen #modal-buttons Button { margin: 0 1; }
+    """
+
+    def __init__(
+        self,
+        session_state: Any,
+        agent: Any,
+        assistant_id: str,
+        token_tracker: Any,
+        args: str,
+        execute_fn: Any,
+    ) -> None:
+        super().__init__()
+        self._ss = session_state
+        self._agent = agent
+        self._assistant_id = assistant_id
+        self._token_tracker = token_tracker
+        self._args = args
+        self._execute_fn = execute_fn
+        self._iter_cards: dict[int, Static] = {}
+        self._finished = False
+        self._stop_requested = False
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="modal-box"):
+            yield Static(
+                Text("🔁 Ralph — Autonomous Mode", style="bold cyan"),
+                id="modal-title",
+            )
+            yield Static("", id="ralph-header")
+            with VerticalScroll(id="ralph-iters"):
+                pass  # iteration cards mounted dynamically
+            yield Static("", id="ralph-summary")
+            yield Static("", id="ralph-status-table")
+            with Horizontal(id="modal-buttons"):
+                yield Button("⏹ Stop", id="ralph-stop", variant="error")
+                yield Button("💾 Checkpoint", id="ralph-checkpoint", variant="warning")
+                yield Button("Close", id="ralph-close")
+
+    def on_mount(self) -> None:
+        animate_modal_screen(self)
+        self.query_one("#ralph-header", Static).update(
+            Text("Starting Ralph run…", style="dim italic")
+        )
+        self._run_ralph()
+
+    # ── Event handlers ─────────────────────────────────────────────
+
+    def _on_ralph_event(self, event: Any) -> None:
+        """Drive modal widgets from structured Ralph events."""
+        from novacode_cli.commands import ralph_events as rev
+
+        if isinstance(event, rev.RalphStarted):
+            self._iter_cards.clear()
+            iters = (
+                "unlimited"
+                if event.max_iterations == 0
+                else str(event.max_iterations)
+            )
+            title = (
+                "🔁 Ralph Mode (Resumed)"
+                if event.resumed_from
+                else "🔁 Ralph Mode"
+            )
+            t = Text()
+            t.append(f"{title}\n", style="bold")
+            t.append("Task: ", style="bold")
+            t.append(f"{event.task}\n")
+            t.append("Max iterations: ", style="bold")
+            t.append(f"{iters}\n")
+            if event.resumed_from:
+                t.append("Resuming from: ", style="bold")
+                t.append(f"iteration {event.resumed_from}\n")
+            t.append("Mode: ", style="bold")
+            t.append(
+                "background (non-blocking)"
+                if event.background
+                else "foreground"
+            )
+            self.query_one("#ralph-header", Static).update(t)
+
+        elif isinstance(event, rev.IterationStarted):
+            text = self._iter_text(
+                event.iteration, event.max_iterations, "running"
+            )
+            card = Static(text, classes="ralph-iter-card running")
+            self._iter_cards[event.iteration] = card
+            self.query_one("#ralph-iters", VerticalScroll).mount(card)
+            card.scroll_visible()
+
+        elif isinstance(event, rev.IterationFinished):
+            status = "done" if event.ok else "failed"
+            text = self._iter_text(
+                event.iteration,
+                event.max_iterations,
+                status,
+                event.elapsed,
+                event.error,
+            )
+            card = self._iter_cards.get(event.iteration)
+            if card is not None:
+                try:
+                    card.set_classes(f"ralph-iter-card {status}")
+                    card.update(text)
+                except Exception:  # noqa: BLE001
+                    pass
+
+        elif isinstance(event, rev.RalphFinished):
+            self._finished = True
+            t = Text()
+            t.append("📊 Ralph finished", style="bold")
+            t.append(f" — {event.completed} completed", style="green")
+            if event.failed:
+                t.append(f", {event.failed} failed", style="red")
+            t.append(f" of {event.total} iteration(s)", style="dim")
+            t.append(f"\nReason: {event.reason}", style="dim italic")
+            self.query_one("#ralph-summary", Static).update(t)
+            try:
+                self.query_one("#ralph-stop", Button).disabled = True
+                self.query_one("#ralph-checkpoint", Button).disabled = True
+            except Exception:  # noqa: BLE001
+                pass
+
+        elif isinstance(event, rev.StatusSnapshot):
+            self._render_status(event)
+
+    def _render_status(self, snap: Any) -> None:
+        """Render ``--status`` snapshot as a native table inside the modal."""
+        from rich.console import Group
+        from rich.table import Table
+
+        header = Text("Ralph Background Tasks\n", style="bold")
+        if not snap.rows:
+            header.append("No background Ralph tasks running.", style="dim")
+            self.query_one("#ralph-status-table", Static).update(header)
+            return
+
+        table = Table(show_edge=False, pad_edge=False, expand=False)
+        table.add_column("", width=2)
+        table.add_column("Iter")
+        table.add_column("Status")
+        table.add_column("Elapsed", justify="right")
+        table.add_column("Task")
+        glyphs = {
+            "running": ("⏳", "yellow"),
+            "completed": ("✓", "green"),
+            "failed": ("✗", "red"),
+        }
+        for row in snap.rows:
+            g, color = glyphs.get(row.status, ("•", "dim"))
+            disp = (
+                f"{row.iteration}/{row.max_iterations}"
+                if row.max_iterations > 0
+                else str(row.iteration)
+            )
+            desc = row.task if len(row.task) <= 50 else row.task[:50] + "…"  # noqa: PLR2004
+            table.add_row(
+                Text(g, style=color),
+                disp,
+                Text(row.status, style=color),
+                f"{row.elapsed:.0f}s",
+                desc,
+            )
+        summary = Text()
+        summary.append(f"\nTotal {snap.total}", style="dim")
+        summary.append(f"  ·  running {snap.running}", style="yellow")
+        summary.append(f"  ·  completed {snap.completed}", style="green")
+        summary.append(f"  ·  failed {snap.failed}", style="red")
+        self.query_one("#ralph-status-table", Static).update(
+            Group(header, table, summary)
+        )
+
+    def _iter_text(
+        self,
+        iteration: int,
+        max_iterations: int,
+        status: str,
+        elapsed: float | None = None,
+        error: str | None = None,
+    ) -> Text:
+        """One iteration card, styled by status."""
+        glyph, color = self._ITER_GLYPH.get(status, ("•", "dim"))
+        disp = (
+            f"{iteration}/{max_iterations}"
+            if max_iterations > 0
+            else str(iteration)
+        )
+        t = Text()
+        t.append(f"{glyph} Iteration {disp}", style=f"bold {color}")
+        if status == "running":
+            t.append("  — running…", style="dim")
+        else:
+            t.append(
+                f"  — {'done' if status == 'done' else 'failed'}",
+                style=color,
+            )
+            if elapsed is not None:
+                t.append(f" ({elapsed:.1f}s)", style="dim")
+            if error:
+                t.append(f"\n    {error}", style="red")
+        return t
+
+    # ── Run the handler ────────────────────────────────────────────
+
+    @work(exclusive=True, group="ralph")
+    async def _run_ralph(self) -> None:
+        """Kick off the Ralph handler with events routed to this modal."""
+        import threading
+
+        from novacode_cli.commands.ralph_handler import handle_ralph_command
+
+        loop_tid = threading.get_ident()
+
+        def _emit(message: str = "") -> None:
+            """Thread-safe Rich-markup emitter — logs to main transcript."""
+            try:
+                renderable = (
+                    Text.from_markup(message) if message else Text("")
+                )
+            except Exception:  # noqa: BLE001
+                renderable = Text(message)
+            app = self.app
+            if threading.get_ident() == loop_tid:
+                app._log(renderable)  # noqa: SLF001
+            else:
+                try:
+                    app.call_from_thread(app._log, renderable)  # noqa: SLF001
+                except Exception:  # noqa: BLE001
+                    pass
+
+        def _on_event(event: Any) -> None:
+            if threading.get_ident() == loop_tid:
+                self._on_ralph_event(event)
+            else:
+                try:
+                    self.app.call_from_thread(self._on_ralph_event, event)
+                except Exception:  # noqa: BLE001
+                    pass
+
+        try:
+            await handle_ralph_command(
+                self._agent,
+                self._ss,
+                self._assistant_id,
+                self._token_tracker,
+                self._args or None,
+                execute_fn=self._execute_fn,
+                emit=_emit,
+                on_event=_on_event,
+            )
+        except Exception as ex:  # noqa: BLE001
+            self.query_one("#ralph-summary", Static).update(
+                Text(f"Error: {ex}", style="red bold")
+            )
+
+    # ── Button handling ────────────────────────────────────────────
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        bid = event.button.id
+        if bid == "ralph-close":
+            self.dismiss(None)
+        elif bid == "ralph-stop":
+            self._stop_requested = True
+            self.workers.cancel_group(self, "ralph")
+            self.query_one("#ralph-summary", Static).update(
+                Text("⏹ Stop requested…", style="yellow bold")
+            )
+        elif bid == "ralph-checkpoint":
+            self._ss._ralph_checkpoint_requested = True  # noqa: SLF001
+            self.query_one("#ralph-summary", Static).update(
+                Text("💾 Checkpoint requested…", style="yellow")
+            )
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
 class PromptInput(Input):
     """Main prompt input that collapses large pastes into a compact placeholder.
 
@@ -2391,6 +2724,9 @@ class NovaApp(App):
         self._auto_compact = True
         # Live steering: SteeringInstructions added mid-turn, removed when it ends.
         self._live_steers: list = []
+        # Deferred prompts: messages sent during an active turn that weren't
+        # consumed by the steering middleware are re-dispatched as new turns.
+        self._deferred_prompts: list[str] = []
         # Nova learning status (review cycles) shown inline in the #status line
         # beside the context %, so it never overlaps the input. _nova_status is
         # the current message (or None); the timer auto-clears it after a moment.
@@ -4362,6 +4698,8 @@ class NovaApp(App):
         # proactively manage the context window once the turn has settled.
         await self._update_context_breakdown()
         await self._check_context()
+        # Auto-dispatch any deferred prompts that weren't consumed as steers.
+        await self._drain_deferred_prompts()
 
     async def _update_context_breakdown(self) -> None:
         """Recompute the context breakdown from agent state after a turn.
@@ -4421,16 +4759,44 @@ class NovaApp(App):
             self._ollama_offload_checked = True
 
     def _clear_live_steers(self) -> None:
-        """Drop transient live-steer instructions added during the turn."""
+        """Drop transient live-steer instructions added during the turn.
+
+        Unconsumed steers (the agent finished before the middleware could
+        inject them) are saved to ``_deferred_prompts`` so they can be
+        dispatched as a fresh turn rather than silently vanishing.
+        """
         if not self._live_steers:
             return
         instrs = getattr(self.session_state, "steering_instructions", None) or []
         for si in self._live_steers:
+            # If the middleware never delivered this steer, requeue it.
+            if not si.consumed:
+                self._deferred_prompts.append(si.instruction)
             try:
                 instrs.remove(si)
             except ValueError:
                 pass
         self._live_steers.clear()
+
+    async def _drain_deferred_prompts(self) -> None:
+        """Dispatch prompts that were queued during the previous turn.
+
+        Called after ``_stream_prompt`` finishes. Each deferred prompt is
+        shown as a user message and run through the agent as a new turn,
+        giving the user seamless "send while busy" behaviour.
+        """
+        while self._deferred_prompts:
+            prompt = self._deferred_prompts.pop(0)
+            self._log(
+                Text(
+                    f"↗ Processing queued message: {prompt}",
+                    style="italic #9ece6a",
+                )
+            )
+            await self._add_message(
+                Text("You", style="bold cyan"), "user", Text(prompt)
+            )
+            await self._stream_prompt(prompt)
 
     async def _check_context(self) -> None:
         """Warn (and optionally auto-compact) as the context window fills up.
@@ -4510,6 +4876,68 @@ class NovaApp(App):
             except asyncio.CancelledError:
                 return
             try:
+                lock = getattr(self.session_state, "_remote_message_lock", None)
+                if self._turn_active or (lock is not None and lock.locked()):
+                    try:
+                        # Log it in the TUI transcript so the local user sees it
+                        await self._add_message(
+                            Text(
+                                f"📡 {msg.user_name} ({msg.platform.value})",
+                                style="bold cyan",
+                            ),
+                            "user",
+                            Text(msg.text),
+                        )
+                        # Treat as steer / question response
+                        if (
+                            self._remote_question_future is not None
+                            and not self._remote_question_future.done()
+                        ):
+                            react_fn = getattr(msg, "react_fn", None)
+                            if react_fn is not None:
+                                try:
+                                    await react_fn("📥")
+                                except Exception:
+                                    pass
+                            self._remote_question_future.set_result(msg)
+                            continue
+
+                        text = (getattr(msg, "text", "") or "").strip()
+                        low = text.lower()
+                        if low.startswith("/steer"):
+                            text = text[len("/steer") :].strip()
+                        elif text.startswith("/"):
+                            reply_fn = getattr(msg, "reply_fn", None)
+                            if reply_fn is not None:
+                                try:
+                                    await reply_fn(
+                                        "⏳ Busy with the current task — send "
+                                        "`/steer <text>` (or just text) to add to it."
+                                    )
+                                except Exception:
+                                    pass
+                            continue
+                        if not text:
+                            continue
+                        
+                        self._add_live_steer(text)
+                        react_fn = getattr(msg, "react_fn", None)
+                        reply_fn = getattr(msg, "reply_fn", None)
+                        if react_fn is not None:
+                            try:
+                                await react_fn("↗")
+                            except Exception:
+                                pass
+                        elif reply_fn is not None:
+                            try:
+                                await reply_fn(f"↗ Added to the running task: {text}")
+                            except Exception:
+                                pass
+                    except Exception as ex:
+                        self._log(Text(f"Steer error: {ex}", style="red"))
+                    finally:
+                        queue.task_done()
+                    continue
                 await self._add_message(
                     Text(
                         f"📡 {msg.user_name} ({msg.platform.value})",
@@ -4575,7 +5003,16 @@ class NovaApp(App):
                         # live steers so the user can "add to the previous prompt".
                         steer_drain = asyncio.create_task(self._remote_steer_drain(queue))
                         try:
-                            await self._stream_prompt(prompt_text)
+                            if isinstance(prompt_text, str):
+                                await self._stream_prompt(prompt_text)
+                            elif callable(prompt_text):
+                                import inspect
+                                if inspect.iscoroutinefunction(prompt_text):
+                                    await prompt_text()
+                                else:
+                                    res = prompt_text()
+                                    if inspect.iscoroutine(res):
+                                        await res
                         finally:
                             steer_drain.cancel()
                             try:
@@ -4630,7 +5067,6 @@ class NovaApp(App):
             "files",
             "images",
             "vision",
-            "ralph",
             "kill",
             "restore",
             "reindex",
@@ -4639,9 +5075,6 @@ class NovaApp(App):
             "notifications",
             "trace",
             "log",
-            "research",
-            "dream",
-            "evolution",
             "tests",
             "fast",
         }
@@ -4660,17 +5093,22 @@ class NovaApp(App):
             "• /verbose — toggle settings\n"
             "• /ingest <path> — ingest a raw source into the wiki\n"
             "• /ask <question> — ask with wiki context\n"
+            "• /research <query> — launch multi-agent research swarm\n"
+            "• /ralph <task> — run autonomously (looping mode)\n"
+            "• /evolution — view self-evolution logs\n"
+            "• /dream — consolidate memory from previous sessions\n"
             "• /<skill> (e.g. /graphify) — run a skill\n"
             "Anything without a leading / is sent to the agent. Interactive "
             "panels (/model picker, /sessions, /mcp, /theme…) are local-only."
         )
 
-    async def _remote_slash(self, text: str) -> "tuple[str | None, str | None]":
+    async def _remote_slash(self, text: str) -> "tuple[str | None, Any]":
         """Route a slash command arriving from Discord/Telegram.
 
-        Returns ``(reply_text, stream_prompt)``:
+        Returns ``(reply_text, stream_prompt_or_callable)``:
           * ``(str, None)`` — send this text back; no agent turn.
           * ``(None, str)`` — stream this prompt as an agent turn (skills).
+          * ``(None, callable)`` — execute this coroutine/callable in the turn context.
         Interactive / local-only commands return an explanatory reply.
         """
         parts = text[1:].split(maxsplit=1)
@@ -4763,6 +5201,167 @@ class NovaApp(App):
                 return None, prompt
             except Exception as ex:  # noqa: BLE001
                 return f"/ask error: {ex}", None
+
+        if cmd == "research":
+            from novacode_cli.commands.research_handler import handle_research_command
+            if not arg:
+                with _rich_console.capture() as cap:
+                    await handle_research_command(
+                        self.agent, self.session_state, self.token_tracker, cmd_args=None
+                    )
+                out = Text.from_ansi(cap.get()).plain.strip()
+                return out, None
+
+            from novacode_cli.commands.research_handler import _parse_args, _MODE_AGENTS, _MODE_DESCRIPTIONS
+            mode, query, agent_count, fast_mode = _parse_args(arg)
+            if not query:
+                return f"Error: no research query provided.\nUsage: /research {mode} <your question>", None
+
+            async def run_res(msg_obj=self._remote_msg):
+                self._log(
+                    Text(
+                        f"📡 Remote ({msg_obj.platform.value if msg_obj else 'Remote'}) triggered research swarm: {query}",
+                        style="bold cyan"
+                    )
+                )
+                base_agents = _MODE_AGENTS[mode]
+                agents = (base_agents * ((agent_count // len(base_agents)) + 1))[:agent_count]
+                base_dir = Path(".nova") / "research"
+                try:
+                    base_dir.mkdir(parents=True, exist_ok=True)
+                except Exception:
+                    pass
+
+                conversation_context = ""
+                try:
+                    from novacode_cli.context import ContextManager
+                    conversation_context = await ContextManager().digest(
+                        self.agent, self.session_state.thread_id
+                    )
+                except Exception:
+                    pass
+
+                prompt = render_template(
+                    "research_swarm.jinja",
+                    research_query=query,
+                    mode=mode,
+                    mode_description=_MODE_DESCRIPTIONS[mode],
+                    agent_count=agent_count,
+                    agents=agents,
+                    base_dir=base_dir.as_posix(),
+                    fast_mode=fast_mode,
+                    conversation_context=conversation_context,
+                )
+
+                reply_msg = f"🔬 Starting research swarm (mode: {mode}, agents: {agent_count})..."
+                if fast_mode:
+                    reply_msg += " (fast mode)"
+                if msg_obj is not None:
+                    try:
+                        await msg_obj.reply_fn(reply_msg)
+                    except Exception:
+                        pass
+                await self._tui_execute_fn(
+                    prompt,
+                    self.agent,
+                    "dora",
+                    self.session_state,
+                    self.token_tracker,
+                    self.backend,
+                )
+            return None, run_res
+
+        if cmd == "evolution":
+            async def run_evo(msg_obj=self._remote_msg):
+                lines = []
+                def _emit(m=""):
+                    if m: lines.append(m)
+                from novacode_cli.commands.evolution_command import handle_evolution_command
+                try:
+                    await handle_evolution_command(emit=_emit)
+                except ImportError:
+                    from novacode_cli.commands.evolution_handler import handle_evolution_command
+                    await handle_evolution_command(emit=_emit)
+                text_out = "\n".join(lines)
+                plain = Text.from_markup(text_out).plain.strip()
+                if msg_obj is not None:
+                    try:
+                        await msg_obj.reply_fn(plain or "No evolution logs yet.")
+                    except Exception:
+                        pass
+            return None, run_evo
+
+        if cmd == "dream":
+            async def run_dream(msg_obj=self._remote_msg):
+                status_lines = []
+                def _emit(m=""):
+                    if m: status_lines.append(m)
+                from novacode_cli.commands.dream_handler import handle_dream_command
+                result = await handle_dream_command(self.session_state, self.assistant_id, emit=_emit)
+                if status_lines and msg_obj is not None:
+                    plain = Text.from_markup("\n".join(status_lines)).plain.strip()
+                    try:
+                        await msg_obj.reply_fn(plain)
+                    except Exception:
+                        pass
+                if isinstance(result, str) and result.strip():
+                    await self._stream_prompt(result)
+            return None, run_dream
+
+        if cmd == "ralph":
+            # For --status, it's fast, so return directly
+            if arg.strip() == "--status":
+                lines = []
+                def _emit(m=""):
+                    if m: lines.append(m)
+                from novacode_cli.commands.ralph_handler import handle_ralph_status
+                await handle_ralph_status(self.session_state, emit=_emit)
+                text_out = "\n".join(lines)
+                plain = Text.from_markup(text_out).plain
+                return plain, None
+
+            # For running ralph task, run it in the turn context
+            async def run_ralph(msg_obj=self._remote_msg):
+                self._log(
+                    Text(
+                        f"📡 Remote ({msg_obj.platform.value if msg_obj else 'Remote'}) triggered autonomous Ralph run: {arg or '(resume)'}",
+                        style="bold cyan"
+                    )
+                )
+                # We want to forward ralph's emit events to both the local TUI and the remote user
+                async def _emit_remote(message: str = "") -> None:
+                    if not message:
+                        return
+                    try:
+                        renderable = Text.from_markup(message)
+                    except Exception:
+                        renderable = Text(message)
+                    
+                    # Log to TUI locally
+                    self._log(renderable)
+                    
+                    # Reply to remote user
+                    plain = renderable.plain.strip()
+                    if plain and msg_obj is not None:
+                        try:
+                            await msg_obj.reply_fn(plain)
+                        except Exception:
+                            pass
+
+                from novacode_cli.commands.ralph_handler import handle_ralph_command
+                parts = text.split(maxsplit=1)
+                ralph_args = parts[1].strip() if len(parts) > 1 else ""
+
+                await handle_ralph_command(
+                    self.agent,
+                    self.session_state,
+                    self.assistant_id,
+                    self.token_tracker,
+                    ralph_args or None,
+                    execute_fn=self._tui_execute_fn,
+                    emit=_emit_remote,
+                )
+            return None, run_ralph
 
         if cmd in self._REMOTE_LOCAL_ONLY:
             return f"/{cmd} is only available in the local TUI.", None
@@ -4929,7 +5528,18 @@ class NovaApp(App):
         elif cmd == "browser-use":
             await self._run_browser_use(text)
         elif cmd == "ralph":
-            await self._run_ralph(text)
+            parts = text.split(maxsplit=1)
+            args = parts[1].strip() if len(parts) > 1 else ""
+            await self.push_screen_wait(
+                RalphScreen(
+                    session_state=self.session_state,
+                    agent=self.agent,
+                    assistant_id=self.assistant_id,
+                    token_tracker=self.token_tracker,
+                    args=args,
+                    execute_fn=self._tui_execute_fn,
+                )
+            )
         elif cmd == "trello":
             await self._run_trello(text)
         elif cmd == "create":
