@@ -800,10 +800,16 @@ async def _handle_remote_command(cmd_args: str | None, session_state, console) -
         # Parse --token and --channel/--chat from args
         token = None
         chat_id = None
+        ping = None
 
         token_match = re.search(r"--token\s+(\S+)", rest)
         if token_match:
             token = token_match.group(1)
+
+        if "--no-ping" in rest:
+            ping = False
+        elif "--ping" in rest:
+            ping = True
 
         if platform_str == "discord":
             channel_match = re.search(r"--channel\s+(\d+)", rest)
@@ -823,11 +829,13 @@ async def _handle_remote_command(cmd_args: str | None, session_state, console) -
                 token = saved_discord.get("token")
             if chat_id is None:
                 chat_id = saved_discord.get("channel_id")
+            if ping is None:
+                ping = saved_discord.get("ping", True)
 
             if not token:
                 console.print()
                 console.print("  [red]No Discord token provided or saved.[/red]")
-                console.print("  [dim]Usage: /remote start discord --token <TOKEN> [--channel <ID>][/dim]")
+                console.print("  [dim]Usage: /remote start discord --token <TOKEN> [--channel <ID>] [--ping|--no-ping][/dim]")
                 console.print("  [dim]The token will be saved for future use.[/dim]")
                 console.print()
                 return True
@@ -843,7 +851,7 @@ async def _handle_remote_command(cmd_args: str | None, session_state, console) -
                 console.print(f"  No --channel specified. Creating #{channel_name}...")
 
                 success, error_msg = await manager.start_discord_auto_channel(
-                    token=token, channel_name=channel_name
+                    token=token, channel_name=channel_name, ping=ping
                 )
                 if not success:
                     console.print(f"  [red]✗[/red] Could not create channel: {error_msg}")
@@ -865,7 +873,7 @@ async def _handle_remote_command(cmd_args: str | None, session_state, console) -
 
                 console.print(f"  [green]✓[/green] Created channel #{channel_name} (ID: {chat_id})")
                 # Save the auto-created channel
-                await async_save_discord_config(token, str(chat_id))
+                await async_save_discord_config(token, str(chat_id), ping=ping)
 
         elif platform_str == "telegram":
             saved_telegram = saved.get("telegram", {})
@@ -891,17 +899,21 @@ async def _handle_remote_command(cmd_args: str | None, session_state, console) -
 
         # ── Save the config ──
         if platform_str == "discord":
-            await async_save_discord_config(token, str(chat_id))
+            await async_save_discord_config(token, str(chat_id), ping=ping)
         else:
             await async_save_telegram_config(token, str(chat_id))
 
         # ── Start the bridge ──
         console.print()
-        console.print(f"  Starting {platform_str.title()} bridge (chat: {chat_id})...")
+        if platform_str == "discord":
+            ping_status = "ping: enabled" if ping else "ping: disabled"
+            console.print(f"  Starting Discord bridge (channel: {chat_id}, {ping_status})...")
+        else:
+            console.print(f"  Starting Telegram bridge (chat: {chat_id})...")
 
         try:
             if platform_str == "discord":
-                success, error_msg = await manager.start_discord(token=token, channel_id=chat_id)
+                success, error_msg = await manager.start_discord(token=token, channel_id=chat_id, ping=ping)
             else:
                 success, error_msg = await manager.start_telegram(token=token, chat_id=int(chat_id))
         except Exception as e:

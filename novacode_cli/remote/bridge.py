@@ -78,6 +78,7 @@ class RemoteMessage:
     typing_fn: Callable[[], Awaitable[None]] | None = None
     react_fn: Callable[[str], Awaitable[None]] | None = None
     edit_fn: Callable[..., Awaitable[None]] | None = None
+    user_mention: str | None = None
 
 
 @dataclass
@@ -89,11 +90,13 @@ class BridgeConfig:
         token: Bot token for the platform API.
         chat_id: Specific channel/chat to listen on and respond in.
         allowed_ids: Set of additional IDs that are allowed to interact.
+        ping: Whether to ping/mention the user when the task is done (Discord).
     """
     platform: RemotePlatform
     token: str
     chat_id: str | int
     allowed_ids: set[str | int] = field(default_factory=set)
+    ping: bool = True
 
 
 # ---------------------------------------------------------------------------
@@ -361,12 +364,13 @@ class RemoteBridgeManager:
     def _make_bridge_id(self, platform: RemotePlatform, chat_id: str | int) -> str:
         return f"{platform.value}:{chat_id}"
 
-    async def start_discord(self, token: str, channel_id: str | int) -> tuple[bool, str]:
+    async def start_discord(self, token: str, channel_id: str | int, ping: bool = True) -> tuple[bool, str]:
         """Start a Discord bridge.
 
         Args:
             token: Discord bot token.
             channel_id: Discord channel ID to listen on.
+            ping: Whether to ping/mention the user when the task is done.
 
         Returns:
             (success, error_message) tuple. error_message is empty on success.
@@ -384,6 +388,7 @@ class RemoteBridgeManager:
             token=token,
             chat_id=str(channel_id),
             allowed_ids={str(channel_id)},
+            ping=ping,
         )
 
         # Validate Discord token format (bot tokens: 3 dot-separated segments, ~70+ chars)
@@ -501,7 +506,7 @@ class RemoteBridgeManager:
             return False, f"Failed to start Telegram bridge: {e}"
 
     async def start_discord_auto_channel(
-        self, token: str, channel_name: str, guild_id: int | None = None
+        self, token: str, channel_name: str, guild_id: int | None = None, ping: bool = True
     ) -> tuple[bool, str]:
         """Start a Discord bridge and auto-create a channel.
 
@@ -512,6 +517,7 @@ class RemoteBridgeManager:
             token: Discord bot token.
             channel_name: Name for the auto-created channel.
             guild_id: Optional specific guild ID. If None, uses first guild.
+            ping: Whether to ping/mention the user when the task is done.
 
         Returns:
             (success, error_message) tuple. On success, the channel ID is
@@ -542,6 +548,7 @@ class RemoteBridgeManager:
                 token=token,
                 chat_id=temp_channel_id,
                 allowed_ids={temp_channel_id},
+                ping=ping,
             )
 
             bridge = DiscordBridge(

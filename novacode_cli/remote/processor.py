@@ -235,6 +235,8 @@ async def remote_message_processor(
                             _condense_response(response_text) if response_text else ""
                         )
                         final_text = condensed or "✅ Task completed (no text response)."
+                        if getattr(remote_msg, "user_mention", None):
+                            final_text = f"{remote_msg.user_mention}\n{final_text}"
                         try:
                             await remote_msg.reply_fn(final_text)
                         except Exception:

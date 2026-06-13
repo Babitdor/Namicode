@@ -245,6 +245,9 @@ class TelegramBridge:
                         except Exception as e:  # noqa: BLE001
                             logger.error(f"Telegram stream edit error: {e}")
 
+                    tg_username = from_user.get("username")
+                    user_mention = f"@{tg_username}" if tg_username else None
+
                     remote_msg = RemoteMessage(
                         platform=RemotePlatform.TELEGRAM,
                         chat_id=chat_id,
@@ -253,6 +256,7 @@ class TelegramBridge:
                         reply_fn=reply_fn,
                         typing_fn=typing_fn,
                         edit_fn=edit_fn,
+                        user_mention=user_mention,
                     )
 
                     await self._queue.put(remote_msg)

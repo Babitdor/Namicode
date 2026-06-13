@@ -237,6 +237,9 @@ class DiscordBridge:
                 except Exception as e:  # noqa: BLE001
                     logger.error(f"Unexpected Discord edit error: {e}")
 
+            ping_enabled = getattr(self._config, "ping", True)
+            user_mention = message.author.mention if ping_enabled else None
+
             try:
                 remote_msg = RemoteMessage(
                     platform=RemotePlatform.DISCORD,
@@ -247,6 +250,7 @@ class DiscordBridge:
                     typing_fn=message.channel.typing,
                     react_fn=react_fn,
                     edit_fn=edit_fn,
+                    user_mention=user_mention,
                 )
             except Exception as _e:
                 logger.error(f"Failed to create RemoteMessage: {_e}")
@@ -259,6 +263,7 @@ class DiscordBridge:
                     reply_fn=reply_fn,
                     react_fn=react_fn,
                     edit_fn=edit_fn,
+                    user_mention=user_mention,
                 )
 
             await self._queue.put(remote_msg)
