@@ -989,6 +989,7 @@ class McpScreen(ModalScreen[None]):
             with Horizontal(id="modal-buttons"):
                 yield Button("Install", id="install", variant="primary")
                 yield Button("Add Custom", id="add-custom")
+                yield Button("Toggle Active", id="toggle-enable")
                 yield Button("Remove", id="remove", variant="error")
                 yield Button("Close", id="close")
 
@@ -1048,29 +1049,44 @@ class McpScreen(ModalScreen[None]):
         if servers:
             for name, sc in servers.items():
                 self._config_names.append(name)
-                is_active = name in active_servers
-                status_mark = "\u25cf" if is_active else "\u25cb"
-                status_style = "#73daca" if is_active else "#565f89"
+                is_disabled = getattr(sc, "disabled", False)
+                is_active = name in active_servers and not is_disabled
                 transport = getattr(sc, "transport", "?")
                 loc = getattr(sc, "url", None) or getattr(sc, "command", None) or ""
-                label = Text.assemble(
-                    (f"{status_mark}  {name}  \u00b7  ", status_style),
-                    (f"{transport}  \u00b7  {loc}", "dim"),
-                )
+                if is_disabled:
+                    status_mark = "\u25cb"
+                    status_style = "#f7768e"
+                    label = Text.assemble(
+                        (f"{status_mark}  {name} (disabled)  \u00b7  ", status_style),
+                        (f"{transport}  \u00b7  {loc}", "dim strike"),
+                    )
+                else:
+                    status_mark = "\u25cf" if is_active else "\u25cb"
+                    status_style = "#73daca" if is_active else "#565f89"
+                    label = Text.assemble(
+                        (f"{status_mark}  {name}  \u00b7  ", status_style),
+                        (f"{transport}  \u00b7  {loc}", "dim"),
+                    )
                 configured.add_option(Option(label))
 
             # Show active tool count
             active_section = self.query_one("#mcp-section", Static)
-            active_count = sum(1 for n in active_servers if n in self._config_names)
-            inactive_count = len(self._config_names) - active_count
+            active_count = sum(1 for n in active_servers if n in self._config_names and not getattr(servers[n], "disabled", False))
+            disabled_count = sum(1 for n in self._config_names if getattr(servers[n], "disabled", False))
+            inactive_count = len(self._config_names) - active_count - disabled_count
+
+            counts_str = []
+            if active_count:
+                counts_str.append(f"{active_count} active")
+            if inactive_count:
+                counts_str.append(f"{inactive_count} inactive")
+            if disabled_count:
+                counts_str.append(f"{disabled_count} disabled")
+
+            counts_text = f" ({', '.join(counts_str)})" if counts_str else ""
             active_section.update(
                 Text(
-                    f"Configured Servers: {len(self._config_names)} total"
-                    + (
-                        f" ({active_count} active, {inactive_count} inactive)"
-                        if inactive_count or active_count
-                        else ""
-                    ),
+                    f"Configured Servers: {len(self._config_names)} total" + counts_text,
                     style="bold cyan",
                 )
             )
@@ -1079,6 +1095,9 @@ class McpScreen(ModalScreen[None]):
             self.query_one("#mcp-section", Static).update(
                 Text("Configured Servers: (none)", style="bold cyan")
             )
+
+        # Update toggle button dynamically based on reload
+        self._update_toggle_button(configured.highlighted)
 
         # Available presets
         presets_list = self.query_one("#mcp-presets", OptionList)
@@ -1124,6 +1143,73 @@ class McpScreen(ModalScreen[None]):
             self._install_highlighted()
         elif event.button.id == "add-custom":
             self._add_custom()
+        elif event.button.id == "toggle-enable":
+            self._toggle_highlighted()
+
+    def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        if event.option_list.id == "mcp-configured":
+            self._update_toggle_button(event.highlighted)
+
+    def _update_toggle_button(self, idx: int | None) -> None:
+        try:
+            btn = self.query_one("#toggle-enable", Button)
+            if idx is None or not (0 <= idx < len(self._config_names)):
+                btn.label = "Toggle Active"
+                btn.disabled = True
+                return
+
+            btn.disabled = False
+            name = self._config_names[idx]
+            from novacode_cli.mcp.config import MCPConfig
+            sc = MCPConfig().get_server(name)
+            if sc and getattr(sc, "disabled", False):
+                btn.label = "Activate"
+            else:
+                btn.label = "Deactivate"
+        except Exception:
+            pass
+
+    @work
+    async def _toggle_highlighted(self) -> None:
+        if not self._config_names:
+            return
+        ol = self.query_one("#mcp-configured", OptionList)
+        idx = ol.highlighted
+        if idx is None or not (0 <= idx < len(self._config_names)):
+            return
+        name = self._config_names[idx]
+        try:
+            from novacode_cli.mcp.config import MCPConfig
+
+            config_mgr = MCPConfig()
+            sc = config_mgr.get_server(name)
+            if sc:
+                sc.disabled = not getattr(sc, "disabled", False)
+                await config_mgr.add_server_async(name, sc)
+
+                # Show status message
+                state_str = "deactivated" if sc.disabled else "activated"
+                self.app.query_one("#transcript", VerticalScroll).mount(
+                    Static(
+                        Text(
+                            f"\u2713 MCP '{name}' {state_str}!",
+                            style="green",
+                        ),
+                        classes="logline",
+                    )
+                )
+                if hasattr(self.app, "session_state") and hasattr(self.app.session_state, "reload_mcp_servers"):
+                    new_agent, new_backend = await self.app.session_state.reload_mcp_servers()
+                    self.app.agent = new_agent
+                    self.app.backend = new_backend
+        except Exception as ex:  # noqa: BLE001
+            self.app.query_one("#transcript", VerticalScroll).mount(
+                Static(
+                    Text(f"Toggle failed: {ex}", style="red"),
+                    classes="logline",
+                )
+            )
+        self._reload()
 
     @work
     async def _remove_highlighted(self) -> None:
@@ -1145,8 +1231,26 @@ class McpScreen(ModalScreen[None]):
                 from novacode_cli.mcp.config import MCPConfig
 
                 MCPConfig().remove_server(name)
-            except Exception:  # noqa: BLE001
-                pass
+                self.app.query_one("#transcript", VerticalScroll).mount(
+                    Static(
+                        Text(
+                            f"\u2713 MCP '{name}' removed!",
+                            style="green",
+                        ),
+                        classes="logline",
+                    )
+                )
+                if hasattr(self.app, "session_state") and hasattr(self.app.session_state, "reload_mcp_servers"):
+                    new_agent, new_backend = await self.app.session_state.reload_mcp_servers()
+                    self.app.agent = new_agent
+                    self.app.backend = new_backend
+            except Exception as ex:  # noqa: BLE001
+                self.app.query_one("#transcript", VerticalScroll).mount(
+                    Static(
+                        Text(f"Remove failed: {ex}", style="red"),
+                        classes="logline",
+                    )
+                )
             self._reload()
 
     @work
@@ -1191,12 +1295,16 @@ class McpScreen(ModalScreen[None]):
                 self.app.query_one("#transcript", VerticalScroll).mount(
                     Static(
                         Text(
-                            f"\u2713 MCP preset '{preset['name']}' installed! Restart session to activate.",
+                            f"\u2713 MCP preset '{preset['name']}' installed!",
                             style="green",
                         ),
                         classes="logline",
                     )
                 )
+                if hasattr(self.app, "session_state") and hasattr(self.app.session_state, "reload_mcp_servers"):
+                    new_agent, new_backend = await self.app.session_state.reload_mcp_servers()
+                    self.app.agent = new_agent
+                    self.app.backend = new_backend
         except Exception as ex:  # noqa: BLE001
             self.app.query_one("#transcript", VerticalScroll).mount(
                 Static(
@@ -1205,7 +1313,6 @@ class McpScreen(ModalScreen[None]):
                 )
             )
         self._reload()
-        self.dismiss(None)
 
     @work
     async def _add_custom(self) -> None:
@@ -1234,12 +1341,16 @@ class McpScreen(ModalScreen[None]):
                 self.app.query_one("#transcript", VerticalScroll).mount(
                     Static(
                         Text(
-                            f"\u2713 Custom MCP '{name}' added! Restart session to activate.",
+                            f"\u2713 Custom MCP '{name}' added!",
                             style="green",
                         ),
                         classes="logline",
                     )
                 )
+                if hasattr(self.app, "session_state") and hasattr(self.app.session_state, "reload_mcp_servers"):
+                    new_agent, new_backend = await self.app.session_state.reload_mcp_servers()
+                    self.app.agent = new_agent
+                    self.app.backend = new_backend
             except Exception as ex:  # noqa: BLE001
                 self.app.query_one("#transcript", VerticalScroll).mount(
                     Static(
@@ -1248,7 +1359,6 @@ class McpScreen(ModalScreen[None]):
                     )
                 )
             self._reload()
-            self.dismiss(None)
 
     def action_close(self) -> None:
         self.dismiss(None)
@@ -1345,6 +1455,7 @@ class McpCustomModal(ModalScreen[dict | None]):
                 id="mcp-conn",
             )
             yield Input(placeholder="Description (optional)", id="mcp-desc")
+            yield Static("", id="mcp-custom-hint")
             with Horizontal(id="modal-buttons"):
                 yield Button("Add", id="do-add", variant="primary")
                 yield Button("Cancel", id="cancel")
@@ -1366,11 +1477,13 @@ class McpCustomModal(ModalScreen[dict | None]):
             self._do_add()
 
     def _do_add(self) -> None:
+        hint = self.query_one("#mcp-custom-hint", Static)
         try:
             name = self.query_one("#mcp-name", Input).value.strip()
         except Exception:  # noqa: BLE001
-            return
+            name = ""
         if not name:
+            hint.update(Text("Server name is required", style="red"))
             return
         try:
             transport = self.query_one("#mcp-transport", Select).value
@@ -1381,6 +1494,7 @@ class McpCustomModal(ModalScreen[dict | None]):
         except Exception:  # noqa: BLE001
             conn = ""
         if not conn:
+            hint.update(Text("Connection string/URL is required", style="red"))
             return
         try:
             desc = self.query_one("#mcp-desc", Input).value.strip()
@@ -1392,10 +1506,19 @@ class McpCustomModal(ModalScreen[dict | None]):
         else:
             # stdio: split command into executable + args
             parts = conn.split()
+            cmd = parts[0] if parts else conn
+            # Validate command locally first to show immediate feedback in modal!
+            try:
+                from novacode_cli.mcp.config import MCPServerConfig
+                MCPServerConfig.validate_command(cmd)
+            except ValueError as ex:
+                hint.update(Text(f"Validation failed: {ex}", style="red"))
+                return
+
             result = {
                 "name": name,
                 "transport": "stdio",
-                "command": parts[0] if parts else conn,
+                "command": cmd,
                 "args": parts[1:] if len(parts) > 1 else [],
             }
         if desc:

@@ -494,6 +494,16 @@ class SessionState:
             session_id=self.session_id,
         )
 
+    async def reload_mcp_servers(self) -> tuple[Any, Any]:
+        """Reload MCP servers dynamically.
+
+        Delegates to AgentRuntimeState.reload_mcp_servers() and passes
+        steering_instructions.
+        """
+        return await self._agent_runtime.reload_mcp_servers(
+            steering_instructions=self.steering_instructions,
+        )
+
     def toggle_auto_approve(self) -> bool:
         """Toggle auto-approve and return new state."""
         return self._ui_settings.toggle_auto_approve()

@@ -177,6 +177,9 @@ def build_mcp_config_dict(mcp_config: MCPConfig) -> dict[str, Connection]:
     config_dict: dict[str, Connection] = {}
 
     for name, config in servers.items():
+        if getattr(config, "disabled", False):
+            logger.info("Skipping disabled MCP server: %s", name)
+            continue
         try:
             config_dict[name] = build_mcp_server_config(config)
         except ValueError:
