@@ -1816,6 +1816,1062 @@ class ThemeScreen(ModalScreen[None]):
         self.dismiss(None)
 
 
+class AgentCreateModal(ModalScreen[dict | None]):
+    """Modal dialog to collect inputs for creating a new custom subagent."""
+
+    BINDINGS = [("escape", "cancel", "Cancel")]
+
+    def compose(self) -> ComposeResult:
+        from novacode_cli.config.config import settings
+        
+        scope_options = [("Global (all projects)", "global")]
+        if settings.project_root is not None:
+            scope_options.append(("Project (current project only)", "project"))
+
+        with Vertical(id="modal-box"):
+            yield Static(Text("Create Custom Subagent", style="bold"), id="modal-title")
+            yield Static(Text("Agent Name (e.g. code-reviewer):", style="bold"), id="agent-name-label")
+            yield Input(placeholder="Name (letters, numbers, hyphens, underscores)", id="agent-name")
+            
+            yield Static(Text("Specialization / Description:", style="bold"), id="agent-desc-label")
+            yield Input(placeholder="e.g. Reviews python code for security vulnerabilities", id="agent-desc")
+            
+            yield Static(Text("Storage Scope:", style="bold"), id="agent-scope-label")
+            yield Select(scope_options, id="agent-scope", value="global")
+            
+            yield Static(Text("Color Theme:", style="bold"), id="agent-color-label")
+            yield Select(
+                [
+                    ("Sky Blue", "#0ea5e9"),
+                    ("Teal", "#14b8a6"),
+                    ("Green", "#22c55e"),
+                    ("Blue", "#3b82f6"),
+                    ("Orange", "#f97316"),
+                    ("Red", "#ef4444"),
+                    ("Purple", "#a855f7"),
+                    ("Pink", "#ec4899"),
+                    ("Gray", "#6b7280"),
+                ],
+                id="agent-color",
+                value="#0ea5e9",
+            )
+            yield Static("", id="agent-create-hint")
+            with Horizontal(id="modal-buttons"):
+                yield Button("Create", id="do-create", variant="primary")
+                yield Button("Cancel", id="cancel")
+
+    def on_mount(self) -> None:
+        animate_modal_screen(self)
+        self.query_one("#agent-name", Input).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cancel":
+            self.dismiss(None)
+        elif event.button.id == "do-create":
+            self._submit()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "agent-name":
+            self.query_one("#agent-desc", Input).focus()
+        elif event.input.id == "agent-desc":
+            self._submit()
+
+    def _submit(self) -> None:
+        hint = self.query_one("#agent-create-hint", Static)
+        try:
+            name = self.query_one("#agent-name", Input).value.strip()
+        except Exception:
+            name = ""
+        if not name:
+            hint.update(Text("Agent name is required", style="red"))
+            return
+
+        from novacode_cli.config.config import settings
+        if not settings._is_valid_agent_name(name):
+            hint.update(Text("Invalid name (use letters, numbers, hyphens, underscores)", style="red"))
+            return
+
+        try:
+            desc = self.query_one("#agent-desc", Input).value.strip()
+        except Exception:
+            desc = ""
+        if not desc:
+            hint.update(Text("Description is required", style="red"))
+            return
+
+        try:
+            scope = self.query_one("#agent-scope", Select).value
+        except Exception:
+            scope = "global"
+
+        try:
+            color = self.query_one("#agent-color", Select).value
+        except Exception:
+            color = "#0ea5e9"
+
+        self.dismiss({
+            "name": name,
+            "description": desc,
+            "scope": scope,
+            "color": color,
+        })
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class AgentsScreen(ModalScreen[None]):
+    """Native subagents manager: list configured agents, view details, create or delete them."""
+
+    BINDINGS = [("escape", "close", "Close")]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._agents: list[tuple[str, Path, str]] = []  # list of (name, path, scope)
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="modal-box"):
+            yield Static(Text("Subagents Manager", style="bold"), id="modal-title")
+            yield Static(Text("Configured Subagents:", style="bold cyan"), id="agents-section")
+            yield OptionList(id="agents-list")
+            yield Static(Text("Subagent Details:", style="bold yellow"), id="agent-detail-header")
+            yield Static("", id="agent-detail-preview", classes="preview-box")
+            yield Static("", id="agents-hint")
+            with Horizontal(id="modal-buttons"):
+                yield Button("Create", id="create", variant="primary")
+                yield Button("Delete", id="delete", variant="error")
+                yield Button("Close", id="close")
+
+    def on_mount(self) -> None:
+        animate_modal_screen(self)
+        self._reload()
+
+    def _reload(self) -> None:
+        from novacode_cli.config.config import settings
+
+        try:
+            self._agents = sorted(settings.get_all_agents(), key=lambda x: x[0].lower())
+        except Exception:
+            self._agents = []
+
+        ol = self.query_one("#agents-list", OptionList)
+        keep = ol.highlighted
+        ol.clear_options()
+        hint = self.query_one("#agents-hint", Static)
+
+        if not self._agents:
+            ol.add_option(Option("(no custom subagents found)"))
+            self.query_one("#agent-detail-preview", Static).update(Text("No subagents are currently configured.", style="dim"))
+            self.query_one("#delete", Button).disabled = True
+            hint.update(Text("Create one with the Create button", style="dim"))
+            return
+
+        self.query_one("#delete", Button).disabled = False
+        for name, path, scope in self._agents:
+            from novacode_cli.commands.agents_commands import extract_agent_description
+            desc = ""
+            try:
+                desc = extract_agent_description(path / "agent.md")
+            except Exception:
+                pass
+            label = Text.assemble(
+                (f"@{name} ", "bold #73daca"),
+                (f" · {scope} · ", "dim"),
+                (desc, "dim")
+            )
+            ol.add_option(Option(label))
+
+        if keep is not None and 0 <= keep < len(self._agents):
+            ol.highlighted = keep
+        else:
+            ol.highlighted = 0
+        ol.focus()
+        
+        self._update_preview(ol.highlighted)
+        hint.update(Text("Select an agent to see details · Create/Delete custom agents", style="dim"))
+
+    def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        if event.option_list.id == "agents-list":
+            self._update_preview(event.option_index)
+
+    def _update_preview(self, idx: int | None) -> None:
+        preview = self.query_one("#agent-detail-preview", Static)
+        if idx is None or not self._agents or not (0 <= idx < len(self._agents)):
+            preview.update("")
+            return
+
+        name, path, scope = self._agents[idx]
+        from novacode_cli.commands.agents_commands import extract_agent_description
+        desc = ""
+        system_prompt = ""
+        color = ""
+        agent_md = path / "agent.md"
+        try:
+            desc = extract_agent_description(agent_md)
+            content = agent_md.read_text(encoding="utf-8")
+            if content.startswith("---"):
+                parts = content.split("---", 2)
+                if len(parts) >= 3:
+                    system_prompt = parts[2].strip()
+                    for line in parts[1].splitlines():
+                        if line.strip().startswith("color:"):
+                            color = line.split(":", 1)[1].strip()
+            else:
+                system_prompt = content.strip()
+        except Exception as e:
+            system_prompt = f"(error reading system prompt: {e})"
+
+        preview_text = Text()
+        preview_text.append(f"Name: ", style="bold")
+        preview_text.append(f"@{name}\n", style="bold #73daca")
+        preview_text.append(f"Scope: ", style="bold")
+        preview_text.append(f"{scope}\n", style="bold yellow" if scope == "project" else "bold blue")
+        if color:
+            preview_text.append(f"Color: ", style="bold")
+            preview_text.append(f"{color}\n", style=f"bold {color}")
+        if desc:
+            preview_text.append(f"Description: ", style="bold")
+            preview_text.append(f"{desc}\n\n", style="dim")
+        preview_text.append(f"System Prompt:\n", style="bold")
+        preview_text.append(system_prompt, style="italic dim")
+
+        preview.update(preview_text)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "close":
+            self.dismiss(None)
+        elif event.button.id == "create":
+            self._create_agent()
+        elif event.button.id == "delete":
+            self._delete_agent()
+
+    @work
+    async def _create_agent(self) -> None:
+        result = await self.app.push_screen_wait(AgentCreateModal())
+        if result is not None:
+            name = result["name"]
+            desc = result["description"]
+            scope = result["scope"]
+            color = result["color"]
+
+            from novacode_cli.config.config import settings
+            from pathlib import Path
+            if scope == "project":
+                agents_dir = settings.ensure_project_agents_dir()
+                agent_dir = agents_dir / name
+            else:
+                agent_dir = settings.get_agents_root_dir() / name
+
+            if agent_dir.exists():
+                self.app.query_one("#transcript", VerticalScroll).mount(
+                    Static(
+                        Text(f"Agent '{name}' already exists in that scope.", style="yellow"),
+                        classes="logline",
+                    )
+                )
+                return
+
+            self.app.query_one("#transcript", VerticalScroll).mount(
+                Static(
+                    Text(f"Generating system prompt for @{name} using AI...", style="cyan"),
+                    classes="logline",
+                )
+            )
+
+            try:
+                from novacode_cli.commands.agents_commands import _generate_agent_system_prompt
+                system_prompt = await _generate_agent_system_prompt(name, desc)
+                if not system_prompt:
+                    raise RuntimeError("AI generation of system prompt returned empty response.")
+
+                final_content = f"""---
+color: {color}
+description: {desc}
+---
+
+{system_prompt}"""
+
+                agent_dir.mkdir(parents=True, exist_ok=True)
+                agent_md = agent_dir / "agent.md"
+                agent_md.write_text(final_content, encoding="utf-8")
+
+                self.app.query_one("#transcript", VerticalScroll).mount(
+                    Static(
+                        Text(f"✓ Custom subagent '@{name}' created successfully!", style="green"),
+                        classes="logline",
+                    )
+                )
+                self.app._agent_names_cache = None
+            except Exception as e:
+                self.app.query_one("#transcript", VerticalScroll).mount(
+                    Static(
+                        Text(f"Failed to create agent: {e}", style="red"),
+                        classes="logline",
+                    )
+                )
+            self._reload()
+
+    @work
+    async def _delete_agent(self) -> None:
+        ol = self.query_one("#agents-list", OptionList)
+        idx = ol.highlighted
+        if idx is None or not self._agents or not (0 <= idx < len(self._agents)):
+            return
+
+        name, path, scope = self._agents[idx]
+        ok = await self.app.push_screen_wait(
+            ConfirmModal(
+                f"Delete custom subagent '@{name}'?",
+                Text("This will delete the agent's folder and prompt config. This cannot be undone."),
+            )
+        )
+        if ok:
+            import shutil
+            try:
+                shutil.rmtree(path)
+                self.app.query_one("#transcript", VerticalScroll).mount(
+                    Static(
+                        Text(f"✓ Deleted subagent '@{name}'!", style="green"),
+                        classes="logline",
+                    )
+                )
+                self.app._agent_names_cache = None
+            except Exception as e:
+                self.app.query_one("#transcript", VerticalScroll).mount(
+                    Static(
+                        Text(f"Failed to delete subagent: {e}", style="red"),
+                        classes="logline",
+                    )
+                )
+            self._reload()
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
+class SkillCreateModal(ModalScreen[dict | None]):
+    """Modal dialog to collect inputs for creating a new custom skill."""
+
+    BINDINGS = [("escape", "cancel", "Cancel")]
+
+    def compose(self) -> ComposeResult:
+        from novacode_cli.config.config import settings
+        
+        scope_options = [("Global (all projects)", "global")]
+        if settings.project_root is not None:
+            scope_options.append(("Project (current project only)", "project"))
+
+        with Vertical(id="modal-box"):
+            yield Static(Text("Create Custom Skill", style="bold"), id="modal-title")
+            yield Static(Text("Skill Name (e.g. docker-deploy):", style="bold"), id="skill-name-label")
+            yield Input(placeholder="Name (letters, numbers, hyphens, underscores)", id="skill-name")
+            
+            yield Static(Text("Specialization / Description:", style="bold"), id="skill-desc-label")
+            yield Input(placeholder="Description (optional)", id="skill-desc")
+            
+            yield Static(Text("Storage Scope:", style="bold"), id="skill-scope-label")
+            yield Select(scope_options, id="skill-scope", value="global")
+            
+            yield Static("", id="skill-create-hint")
+            with Horizontal(id="modal-buttons"):
+                yield Button("Create", id="do-create", variant="primary")
+                yield Button("Cancel", id="cancel")
+
+    def on_mount(self) -> None:
+        animate_modal_screen(self)
+        self.query_one("#skill-name", Input).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cancel":
+            self.dismiss(None)
+        elif event.button.id == "do-create":
+            self._submit()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "skill-name":
+            self.query_one("#skill-desc", Input).focus()
+        elif event.input.id == "skill-desc":
+            self._submit()
+
+    def _submit(self) -> None:
+        hint = self.query_one("#skill-create-hint", Static)
+        try:
+            name = self.query_one("#skill-name", Input).value.strip()
+        except Exception:
+            name = ""
+        if not name:
+            hint.update(Text("Skill name is required", style="red"))
+            return
+
+        from novacode_cli.skills.skill_creation import _validate_name
+        is_valid, err = _validate_name(name)
+        if not is_valid:
+            hint.update(Text(f"Invalid name: {err}", style="red"))
+            return
+
+        try:
+            desc = self.query_one("#skill-desc", Input).value.strip()
+        except Exception:
+            desc = ""
+
+        try:
+            scope = self.query_one("#skill-scope", Select).value
+        except Exception:
+            scope = "global"
+
+        self.dismiss({
+            "name": name,
+            "description": desc,
+            "scope": scope,
+        })
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class SkillsScreen(ModalScreen[None]):
+    """Native skills manager: list installed skills, view details, create new skills."""
+
+    BINDINGS = [("escape", "close", "Close")]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="modal-box"):
+            yield Static(Text("Skills Manager", style="bold"), id="modal-title")
+            yield Static(Text("Installed Skills:", style="bold cyan"), id="skills-section")
+            yield OptionList(id="skills-list")
+            yield Static(Text("Skill Details:", style="bold yellow"), id="skill-detail-header")
+            yield Static("", id="skill-detail-preview", classes="preview-box")
+            yield Static("", id="skills-hint")
+            with Horizontal(id="modal-buttons"):
+                yield Button("Create", id="create", variant="primary")
+                yield Button("Close", id="close")
+
+    def on_mount(self) -> None:
+        animate_modal_screen(self)
+        self._reload()
+
+    def _reload(self) -> None:
+        self.app._skill_names_cache = None
+        names = self.app._get_skill_names()
+
+        ol = self.query_one("#skills-list", OptionList)
+        keep = ol.highlighted
+        ol.clear_options()
+        hint = self.query_one("#skills-hint", Static)
+
+        if not names:
+            ol.add_option(Option("(no skills found)"))
+            self.query_one("#skill-detail-preview", Static).update(Text("No skills are currently installed.", style="dim"))
+            hint.update(Text("Create one with the Create button", style="dim"))
+            return
+
+        for name in names:
+            ol.add_option(Option(Text(name, style="bold #e0af68")))
+
+        if keep is not None and 0 <= keep < len(names):
+            ol.highlighted = keep
+        else:
+            ol.highlighted = 0
+        ol.focus()
+
+        self._update_preview(ol.highlighted)
+        hint.update(Text("Select a skill to see details · Create custom skills", style="dim"))
+
+    def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        if event.option_list.id == "skills-list":
+            self._update_preview(event.option_index)
+
+    def _update_preview(self, idx: int | None) -> None:
+        preview = self.query_one("#skill-detail-preview", Static)
+        names = self.app._get_skill_names()
+        if idx is None or not names or not (0 <= idx < len(names)):
+            preview.update("")
+            return
+
+        skill_name = names[idx]
+        
+        from pathlib import Path
+        from novacode_cli.config.config import Settings, settings
+
+        skill_path = None
+        scope = "unknown"
+        
+        search_dirs = []
+        try:
+            search_dirs.append((settings.ensure_user_skills_dir(), "global"))
+        except Exception:
+            pass
+        try:
+            claude_dir = Settings.get_global_claude_skills_dir()
+            if claude_dir.exists():
+                search_dirs.append((claude_dir, "global"))
+        except Exception:
+            pass
+        try:
+            for d in settings.get_project_skills_dirs():
+                search_dirs.append((Path(d), "project"))
+        except Exception:
+            pass
+
+        for d, sc in search_dirs:
+            if d and (d / skill_name / "SKILL.md").exists():
+                skill_path = d / skill_name / "SKILL.md"
+                scope = sc
+                break
+
+        desc = ""
+        instructions = ""
+        if skill_path:
+            try:
+                content = skill_path.read_text(encoding="utf-8")
+                if content.startswith("---"):
+                    parts = content.split("---", 2)
+                    if len(parts) >= 3:
+                        instructions = parts[2].strip()
+                        for line in parts[1].splitlines():
+                            if line.strip().startswith("description:"):
+                                desc = line.split(":", 1)[1].strip()
+                else:
+                    instructions = content.strip()
+            except Exception as e:
+                instructions = f"(error reading skill: {e})"
+        else:
+            instructions = "(SKILL.md file not found)"
+
+        preview_text = Text()
+        preview_text.append(f"Name: ", style="bold")
+        preview_text.append(f"{skill_name}\n", style="bold #e0af68")
+        preview_text.append(f"Scope: ", style="bold")
+        preview_text.append(f"{scope}\n", style="bold yellow" if scope == "project" else "bold blue")
+        if desc:
+            preview_text.append(f"Description: ", style="bold")
+            preview_text.append(f"{desc}\n\n", style="dim")
+        preview_text.append(f"Instructions / Content:\n", style="bold")
+        preview_text.append(instructions[:1000] + "..." if len(instructions) > 1000 else instructions, style="italic dim")
+
+        preview.update(preview_text)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "close":
+            self.dismiss(None)
+        elif event.button.id == "create":
+            self._create_skill()
+
+    @work
+    async def _create_skill(self) -> None:
+        result = await self.app.push_screen_wait(SkillCreateModal())
+        if result is not None:
+            name = result["name"]
+            desc = result["description"]
+            scope = result["scope"]
+
+            self.app.query_one("#transcript", VerticalScroll).mount(
+                Static(
+                    Text(f"Generating skill '{name}' using AI...", style="cyan"),
+                    classes="logline",
+                )
+            )
+
+            try:
+                from novacode_cli.config.config import settings
+                if scope == "project":
+                    base_dir = settings.ensure_project_skills_dir()
+                else:
+                    base_dir = settings.ensure_user_skills_dir(self.app.assistant_id)
+
+                skill_dir = base_dir / name
+                if skill_dir.exists():
+                    self.app.query_one("#transcript", VerticalScroll).mount(
+                        Static(
+                            Text(f"Skill '{name}' already exists.", style="yellow"),
+                            classes="logline",
+                        )
+                    )
+                    return
+
+                skill_dir.mkdir(parents=True, exist_ok=True)
+                
+                from novacode_cli.skills.skill_creation import _generate_skill
+                content = await _generate_skill(
+                    name,
+                    base_dir=base_dir,
+                    description=desc if desc else None,
+                )
+
+                if content is None:
+                    raise RuntimeError("AI generation returned empty response.")
+
+                self.app.query_one("#transcript", VerticalScroll).mount(
+                    Static(
+                        Text(f"✓ Skill '{name}' created successfully!", style="green"),
+                        classes="logline",
+                    )
+                )
+            except Exception as e:
+                self.app.query_one("#transcript", VerticalScroll).mount(
+                    Static(
+                        Text(f"Failed to create skill: {e}", style="red"),
+                        classes="logline",
+                    )
+                )
+            self._reload()
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
+class HookCreateModal(ModalScreen[dict | None]):
+    """Modal dialog to collect inputs for creating a new hook."""
+
+    BINDINGS = [("escape", "cancel", "Cancel")]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="modal-box"):
+            yield Static(Text("Add New Hook", style="bold"), id="modal-title")
+            yield Static(Text("Command to execute (e.g. python script.py):", style="bold"), id="hook-command-label")
+            yield Input(placeholder="e.g. python /path/to/script.py", id="hook-command")
+
+            yield Static(Text("Events to subscribe to (comma-separated, blank for all):", style="bold"), id="hook-events-label")
+            yield Input(placeholder="e.g. session.start, tool.call", id="hook-events")
+            yield Static(
+                "Valid events: session.start, session.end, session.save, session.continue, "
+                "model.switch, tool.call, tool.result, agent.message, user.message, error, "
+                "remote.message, context.warning, compact, init.complete, notification",
+                classes="modal-hint",
+                id="events-help-text"
+            )
+            yield Static("", id="hook-create-hint")
+            with Horizontal(id="modal-buttons"):
+                yield Button("Save", id="do-save", variant="primary")
+                yield Button("Cancel", id="cancel")
+
+    def on_mount(self) -> None:
+        animate_modal_screen(self)
+        self.query_one("#hook-command", Input).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cancel":
+            self.dismiss(None)
+        elif event.button.id == "do-save":
+            self._submit()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "hook-command":
+            self.query_one("#hook-events", Input).focus()
+        elif event.input.id == "hook-events":
+            self._submit()
+
+    def _submit(self) -> None:
+        hint = self.query_one("#hook-create-hint", Static)
+        try:
+            cmd_str = self.query_one("#hook-command", Input).value.strip()
+        except Exception:
+            cmd_str = ""
+        if not cmd_str:
+            hint.update(Text("Command is required", style="red"))
+            return
+
+        # Check shell metacharacters
+        _SHELL_METACHARACTERS = set("`$|;&")
+        for c in _SHELL_METACHARACTERS:
+            if c in cmd_str:
+                hint.update(Text(f"Shell metacharacter '{c}' not allowed in command", style="red"))
+                return
+
+        try:
+            events_str = self.query_one("#hook-events", Input).value.strip()
+        except Exception:
+            events_str = ""
+        events = []
+        if events_str:
+            events = [e.strip() for e in events_str.split(",") if e.strip()]
+            # Validate events
+            from novacode_cli.hooks import HookEvent
+            valid_events = {getattr(HookEvent, attr) for attr in dir(HookEvent) if not attr.startswith("_") and isinstance(getattr(HookEvent, attr), str)}
+            valid_events.add("notification")
+            invalid_events = [e for e in events if e not in valid_events]
+            if invalid_events:
+                hint.update(Text(f"Invalid events: {', '.join(invalid_events)}", style="red"))
+                return
+
+        self.dismiss({
+            "command": cmd_str.split(),
+            "events": events,
+            "enabled": True
+        })
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class HooksScreen(ModalScreen[None]):
+    """Native hooks manager: list, toggle, remove, test, add and reload hooks."""
+
+    BINDINGS = [("escape", "close", "Close")]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._hooks: list[dict] = []
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="modal-box"):
+            yield Static(Text("Hook Management", style="bold"), id="modal-title")
+            yield Static(Text("Configured Hooks:", style="bold cyan"), id="hooks-section")
+            yield OptionList(id="hooks-list")
+            yield Static(Text("Hook Details:", style="bold yellow"), id="hook-detail-header")
+            yield Static("", id="hook-detail-preview", classes="preview-box")
+            yield Static("", id="hooks-hint")
+            with Horizontal(id="modal-buttons"):
+                yield Button("Add Hook", id="add", variant="primary")
+                yield Button("Toggle Enable", id="toggle", variant="default")
+                yield Button("Test Hook", id="test", variant="default")
+                yield Button("Remove", id="remove", variant="error")
+                yield Button("Reload", id="reload", variant="default")
+                yield Button("Close", id="close")
+
+    def on_mount(self) -> None:
+        animate_modal_screen(self)
+        self._reload()
+
+    def _reload(self) -> None:
+        from novacode_cli.hooks import _load_hooks
+        try:
+            self._hooks = _load_hooks()
+        except Exception:
+            self._hooks = []
+
+        ol = self.query_one("#hooks-list", OptionList)
+        keep = ol.highlighted
+        ol.clear_options()
+        hint = self.query_one("#hooks-hint", Static)
+
+        if not self._hooks:
+            ol.add_option(Option("(no hooks configured)"))
+            self.query_one("#hook-detail-preview", Static).update(Text("No hooks are currently configured.", style="dim"))
+            self.query_one("#toggle", Button).disabled = True
+            self.query_one("#test", Button).disabled = True
+            self.query_one("#remove", Button).disabled = True
+            hint.update(Text("Create a hook with the Add Hook button", style="dim"))
+            return
+
+        self.query_one("#toggle", Button).disabled = False
+        self.query_one("#test", Button).disabled = False
+        self.query_one("#remove", Button).disabled = False
+
+        for h in self._hooks:
+            command = " ".join(h.get("command", []))
+            events = ", ".join(h.get("events", ["<all>"]))
+            enabled = h.get("enabled", True)
+            status = "✓" if enabled else "✗"
+            status_style = "bold green" if enabled else "bold red"
+            label = Text.assemble(
+                (f"{status} ", status_style),
+                (f"{command} ", "bold #73daca"),
+                (f"· {events}", "dim"),
+            )
+            ol.add_option(Option(label))
+
+        if keep is not None and 0 <= keep < len(self._hooks):
+            ol.highlighted = keep
+        else:
+            ol.highlighted = 0
+        ol.focus()
+
+        self._update_preview(ol.highlighted)
+        hint.update(Text("Select a hook to see details · Add/Toggle/Test/Remove hooks", style="dim"))
+
+    def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        if event.option_list.id == "hooks-list":
+            self._update_preview(event.option_index)
+
+    def _update_preview(self, idx: int | None) -> None:
+        preview = self.query_one("#hook-detail-preview", Static)
+        if idx is None or not self._hooks or not (0 <= idx < len(self._hooks)):
+            preview.update("")
+            return
+
+        h = self._hooks[idx]
+        command = " ".join(h.get("command", []))
+        events = ", ".join(h.get("events", ["<all>"]))
+        enabled = h.get("enabled", True)
+
+        preview_text = Text()
+        preview_text.append("Command: ", style="bold")
+        preview_text.append(f"{command}\n", style="bold #73daca")
+        preview_text.append("Events: ", style="bold")
+        preview_text.append(f"{events}\n", style="cyan")
+        preview_text.append("Status: ", style="bold")
+        preview_text.append("Enabled\n" if enabled else "Disabled\n", style="bold green" if enabled else "bold red")
+
+        preview.update(preview_text)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "close":
+            self.dismiss(None)
+        elif event.button.id == "add":
+            self._add_hook()
+        elif event.button.id == "toggle":
+            self._toggle_hook()
+        elif event.button.id == "test":
+            self._test_hook()
+        elif event.button.id == "remove":
+            self._remove_hook()
+        elif event.button.id == "reload":
+            self._reload_hooks()
+
+    @work
+    async def _add_hook(self) -> None:
+        result = await self.app.push_screen_wait(HookCreateModal())
+        if result is not None:
+            from novacode_cli.commands.hooks_handler import _save_hooks
+            self._hooks.append(result)
+            ok = _save_hooks(self._hooks)
+            self.app.query_one("#transcript", VerticalScroll).mount(
+                Static(
+                    Text(f"✓ Hook added: {' '.join(result['command'])}" if ok else "Failed to save hook configuration", style="green" if ok else "red"),
+                    classes="logline"
+                )
+            )
+            self._reload()
+
+    @work
+    async def _toggle_hook(self) -> None:
+        ol = self.query_one("#hooks-list", OptionList)
+        idx = ol.highlighted
+        if idx is not None and 0 <= idx < len(self._hooks):
+            h = self._hooks[idx]
+            from novacode_cli.commands.hooks_handler import _save_hooks
+            h["enabled"] = not h.get("enabled", True)
+            ok = _save_hooks(self._hooks)
+            action = "enabled" if h["enabled"] else "disabled"
+            self.app.query_one("#transcript", VerticalScroll).mount(
+                Static(
+                    Text(f"✓ Hook {action}: {' '.join(h['command'])}" if ok else "Failed to save hook configuration", style="green" if ok else "red"),
+                    classes="logline"
+                )
+            )
+            self._reload()
+
+    @work
+    async def _test_hook(self) -> None:
+        ol = self.query_one("#hooks-list", OptionList)
+        idx = ol.highlighted
+        if idx is not None and 0 <= idx < len(self._hooks):
+            h = self._hooks[idx]
+            command = h.get("command", [])
+            self.app.query_one("#transcript", VerticalScroll).mount(
+                Static(Text(f"Testing hook: {' '.join(command)}...", style="cyan"), classes="logline")
+            )
+            import time
+            from novacode_cli.hooks import dispatch_hook
+            test_payload = {
+                "test": True,
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "message": "This is a test event"
+            }
+            try:
+                await dispatch_hook("test", test_payload)
+                self.app.query_one("#transcript", VerticalScroll).mount(
+                    Static(Text("✓ Test event fired successfully! Check hook logs.", style="green"), classes="logline")
+                )
+            except Exception as e:
+                self.app.query_one("#transcript", VerticalScroll).mount(
+                    Static(Text(f"✗ Test failed: {e}", style="red"), classes="logline")
+                )
+
+    @work
+    async def _remove_hook(self) -> None:
+        ol = self.query_one("#hooks-list", OptionList)
+        idx = ol.highlighted
+        if idx is not None and 0 <= idx < len(self._hooks):
+            h = self._hooks[idx]
+            ok = await self.app.push_screen_wait(
+                ConfirmModal(
+                    f"Remove hook: {' '.join(h.get('command', []))}?",
+                    Text("This will remove the hook from configuration. This cannot be undone."),
+                )
+            )
+            if ok:
+                from novacode_cli.commands.hooks_handler import _save_hooks
+                removed = self._hooks.pop(idx)
+                saved = _save_hooks(self._hooks)
+                self.app.query_one("#transcript", VerticalScroll).mount(
+                    Static(
+                        Text(f"✓ Removed hook: {' '.join(removed.get('command', []))}" if saved else "Failed to save hook configuration", style="green" if saved else "red"),
+                        classes="logline"
+                    )
+                )
+                self._reload()
+
+    def _reload_hooks(self) -> None:
+        from novacode_cli.hooks import reload_hooks
+        reload_hooks()
+        self.app.query_one("#transcript", VerticalScroll).mount(
+            Static(Text("✓ Hooks configuration reloaded from disk", style="green"), classes="logline")
+        )
+        self._reload()
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
+class ServersScreen(ModalScreen[None]):
+    """Native dev servers manager: list servers, open in browser, stop them."""
+
+    BINDINGS = [("escape", "close", "Close")]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._servers: list[Any] = []
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="modal-box"):
+            yield Static(Text("Dev Server Management", style="bold"), id="modal-title")
+            yield Static(Text("Running Dev Servers:", style="bold cyan"), id="servers-section")
+            yield OptionList(id="servers-list")
+            yield Static(Text("Server Details:", style="bold yellow"), id="server-detail-header")
+            yield Static("", id="server-detail-preview", classes="preview-box")
+            yield Static("", id="servers-hint")
+            with Horizontal(id="modal-buttons"):
+                yield Button("Open in Browser", id="open-browser", variant="primary")
+                yield Button("Stop Server", id="stop-server", variant="error")
+                yield Button("Stop All Managed", id="stop-all", variant="error")
+                yield Button("Close", id="close")
+
+    def on_mount(self) -> None:
+        animate_modal_screen(self)
+        self._reload()
+
+    def _reload(self) -> None:
+        from novacode_cli.server_runner.dev_server import list_servers
+        try:
+            self._servers = list_servers(include_external=True)
+        except Exception:
+            self._servers = []
+
+        ol = self.query_one("#servers-list", OptionList)
+        keep = ol.highlighted
+        ol.clear_options()
+        hint = self.query_one("#servers-hint", Static)
+
+        if not self._servers:
+            ol.add_option(Option("(no dev servers running)"))
+            self.query_one("#server-detail-preview", Static).update(Text("No dev servers are currently running.", style="dim"))
+            self.query_one("#open-browser", Button).disabled = True
+            self.query_one("#stop-server", Button).disabled = True
+            self.query_one("#stop-all", Button).disabled = True
+            hint.update(Text("Start a dev server via start_dev_server tool", style="dim"))
+            return
+
+        self.query_one("#open-browser", Button).disabled = False
+        self.query_one("#stop-all", Button).disabled = False
+        self.query_one("#stop-server", Button).disabled = False
+
+        for s in self._servers:
+            ext = s.pid == 0 and "external" in s.name
+            status_style = "bold green" if s.status.value == "healthy" else "bold yellow"
+            pid_label = f"external" if ext else f"PID {s.pid}"
+            label = Text.assemble(
+                (f"{s.name} ", "bold #73daca"),
+                (f" · {pid_label} · ", "dim"),
+                (s.url, "cyan"),
+                (f" · {s.status.value}", status_style),
+            )
+            ol.add_option(Option(label))
+
+        if keep is not None and 0 <= keep < len(self._servers):
+            ol.highlighted = keep
+        else:
+            ol.highlighted = 0
+        ol.focus()
+
+        self._update_preview(ol.highlighted)
+        hint.update(Text("Select a server to view details or perform actions", style="dim"))
+
+    def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        if event.option_list.id == "servers-list":
+            self._update_preview(event.option_index)
+
+    def _update_preview(self, idx: int | None) -> None:
+        preview = self.query_one("#server-detail-preview", Static)
+        if idx is None or not self._servers or not (0 <= idx < len(self._servers)):
+            preview.update("")
+            return
+
+        s = self._servers[idx]
+        ext = s.pid == 0 and "external" in s.name
+
+        preview_text = Text()
+        preview_text.append("Name: ", style="bold")
+        preview_text.append(f"{s.name}\n", style="bold #73daca")
+        preview_text.append("URL: ", style="bold")
+        preview_text.append(f"{s.url}\n", style="cyan")
+        preview_text.append("Status: ", style="bold")
+        status_style = "bold green" if s.status.value == "healthy" else "bold yellow"
+        preview_text.append(f"{s.status.value}\n", style=status_style)
+        preview_text.append("PID: ", style="bold")
+        preview_text.append(f"{'external' if ext else s.pid}\n", style="dim")
+        preview_text.append("Command:\n", style="bold")
+        preview_text.append(s.command if s.command else "(external server, command unknown)", style="italic dim")
+
+        preview.update(preview_text)
+        # Disable stop server button for external servers
+        self.query_one("#stop-server", Button).disabled = ext
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "close":
+            self.dismiss(None)
+        elif event.button.id == "open-browser":
+            self._open_in_browser()
+        elif event.button.id == "stop-server":
+            self._stop_server()
+        elif event.button.id == "stop-all":
+            self._stop_all()
+
+    def _open_in_browser(self) -> None:
+        ol = self.query_one("#servers-list", OptionList)
+        idx = ol.highlighted
+        if idx is not None and 0 <= idx < len(self._servers):
+            import webbrowser
+            webbrowser.open(self._servers[idx].url)
+            self.app.query_one("#transcript", VerticalScroll).mount(
+                Static(Text(f"✓ Opened {self._servers[idx].url}", style="green"), classes="logline")
+            )
+
+    @work
+    async def _stop_server(self) -> None:
+        ol = self.query_one("#servers-list", OptionList)
+        idx = ol.highlighted
+        if idx is not None and 0 <= idx < len(self._servers):
+            s = self._servers[idx]
+            if s.pid == 0 and "external" in s.name:
+                return
+            from novacode_cli.server_runner.dev_server import stop_server
+            ok = await stop_server(pid=s.pid)
+            self.app.query_one("#transcript", VerticalScroll).mount(
+                Static(
+                    Text(f"✓ Stopped '{s.name}' (PID {s.pid})" if ok else f"Failed to stop server '{s.name}'", style="green" if ok else "red"),
+                    classes="logline"
+                )
+            )
+            self._reload()
+
+    @work
+    async def _stop_all(self) -> None:
+        from novacode_cli.process_manager import ProcessManager
+        count = await ProcessManager.get_instance().stop_all()
+        self.app.query_one("#transcript", VerticalScroll).mount(
+            Static(
+                Text(f"✓ Stopped {count} managed server(s)" if count else "No managed servers to stop", style="green" if count else "yellow"),
+                classes="logline"
+            )
+        )
+        self._reload()
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
 class RemoteScreen(ModalScreen[None]):
     """Native /remote screen: bridge status + start/stop/test, rendered as TUI
     components (the underlying logic is reused, but its output stays in-modal)."""
@@ -2694,9 +3750,20 @@ class NovaApp(App):
     #modal-title { margin-bottom: 1; padding: 0 0; }
     #modal-body { padding: 0 0; }
     /* Long lists scroll inside the box instead of overflowing the screen. */
-    #sessions, #pick-list, #infolist, #mcp-configured, #mcp-presets, #plugins {
-        height: auto; max-height: 60%;
+    #sessions, #pick-list, #infolist, #mcp-configured, #mcp-presets, #plugins, #agents-list, #skills-list, #servers-list, #hooks-list {
+        height: auto; max-height: 40%;
         padding: 0 2;
+    }
+    .preview-box {
+        background: $boost;
+        border: round $accent 50%;
+        padding: 1 2;
+        margin-top: 1;
+        margin-bottom: 1;
+        height: auto;
+        max-height: 12;
+        scrollbar-gutter: stable;
+        overflow-y: scroll;
     }
     /* The Ollama model list sits ABOVE the inputs + Switch/Cancel buttons, so it
        gets a tighter cap and its own scroll — otherwise a long list pushes the
@@ -7172,78 +8239,8 @@ class NovaApp(App):
             pass
 
     async def _run_servers(self) -> None:
-        """Native /servers: list dev servers and act on a chosen one."""
-        import webbrowser
-
-        from novacode_cli.process_manager import ProcessManager
-        from novacode_cli.server_runner.dev_server import list_servers, stop_server
-
-        servers = list_servers(include_external=True)
-        t = Text()
-        t.append("Dev servers\n", style="bold")
-        if not servers:
-            t.append("  (none running — use the start_dev_server tool)\n", style="dim")
-            self._log(t)
-            return
-        for s in servers:
-            ext = s.pid == 0 and "external" in s.name
-            t.append(f"  [{'external' if ext else s.pid}] ", style="dim")
-            t.append(f"{s.name}", style="cyan")
-            t.append(f"  {s.url}  ", style="dim")
-            t.append(
-                f"{s.status.value}\n",
-                style="green" if s.status.value == "healthy" else "yellow",
-            )
-        self._log(t)
-
-        action = await self.push_screen_wait(
-            PickScreen(
-                "Servers — choose an action",
-                [
-                    "Open in browser",
-                    "Stop a server (managed)",
-                    "Stop all managed",
-                    "Cancel",
-                ],
-            )
-        )
-        if action in (-1, 3, None):
-            return
-        if action == 0:
-            opts = [f"{s.name} ({s.url})" for s in servers]
-            idx = await self.push_screen_wait(PickScreen("Open which server?", opts))
-            if 0 <= idx < len(servers):
-                webbrowser.open(servers[idx].url)
-                self._log(Text(f"✓ Opened {servers[idx].url}", style="green"))
-            return
-        if action == 1:
-            stoppable = [s for s in servers if s.pid > 0]
-            if not stoppable:
-                self._log(Text("No managed servers to stop.", style="yellow"))
-                return
-            opts = [f"{s.name} (PID {s.pid})" for s in stoppable]
-            idx = await self.push_screen_wait(PickScreen("Stop which server?", opts))
-            if 0 <= idx < len(stoppable):
-                ok = await stop_server(pid=stoppable[idx].pid)
-                self._log(
-                    Text(
-                        (f"✓ Stopped '{stoppable[idx].name}'" if ok else "Failed to stop server"),
-                        style="green" if ok else "red",
-                    )
-                )
-            return
-        if action == 2:
-            count = await ProcessManager.get_instance().stop_all()
-            self._log(
-                Text(
-                    (
-                        f"✓ Stopped {count} managed server(s)"
-                        if count
-                        else "No managed servers to stop"
-                    ),
-                    style="green" if count else "yellow",
-                )
-            )
+        """Show running servers (interactive)."""
+        await self.push_screen_wait(ServersScreen())
 
     async def _run_kill(self, text: str) -> None:
         """Native /kill: kill a process by PID/name (arg) or via a picker."""
@@ -7370,106 +8367,8 @@ class NovaApp(App):
             _restore(idx)
 
     async def _run_hooks(self, text: str) -> None:
-        """Native /hooks: list, enable/disable/remove/test via args or a picker."""
-        from novacode_cli.commands.hooks_handler import _save_hooks
-        from novacode_cli.hooks import _load_hooks
-
-        parts = text.split()
-        sub = parts[1].lower() if len(parts) > 1 else "list"
-        idx_arg = parts[2] if len(parts) > 2 else None
-
-        def _fmt(hooks: list[dict]) -> Text:
-            t = Text()
-            t.append("Configured hooks\n", style="bold")
-            if not hooks:
-                t.append("  (none — add with:  nova hooks add)\n", style="dim")
-                return t
-            for i, h in enumerate(hooks, 1):
-                command = " ".join(h.get("command", []))
-                events = ", ".join(h.get("events", ["<all>"]))
-                status = "✓" if h.get("enabled", True) else "✗"
-                t.append(f"  {i}. ", style="dim")
-                t.append(f"{status} {command}", style="cyan")
-                t.append(f"  [{events}]\n", style="dim")
-            return t
-
-        hooks = _load_hooks()
-        if sub in ("list", ""):
-            self._log(_fmt(hooks))
-            return
-        if sub == "add":
-            self._log(
-                Text(
-                    "Interactive hook creation isn't available in the TUI yet. "
-                    "Add hooks with:  nova hooks add",
-                    style="yellow",
-                )
-            )
-            return
-        if sub not in ("enable", "disable", "remove", "test"):
-            self._log(Text(f"Unknown hooks subcommand: {sub}", style="yellow"))
-            return
-        if not hooks:
-            self._log(Text("No hooks configured.", style="yellow"))
-            return
-
-        # Resolve the target hook index (explicit arg or picker).
-        index = None
-        if idx_arg and idx_arg.isdigit():
-            index = int(idx_arg) - 1
-        else:
-            opts = [
-                ("✓ " if h.get("enabled", True) else "✗ ") + " ".join(h.get("command", []))
-                for h in hooks
-            ]
-            picked = await self.push_screen_wait(PickScreen(f"{sub.title()} which hook?", opts))
-            if picked is None or picked < 0:
-                return
-            index = picked
-        if index is None or not (0 <= index < len(hooks)):
-            self._log(
-                Text(
-                    f"Hook {('' if index is None else index + 1)} does not exist.",
-                    style="red",
-                )
-            )
-            return
-
-        if sub == "test":
-            self._log(
-                Text(
-                    f"Hook test isn't available in the TUI yet — run:  nova hooks test {index + 1}",
-                    style="yellow",
-                )
-            )
-            return
-        if sub == "remove":
-            removed = hooks.pop(index)
-            ok = _save_hooks(hooks)
-            self._log(
-                Text(
-                    (
-                        f"✓ Removed hook: {' '.join(removed.get('command', []))}"
-                        if ok
-                        else "Failed to save hook configuration"
-                    ),
-                    style="green" if ok else "red",
-                )
-            )
-            return
-        # enable / disable
-        hooks[index]["enabled"] = sub == "enable"
-        ok = _save_hooks(hooks)
-        self._log(
-            Text(
-                (
-                    f"✓ Hook {index + 1} {'enabled' if sub == 'enable' else 'disabled'}"
-                    if ok
-                    else "Failed to save hook configuration"
-                ),
-                style="green" if ok else "red",
-            )
-        )
+        """Show hooks manager (interactive)."""
+        await self.push_screen_wait(HooksScreen())
 
     async def _run_browser_use(self, text: str) -> None:
         """Run /browser-use; the agent analysis streams natively via execute_fn."""
@@ -7855,37 +8754,12 @@ class NovaApp(App):
         )
 
     async def _run_agents(self) -> None:
-        """Show configured subagents (read-only)."""
-        lines = []
-        try:
-            from novacode_cli.config.config import extract_agent_description, settings
-
-            for name, agent_dir, scope in settings.get_all_agents():
-                try:
-                    desc = extract_agent_description(agent_dir / "agent.md")
-                except Exception:  # noqa: BLE001
-                    desc = ""
-                lines.append(f"{name}  ·  {scope}  ·  {desc}".rstrip(" ·"))
-        except Exception as ex:  # noqa: BLE001
-            lines = [f"(error listing agents: {ex})"]
-        await self.push_screen_wait(
-            InfoListScreen(
-                "Subagents",
-                lines or ["(no agents found)"],
-                hint="Create/edit with:  nova agents  ·  or @name in chat",
-            )
-        )
+        """Show configured subagents (interactive)."""
+        await self.push_screen_wait(AgentsScreen())
 
     async def _run_skills(self) -> None:
-        """Show installed skills (read-only)."""
-        names = self._get_skill_names()
-        await self.push_screen_wait(
-            InfoListScreen(
-                "Skills",
-                names or ["(no skills found)"],
-                hint="Run a skill with:  /skill:<name>  ·  manage with:  nova skills",
-            )
-        )
+        """Show installed skills (interactive)."""
+        await self.push_screen_wait(SkillsScreen())
 
     def _collect_skill_names(self) -> list[str]:
         from pathlib import Path
