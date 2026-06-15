@@ -129,7 +129,11 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
     config = build_agent_config(thread_id, assistant_id)
 
     agent_display_name = get_agent_display_name(assistant_id)
-    agent_colors = COLORS["agent"]
+    agent_colors = (
+        get_agent_color(assistant_id)
+        if assistant_id and assistant_id != "nova-agent"
+        else (COLORS["success"] if assistant_id == "nova-agent" else COLORS["agent"])
+    )
 
     if seen_message_ids is None:
         seen_message_ids = set()

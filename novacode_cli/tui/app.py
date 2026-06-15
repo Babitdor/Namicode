@@ -489,6 +489,21 @@ class ChatMessage(Vertical):
         self._pending_body: Any = None
         self.tooltip = "Click to copy this message"
 
+        # Parse and store custom border color if specified
+        self._custom_color = None
+        if header.style:
+            from rich.style import Style
+            if isinstance(header.style, Style) and header.style.color:
+                self._custom_color = header.style.color.name
+            else:
+                style_str = str(header.style)
+                import re
+                m = re.search(r"#(?:[0-9a-fA-F]{3}){1,2}\b", style_str)
+                if m:
+                    self._custom_color = m.group(0)
+                elif "green" in style_str:
+                    self._custom_color = "#10b981"
+
     def compose(self) -> ComposeResult:
         yield Static(self._header, classes="role")
         if isinstance(self._pending_body, Widget):
@@ -498,6 +513,10 @@ class ChatMessage(Vertical):
             yield Static(self._pending_body or "", classes="body")
 
     def on_mount(self) -> None:
+        # Apply custom border color if set
+        if self._custom_color:
+            self.styles.border_left = ("thick", self._custom_color)
+
         # If update_body ran before the `.body` child existed, apply the stashed
         # renderable now that the children are mounted.
         if self._pending_body is not None:
@@ -507,6 +526,32 @@ class ChatMessage(Vertical):
                 except NoMatches:
                     pass
             self._pending_body = None
+
+    def update_header(self, header: Text) -> None:
+        self._header = header
+        try:
+            role_static = self.query_one(".role", Static)
+            role_static.update(header)
+        except Exception:
+            pass
+
+        # Parse and store custom border color if specified
+        self._custom_color = None
+        if header.style:
+            from rich.style import Style
+            if isinstance(header.style, Style) and header.style.color:
+                self._custom_color = header.style.color.name
+            else:
+                style_str = str(header.style)
+                import re
+                m = re.search(r"#(?:[0-9a-fA-F]{3}){1,2}\b", style_str)
+                if m:
+                    self._custom_color = m.group(0)
+                elif "green" in style_str:
+                    self._custom_color = "#10b981"
+
+        if self._custom_color:
+            self.styles.border_left = ("thick", self._custom_color)
 
     def update_body(self, renderable: Any) -> None:
         self.raw_text = self._renderable_text(renderable)
@@ -3923,6 +3968,14 @@ class NovaApp(App):
         self._nova_status: str | None = None
         self._nova_status_style: str = "dim"
         self._nova_indicator_timer: Any = None
+
+    def _current_agent_info(self) -> tuple[str, str]:
+        from novacode_cli.ui.input_preparation import get_agent_display_name
+        from novacode_cli.config.config import get_agent_color
+        aid = self.assistant_id
+        name = get_agent_display_name(aid)
+        color = get_agent_color(aid) if name != "Nova" else "#10b981"
+        return name, color
 
     def compose(self) -> ComposeResult:
         yield VerticalScroll(id="transcript")
@@ -8925,7 +8978,8 @@ class NovaApp(App):
             # Coalesced repaint (~20fps) — see _schedule_stream_flush/_flush_stream.
             self._live_buf += e.text
             if self._stream_msg is None:
-                self._stream_msg = ChatMessage(Text("Nova", style="green"), "nova")
+                name, color = self._current_agent_info()
+                self._stream_msg = ChatMessage(Text(name, style=f"bold {color}"), "nova")
                 await self._mount(self._stream_msg)
             self._schedule_stream_flush()
             if self._activity != "responding…":
@@ -8946,6 +9000,7 @@ class NovaApp(App):
             # any pending coalesced flush so it can't repaint a finalized widget.
             self._stream_flush_scheduled = False
             if self._stream_msg is not None:
+                self._stream_msg.update_header(Text(e.agent_name, style=e.agent_color))
                 self._stream_msg.update_body(Markdown(e.text))
                 self._stream_msg = None
             else:
