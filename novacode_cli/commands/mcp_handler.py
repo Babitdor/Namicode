@@ -20,6 +20,7 @@ async def handle_mcp_command(ctx: CommandContext) -> bool:
         MenuOption("Install a preset MCP", _action_install_preset),
         MenuOption("Add custom MCP", _action_add_custom),
         MenuOption("List configured MCPs", _action_list_configured),
+        MenuOption("Enable/Disable (Toggle) a configured MCP", _action_toggle_mcp),
         MenuOption("Remove an MCP", _action_remove_mcp),
     ]
     return await run_interactive_menu("MCP Server Management", options, ctx)
@@ -229,9 +230,14 @@ async def _action_list_configured(
         )
         console.print()
         for name, config in servers.items():
-            is_active = name in active_servers
-            status_indicator = "[green]✓[/green]" if is_active else "[red]✗[/red]"
-            status_text = "[green]active[/green]" if is_active else "[red]inactive[/red]"
+            is_disabled = getattr(config, "disabled", False)
+            is_active = name in active_servers and not is_disabled
+            if is_disabled:
+                status_indicator = "[dim]✗[/dim]"
+                status_text = "[dim]disabled[/dim]"
+            else:
+                status_indicator = "[green]✓[/green]" if is_active else "[red]✗[/red]"
+                status_text = "[green]active[/green]" if is_active else "[red]inactive[/red]"
 
             console.print(
                 f"  {status_indicator} [bold]{name}[/bold] ({status_text})",
@@ -298,6 +304,58 @@ async def _action_remove_mcp(
                     console.print(
                         "[dim]Restart your session for changes to take effect.[/dim]"
                     )
+            else:
+                console.print()
+                console.print("[yellow]Invalid choice[/yellow]")
+        except (ValueError, IndexError):
+            console.print()
+            console.print("[yellow]Invalid choice[/yellow]")
+    return True
+
+
+async def _action_toggle_mcp(
+    ctx: CommandContext, session: PromptSession,
+) -> bool:
+    """Option: toggle configured MCP enable/disable status."""
+    mcp_config = MCPConfig()
+    servers = mcp_config.list_servers()
+
+    if not servers:
+        console.print()
+        console.print("[yellow]No MCP servers configured[/yellow]")
+        return True
+
+    console.print()
+    console.print("[bold]Configured MCPs:[/bold]", style=COLORS["primary"])
+    for i, (name, config) in enumerate(servers.items(), 1):
+        status = "disabled" if getattr(config, "disabled", False) else "enabled"
+        console.print(f"  {i}. {name} ({status})")
+
+    console.print()
+    choice = (
+        await session.prompt_async("Choose MCP to toggle (or 'cancel'): ")
+    ).strip()
+
+    if choice.lower() != "cancel":
+        try:
+            choice_idx = int(choice) - 1
+            server_names = list(servers.keys())
+            if 0 <= choice_idx < len(server_names):
+                name = server_names[choice_idx]
+                config = servers[name]
+                config.disabled = not getattr(config, "disabled", False)
+                await mcp_config.add_server_async(name, config)
+
+                status_str = "disabled" if config.disabled else "enabled"
+                console.print()
+                console.print(
+                    f"✓ MCP '{name}' is now {status_str}!",
+                    style=COLORS["primary"],
+                )
+                console.print()
+                console.print(
+                    "[dim]Restart your session for changes to take effect.[/dim]"
+                )
             else:
                 console.print()
                 console.print("[yellow]Invalid choice[/yellow]")

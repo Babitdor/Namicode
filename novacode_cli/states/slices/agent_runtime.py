@@ -124,6 +124,49 @@ class AgentRuntimeState:
 
         return new_agent, new_backend
 
+    async def reload_mcp_servers(
+        self,
+        steering_instructions: list | None = None,
+    ) -> tuple[Any, Any]:
+        """Reload MCP servers dynamically by resetting the middleware and recreating the agent.
+
+        Args:
+            steering_instructions: Persistent user guidance (from SessionState)
+
+        Returns:
+            Tuple of (new_agent, new_backend)
+
+        Raises:
+            RuntimeError: If agent context is not set
+        """
+        if not all([self._agent, self._checkpointer, self._store, self._assistant_id]):
+            raise RuntimeError("Agent context not set. Cannot reload MCP servers.")
+
+        # Reset the shared MCP middleware so it discovers the updated configuration
+        from novacode_cli.mcp import reset_shared_mcp_middleware
+        reset_shared_mcp_middleware()
+
+        from novacode_cli.agents.core_agent import create_agent_with_config
+
+        # Recreate agent, preserving state
+        new_agent, new_backend = create_agent_with_config(
+            model=self._model,
+            assistant_id=self._assistant_id,
+            tools=self._tools,
+            sandbox=self._backend if hasattr(self._backend, "default") else None,
+            sandbox_type=self._sandbox_type,
+            store=self._store,
+            checkpointer=self._checkpointer,
+            is_continuation=True,  # Mark as continuation to preserve state
+            steering_instructions=steering_instructions or [],
+        )
+
+        # Update stored references
+        self._agent = new_agent
+        self._backend = new_backend
+
+        return new_agent, new_backend
+
     # -- agent access ----------------------------------------------------------
 
     def get_active_agent(self, plan_mode_enabled: bool = False) -> tuple[Any, Any]:

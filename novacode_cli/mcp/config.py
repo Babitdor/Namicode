@@ -123,6 +123,7 @@ class MCPServerConfig(BaseModel):
     args: list[str] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)
     description: str | None = None
+    disabled: bool = False
 
     @field_validator("command")
     @classmethod
@@ -135,9 +136,9 @@ class MCPServerConfig(BaseModel):
             if ".." in v:
                 msg = "Path traversal not allowed in command"
                 raise ValueError(msg)
-            # Validate binary exists: absolute path must be a file;
+            # Validate binary exists: absolute/relative path must be a file;
             # simple name must be found on PATH.
-            if "/" in v:
+            if "/" in v or "\\" in v:
                 if not Path(v).is_file():
                     msg = f"Command binary not found: {v}"
                     raise ValueError(msg)

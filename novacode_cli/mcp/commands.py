@@ -97,6 +97,66 @@ def _remove(name: str) -> None:
         sys.exit(1)
 
 
+def _enable(name: str) -> None:
+    """Enable a configured MCP server.
+
+    Args:
+        name: Server name/identifier
+    """
+    mcp_config = MCPConfig()
+    servers = mcp_config.list_servers()
+    if name not in servers:
+        console.print(
+            f"[bold red]Error:[/bold red] MCP server '{name}' not found.",
+        )
+        sys.exit(1)
+
+    config = servers[name]
+    if not getattr(config, "disabled", False):
+        console.print(
+            f"MCP server '{name}' is already enabled.",
+            style=COLORS["primary"],
+        )
+        return
+
+    config.disabled = False
+    mcp_config.add_server(name, config)
+    console.print(
+        f"✓ MCP server '{name}' enabled successfully!",
+        style=COLORS["primary"],
+    )
+
+
+def _disable(name: str) -> None:
+    """Disable a configured MCP server.
+
+    Args:
+        name: Server name/identifier
+    """
+    mcp_config = MCPConfig()
+    servers = mcp_config.list_servers()
+    if name not in servers:
+        console.print(
+            f"[bold red]Error:[/bold red] MCP server '{name}' not found.",
+        )
+        sys.exit(1)
+
+    config = servers[name]
+    if getattr(config, "disabled", False):
+        console.print(
+            f"MCP server '{name}' is already disabled.",
+            style=COLORS["primary"],
+        )
+        return
+
+    config.disabled = True
+    mcp_config.add_server(name, config)
+    console.print(
+        f"✓ MCP server '{name}' disabled successfully!",
+        style=COLORS["primary"],
+    )
+
+
 def _list() -> None:
     """List all configured MCP servers with connection status."""
     mcp_config = MCPConfig()
@@ -141,9 +201,14 @@ def _list() -> None:
 
     for name, config in servers.items():
         # Show active indicator
-        is_active = name in active_servers
-        status_indicator = "[green]✓[/green]" if is_active else "[red]✗[/red]"
-        status_text = "[green]active[/green]" if is_active else "[red]inactive[/red]"
+        is_disabled = getattr(config, "disabled", False)
+        is_active = name in active_servers and not is_disabled
+        if is_disabled:
+            status_indicator = "[dim]✗[/dim]"
+            status_text = "[dim]disabled[/dim]"
+        else:
+            status_indicator = "[green]✓[/green]" if is_active else "[red]✗[/red]"
+            status_text = "[green]active[/green]" if is_active else "[red]inactive[/red]"
         
         console.print(
             f"  {status_indicator} [bold]{name}[/bold] ({status_text})",
@@ -738,6 +803,22 @@ def setup_mcp_parser(subparsers: Any) -> argparse.ArgumentParser:
     )
     remove_parser.add_argument("name", help="Server name/identifier to remove")
 
+    # MCP enable
+    enable_parser = mcp_subparsers.add_parser(
+        "enable",
+        help="Enable a configured MCP server",
+        description="Enable a configured MCP server configuration",
+    )
+    enable_parser.add_argument("name", help="Server name/identifier to enable")
+
+    # MCP disable
+    disable_parser = mcp_subparsers.add_parser(
+        "disable",
+        help="Disable a configured MCP server",
+        description="Disable a configured MCP server configuration",
+    )
+    disable_parser.add_argument("name", help="Server name/identifier to disable")
+
     # MCP list
     mcp_subparsers.add_parser(
         "list",
@@ -845,6 +926,12 @@ def execute_mcp_command(args: argparse.Namespace) -> None:
     elif args.mcp_command == "remove":
         _remove(args.name)
 
+    elif args.mcp_command == "enable":
+        _enable(args.name)
+
+    elif args.mcp_command == "disable":
+        _disable(args.name)
+
     elif args.mcp_command == "list":
         _list()
 
@@ -854,13 +941,15 @@ def execute_mcp_command(args: argparse.Namespace) -> None:
     else:
         # No subcommand provided, show help
         console.print(
-            "[yellow]Please specify an MCP subcommand: add, remove, list, or install[/yellow]",
+            "[yellow]Please specify an MCP subcommand: add, remove, list, install, enable, or disable[/yellow]",
         )
         console.print("\n[bold]Usage:[/bold]", style=COLORS["primary"])
         console.print("  Nova mcp <command> [options]\n")
         console.print("[bold]Available commands:[/bold]", style=COLORS["primary"])
         console.print("  add       Add or update an MCP server")
         console.print("  remove    Remove an MCP server")
+        console.print("  enable    Enable a configured MCP server")
+        console.print("  disable   Disable a configured MCP server")
         console.print("  list      List all configured MCP servers")
         console.print("  install   Install an MCP server from URL")
         console.print("\n[bold]Examples:[/bold]", style=COLORS["primary"])
