@@ -317,10 +317,10 @@ async def _drive_autocomplete():
 
 
 async def _drive_agents_skills():
-    """/agents and /skills open read-only list screens."""
+    """/agents, /skills, /servers, and /hooks open interactive list screens."""
     from textual.widgets import Button, Input
 
-    from novacode_cli.tui.app import InfoListScreen, NovaApp
+    from novacode_cli.tui.app import AgentsScreen, HooksScreen, NovaApp, ServersScreen, SkillsScreen
     from novacode_cli.ui.ui_elements import TokenTracker
 
     app = NovaApp(
@@ -333,14 +333,22 @@ async def _drive_agents_skills():
         model_name="m",
     )
     async with app.run_test() as pilot:
-        for cmd in ("/agents", "/skills"):
+        for cmd in ("/agents", "/skills", "/servers", "/hooks"):
             inp = app.query_one("#prompt", Input)
             inp.value = cmd
             inp.focus()
             await pilot.pause()
             await pilot.press("enter")
             await pilot.pause()
-            assert isinstance(app.screen, InfoListScreen), (cmd, type(app.screen).__name__)
+            if cmd == "/agents":
+                expected_type = AgentsScreen
+            elif cmd == "/skills":
+                expected_type = SkillsScreen
+            elif cmd == "/servers":
+                expected_type = ServersScreen
+            else:
+                expected_type = HooksScreen
+            assert isinstance(app.screen, expected_type), (cmd, type(app.screen).__name__)
             app.screen.query_one("#close", Button).press()
             await pilot.pause()
 
@@ -2006,15 +2014,16 @@ async def _drive_menus_native():
         await app.workers.wait_for_complete()
         await pilot.pause()
 
-    async with app.run_test() as pilot:
-        await submit(pilot, "/files")
-        await submit(pilot, "/hooks list")
-        await submit(pilot, "/restore")  # no recovery manager -> native notice
-        txt = " ".join(
-            str(w.render()) for w in app.query("#transcript .logline").results(Static)
-        )
-        assert "isn't available" not in txt, txt
-        assert "Session file operations" in txt, txt
+    from unittest.mock import patch
+    with patch("novacode_cli.recovery.get_recovery_manager", return_value=None):
+        async with app.run_test() as pilot:
+            await submit(pilot, "/files")
+            await submit(pilot, "/restore")  # no recovery manager -> native notice
+            txt = " ".join(
+                str(w.render()) for w in app.query("#transcript .logline").results(Static)
+            )
+            assert "isn't available" not in txt, txt
+            assert "Session file operations" in txt, txt
 
 
 def test_tui_menus_native():
