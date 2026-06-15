@@ -89,11 +89,13 @@ def get_agent_display_name(assistant_id: str | None) -> str:
     Returns:
         Human-readable display name
     """
+    if not assistant_id:
+        return "Agent"
     if assistant_id == "nova-agent":
         return "Nova"
     if assistant_id == "ralph":
         return "Ralph"
-    return assistant_id or "Agent"
+    return assistant_id.capitalize()
 
 
 def build_agent_config(

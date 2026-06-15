@@ -1207,6 +1207,57 @@ def test_tui_stream_coalescing():
     asyncio.run(_drive_stream_coalescing())
 
 
+async def _drive_custom_agent_stream_and_color():
+    """Verify that a custom assistant (e.g. 'ralph') streams and commits with correct name and color."""
+    import novacode_cli.ui_events as ev
+    from textual.widgets import Static
+    from rich.text import Text
+
+    from novacode_cli.tui.app import NovaApp, ChatMessage
+    from novacode_cli.ui.ui_elements import TokenTracker
+    from novacode_cli.config.config import set_agent_color
+
+    set_agent_color("ralph", "#ff007f")
+
+    app = NovaApp(
+        agent=_FakeAgent(),
+        assistant_id="ralph",
+        session_state=_SS(),
+        backend=None,
+        token_tracker=TokenTracker(),
+        image_tracker=None,
+        model_name="m",
+    )
+    async with app.run_test() as pilot:
+        # 1. TextDelta streams
+        await app._render(ev.TextDelta("Hello from Ralph"))
+        assert app._stream_msg is not None
+
+        # Verify the streaming card has correct headers and borders
+        role_static = app._stream_msg.query_one(".role", Static)
+        assert "Ralph" in str(role_static.render())
+        assert app._stream_msg._custom_color == "#ff007f"
+
+        # 2. AssistantMessage commits
+        await app._render(
+            ev.AssistantMessage(text="Hello from Ralph", agent_name="Ralph", agent_color="#ff007f")
+        )
+        assert app._stream_msg is None
+
+        # Verify the committed message exists in transcript with correct color and name
+        last_msg = app._transcript().children[-1]
+        assert isinstance(last_msg, ChatMessage)
+        role_static = last_msg.query_one(".role", Static)
+        assert "Ralph" in str(role_static.render())
+        assert last_msg._custom_color == "#ff007f"
+
+
+def test_tui_custom_agent_stream_and_color():
+    if not _HAS_TEXTUAL:
+        return
+    asyncio.run(_drive_custom_agent_stream_and_color())
+
+
 async def _drive_transcript_cap():
     """The transcript is pruned from the top past the cap; tracked in-progress
     widgets survive even when they're the oldest."""
