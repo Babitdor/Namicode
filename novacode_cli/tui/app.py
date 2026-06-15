@@ -1148,7 +1148,7 @@ class McpScreen(ModalScreen[None]):
 
     def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
         if event.option_list.id == "mcp-configured":
-            self._update_toggle_button(event.highlighted)
+            self._update_toggle_button(event.option_index)
 
     def _update_toggle_button(self, idx: int | None) -> None:
         try:
