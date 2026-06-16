@@ -350,37 +350,36 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
     def _supports_sandbox_execution(self) -> bool:
         """Check whether the backend can actually execute shell commands.
 
-        This must use the *exact same* test that ``CompositeBackend.execute``
-        uses internally — ``isinstance(default, SandboxBackendProtocol)`` —
-        otherwise the two disagree: the old duck-typed check (``hasattr
-        execute``) returned True for any non-Filesystem default with an
-        ``execute`` attr (including ``CompositeBackend`` itself, whose
-        ``execute`` always exists but raises ``NotImplementedError`` when the
-        default isn't a real sandbox). That mismatch produced the
-        "Sandbox execution not available" error. By checking the protocol
-        directly we guarantee that whenever this returns True, ``execute``
-        succeeds — and when it returns False we fall back to local execution.
+        This must use the same routing rule as ``CompositeBackend.execute``
+        — it delegates to the *default* backend — but we intentionally restrict
+        the check to real sandbox backends (subclasses of ``BaseSandbox``). Nova's
+        local-mode backend, ``LocalShellBackend``, implements
+        ``SandboxBackendProtocol`` but is **not** a sandbox; we want the
+        ``ShellMiddleware`` to handle local execution itself so dangerous-command
+        blocklists, OS confinement, and background-process management keep
+        working. Remote sandbox wrappers such as ``WorkdirSandboxBackend`` extend
+        ``BaseSandbox`` and are therefore treated as sandboxes.
 
         Returns:
-            True only if the (default) backend implements SandboxBackendProtocol.
+            True only if the (default) backend is a real sandbox backend.
         """
         if self._backend is None:
             return False
 
-        from deepagents.backends.protocol import SandboxBackendProtocol
+        from deepagents.backends.sandbox import BaseSandbox
 
         # CompositeBackend: execution always delegates to the *default* backend,
-        # so the sandbox question is really "is the default a sandbox?".
+        # so the sandbox question is really "is the default a real sandbox?".
         try:
             from deepagents.backends import CompositeBackend
 
             if isinstance(self._backend, CompositeBackend):
-                return isinstance(self._backend.default, SandboxBackendProtocol)
+                return isinstance(self._backend.default, BaseSandbox)
         except ImportError:
             pass
 
-        # Direct backend: it supports execution iff it is a sandbox backend.
-        return isinstance(self._backend, SandboxBackendProtocol)
+        # Direct backend: it supports execution iff it is a real sandbox backend.
+        return isinstance(self._backend, BaseSandbox)
 
     def _run_shell_command(
         self,
