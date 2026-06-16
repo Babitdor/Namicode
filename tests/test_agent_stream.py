@@ -571,25 +571,39 @@ def test_plan_auto_approve_completes_turn():
             self.value = value
 
     class Agent:
+        def __init__(self):
+            self.calls = 0
+
         async def aget_state(self, config):
             return _State([])
 
         async def astream(self, inp, **kw):
-            yield (
-                (),
-                "updates",
-                {
-                    "__interrupt__": [
-                        MockInterrupt(
-                            "int1",
-                            {
-                                "type": "plan_approval",
-                                "plan": "Mock Plan content",
-                            }
-                        )
-                    ]
-                }
-            )
+            self.calls += 1
+            if self.calls == 1:
+                yield (
+                    (),
+                    "updates",
+                    {
+                        "__interrupt__": [
+                            MockInterrupt(
+                                "int1",
+                                {
+                                    "type": "plan_approval",
+                                    "plan": "Mock Plan content",
+                                }
+                            )
+                        ]
+                    }
+                )
+            else:
+                yield (
+                    (),
+                    "messages",
+                    (
+                        _Chunk("m1", [{"type": "text", "text": "Plan approved, proceeding."}]),
+                        {}
+                    )
+                )
 
         async def aupdate_state(self, **kw):
             pass
