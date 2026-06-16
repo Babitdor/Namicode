@@ -8193,6 +8193,7 @@ class NovaApp(App):
         seen_message_ids=None,
         *,
         skip_file_mentions=False,
+    ) -> None:
         await self._stream_prompt(user_input, assistant_id=assistant_id)
 
     async def _tui_quiet_execute_fn(
