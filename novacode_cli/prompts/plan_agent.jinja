@@ -72,6 +72,8 @@ Blocked tools (return errors in plan mode):
 {% if blocked_tools %}{{ blocked_tools }}{% else %}(No tool restrictions specified — but still plan mode: do not implement.){% endif %}
 
 {{ restricted_write_tools }} are allowed only inside `/.nova/plans/`. Everything else off-limits until approval.
+
+- If a search tool (`grep`, `code_search`, or `query_project_graph`) returns no matches (empty result or "no matches"), **never** repeat the search with the same query term in the same turn. Try alternative casing, synonyms, or broader terms.
 </constraints>
 
 <env>

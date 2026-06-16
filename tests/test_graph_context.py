@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import pytest
 
 # Import graph_reader directly to avoid bootstrap/__init__.py pulling in langchain
 _spec = importlib.util.spec_from_file_location(
@@ -65,3 +66,61 @@ class TestLegendInjection:
         # The whole point: the standing injection is small.
         section = _summary().to_prompt_section()
         assert len(section) < 600, len(section)
+
+
+@pytest.mark.asyncio
+async def test_query_project_graph_async(monkeypatch):
+    import pytest
+    from pathlib import Path
+    from novacode_cli.tools.graph_tools import query_project_graph
+
+    monkeypatch.setattr("novacode_cli.config.config.settings.project_root", Path("/dummy"))
+    monkeypatch.setattr(
+        "novacode_cli.tools.graph_tools._load_raw_graph",
+        lambda path: {
+            "nodes": [{"id": "node1", "label": "NodeOne", "source_file": "src/node1.py", "community": 0}],
+            "metadata": {
+                "communities": [{"id": 0, "label": "Community Zero", "node_count": 1, "nodes": ["node1"]}],
+                "god_nodes": [],
+                "surprising_connections": [],
+            }
+        }
+    )
+
+    res = await query_project_graph.ainvoke("NodeOne")
+    assert "Matching Nodes (1 found)" in res
+    assert "NodeOne" in res
+
+
+@pytest.mark.asyncio
+async def test_graph_context_middleware_async(monkeypatch):
+    import pytest
+    from pathlib import Path
+    from langchain_core.messages import SystemMessage
+    from novacode_cli.bootstrap.graph_context import GraphContextMiddleware
+
+    class _Req:
+        def __init__(self, system_prompt="Base prompt"):
+            self.system_prompt = system_prompt
+            self.system_message = None
+
+        def override(self, system_message):
+            self.system_message = system_message
+            self.system_prompt = getattr(system_message, "content", "")
+            return self
+
+    # Mock settings and the reader's load method
+    middleware = GraphContextMiddleware(workspace_root="/dummy")
+    monkeypatch.setattr(middleware._reader, "load", lambda: _summary())
+
+    request = _Req("Base prompt")
+
+    async def dummy_handler(req):
+        return req
+
+    # Wrap the call
+    res = await middleware.awrap_model_call(request, dummy_handler)
+    assert "[Project Graph]" in res.system_prompt
+    assert "100 nodes, 250 edges" in res.system_prompt
+
+

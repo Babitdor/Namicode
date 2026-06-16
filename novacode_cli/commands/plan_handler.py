@@ -111,7 +111,8 @@ async def _start_plan_mode(
     session_state.plan_mode_enabled = True
     session_state.plan_content = None  # Clear old plan content
     session_state.approved_plan_content = None  # Clear any previously approved plan
-    session_state.auto_approve = False  # Reset auto-approve for the new planning phase
+    if not getattr(session_state, "auto_approve", False):
+        session_state.auto_approve = False  # Reset auto-approve only if it was False
 
     console.print()
     console.print(
@@ -170,6 +171,7 @@ async def _start_plan_mode(
                 duckduckgo_search,
             ],
             steering_instructions=session_state.steering_instructions,
+            auto_approve=getattr(session_state, "auto_approve", False),
             checkpointer=getattr(session_state, "_checkpointer", None),
             store=getattr(session_state, "_store", None),
         )

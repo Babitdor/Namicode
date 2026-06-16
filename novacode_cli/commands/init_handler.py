@@ -157,40 +157,48 @@ class InitOrchestrator:
         """Run the /init pipeline (graphify) or fall back to agent exploration."""
         from novacode_cli.init.detect import is_graphify_available
 
-        if is_graphify_available():
-            if self._execute_fn is None:
-                self._execute_fn = build_init_execute_fn(
-                    self._agent,
-                    self._session_state,
-                    self._assistant_id,
-                    self._token_tracker,
-                    self._flags,
+        prev_plan = getattr(self._session_state, "plan_mode_enabled", False)
+        if hasattr(self._session_state, "plan_mode_enabled"):
+            self._session_state.plan_mode_enabled = False
+
+        try:
+            if is_graphify_available():
+                if self._execute_fn is None:
+                    self._execute_fn = build_init_execute_fn(
+                        self._agent,
+                        self._session_state,
+                        self._assistant_id,
+                        self._token_tracker,
+                        self._flags,
+                    )
+                result = await _run_graphify_pipeline(
+                    project_root=self._project_root,
+                    nova_dir=self._nova_dir,
+                    nova_md_path=self._nova_md_path,
+                    agents_md_path=self._agents_md_path,
+                    flags=self._flags,
+                    emit=self._renderer.emit,
+                    progress_console=self._progress_console,
+                    agent=self._agent,
+                    execute_fn=self._execute_fn,
+                    session_id=self._session_id,
                 )
-            result = await _run_graphify_pipeline(
-                project_root=self._project_root,
-                nova_dir=self._nova_dir,
-                nova_md_path=self._nova_md_path,
-                agents_md_path=self._agents_md_path,
-                flags=self._flags,
-                emit=self._renderer.emit,
-                progress_console=self._progress_console,
-                agent=self._agent,
-                execute_fn=self._execute_fn,
-                session_id=self._session_id,
-            )
-            self._renderer.result(result, self._flags)
-            return result
-        else:
-            self._renderer.graphify_unavailable()
-            await self._renderer.run_fallback(
-                project_root=self._project_root,
-                nova_md_path=self._nova_md_path,
-                agent=self._agent,
-                session_state=self._session_state,
-                assistant_id=self._assistant_id,
-                token_tracker=self._token_tracker,
-            )
-            return _make_empty_result(self._nova_dir, self._nova_md_path)
+                self._renderer.result(result, self._flags)
+                return result
+            else:
+                self._renderer.graphify_unavailable()
+                await self._renderer.run_fallback(
+                    project_root=self._project_root,
+                    nova_md_path=self._nova_md_path,
+                    agent=self._agent,
+                    session_state=self._session_state,
+                    assistant_id=self._assistant_id,
+                    token_tracker=self._token_tracker,
+                )
+                return _make_empty_result(self._nova_dir, self._nova_md_path)
+        finally:
+            if hasattr(self._session_state, "plan_mode_enabled"):
+                self._session_state.plan_mode_enabled = prev_plan
 
 
 def _make_empty_result(nova_dir: Path, nova_md_path: Path) -> InitResult:

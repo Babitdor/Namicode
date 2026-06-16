@@ -294,3 +294,48 @@ def test_semantic_extract_via_agent_relativizes_absolute_paths(tmp_path):
     assert "docs/plans/note.md" in prompt  # relative, forward slashes
     assert str(tmp_path) not in prompt  # no absolute path leaked
     assert "\\" not in prompt.split("note.md")[0][-40:]  # no backslashes near it
+
+
+def test_init_orchestrator_disables_plan_mode(tmp_path, monkeypatch):
+    from novacode_cli.commands.init_handler import InitOrchestrator, InitFlags, InitResult
+    import json
+
+    class FakeSessionState:
+        def __init__(self):
+            self.plan_mode_enabled = True
+
+    session_state = FakeSessionState()
+    called_assert = False
+
+    async def mock_run_pipeline(*args, **kwargs):
+        nonlocal called_assert
+        assert session_state.plan_mode_enabled is False
+        called_assert = True
+        return InitResult(ok=True, nova_dir=tmp_path / ".nova", nova_md_path=tmp_path / ".nova" / "NOVA.md")
+
+    monkeypatch.setattr("novacode_cli.init.detect.is_graphify_available", lambda: True)
+    monkeypatch.setattr("novacode_cli.commands.init_handler._run_graphify_pipeline", mock_run_pipeline)
+
+    class FakeRenderer:
+        def emit(self, event):
+            pass
+        def result(self, result, flags):
+            pass
+
+    orchestrator = InitOrchestrator(
+        project_root=tmp_path,
+        nova_dir=tmp_path / ".nova",
+        nova_md_path=tmp_path / ".nova" / "NOVA.md",
+        agents_md_path=tmp_path / ".nova" / "AGENTS.md",
+        flags=InitFlags(),
+        renderer=FakeRenderer(),
+        agent=None,
+        session_state=session_state,
+        assistant_id="fake",
+        token_tracker=None,
+        execute_fn=lambda x: None,
+    )
+
+    asyncio.run(orchestrator.run())
+    assert called_assert is True
+    assert session_state.plan_mode_enabled is True

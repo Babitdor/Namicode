@@ -46,6 +46,11 @@ All paths must be absolute (e.g., `/src/main.py`). Never use relative or Windows
 | `/skills/` | Global skills |
 </file_paths>
 
+<search_constraints>
+- If a search tool (`grep`, `code_search`, or `query_project_graph`) returns no matches (empty result or "no matches"), **never** repeat the search with the same query term in the same turn.
+- If a search fails to find a keyword, do not assume the codebase lacks the feature. Try alternative casing, synonyms, or broader terms. If still not found, locate entry points/related modules via the project graph and read the files directly.
+</search_constraints>
+
 <shell_environment>
 - **Platform**: {{ platform }}
 - **Shell**: {{ shell_name }}

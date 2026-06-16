@@ -518,6 +518,32 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
                     # and hard-denies block without asking. Only a genuine "ask"
                     # falls through to surface an InterruptRequest + notification.
                     _policy_resolutions: list[dict | None] | None = None
+                    if kind == "plan" and _auto_approve:
+                        # Auto-approve plan without prompting
+                        hitl_response[interrupt_id] = {"approved": True, "mode": "auto"}
+                        command_state_update.update({"plan_mode_enabled": False})
+                        plan_approved = True
+
+                        # Set plan_mode_enabled=False on session_state and clear plan agent
+                        session_state.plan_mode_enabled = False
+                        using_separate_plan_agent = (
+                            hasattr(session_state, "plan_agent") and session_state.plan_agent is not None
+                        )
+                        if using_separate_plan_agent:
+                            # Try to extract the plan content from the payload
+                            inline_plan = (payload or {}).get("plan")
+                            if inline_plan:
+                                session_state.set_approved_plan(inline_plan)
+                            session_state.clear_plan_agent()
+                        session_state.plan_content = None
+
+                        yield ev.ContextMessage(
+                            "Plan Approved - switching to execution mode (auto-approved)",
+                            icon="✓",
+                            color="green",
+                        )
+                        continue
+
                     if kind == "tool":
                         try:
                             _policy_resolutions = evaluate_tool_actions(

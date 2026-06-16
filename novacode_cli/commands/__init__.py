@@ -147,6 +147,7 @@ def build_command_registry() -> CommandRegistry:
     from novacode_cli.commands.trace_handler import register_commands as _r12
     from novacode_cli.commands.trello_handler import register_commands as _r17
     from novacode_cli.commands.wiki_commands import register_commands as _r22
+    from novacode_cli.commands.effort_handler import register_commands as _r24
 
     for _r in (
         _r1,
@@ -172,6 +173,7 @@ def build_command_registry() -> CommandRegistry:
         _r21,
         _r22,
         _r23,
+        _r24,
     ):
         _r(registry)
 

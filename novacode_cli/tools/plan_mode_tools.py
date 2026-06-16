@@ -139,9 +139,6 @@ def exit_plan_mode(plan: str = "") -> str:
         "Plan approved. Proceed with implementation." or
         "Plan rejected. Revise the plan based on user feedback."
     """
-    if _auto_approve_var.get():
-        return "Plan approved. Proceed with implementation."
-
     response = interrupt(
         {
             "type": "plan_approval",

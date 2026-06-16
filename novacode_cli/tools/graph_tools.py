@@ -25,7 +25,7 @@ def _matches(text: str | None, query_lower: str) -> bool:
 
 
 @tool
-def query_project_graph(query: str) -> str:
+async def query_project_graph(query: str) -> str:
     """Query the project graph for targeted architectural information.
 
     Searches the project graph (built by /init) for nodes, communities, god
@@ -41,10 +41,16 @@ def query_project_graph(query: str) -> str:
         Matching nodes, communities, god nodes, and cross-module connections.
         Returns a "no graph" message if /init has not been run.
     """
+    import asyncio
     from novacode_cli.config.config import settings
 
     workspace_root = settings.project_root or Path.cwd()
-    data = _load_raw_graph(Path(workspace_root))
+    try:
+        loop = asyncio.get_running_loop()
+        data = await loop.run_in_executor(None, _load_raw_graph, Path(workspace_root))
+    except RuntimeError:
+        data = _load_raw_graph(Path(workspace_root))
+
     if data is None:
         return "No project graph available. Run /init to build the project graph."
 
