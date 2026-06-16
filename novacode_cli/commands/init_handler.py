@@ -138,6 +138,7 @@ class InitOrchestrator:
         session_id: str = "",
         progress_console=None,
         execute_fn=None,
+        use_process_pool: bool = False,
     ) -> None:
         self._project_root = project_root
         self._nova_dir = nova_dir
@@ -152,6 +153,7 @@ class InitOrchestrator:
         self._session_id = session_id
         self._progress_console = progress_console
         self._execute_fn = execute_fn
+        self._use_process_pool = use_process_pool
 
     async def run(self) -> InitResult:
         """Run the /init pipeline (graphify) or fall back to agent exploration."""
@@ -182,6 +184,7 @@ class InitOrchestrator:
                     agent=self._agent,
                     execute_fn=self._execute_fn,
                     session_id=self._session_id,
+                    use_process_pool=self._use_process_pool,
                 )
                 self._renderer.result(result, self._flags)
                 return result
@@ -345,6 +348,7 @@ async def _run_graphify_pipeline(
     agent=None,
     execute_fn=None,
     session_id: str = "",
+    use_process_pool: bool = False,
 ) -> InitResult:
     """Run the graphify-powered multi-step /init pipeline (pure logic).
 
@@ -533,78 +537,139 @@ async def _run_graphify_pipeline(
     # they don't leak into NOVA.md / the graph JSON and break later edit_file
     # matches (the agent loops on "String not found"). Done once here so the
     # graph, cache, facts, and docs all inherit slash paths.
-    extraction = normalize_source_paths(extraction)
+    extraction = await asyncio.to_thread(normalize_source_paths, extraction)
 
     # Sanitize BEFORE caching so a malformed LLM fragment (dict weight, None
     # label/id) can't poison the cache — otherwise a later `/init --update`
     # reloads the bad data and crashes ('>' float/dict, regex on NoneType).
     # build_project_graph re-sanitizes as a catch-all.
-    extraction = sanitize_graph_extraction(extraction)
+    extraction = await asyncio.to_thread(sanitize_graph_extraction, extraction)
 
     # Save extraction cache for future incremental updates
     await asyncio.to_thread(save_extraction_cache, project_root, extraction)
 
-    # ── Step 3: Build & Cluster ─────────────────────────────────
-    emit(StepStarted(3, _TOTAL_STEPS, "Building knowledge graph"))
-    # graphify.build + Leiden clustering — CPU-intensive for large graphs
-    G = await asyncio.to_thread(build_project_graph, extraction, pc)
-    if G is None:
-        emit(Notice("Graph building failed", "error"))
-        return InitResult(
-            ok=False,
-            nova_dir=nova_dir,
-            nova_md_path=nova_md_path,
-            message="Graph building failed",
-        )
+    if use_process_pool:
+        from concurrent.futures import ProcessPoolExecutor
+        import os
 
-    communities = await asyncio.to_thread(cluster_project_graph, G, pc)
-    try:
+        def init_worker():
+            os.environ["NOVA_INIT_QUIET"] = "1"
+
+        loop = asyncio.get_running_loop()
+        # Spin up a ProcessPoolExecutor with 1 worker specifically for running
+        # the heavy NetworkX / Leiden clustering / analysis steps without holding
+        # the GIL on the main Textual/asyncio thread.
+        with ProcessPoolExecutor(max_workers=1, initializer=init_worker) as pool:
+            # ── Step 3: Build & Cluster ─────────────────────────────────
+            emit(StepStarted(3, _TOTAL_STEPS, "Building knowledge graph"))
+            G = await loop.run_in_executor(pool, build_project_graph, extraction, None)
+            if G is None:
+                emit(Notice("Graph building failed", "error"))
+                return InitResult(
+                    ok=False,
+                    nova_dir=nova_dir,
+                    nova_md_path=nova_md_path,
+                    message="Graph building failed",
+                )
+
+            communities = await loop.run_in_executor(pool, cluster_project_graph, G, None)
+            try:
+                emit(
+                    StepDetail(
+                        f"{G.number_of_nodes()} nodes · {G.number_of_edges()} edges · "
+                        f"{len(communities or {})} communities"
+                    )
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
+            # ── Step 4: Analyze ─────────────────────────────────────────
+            emit(StepStarted(4, _TOTAL_STEPS, "Analyzing project structure"))
+            analysis = await loop.run_in_executor(pool, analyze_project_graph, G, communities, None)
+            emit(
+                StepDetail(
+                    f"{len(analysis.get('god_nodes', []))} hubs · "
+                    f"{len(analysis.get('surprising_connections', []))} surprising links"
+                )
+            )
+
+            # ── Step 5: Export graph + author docs ───────────────────────────
+            emit(StepStarted(5, _TOTAL_STEPS, "Generating documentation"))
+            nova_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                await loop.run_in_executor(
+                    pool,
+                    export_project_graph,
+                    G,
+                    communities,
+                    analysis,
+                    nova_dir,
+                    None,
+                    not flags.no_viz,
+                )
+                emit(
+                    StepDetail(
+                        "Exported project-graph.json"
+                        + ("" if flags.no_viz else " + project-graph.html")
+                    )
+                )
+            except Exception as ex:  # noqa: BLE001
+                emit(Notice(f"Graph export skipped ({ex})", "warn"))
+    else:
+        # ── Step 3: Build & Cluster ─────────────────────────────────
+        emit(StepStarted(3, _TOTAL_STEPS, "Building knowledge graph"))
+        G = await asyncio.to_thread(build_project_graph, extraction, pc)
+        if G is None:
+            emit(Notice("Graph building failed", "error"))
+            return InitResult(
+                ok=False,
+                nova_dir=nova_dir,
+                nova_md_path=nova_md_path,
+                message="Graph building failed",
+            )
+
+        communities = await asyncio.to_thread(cluster_project_graph, G, pc)
+        try:
+            emit(
+                StepDetail(
+                    f"{G.number_of_nodes()} nodes · {G.number_of_edges()} edges · "
+                    f"{len(communities or {})} communities"
+                )
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+        # ── Step 4: Analyze ─────────────────────────────────────────
+        emit(StepStarted(4, _TOTAL_STEPS, "Analyzing project structure"))
+        analysis = await asyncio.to_thread(analyze_project_graph, G, communities, pc)
         emit(
             StepDetail(
-                f"{G.number_of_nodes()} nodes · {G.number_of_edges()} edges · "
-                f"{len(communities or {})} communities"
+                f"{len(analysis.get('god_nodes', []))} hubs · "
+                f"{len(analysis.get('surprising_connections', []))} surprising links"
             )
         )
-    except Exception:  # noqa: BLE001
-        pass
 
-    # ── Step 4: Analyze ─────────────────────────────────────────
-    emit(StepStarted(4, _TOTAL_STEPS, "Analyzing project structure"))
-    # graphify.analyze — includes betweenness centrality, O(V*E) worst case
-    analysis = await asyncio.to_thread(analyze_project_graph, G, communities, pc)
-    emit(
-        StepDetail(
-            f"{len(analysis.get('god_nodes', []))} hubs · "
-            f"{len(analysis.get('surprising_connections', []))} surprising links"
-        )
-    )
-
-    # ── Step 5: Export graph + author docs ───────────────────────────
-    emit(StepStarted(5, _TOTAL_STEPS, "Generating documentation"))
-
-    # Export the graph FIRST so NOVA.md authoring can query it live
-    # (query_project_graph reads .nova/project-graph.json) and the agent can
-    # open it directly. Guarded: a graphify export edge case must degrade to a
-    # notice, not abort /init — NOVA.md authoring can still proceed without it.
-    nova_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        await asyncio.to_thread(
-            export_project_graph,
-            G=G,
-            communities=communities,
-            analysis=analysis,
-            output_dir=nova_dir,
-            console=pc,
-            include_html=not flags.no_viz,
-        )
-        emit(
-            StepDetail(
-                "Exported project-graph.json"
-                + ("" if flags.no_viz else " + project-graph.html")
+        # ── Step 5: Export graph + author docs ───────────────────────────
+        emit(StepStarted(5, _TOTAL_STEPS, "Generating documentation"))
+        nova_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            await asyncio.to_thread(
+                export_project_graph,
+                G=G,
+                communities=communities,
+                analysis=analysis,
+                output_dir=nova_dir,
+                console=pc,
+                include_html=not flags.no_viz,
             )
-        )
-    except Exception as ex:  # noqa: BLE001
-        emit(Notice(f"Graph export skipped ({ex})", "warn"))
+            emit(
+                StepDetail(
+                    "Exported project-graph.json"
+                    + ("" if flags.no_viz else " + project-graph.html")
+                )
+            )
+        except Exception as ex:  # noqa: BLE001
+            emit(Notice(f"Graph export skipped ({ex})", "warn"))
 
     # Author NOVA.md. Preferred: the Nova AGENT writes a rich, grounded doc using
     # its tools (query_project_graph / read_file). Fallbacks: a single grounded
