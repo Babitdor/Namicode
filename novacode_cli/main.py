@@ -100,7 +100,7 @@ try:
     _SQLITE_CHECKPOINTER_AVAILABLE = True
 except ImportError:
     _SQLITE_CHECKPOINTER_AVAILABLE = False
-from deepagents.backends.protocol import SandboxBackendProtocol
+from deepagents.backends.sandbox import BaseSandbox
 
 # Apply safety patches for backends that don't handle all content block types
 # (e.g., Ollama crashes on "file" type blocks from PDF reads)
@@ -666,12 +666,14 @@ async def simple_cli(
     if backend:
         from deepagents.backends.composite import CompositeBackend
 
-        # Check if it's a CompositeBackend with a sandbox default backend
+        # Check if it's a CompositeBackend with a real sandbox as the default
+        # backend. LocalShellBackend implements SandboxBackendProtocol but is not
+        # a remote sandbox, so we require a BaseSandbox subclass.
         if isinstance(backend, CompositeBackend):
-            if isinstance(backend.default, SandboxBackendProtocol):
+            if isinstance(backend.default, BaseSandbox):
                 sandbox_id = backend.default.id
                 sandbox_meta = getattr(backend.default, "_nova_meta", None)
-        elif isinstance(backend, SandboxBackendProtocol):
+        elif isinstance(backend, BaseSandbox):
             sandbox_id = backend.id
             sandbox_meta = getattr(backend, "_nova_meta", None)
 

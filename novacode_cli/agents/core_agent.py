@@ -100,6 +100,7 @@ from langgraph.store.base import BaseStore
 from deepagents import create_deep_agent
 from deepagents.backends import CompositeBackend
 from deepagents.backends.filesystem import FilesystemBackend
+from deepagents.backends.local_shell import LocalShellBackend
 from deepagents.backends.protocol import BackendProtocol, SandboxBackendProtocol
 from deepagents.backends.store import StoreBackend
 from deepagents.middleware.subagents import SubAgent
@@ -768,11 +769,19 @@ This file stores your preferences and context that persist across sessions.
     # CONDITIONAL SETUP: Local vs Remote Sandbox
     if sandbox is None:
         # ========== LOCAL MODE ==========
-        # Backend: Local filesystem for code with path containment to allowed directories
-        # This prevents the agent from writing outside allowed directories
-        _default_backend = FilesystemBackend(
+        # Default backend must support command execution for subagents: deepagents'
+        # FilesystemMiddleware always registers an `execute` tool, and declarative
+        # subagents inherit that tool but do not get Nova's ShellMiddleware. In
+        # local mode the previous default (a plain FilesystemBackend) caused the
+        # `execute` tool to fail with "Default backend doesn't support command
+        # execution". We use LocalShellBackend as the default instead: it is a
+        # FilesystemBackend subclass, so project reads/writes keep their existing
+        # virtual-root semantics, and it also implements SandboxBackendProtocol so
+        # the subagent's `execute` tool can run commands locally.
+        _default_backend = LocalShellBackend(
             root_dir=str(workspace_root),
             virtual_mode=True,
+            env=dict(os.environ),
         )
 
     else:
