@@ -644,10 +644,7 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
                 if any_rejected:
                     yield ev.ErrorOutput("Command rejected. Tell the agent what to do differently.")
 
-                # Don't resume the graph when the plan was approved — exit the
-                # streaming loop so the caller can execute with the main agent.
-                if plan_approved:
-                    break
+
 
                 stream_input = Command(
                     resume=hitl_response,
