@@ -30,6 +30,16 @@ def _make_console() -> Console:
     characters like emojis and special symbols that Rich renders in panel
     titles. Wrapping stdout with UTF-8 avoids UnicodeEncodeError.
     """
+    import os
+    if os.environ.get("NOVA_INIT_QUIET") == "1":
+        import io
+        from rich.console import Console as _Console
+        return _Console(
+            file=io.StringIO(),
+            force_terminal=False,
+            force_interactive=False,
+            width=100,
+        )
     from novacode_cli.config.config import console as _global_console
     return _global_console
 
@@ -309,7 +319,7 @@ async def semantic_extract_project(
     )
 
     async def _do_chunk(chunk: list[Path]) -> dict[str, Any] | None:
-        listing = _build_chunk_listing(project_root, chunk)
+        listing = await asyncio.to_thread(_build_chunk_listing, project_root, chunk)
         if not listing.strip():
             return None
         prompt = render_template("init_semantic_extract.jinja", files_block=listing)

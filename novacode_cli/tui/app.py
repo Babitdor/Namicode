@@ -7451,6 +7451,7 @@ class NovaApp(App):
                 session_id=getattr(self.session_state, "session_id", ""),
                 progress_console=quiet_console,
                 execute_fn=self._tui_quiet_execute_fn,
+                use_process_pool=True,
             )
             await orchestrator.run()
         except Exception as ex:  # noqa: BLE001
