@@ -405,6 +405,7 @@ async def semantic_extract_via_agent(
 
     Returns ``{nodes, edges, hyperedges, ...}`` (empty on failure → AST-only).
     """
+    import asyncio
     empty = {"nodes": [], "edges": [], "hyperedges": [], "input_tokens": 0, "output_tokens": 0}
     if console is None:
         console = _make_console()
@@ -487,7 +488,7 @@ async def semantic_extract_via_agent(
         console.print(f"[yellow]⚠ Agent semantic extraction failed ({exc})[/yellow]")
         return empty
 
-    return _read_and_merge_fragments(frag_dir, console)
+    return await asyncio.to_thread(_read_and_merge_fragments, frag_dir, console)
 
 
 def normalize_source_paths(extraction: dict[str, Any]) -> dict[str, Any]:

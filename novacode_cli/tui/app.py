@@ -7450,7 +7450,7 @@ class NovaApp(App):
                 token_tracker=self.token_tracker,
                 session_id=getattr(self.session_state, "session_id", ""),
                 progress_console=quiet_console,
-                execute_fn=self._tui_execute_fn,
+                execute_fn=self._tui_quiet_execute_fn,
             )
             await orchestrator.run()
         except Exception as ex:  # noqa: BLE001
@@ -8193,14 +8193,46 @@ class NovaApp(App):
         seen_message_ids=None,
         *,
         skip_file_mentions=False,
-    ) -> None:
-        """Drop-in replacement for ``execute_task`` that streams natively.
-
-        Signature mirrors ``execute_task`` so handlers (e.g. /research,
-        /browser-use, /ralph) can call it positionally or by keyword and have
-        the agent run render as native TUI widgets instead of rich prints.
-        """
         await self._stream_prompt(user_input, assistant_id=assistant_id)
+
+    async def _tui_quiet_execute_fn(
+        self,
+        user_input,
+        agent=None,
+        assistant_id=None,
+        session_state=None,
+        token_tracker=None,
+        backend=None,
+        is_subagent=False,
+        image_tracker=None,
+        seen_message_ids=None,
+        *,
+        skip_file_mentions=False,
+    ) -> None:
+        """Execute the agent run quietly without streaming events to the TUI transcript.
+
+        This avoids event loop flooding and unresponsiveness during intensive
+        background operations like /init.
+        """
+        from novacode_cli.agent_stream import run_agent_stream
+        from novacode_cli.ui_events import InterruptRequest, StatusUpdate
+
+        ag = agent or self._init_agent or self.agent
+        aid = assistant_id or self.assistant_id
+
+        async for e in run_agent_stream(
+            user_input,
+            ag,
+            aid,
+            self.session_state,
+            backend=backend or self._init_backend or self.backend,
+            image_tracker=self.image_tracker,
+            seen_message_ids=self._seen,
+        ):
+            if isinstance(e, StatusUpdate):
+                self._set_status(e.message or "ready")
+            elif isinstance(e, InterruptRequest):
+                await self._handle_interrupt(e)
 
     async def _run_research(self, text: str) -> None:
         """Launch the research swarm, streaming the run as native widgets."""
