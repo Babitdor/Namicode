@@ -166,3 +166,137 @@ async def test_foreground_emits_structured_events(tmp_path, monkeypatch):
     joined = "\n".join(markup)
     assert "Ralph Mode" not in joined
     assert "Iteration 1/2" not in joined
+
+
+async def test_ralph_stop_requested(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    calls = []
+
+    async def fake_execute(prompt, agent, name, ss, tt, backend=None):
+        # Request stop when executing the first iteration
+        ss._ralph_stop_requested = True
+        calls.append(name)
+
+    session = types.SimpleNamespace(
+        auto_approve=False,
+        thread_id="t",
+        background_ralph_tasks={},
+        add_notification=lambda **_: None,
+        _ralph_stop_requested=False,
+    )
+    markup, emit = _sink()
+    events = []
+
+    ok = await rh.handle_ralph_command(
+        agent=object(),
+        session_state=session,
+        assistant_id="ralph",
+        token_tracker=None,
+        cmd_args="do something --iterations 5",
+        execute_fn=fake_execute,
+        emit=emit,
+        on_event=events.append,
+    )
+
+    assert ok is True
+    # Should only execute one iteration, then stop.
+    assert len(calls) == 1
+    kinds = [type(e).__name__ for e in events]
+    assert kinds == [
+        "RalphStarted",
+        "IterationStarted",
+        "IterationFinished",
+        "RalphFinished",
+    ]
+    assert events[-1].completed == 1
+    assert events[-1].reason == "stopped"
+
+
+async def test_ralph_checkpoint_requested(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(rh, "_get_checkpoint_path", lambda: tmp_path / "ralph-checkpoint.json")
+    calls = []
+
+    async def fake_execute(prompt, agent, name, ss, tt, backend=None):
+        # Request checkpoint
+        ss._ralph_checkpoint_requested = True
+        calls.append(name)
+
+    session = types.SimpleNamespace(
+        auto_approve=False,
+        thread_id="t",
+        background_ralph_tasks={},
+        add_notification=lambda **_: None,
+        _ralph_checkpoint_requested=False,
+    )
+    markup, emit = _sink()
+    events = []
+
+    ok = await rh.handle_ralph_command(
+        agent=object(),
+        session_state=session,
+        assistant_id="ralph",
+        token_tracker=None,
+        cmd_args="do something --iterations 5",
+        execute_fn=fake_execute,
+        emit=emit,
+        on_event=events.append,
+    )
+
+    assert ok is True
+    # Should only execute one iteration, then stop after saving checkpoint.
+    assert len(calls) == 1
+    kinds = [type(e).__name__ for e in events]
+    assert kinds == [
+        "RalphStarted",
+        "IterationStarted",
+        "IterationFinished",
+        "RalphFinished",
+    ]
+    assert events[-1].completed == 1
+    assert events[-1].reason == "checkpoint"
+    # Ensure checkpoint file was created
+    assert (tmp_path / "ralph-checkpoint.json").is_file()
+
+
+async def test_ralph_cancelled_error(tmp_path, monkeypatch):
+    import asyncio
+
+    monkeypatch.chdir(tmp_path)
+    calls = []
+
+    async def fake_execute(prompt, agent, name, ss, tt, backend=None):
+        calls.append(name)
+        raise asyncio.CancelledError()
+
+    session = types.SimpleNamespace(
+        auto_approve=False,
+        thread_id="t",
+        background_ralph_tasks={},
+        add_notification=lambda **_: None,
+    )
+    markup, emit = _sink()
+    events = []
+
+    ok = await rh.handle_ralph_command(
+        agent=object(),
+        session_state=session,
+        assistant_id="ralph",
+        token_tracker=None,
+        cmd_args="do something --iterations 5",
+        execute_fn=fake_execute,
+        emit=emit,
+        on_event=events.append,
+    )
+
+    assert ok is True
+    assert len(calls) == 1
+    kinds = [type(e).__name__ for e in events]
+    assert kinds == [
+        "RalphStarted",
+        "IterationStarted",
+        "RalphFinished",
+    ]
+    assert events[-1].completed == 0
+    assert events[-1].reason == "stopped"
+

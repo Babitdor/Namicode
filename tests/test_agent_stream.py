@@ -564,8 +564,69 @@ def test_cancellation_emits_cancelled():
     assert any(isinstance(e, ev.Cancelled) for e in evts), [type(e).__name__ for e in evts]
 
 
+def test_plan_auto_approve_completes_turn():
+    class MockInterrupt:
+        def __init__(self, id, value):
+            self.id = id
+            self.value = value
+
+    class Agent:
+        async def aget_state(self, config):
+            return _State([])
+
+        async def astream(self, inp, **kw):
+            yield (
+                (),
+                "updates",
+                {
+                    "__interrupt__": [
+                        MockInterrupt(
+                            "int1",
+                            {
+                                "type": "plan_approval",
+                                "plan": "Mock Plan content",
+                            }
+                        )
+                    ]
+                }
+            )
+
+        async def aupdate_state(self, **kw):
+            pass
+
+    class CustomSessionState:
+        thread_id = "t1"
+        auto_approve = True
+        plan_mode_enabled = True
+        plan_content = None
+        approved_plan_content = None
+        plan_agent = object()
+
+        def set_approved_plan(self, plan):
+            self.approved_plan_content = plan
+
+        def clear_plan_agent(self):
+            pass
+
+    session = CustomSessionState()
+
+    async def _run():
+        out = []
+        async for e in iterate_agent_events("test", Agent(), "nova-agent", session):
+            out.append(e)
+        return out
+
+    evts = asyncio.run(_run())
+    kinds = [type(e).__name__ for e in evts]
+
+    assert any(isinstance(e, ev.ContextMessage) and "switching to execution mode" in e.message for e in evts), kinds
+    assert not session.plan_mode_enabled
+    assert session.approved_plan_content == "Mock Plan content"
+
+
 if __name__ == "__main__":
     test_happy_path_text_tool_todo()
     test_question_interrupt_resumes()
     test_cancellation_emits_cancelled()
+    test_plan_auto_approve_completes_turn()
     print("ALL TESTS PASSED")

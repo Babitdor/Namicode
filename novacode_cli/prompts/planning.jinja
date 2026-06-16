@@ -70,6 +70,7 @@ Pass this full plan as the `plan` argument to `exit_plan_mode` — it is what th
 - Do not write or modify actual project files
 - Do not run commands
 - Do not simulate execution
+- If a search tool (`grep`, `code_search`, or `query_project_graph`) returns no matches (empty result or "no matches"), **never** repeat the search with the same query term in the same turn. Try alternative casing, synonyms, or broader terms.
 </constraints>
 
 <quality_bar>

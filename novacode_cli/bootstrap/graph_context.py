@@ -73,7 +73,12 @@ class GraphContextMiddleware(AgentMiddleware):
         """Pre-warm the instance cache on session start."""
         if not self._enabled:
             return None
-        self._reader.load()
+        import asyncio
+        try:
+            loop = asyncio.get_running_loop()
+            loop.run_in_executor(None, self._reader.load)
+        except RuntimeError:
+            self._reader.load()
         return None
 
     def _inject(self, request: ModelRequest) -> ModelRequest:
@@ -82,6 +87,39 @@ class GraphContextMiddleware(AgentMiddleware):
             return request
 
         summary = self._reader.load()
+        if not summary:
+            return request
+
+        graph_context = summary.to_prompt_section()
+        if not graph_context:
+            return request
+
+        block = (
+            f"[Project Graph]\n{graph_context}\n"
+            "This is a legend only — module names above, nothing else. The graph "
+            "also knows each file/symbol's location, which community it belongs "
+            "to, its blast radius (high-degree hubs), and cross-module "
+            "connections — but none of that is listed here. Call "
+            '`query_project_graph("<file or symbol>")` to look up those details '
+            "on demand instead of inferring them from the module list.\n"
+            "[/Project Graph]"
+        )
+        system_prompt = request.system_prompt
+        new_prompt = (system_prompt + "\n\n" + block) if system_prompt else block
+        return request.override(system_message=SystemMessage(new_prompt))
+
+    async def _inject_async(self, request: ModelRequest) -> ModelRequest:
+        """Inject graph context into the system prompt asynchronously."""
+        if not self._enabled:
+            return request
+
+        import asyncio
+        try:
+            loop = asyncio.get_running_loop()
+            summary = await loop.run_in_executor(None, self._reader.load)
+        except RuntimeError:
+            summary = self._reader.load()
+
         if not summary:
             return request
 
@@ -118,8 +156,7 @@ class GraphContextMiddleware(AgentMiddleware):
     ) -> ModelResponse:
         """Async variant — required when the agent runs via ``ainvoke``/``astream``.
 
-        ``_inject`` is synchronous (it reads the cached graph), so we just inject
-        and await the downstream handler. Without this, LangChain raises
-        ``NotImplementedError`` for async invocations.
+        We load the graph asynchronously to avoid blocking the TUI event loop.
         """
-        return await handler(self._inject(request))
+        injected = await self._inject_async(request)
+        return await handler(injected)

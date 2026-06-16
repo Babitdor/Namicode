@@ -159,6 +159,47 @@ async def handle_file(
     return True
 
 
+async def handle_wiki(
+    ctx,
+) -> bool:
+    """/wiki — List all synthesized pages in the project wiki vault.
+
+    In the Textual TUI, this command will open an interactive vault browser.
+    """
+    from novacode_cli.config.config import console
+    from novacode_cli.wiki.manager import WikiManager
+
+    try:
+        mgr = WikiManager()
+        mgr.ensure_structure()
+        entries = mgr.read_index()
+    except Exception as ex:  # noqa: BLE001
+        console.print(f"[red]/wiki error: {ex}[/red]")
+        return True
+
+    console.print()
+    console.print("[yellow]Obsidian LLM Wiki Vault[/yellow]")
+    console.print(f"[dim]Wiki root: {mgr.root}[/dim]")
+    console.print()
+
+    if entries:
+        console.print("[bold]Synthesized Pages:[/bold]")
+        for topic, info in sorted(entries.items(), key=lambda x: x[0].lower()):
+            path = info.get("path", "")
+            summary = info.get("summary", "")
+            console.print(f"  • [bold cyan]{topic}[/bold cyan] ({path})")
+            if summary:
+                console.print(f"    [dim]{summary}[/dim]")
+        console.print()
+        console.print("[dim]Tip: in the TUI, /wiki opens an interactive browser modal.[/dim]")
+    else:
+        console.print(
+            "[dim]No wiki pages found yet. Ingest some sources with /ingest <path> first.[/dim]"
+        )
+    console.print()
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
@@ -177,6 +218,10 @@ def register_commands(registry) -> None:
     async def _file(ctx: CommandContext) -> bool:
         return await handle_file(ctx)
 
+    async def _wiki(ctx: CommandContext) -> bool:
+        return await handle_wiki(ctx)
+
     registry.register("ingest", _ingest)
     registry.register("ask", _ask)
     registry.register("file", _file)
+    registry.register("wiki", _wiki)

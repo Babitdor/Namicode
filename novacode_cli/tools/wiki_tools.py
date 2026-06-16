@@ -60,7 +60,12 @@ def wiki_read(path: str) -> str:
     """
     try:
         mgr = WikiManager()
-        content = mgr.read_page(path)
+        p = path.replace("\\", "/").strip().lstrip("/")
+        if p.startswith(".nova/wiki/"):
+            p = p[len(".nova/wiki/"):]
+        elif p.startswith("wiki/"):
+            p = p[len("wiki/"):]
+        content = mgr.read_page(p)
         if content is None:
             return f"(wiki page not found: {path})"
         return content
@@ -94,8 +99,14 @@ def wiki_write(path: str, content: str) -> str:
         mgr = WikiManager()
         mgr.ensure_structure()
 
+        p = path.replace("\\", "/").strip().lstrip("/")
+        if p.startswith(".nova/wiki/"):
+            p = p[len(".nova/wiki/"):]
+        elif p.startswith("wiki/"):
+            p = p[len("wiki/"):]
+
         # Split path into topic & title
-        parts = path.split("/")
+        parts = p.split("/")
         if len(parts) < 2:
             return (
                 f"(invalid path '{path}' — use topic/filename.md, "
@@ -105,7 +116,7 @@ def wiki_write(path: str, content: str) -> str:
         title = "/".join(parts[1:])
 
         mgr.write_page(topic, title, content)
-        return f"✓ Wrote wiki page: {path}"
+        return f"✓ Wrote wiki page: {topic}/{title}"
     except RuntimeError:
         return "(wiki is not available — not in a git project)"
     except Exception as ex:  # noqa: BLE001
@@ -129,8 +140,13 @@ def wiki_update_index(topic: str, path: str, summary: str = "") -> str:
     """
     try:
         mgr = WikiManager()
-        mgr.update_index(topic, path, summary)
-        return f"✓ Index updated: {topic} → {path}"
+        p = path.replace("\\", "/").strip().lstrip("/")
+        if p.startswith(".nova/wiki/"):
+            p = p[len(".nova/wiki/"):]
+        elif p.startswith("wiki/"):
+            p = p[len("wiki/"):]
+        mgr.update_index(topic, p, summary)
+        return f"✓ Index updated: {topic} → {p}"
     except RuntimeError:
         return "(wiki is not available — not in a git project)"
     except Exception as ex:  # noqa: BLE001

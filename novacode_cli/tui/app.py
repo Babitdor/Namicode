@@ -373,6 +373,8 @@ _TUI_SLASH_COMMANDS = [
     "/ingest",
     "/ask",
     "/file",
+    "/wiki",
+    "/effort",
 ]
 
 from novacode_cli import ui_events as ev
@@ -1234,13 +1236,10 @@ class McpScreen(ModalScreen[None]):
 
                 # Show status message
                 state_str = "deactivated" if sc.disabled else "activated"
-                self.app.query_one("#transcript", VerticalScroll).mount(
-                    Static(
-                        Text(
-                            f"\u2713 MCP '{name}' {state_str}!",
-                            style="green",
-                        ),
-                        classes="logline",
+                self.app._log(
+                    Text(
+                        f"\u2713 MCP '{name}' {state_str}!",
+                        style="green",
                     )
                 )
                 if hasattr(self.app, "session_state") and hasattr(self.app.session_state, "reload_mcp_servers"):
@@ -1248,12 +1247,7 @@ class McpScreen(ModalScreen[None]):
                     self.app.agent = new_agent
                     self.app.backend = new_backend
         except Exception as ex:  # noqa: BLE001
-            self.app.query_one("#transcript", VerticalScroll).mount(
-                Static(
-                    Text(f"Toggle failed: {ex}", style="red"),
-                    classes="logline",
-                )
-            )
+            self.app._log(Text(f"Toggle failed: {ex}", style="red"))
         self._reload()
 
     @work
@@ -1276,13 +1270,10 @@ class McpScreen(ModalScreen[None]):
                 from novacode_cli.mcp.config import MCPConfig
 
                 MCPConfig().remove_server(name)
-                self.app.query_one("#transcript", VerticalScroll).mount(
-                    Static(
-                        Text(
-                            f"\u2713 MCP '{name}' removed!",
-                            style="green",
-                        ),
-                        classes="logline",
+                self.app._log(
+                    Text(
+                        f"\u2713 MCP '{name}' removed!",
+                        style="green",
                     )
                 )
                 if hasattr(self.app, "session_state") and hasattr(self.app.session_state, "reload_mcp_servers"):
@@ -1290,12 +1281,7 @@ class McpScreen(ModalScreen[None]):
                     self.app.agent = new_agent
                     self.app.backend = new_backend
             except Exception as ex:  # noqa: BLE001
-                self.app.query_one("#transcript", VerticalScroll).mount(
-                    Static(
-                        Text(f"Remove failed: {ex}", style="red"),
-                        classes="logline",
-                    )
-                )
+                self.app._log(Text(f"Remove failed: {ex}", style="red"))
             self._reload()
 
     @work
@@ -1337,13 +1323,10 @@ class McpScreen(ModalScreen[None]):
             config = create_config_from_preset(preset_id, user_inputs)
             if config:
                 MCPConfig().add_server(preset_id, config)
-                self.app.query_one("#transcript", VerticalScroll).mount(
-                    Static(
-                        Text(
-                            f"\u2713 MCP preset '{preset['name']}' installed!",
-                            style="green",
-                        ),
-                        classes="logline",
+                self.app._log(
+                    Text(
+                        f"\u2713 MCP preset '{preset['name']}' installed!",
+                        style="green",
                     )
                 )
                 if hasattr(self.app, "session_state") and hasattr(self.app.session_state, "reload_mcp_servers"):
@@ -1351,12 +1334,7 @@ class McpScreen(ModalScreen[None]):
                     self.app.agent = new_agent
                     self.app.backend = new_backend
         except Exception as ex:  # noqa: BLE001
-            self.app.query_one("#transcript", VerticalScroll).mount(
-                Static(
-                    Text(f"Install failed: {ex}", style="red"),
-                    classes="logline",
-                )
-            )
+            self.app._log(Text(f"Install failed: {ex}", style="red"))
         self._reload()
 
     @work
@@ -1383,13 +1361,10 @@ class McpScreen(ModalScreen[None]):
                         description=result.get("description") or None,
                     )
                 MCPConfig().add_server(name, config)
-                self.app.query_one("#transcript", VerticalScroll).mount(
-                    Static(
-                        Text(
-                            f"\u2713 Custom MCP '{name}' added!",
-                            style="green",
-                        ),
-                        classes="logline",
+                self.app._log(
+                    Text(
+                        f"\u2713 Custom MCP '{name}' added!",
+                        style="green",
                     )
                 )
                 if hasattr(self.app, "session_state") and hasattr(self.app.session_state, "reload_mcp_servers"):
@@ -1397,12 +1372,7 @@ class McpScreen(ModalScreen[None]):
                     self.app.agent = new_agent
                     self.app.backend = new_backend
             except Exception as ex:  # noqa: BLE001
-                self.app.query_one("#transcript", VerticalScroll).mount(
-                    Static(
-                        Text(f"Add custom MCP failed: {ex}", style="red"),
-                        classes="logline",
-                    )
-                )
+                self.app._log(Text(f"Add custom MCP failed: {ex}", style="red"))
             self._reload()
 
     def action_close(self) -> None:
@@ -1973,6 +1943,7 @@ class AgentsScreen(ModalScreen[None]):
     def __init__(self) -> None:
         super().__init__()
         self._agents: list[tuple[str, Path, str]] = []  # list of (name, path, scope)
+        self._generating = False
 
     def compose(self) -> ComposeResult:
         with Vertical(id="modal-box"):
@@ -2086,11 +2057,12 @@ class AgentsScreen(ModalScreen[None]):
         if event.button.id == "close":
             self.dismiss(None)
         elif event.button.id == "create":
-            self._create_agent()
+            if not self._generating:
+                self.app.run_worker(self._create_agent(), group="create_agent", exclusive=True)
         elif event.button.id == "delete":
-            self._delete_agent()
+            if not self._generating:
+                self._delete_agent()
 
-    @work
     async def _create_agent(self) -> None:
         result = await self.app.push_screen_wait(AgentCreateModal())
         if result is not None:
@@ -2108,20 +2080,29 @@ class AgentsScreen(ModalScreen[None]):
                 agent_dir = settings.get_agents_root_dir() / name
 
             if agent_dir.exists():
-                self.app.query_one("#transcript", VerticalScroll).mount(
-                    Static(
-                        Text(f"Agent '{name}' already exists in that scope.", style="yellow"),
-                        classes="logline",
-                    )
-                )
+                if self.is_mounted:
+                    try:
+                        hint = self.query_one("#agents-hint", Static)
+                        hint.update(Text(f"Agent '{name}' already exists in that scope.", style="yellow"))
+                    except Exception:
+                        pass
+                self.app._log(Text(f"Agent '{name}' already exists in that scope.", style="yellow"))
                 return
 
-            self.app.query_one("#transcript", VerticalScroll).mount(
-                Static(
-                    Text(f"Generating system prompt for @{name} using AI...", style="cyan"),
-                    classes="logline",
-                )
-            )
+            self._generating = True
+            if self.is_mounted:
+                try:
+                    self.query_one("#create", Button).disabled = True
+                    self.query_one("#delete", Button).disabled = True
+                except Exception:
+                    pass
+
+                try:
+                    hint = self.query_one("#agents-hint", Static)
+                    hint.update(Text(f"Generating system prompt for @{name} using AI... Please wait.", style="bold cyan"))
+                except Exception:
+                    pass
+            self.app._log(Text(f"Generating system prompt for @{name} using AI...", style="cyan"))
 
             try:
                 from novacode_cli.commands.agents_commands import _generate_agent_system_prompt
@@ -2140,24 +2121,36 @@ description: {desc}
                 agent_md = agent_dir / "agent.md"
                 agent_md.write_text(final_content, encoding="utf-8")
 
-                self.app.query_one("#transcript", VerticalScroll).mount(
-                    Static(
-                        Text(f"✓ Custom subagent '@{name}' created successfully!", style="green"),
-                        classes="logline",
-                    )
-                )
+                if self.is_mounted:
+                    try:
+                        hint = self.query_one("#agents-hint", Static)
+                        hint.update(Text(f"✓ Custom subagent '@{name}' created successfully!", style="green"))
+                    except Exception:
+                        pass
+                self.app._log(Text(f"✓ Custom subagent '@{name}' created successfully!", style="green"))
                 self.app._agent_names_cache = None
             except Exception as e:
-                self.app.query_one("#transcript", VerticalScroll).mount(
-                    Static(
-                        Text(f"Failed to create agent: {e}", style="red"),
-                        classes="logline",
-                    )
-                )
-            self._reload()
+                if self.is_mounted:
+                    try:
+                        hint = self.query_one("#agents-hint", Static)
+                        hint.update(Text(f"Failed to create agent: {e}", style="red"))
+                    except Exception:
+                        pass
+                self.app._log(Text(f"Failed to create agent: {e}", style="red"))
+            
+            self._generating = False
+            if self.is_mounted:
+                try:
+                    self.query_one("#create", Button).disabled = False
+                    self.query_one("#delete", Button).disabled = False
+                except Exception:
+                    pass
+                self._reload()
 
     @work
     async def _delete_agent(self) -> None:
+        if self._generating:
+            return
         ol = self.query_one("#agents-list", OptionList)
         idx = ol.highlighted
         if idx is None or not self._agents or not (0 <= idx < len(self._agents)):
@@ -2174,23 +2167,15 @@ description: {desc}
             import shutil
             try:
                 shutil.rmtree(path)
-                self.app.query_one("#transcript", VerticalScroll).mount(
-                    Static(
-                        Text(f"✓ Deleted subagent '@{name}'!", style="green"),
-                        classes="logline",
-                    )
-                )
+                self.app._log(Text(f"✓ Deleted subagent '@{name}'!", style="green"))
                 self.app._agent_names_cache = None
             except Exception as e:
-                self.app.query_one("#transcript", VerticalScroll).mount(
-                    Static(
-                        Text(f"Failed to delete subagent: {e}", style="red"),
-                        classes="logline",
-                    )
-                )
+                self.app._log(Text(f"Failed to delete subagent: {e}", style="red"))
             self._reload()
 
     def action_close(self) -> None:
+        if self._generating:
+            return
         self.dismiss(None)
 
 
@@ -2278,6 +2263,10 @@ class SkillsScreen(ModalScreen[None]):
     """Native skills manager: list installed skills, view details, create new skills."""
 
     BINDINGS = [("escape", "close", "Close")]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._generating = False
 
     def compose(self) -> ComposeResult:
         with Vertical(id="modal-box"):
@@ -2400,9 +2389,9 @@ class SkillsScreen(ModalScreen[None]):
         if event.button.id == "close":
             self.dismiss(None)
         elif event.button.id == "create":
-            self._create_skill()
+            if not self._generating:
+                self.app.run_worker(self._create_skill(), group="create_skill", exclusive=True)
 
-    @work
     async def _create_skill(self) -> None:
         result = await self.app.push_screen_wait(SkillCreateModal())
         if result is not None:
@@ -2410,30 +2399,38 @@ class SkillsScreen(ModalScreen[None]):
             desc = result["description"]
             scope = result["scope"]
 
-            self.app.query_one("#transcript", VerticalScroll).mount(
-                Static(
-                    Text(f"Generating skill '{name}' using AI...", style="cyan"),
-                    classes="logline",
-                )
-            )
+            from novacode_cli.config.config import settings
+            if scope == "project":
+                base_dir = settings.ensure_project_skills_dir()
+            else:
+                base_dir = settings.ensure_user_skills_dir(self.app.assistant_id)
+
+            skill_dir = base_dir / name
+            if skill_dir.exists():
+                if self.is_mounted:
+                    try:
+                        hint = self.query_one("#skills-hint", Static)
+                        hint.update(Text(f"Skill '{name}' already exists.", style="yellow"))
+                    except Exception:
+                        pass
+                self.app._log(Text(f"Skill '{name}' already exists.", style="yellow"))
+                return
+
+            self._generating = True
+            if self.is_mounted:
+                try:
+                    self.query_one("#create", Button).disabled = True
+                except Exception:
+                    pass
+
+                try:
+                    hint = self.query_one("#skills-hint", Static)
+                    hint.update(Text(f"Generating skill '{name}' using AI... Please wait.", style="bold cyan"))
+                except Exception:
+                    pass
+            self.app._log(Text(f"Generating skill '{name}' using AI...", style="cyan"))
 
             try:
-                from novacode_cli.config.config import settings
-                if scope == "project":
-                    base_dir = settings.ensure_project_skills_dir()
-                else:
-                    base_dir = settings.ensure_user_skills_dir(self.app.assistant_id)
-
-                skill_dir = base_dir / name
-                if skill_dir.exists():
-                    self.app.query_one("#transcript", VerticalScroll).mount(
-                        Static(
-                            Text(f"Skill '{name}' already exists.", style="yellow"),
-                            classes="logline",
-                        )
-                    )
-                    return
-
                 skill_dir.mkdir(parents=True, exist_ok=True)
                 
                 from novacode_cli.skills.skill_creation import _generate_skill
@@ -2446,20 +2443,234 @@ class SkillsScreen(ModalScreen[None]):
                 if content is None:
                     raise RuntimeError("AI generation returned empty response.")
 
-                self.app.query_one("#transcript", VerticalScroll).mount(
-                    Static(
-                        Text(f"✓ Skill '{name}' created successfully!", style="green"),
-                        classes="logline",
-                    )
-                )
+                if self.is_mounted:
+                    try:
+                        hint = self.query_one("#skills-hint", Static)
+                        hint.update(Text(f"✓ Skill '{name}' created successfully!", style="green"))
+                    except Exception:
+                        pass
+                self.app._log(Text(f"✓ Skill '{name}' created successfully!", style="green"))
             except Exception as e:
-                self.app.query_one("#transcript", VerticalScroll).mount(
-                    Static(
-                        Text(f"Failed to create skill: {e}", style="red"),
-                        classes="logline",
-                    )
-                )
+                if self.is_mounted:
+                    try:
+                        hint = self.query_one("#skills-hint", Static)
+                        hint.update(Text(f"Failed to create skill: {e}", style="red"))
+                    except Exception:
+                        pass
+                self.app._log(Text(f"Failed to create skill: {e}", style="red"))
+            
+            self._generating = False
+            if self.is_mounted:
+                try:
+                    self.query_one("#create", Button).disabled = False
+                except Exception:
+                    pass
+                self._reload()
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
+class WikiScreen(ModalScreen[None]):
+    """Native wiki manager: browse synthesized wiki pages, view details, ingest raw sources."""
+
+    BINDINGS = [("escape", "close", "Close")]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._pages: list[tuple[str, str, str]] = []  # list of (topic, path, summary)
+        self._sources: list[str] = []  # list of raw source paths
+        self._active_tab = "pages"  # "pages" or "inbox"
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="modal-box"):
+            yield Static(Text("Obsidian LLM Wiki Browser", style="bold"), id="modal-title")
+            
+            with Horizontal(id="wiki-tab-buttons"):
+                yield Button("Synthesized Pages", id="tab-pages", variant="primary")
+                yield Button("Web Clipper Inbox", id="tab-inbox")
+            
+            with Vertical(id="pages-container"):
+                yield Static(Text("Synthesized Pages:", style="bold cyan"), id="pages-header")
+                yield OptionList(id="wiki-pages-list")
+            
+            with Vertical(id="inbox-container"):
+                yield Static(Text("Clipper Inbox / raw:", style="bold cyan"), id="inbox-header")
+                yield OptionList(id="wiki-inbox-list")
+                
+            yield Static(Text("Preview:", style="bold yellow"), id="wiki-detail-header")
+            yield Static("", id="wiki-detail-preview", classes="preview-box")
+            yield Static("", id="wiki-hint")
+            
+            with Horizontal(id="modal-buttons"):
+                yield Button("Ask About Page", id="ask-btn", variant="primary")
+                yield Button("Ingest Selected", id="ingest-btn", variant="primary")
+                yield Button("Refresh", id="refresh-btn")
+                yield Button("Close", id="close")
+
+    def on_mount(self) -> None:
+        animate_modal_screen(self)
+        self._reload()
+        self._switch_tab("pages")
+
+    def _reload(self) -> None:
+        from novacode_cli.wiki.manager import WikiManager
+        from novacode_cli.wiki.ingest import IngestEngine
+
+        # Synthesized Pages
+        try:
+            mgr = WikiManager()
+            mgr.ensure_structure()
+            entries = mgr.read_index()
+            self._pages = sorted(
+                [(topic, info["path"], info.get("summary", "")) for topic, info in entries.items()],
+                key=lambda x: x[0].lower()
+            )
+        except Exception:
+            self._pages = []
+
+        # Clipper Inbox / raw sources
+        try:
+            engine = IngestEngine()
+            self._sources = engine.list_raw_sources()
+        except Exception:
+            self._sources = []
+
+        # Update lists
+        ol_pages = self.query_one("#wiki-pages-list", OptionList)
+        ol_pages.clear_options()
+        for topic, path, summary in self._pages:
+            label = Text.assemble(
+                (f"{topic} ", "bold #7bb6ec"),
+                (f"({path}) ", "dim"),
+                (f"— {summary}" if summary else "", "dim")
+            )
+            ol_pages.add_option(Option(label))
+        if self._pages:
+            ol_pages.highlighted = 0
+
+        ol_inbox = self.query_one("#wiki-inbox-list", OptionList)
+        ol_inbox.clear_options()
+        for s in self._sources:
+            label = Text(s, style="bold #a6e3a1")
+            ol_inbox.add_option(Option(label))
+        if self._sources:
+            ol_inbox.highlighted = 0
+
+        # Reset preview
+        self._update_preview()
+
+    def _switch_tab(self, tab: str) -> None:
+        self._active_tab = tab
+        if tab == "pages":
+            self.query_one("#tab-pages", Button).variant = "primary"
+            self.query_one("#tab-inbox", Button).variant = "default"
+            self.query_one("#pages-container").display = True
+            self.query_one("#inbox-container").display = False
+            self.query_one("#ask-btn", Button).display = True
+            self.query_one("#ingest-btn", Button).display = False
+            try:
+                self.query_one("#wiki-pages-list", OptionList).focus()
+            except Exception:
+                pass
+        else:
+            self.query_one("#tab-pages", Button).variant = "default"
+            self.query_one("#tab-inbox", Button).variant = "primary"
+            self.query_one("#pages-container").display = False
+            self.query_one("#inbox-container").display = True
+            self.query_one("#ask-btn", Button).display = False
+            self.query_one("#ingest-btn", Button).display = True
+            try:
+                self.query_one("#wiki-inbox-list", OptionList).focus()
+            except Exception:
+                pass
+
+        self._update_preview()
+
+    def _update_preview(self) -> None:
+        preview = self.query_one("#wiki-detail-preview", Static)
+        hint = self.query_one("#wiki-hint", Static)
+
+        if self._active_tab == "pages":
+            ol = self.query_one("#wiki-pages-list", OptionList)
+            idx = ol.highlighted
+            if idx is None and self._pages:
+                idx = 0
+            if idx is not None and 0 <= idx < len(self._pages):
+                topic, path, summary = self._pages[idx]
+                from novacode_cli.wiki.manager import WikiManager
+                try:
+                    mgr = WikiManager()
+                    content = mgr.read_page(path)
+                    if content:
+                        preview.update(Text(content))
+                    else:
+                        preview.update(Text("Could not load page content.", style="red"))
+                except Exception as ex:
+                    preview.update(Text(f"Error loading page: {ex}", style="red"))
+                hint.update(Text("Press Ask About Page to query this page.", style="dim"))
+            else:
+                preview.update(Text("Select a page from the list to preview.", style="dim"))
+                hint.update(Text(""))
+        else:
+            ol = self.query_one("#wiki-inbox-list", OptionList)
+            idx = ol.highlighted
+            if idx is None and self._sources:
+                idx = 0
+            if idx is not None and 0 <= idx < len(self._sources):
+                source_path = self._sources[idx]
+                from novacode_cli.wiki.ingest import IngestEngine
+                try:
+                    engine = IngestEngine()
+                    source_full = engine.resolve_source(source_path)
+                    content = source_full.read_text(encoding="utf-8")
+                    preview.update(Text(content))
+                except Exception as ex:
+                    preview.update(Text(f"Error loading source: {ex}", style="red"))
+                hint.update(Text("Press Ingest Selected to parse this source.", style="dim"))
+            else:
+                preview.update(Text("Select a source file to preview.", style="dim"))
+                hint.update(Text(""))
+
+    def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        self._update_preview()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if self._active_tab == "pages":
+            self._ask_about_selected()
+        else:
+            self._ingest_selected()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "close":
+            self.dismiss(None)
+        elif event.button.id == "tab-pages":
+            self._switch_tab("pages")
+        elif event.button.id == "tab-inbox":
+            self._switch_tab("inbox")
+        elif event.button.id == "refresh-btn":
             self._reload()
+        elif event.button.id == "ingest-btn":
+            self._ingest_selected()
+        elif event.button.id == "ask-btn":
+            self._ask_about_selected()
+
+    def _ingest_selected(self) -> None:
+        ol = self.query_one("#wiki-inbox-list", OptionList)
+        if ol.highlighted is not None and 0 <= ol.highlighted < len(self._sources):
+            source_path = self._sources[ol.highlighted]
+            self.dismiss(None)
+            self.app._dispatch(f"/ingest {source_path}")
+
+    def _ask_about_selected(self) -> None:
+        ol = self.query_one("#wiki-pages-list", OptionList)
+        if ol.highlighted is not None and 0 <= ol.highlighted < len(self._pages):
+            topic, path, summary = self._pages[ol.highlighted]
+            self.dismiss(None)
+            inp = self.app.query_one("#prompt", Input)
+            inp.value = f"/ask regarding [[{topic}]]: "
+            inp.cursor_position = len(inp.value)
+            inp.focus()
 
     def action_close(self) -> None:
         self.dismiss(None)
@@ -2671,12 +2882,7 @@ class HooksScreen(ModalScreen[None]):
             from novacode_cli.commands.hooks_handler import _save_hooks
             self._hooks.append(result)
             ok = _save_hooks(self._hooks)
-            self.app.query_one("#transcript", VerticalScroll).mount(
-                Static(
-                    Text(f"✓ Hook added: {' '.join(result['command'])}" if ok else "Failed to save hook configuration", style="green" if ok else "red"),
-                    classes="logline"
-                )
-            )
+            self.app._log(Text(f"✓ Hook added: {' '.join(result['command'])}" if ok else "Failed to save hook configuration", style="green" if ok else "red"))
             self._reload()
 
     @work
@@ -2689,12 +2895,7 @@ class HooksScreen(ModalScreen[None]):
             h["enabled"] = not h.get("enabled", True)
             ok = _save_hooks(self._hooks)
             action = "enabled" if h["enabled"] else "disabled"
-            self.app.query_one("#transcript", VerticalScroll).mount(
-                Static(
-                    Text(f"✓ Hook {action}: {' '.join(h['command'])}" if ok else "Failed to save hook configuration", style="green" if ok else "red"),
-                    classes="logline"
-                )
-            )
+            self.app._log(Text(f"✓ Hook {action}: {' '.join(h['command'])}" if ok else "Failed to save hook configuration", style="green" if ok else "red"))
             self._reload()
 
     @work
@@ -2704,9 +2905,7 @@ class HooksScreen(ModalScreen[None]):
         if idx is not None and 0 <= idx < len(self._hooks):
             h = self._hooks[idx]
             command = h.get("command", [])
-            self.app.query_one("#transcript", VerticalScroll).mount(
-                Static(Text(f"Testing hook: {' '.join(command)}...", style="cyan"), classes="logline")
-            )
+            self.app._log(Text(f"Testing hook: {' '.join(command)}...", style="cyan"))
             import time
             from novacode_cli.hooks import dispatch_hook
             test_payload = {
@@ -2716,13 +2915,9 @@ class HooksScreen(ModalScreen[None]):
             }
             try:
                 await dispatch_hook("test", test_payload)
-                self.app.query_one("#transcript", VerticalScroll).mount(
-                    Static(Text("✓ Test event fired successfully! Check hook logs.", style="green"), classes="logline")
-                )
+                self.app._log(Text("✓ Test event fired successfully! Check hook logs.", style="green"))
             except Exception as e:
-                self.app.query_one("#transcript", VerticalScroll).mount(
-                    Static(Text(f"✗ Test failed: {e}", style="red"), classes="logline")
-                )
+                self.app._log(Text(f"✗ Test failed: {e}", style="red"))
 
     @work
     async def _remove_hook(self) -> None:
@@ -2740,20 +2935,13 @@ class HooksScreen(ModalScreen[None]):
                 from novacode_cli.commands.hooks_handler import _save_hooks
                 removed = self._hooks.pop(idx)
                 saved = _save_hooks(self._hooks)
-                self.app.query_one("#transcript", VerticalScroll).mount(
-                    Static(
-                        Text(f"✓ Removed hook: {' '.join(removed.get('command', []))}" if saved else "Failed to save hook configuration", style="green" if saved else "red"),
-                        classes="logline"
-                    )
-                )
+                self.app._log(Text(f"✓ Removed hook: {' '.join(removed.get('command', []))}" if saved else "Failed to save hook configuration", style="green" if saved else "red"))
                 self._reload()
 
     def _reload_hooks(self) -> None:
         from novacode_cli.hooks import reload_hooks
         reload_hooks()
-        self.app.query_one("#transcript", VerticalScroll).mount(
-            Static(Text("✓ Hooks configuration reloaded from disk", style="green"), classes="logline")
-        )
+        self.app._log(Text("✓ Hooks configuration reloaded from disk", style="green"))
         self._reload()
 
     def action_close(self) -> None:
@@ -2879,9 +3067,7 @@ class ServersScreen(ModalScreen[None]):
         if idx is not None and 0 <= idx < len(self._servers):
             import webbrowser
             webbrowser.open(self._servers[idx].url)
-            self.app.query_one("#transcript", VerticalScroll).mount(
-                Static(Text(f"✓ Opened {self._servers[idx].url}", style="green"), classes="logline")
-            )
+            self.app._log(Text(f"✓ Opened {self._servers[idx].url}", style="green"))
 
     @work
     async def _stop_server(self) -> None:
@@ -2893,24 +3079,14 @@ class ServersScreen(ModalScreen[None]):
                 return
             from novacode_cli.server_runner.dev_server import stop_server
             ok = await stop_server(pid=s.pid)
-            self.app.query_one("#transcript", VerticalScroll).mount(
-                Static(
-                    Text(f"✓ Stopped '{s.name}' (PID {s.pid})" if ok else f"Failed to stop server '{s.name}'", style="green" if ok else "red"),
-                    classes="logline"
-                )
-            )
+            self.app._log(Text(f"✓ Stopped '{s.name}' (PID {s.pid})" if ok else f"Failed to stop server '{s.name}'", style="green" if ok else "red"))
             self._reload()
 
     @work
     async def _stop_all(self) -> None:
         from novacode_cli.process_manager import ProcessManager
         count = await ProcessManager.get_instance().stop_all()
-        self.app.query_one("#transcript", VerticalScroll).mount(
-            Static(
-                Text(f"✓ Stopped {count} managed server(s)" if count else "No managed servers to stop", style="green" if count else "yellow"),
-                classes="logline"
-            )
-        )
+        self.app._log(Text(f"✓ Stopped {count} managed server(s)" if count else "No managed servers to stop", style="green" if count else "yellow"))
         self._reload()
 
     def action_close(self) -> None:
@@ -3181,12 +3357,14 @@ class RalphScreen(ModalScreen[None]):
         self.query_one("#ralph-header", Static).update(
             Text("Starting Ralph run…", style="dim italic")
         )
-        self._run_ralph()
+        self.app.run_worker(self._run_ralph(), group="ralph", exclusive=True)
 
     # ── Event handlers ─────────────────────────────────────────────
 
     def _on_ralph_event(self, event: Any) -> None:
         """Drive modal widgets from structured Ralph events."""
+        if not self.is_mounted:
+            return
         from novacode_cli.commands import ralph_events as rev
 
         if isinstance(event, rev.RalphStarted):
@@ -3257,6 +3435,7 @@ class RalphScreen(ModalScreen[None]):
             try:
                 self.query_one("#ralph-stop", Button).disabled = True
                 self.query_one("#ralph-checkpoint", Button).disabled = True
+                self.query_one("#ralph-close", Button).disabled = False
             except Exception:  # noqa: BLE001
                 pass
 
@@ -3339,9 +3518,6 @@ class RalphScreen(ModalScreen[None]):
                 t.append(f"\n    {error}", style="red")
         return t
 
-    # ── Run the handler ────────────────────────────────────────────
-
-    @work(exclusive=True, group="ralph")
     async def _run_ralph(self) -> None:
         """Kick off the Ralph handler with events routed to this modal."""
         import threading
@@ -3387,10 +3563,30 @@ class RalphScreen(ModalScreen[None]):
                 emit=_emit,
                 on_event=_on_event,
             )
+        except asyncio.CancelledError:
+            self._finished = True
+            if self.is_mounted:
+                try:
+                    self.query_one("#ralph-summary", Static).update(
+                        Text("⏹ Ralph run stopped / cancelled by user.", style="yellow bold")
+                    )
+                    self.query_one("#ralph-stop", Button).disabled = True
+                    self.query_one("#ralph-checkpoint", Button).disabled = True
+                    self.query_one("#ralph-close", Button).disabled = False
+                except Exception:  # noqa: BLE001
+                    pass
         except Exception as ex:  # noqa: BLE001
-            self.query_one("#ralph-summary", Static).update(
-                Text(f"Error: {ex}", style="red bold")
-            )
+            self._finished = True
+            if self.is_mounted:
+                try:
+                    self.query_one("#ralph-summary", Static).update(
+                        Text(f"Error: {ex}", style="red bold")
+                    )
+                    self.query_one("#ralph-stop", Button).disabled = True
+                    self.query_one("#ralph-checkpoint", Button).disabled = True
+                    self.query_one("#ralph-close", Button).disabled = False
+                except Exception:  # noqa: BLE001
+                    pass
 
     # ── Button handling ────────────────────────────────────────────
 
@@ -3399,16 +3595,29 @@ class RalphScreen(ModalScreen[None]):
         if bid == "ralph-close":
             self.dismiss(None)
         elif bid == "ralph-stop":
+            self._ss._ralph_stop_requested = True  # noqa: SLF001
             self._stop_requested = True
-            self.workers.cancel_group(self, "ralph")
-            self.query_one("#ralph-summary", Static).update(
-                Text("⏹ Stop requested…", style="yellow bold")
-            )
+            self.app.workers.cancel_group(self.app, "ralph")
+            if self.is_mounted:
+                try:
+                    self.query_one("#ralph-summary", Static).update(
+                        Text("⏹ Stop requested…", style="yellow bold")
+                    )
+                    self.query_one("#ralph-stop", Button).disabled = True
+                    self.query_one("#ralph-checkpoint", Button).disabled = True
+                except Exception:  # noqa: BLE001
+                    pass
         elif bid == "ralph-checkpoint":
             self._ss._ralph_checkpoint_requested = True  # noqa: SLF001
-            self.query_one("#ralph-summary", Static).update(
-                Text("💾 Checkpoint requested…", style="yellow")
-            )
+            if self.is_mounted:
+                try:
+                    self.query_one("#ralph-summary", Static).update(
+                        Text("💾 Checkpoint requested…", style="yellow")
+                    )
+                    self.query_one("#ralph-stop", Button).disabled = True
+                    self.query_one("#ralph-checkpoint", Button).disabled = True
+                except Exception:  # noqa: BLE001
+                    pass
 
     def action_close(self) -> None:
         self.dismiss(None)
@@ -3795,9 +4004,22 @@ class NovaApp(App):
     #modal-title { margin-bottom: 1; padding: 0 0; }
     #modal-body { padding: 0 0; }
     /* Long lists scroll inside the box instead of overflowing the screen. */
-    #sessions, #pick-list, #infolist, #mcp-configured, #mcp-presets, #plugins, #agents-list, #skills-list, #servers-list, #hooks-list {
+    #sessions, #pick-list, #infolist, #mcp-configured, #mcp-presets, #plugins, #agents-list, #skills-list, #servers-list, #hooks-list, #wiki-pages-list, #wiki-inbox-list {
         height: auto; max-height: 40%;
         padding: 0 2;
+    }
+    #wiki-tab-buttons {
+        height: auto;
+        margin-bottom: 1;
+    }
+    #wiki-tab-buttons Button {
+        margin-right: 1;
+    }
+    #pages-container, #inbox-container {
+        height: auto;
+    }
+    #pages-header, #inbox-header {
+        margin-bottom: 0;
     }
     .preview-box {
         background: $boost;
@@ -3891,6 +4113,7 @@ class NovaApp(App):
         self._reasoning_buf = ""  # accumulating reasoning trace
         self._stream_msg: ChatMessage | None = None  # in-progress Nova answer widget
         self._reason_msg: ChatMessage | None = None  # in-progress reasoning widget
+        self._current_assistant_id: str | None = None
         # Streaming coalescing: deltas append to the buffers above, but the widget
         # is only repainted on a ~50ms timer (see _flush_stream) so a fast token
         # stream doesn't trigger a full re-render + scroll per token.
@@ -3972,7 +4195,7 @@ class NovaApp(App):
     def _current_agent_info(self) -> tuple[str, str]:
         from novacode_cli.ui.input_preparation import get_agent_display_name
         from novacode_cli.config.config import get_agent_color
-        aid = self.assistant_id
+        aid = self._current_assistant_id or self.assistant_id
         name = get_agent_display_name(aid)
         color = get_agent_color(aid) if name != "Nova" else "#10b981"
         return name, color
@@ -4029,6 +4252,8 @@ class NovaApp(App):
             pass
 
     def on_mount(self) -> None:
+        import threading
+        self._thread_id = threading.get_ident()
         # Register Nova's palette and apply the saved (or default) theme first,
         # so the whole UI renders with the right colors from the first frame.
         self._apply_saved_theme()
@@ -4165,7 +4390,13 @@ class NovaApp(App):
         """
         w = self._w_cache.get(selector)
         if w is None:
-            w = self.query_one(selector, kind)
+            try:
+                w = self.query_one(selector, kind)
+            except NoMatches:
+                if self.screen_stack:
+                    w = self.screen_stack[0].query_one(selector, kind)
+                else:
+                    raise
             self._w_cache[selector] = w
         return w
 
@@ -4620,6 +4851,7 @@ class NovaApp(App):
         self._subagent_count = 0
         self._subagent_tool_to_task.clear()
         self._todo_widget = None  # next turn starts a fresh todo block
+        self._current_assistant_id = None
 
     def _flush_stream(self) -> None:
         """Repaint the in-progress stream/reasoning widgets from their buffers.
@@ -5498,8 +5730,28 @@ class NovaApp(App):
         if frag is not None:
             return self._at_candidates(frag[1])
 
-        # Slash contexts are line-level: a space means the token is complete.
+        # Slash contexts are line-level: a space means the token is complete,
+        # unless it is a command like `/ingest` or `/file` that takes arguments.
         if " " in value or not value:
+            if value.startswith("/ingest "):
+                prefix = value[len("/ingest "):].strip()
+                try:
+                    from novacode_cli.wiki.ingest import IngestEngine
+                    from pathlib import Path
+                    engine = IngestEngine()
+                    sources = engine.list_raw_sources()
+                    matches = []
+                    for s in sources:
+                        if not prefix or prefix.lower() in s.lower() or prefix.lower() in Path(s).name.lower():
+                            matches.append(s)
+                    return [f"/ingest {s}" for s in matches[:50]]
+                except Exception:
+                    return []
+            elif value.startswith("/file "):
+                prefix = value[len("/file "):].strip()
+                categories = ["technologies/", "frameworks/", "patterns/", "projects/", "comparisons/"]
+                matches = [c for c in categories if not prefix or c.lower().startswith(prefix.lower())]
+                return [f"/file {c}" for c in matches]
             return []
         v = value.lower()
         # /skill:<name> — invoke a skill
@@ -5907,7 +6159,7 @@ class NovaApp(App):
         # If a plan was approved during this turn, hand off to the main agent.
         await self._maybe_run_approved_plan()
 
-    async def _stream_prompt(self, text: str) -> None:
+    async def _stream_prompt(self, text: str, assistant_id: str | None = None) -> None:
         """Run a single prompt through the agent and render its events.
 
         Serialized on the shared remote lock so local and remote turns never
@@ -5915,15 +6167,16 @@ class NovaApp(App):
         """
         lock = getattr(self.session_state, "_remote_message_lock", None)
         self._reset_streaming()
+        self._current_assistant_id = assistant_id
         self._turn_active = True
         self._turn_start = time.monotonic()
         self._set_status("thinking…")
         try:
             if lock is not None:
                 async with lock:
-                    await self._do_stream(text)
+                    await self._do_stream(text, assistant_id)
             else:
-                await self._do_stream(text)
+                await self._do_stream(text, assistant_id)
         except asyncio.CancelledError:
             self._reset_streaming()
             self._log(Text("Cancelled.", style="yellow"))
@@ -6088,12 +6341,13 @@ class NovaApp(App):
             # Dropped back below the warning line (e.g. after /compact) — re-arm.
             self._ctx_warned = False
 
-    async def _do_stream(self, text: str) -> None:
+    async def _do_stream(self, text: str, assistant_id: str | None = None) -> None:
         ag, backend = self._active_agent()
+        aid = assistant_id or self.assistant_id
         async for e in run_agent_stream(
             text,
             ag,
-            self.assistant_id,
+            aid,
             self.session_state,
             backend=backend,
             image_tracker=self.image_tracker,
@@ -6336,6 +6590,7 @@ class NovaApp(App):
             "• /verbose — toggle settings\n"
             "• /ingest <path> — ingest a raw source into the wiki\n"
             "• /ask <question> — ask with wiki context\n"
+            "• /wiki — show Obsidian LLM Wiki browser\n"
             "• /research <query> — launch multi-agent research swarm\n"
             "• /ralph <task> — run autonomously (looping mode)\n"
             "• /evolution — view self-evolution logs\n"
@@ -6748,6 +7003,8 @@ class NovaApp(App):
             await self._run_ask(text)
         elif cmd == "file":
             await self._run_file(text)
+        elif cmd == "wiki":
+            await self._run_wiki()
         elif cmd == "dream":
             await self._run_dream()
         elif cmd == "evolution":
@@ -6789,6 +7046,8 @@ class NovaApp(App):
             await self._run_create(text)
         elif cmd == "council":
             await self._run_chat(text)
+        elif cmd == "effort":
+            await self._run_effort(text)
         elif cmd in ("plugins", "plugin"):
             await self.push_screen_wait(PluginsScreen())
             # Reload plugin commands so newly-enabled command plugins work this
@@ -6969,6 +7228,18 @@ class NovaApp(App):
             out = cap.get()
             if out.strip():
                 self._log(Text.from_ansi(out))
+            # Sync active TUI agent/backend in case model was switched dynamically
+            if self.session_state is not None:
+                self.agent = self.session_state.agent
+                self.backend = self.session_state.backend
+                model = getattr(self.session_state, "model", None)
+                if model:
+                    self.model_name = getattr(model, "model_name", None) or getattr(model, "model", "unknown")
+                    if self.token_tracker is not None:
+                        try:
+                            self.token_tracker.set_model(self.model_name)
+                        except Exception:  # noqa: BLE001
+                            pass
             # Some handlers return a prompt string to feed back to the agent.
             if isinstance(result, str):
                 await self._stream_prompt(result)
@@ -7190,6 +7461,11 @@ class NovaApp(App):
             self.session_state.auto_approve = _prev_auto
             self._turn_active = False
             self._set_status("ready")
+            if self._init_widget is not None:
+                try:
+                    await self._init_widget.remove()
+                except Exception:  # noqa: BLE001
+                    pass
             self._init_widget = None
             self._init_steps = []
 
@@ -7449,6 +7725,7 @@ class NovaApp(App):
                 assistant_id=getattr(self.session_state, "_assistant_id", None) or "nova",
                 tools=[ask_user_question, enter_plan_mode, exit_plan_mode],
                 steering_instructions=getattr(self.session_state, "steering_instructions", None),
+                auto_approve=getattr(self.session_state, "auto_approve", False),
                 # Share the core agent's checkpointer + store so plan mode sees
                 # the ongoing conversation (same thread_id) and persists.
                 checkpointer=getattr(self.session_state, "_checkpointer", None),
@@ -7458,7 +7735,8 @@ class NovaApp(App):
             self._update_mode_badge()
             self.session_state.plan_content = None
             self.session_state.approved_plan_content = None
-            self.session_state.auto_approve = False
+            if not getattr(self.session_state, "auto_approve", False):
+                self.session_state.auto_approve = False
             self.session_state.plan_agent = plan_agent
             self.session_state.plan_backend = plan_backend
             return True
@@ -7639,7 +7917,7 @@ class NovaApp(App):
         self._seen.clear()
         self._restored_messages = []
 
-        await self.query_one("#transcript", VerticalScroll).remove_children()
+        await self._transcript().remove_children()
 
         # Refresh the home screen: re-show the ASCII-art banner so /clear looks
         # like a fresh launch, not just an empty transcript.
@@ -7704,6 +7982,59 @@ class NovaApp(App):
             rain.reflow(get_responsive_ascii(width=width), width)
         except Exception:  # noqa: BLE001
             pass
+
+    async def _run_effort(self, text: str) -> None:
+        """Handle /effort natively: set reasoning effort level."""
+        from novacode_cli.config.nova_config import NovaConfig
+        from novacode_cli.config.model_create import create_model
+
+        parts = text.split(maxsplit=1)
+        args = parts[1].strip() if len(parts) > 1 else ""
+        nova_config = NovaConfig()
+        current = nova_config.get("reasoning_effort", "off")
+
+        if not args:
+            t = Text()
+            t.append("Reasoning Effort Configuration\n", style="bold")
+            t.append(f"Current: ", style="dim")
+            t.append(f"{current}\n", style="bold cyan")
+            t.append("\nUsage: /effort <low|medium|high|off>\n", style="dim")
+            self._log(t)
+            return
+
+        val = args.strip().lower()
+        if val in ("none", "default"):
+            val = "off"
+        if val not in ("low", "medium", "high", "off"):
+            self._log(Text(f"Invalid effort level '{args}'. Choose: low, medium, high, off", style="red"))
+            return
+
+        nova_config.set("reasoning_effort", val)
+        t = Text(f"✓ Reasoning effort set to '{val}' and saved to config.\n", style="green")
+
+        # Hot-swap the model
+        if self.session_state is not None:
+            try:
+                new_model = create_model()
+                new_agent, new_backend = await self.session_state.switch_model(new_model)
+                self.agent = new_agent
+                self.backend = new_backend
+                self.model_name = getattr(new_model, "model_name", None) or getattr(
+                    new_model, "model", "unknown"
+                )
+                if self.token_tracker is not None:
+                    try:
+                        self.token_tracker.set_model(self.model_name)
+                    except Exception:  # noqa: BLE001
+                        pass
+                t.append("✓ Model recreated with new reasoning effort dynamically!", style="green")
+            except Exception as e:
+                t.append(f"⚠ Could not recreate model dynamically: {e}", style="yellow")
+                t.append("\nThe change will take effect on next model switch or restart.", style="dim")
+        else:
+            t.append("The change will take effect on restart.", style="dim")
+
+        self._log(t)
 
     async def _run_steer(self, text: str) -> None:
         """Manage persistent steering instructions natively (add/list/clear/remove)."""
@@ -7869,7 +8200,7 @@ class NovaApp(App):
         /browser-use, /ralph) can call it positionally or by keyword and have
         the agent run render as native TUI widgets instead of rich prints.
         """
-        await self._stream_prompt(user_input)
+        await self._stream_prompt(user_input, assistant_id=assistant_id)
 
     async def _run_research(self, text: str) -> None:
         """Launch the research swarm, streaming the run as native widgets."""
@@ -7922,7 +8253,7 @@ class NovaApp(App):
             self._log(Text(out or "Usage: /ingest <raw_path>", style="dim"))
             return
         self._log(Text(f"📥 Ingesting: {args}", style="bold"))
-        with _rich_console.capture():
+        with _rich_console.capture() as cap:
             from novacode_cli.commands import CommandContext
 
             mock_ctx = CommandContext(
@@ -7934,6 +8265,9 @@ class NovaApp(App):
                 assistant_id=self.assistant_id,
             )
             await handle_ingest(mock_ctx, execute_fn=self._tui_execute_fn)
+        out = cap.get().strip()
+        if out:
+            self._log(Text.from_ansi(out))
 
     async def _run_ask(self, text: str) -> None:
         """Ask a question with wiki context prepended."""
@@ -7958,7 +8292,7 @@ class NovaApp(App):
             self._log(Text(out or "Usage: /ask <question>", style="dim"))
             return
         self._log(Text(f"📚 Asking: {question}", style="bold"))
-        with _rich_console.capture():
+        with _rich_console.capture() as cap:
             from novacode_cli.commands import CommandContext
 
             mock_ctx = CommandContext(
@@ -7970,6 +8304,9 @@ class NovaApp(App):
                 assistant_id=self.assistant_id,
             )
             await handle_ask(mock_ctx, execute_fn=self._tui_execute_fn)
+        out = cap.get().strip()
+        if out:
+            self._log(Text.from_ansi(out))
 
     async def _run_file(self, text: str) -> None:
         """File conversation knowledge into the wiki."""
@@ -7994,7 +8331,7 @@ class NovaApp(App):
             self._log(Text(out or "Usage: /file <topic>", style="dim"))
             return
         self._log(Text(f"📝 Filing: {topic}", style="bold"))
-        with _rich_console.capture():
+        with _rich_console.capture() as cap:
             from novacode_cli.commands import CommandContext
 
             mock_ctx = CommandContext(
@@ -8006,6 +8343,13 @@ class NovaApp(App):
                 assistant_id=self.assistant_id,
             )
             await handle_file(mock_ctx, execute_fn=self._tui_execute_fn)
+        out = cap.get().strip()
+        if out:
+            self._log(Text.from_ansi(out))
+
+    async def _run_wiki(self) -> None:
+        """Show the Obsidian LLM Wiki browser (interactive)."""
+        await self.push_screen_wait(WikiScreen())
 
     async def _run_dream(self) -> None:
         """Run /dream: show a native memory-consolidation summary, then stream it."""
@@ -8905,6 +9249,8 @@ class NovaApp(App):
         t.append("ask with wiki context prepended\n", style="dim")
         t.append("  /file <topic>    ", style="cyan")
         t.append("file conversation knowledge into the wiki\n", style="dim")
+        t.append("  /wiki            ", style="cyan")
+        t.append("show Obsidian LLM Wiki browser (interactive)\n", style="dim")
         t.append("  /dream           ", style="cyan")
         t.append("reflect over memories to surface ideas\n", style="dim")
         t.append("  /evolution       ", style="cyan")

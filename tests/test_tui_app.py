@@ -320,7 +320,7 @@ async def _drive_agents_skills():
     """/agents, /skills, /servers, and /hooks open interactive list screens."""
     from textual.widgets import Button, Input
 
-    from novacode_cli.tui.app import AgentsScreen, HooksScreen, NovaApp, ServersScreen, SkillsScreen
+    from novacode_cli.tui.app import AgentsScreen, HooksScreen, NovaApp, ServersScreen, SkillsScreen, WikiScreen
     from novacode_cli.ui.ui_elements import TokenTracker
 
     app = NovaApp(
@@ -333,7 +333,7 @@ async def _drive_agents_skills():
         model_name="m",
     )
     async with app.run_test() as pilot:
-        for cmd in ("/agents", "/skills", "/servers", "/hooks"):
+        for cmd in ("/agents", "/skills", "/servers", "/hooks", "/wiki"):
             inp = app.query_one("#prompt", Input)
             inp.value = cmd
             inp.focus()
@@ -346,6 +346,8 @@ async def _drive_agents_skills():
                 expected_type = SkillsScreen
             elif cmd == "/servers":
                 expected_type = ServersScreen
+            elif cmd == "/wiki":
+                expected_type = WikiScreen
             else:
                 expected_type = HooksScreen
             assert isinstance(app.screen, expected_type), (cmd, type(app.screen).__name__)
@@ -441,11 +443,130 @@ async def _drive_skill_agent_autocomplete():
         assert inp.value == "fix the @critic ", inp.value
         assert not pal.display
 
+        # /ingest autocomplete
+        from novacode_cli.wiki.ingest import IngestEngine
+        old_list = IngestEngine.list_raw_sources
+        IngestEngine.list_raw_sources = lambda self: ["Clippings/langgraph.md", "raw/articles/crewai.md"]
+        try:
+            inp.value = "/ingest "
+            await pilot.pause()
+            await app.workers.wait_for_complete()
+            opts = [str(pal.get_option_at_index(i).prompt) for i in range(pal.option_count)]
+            assert pal.display and "/ingest Clippings/langgraph.md" in opts, opts
+
+            inp.value = "/ingest crew"
+            await pilot.pause()
+            await app.workers.wait_for_complete()
+            opts = [str(pal.get_option_at_index(i).prompt) for i in range(pal.option_count)]
+            assert opts == ["/ingest raw/articles/crewai.md"], opts
+        finally:
+            IngestEngine.list_raw_sources = old_list
+
+        # /file autocomplete
+        inp.value = "/file "
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        opts = [str(pal.get_option_at_index(i).prompt) for i in range(pal.option_count)]
+        assert "/file technologies/" in opts and "/file comparisons/" in opts, opts
+
 
 def test_tui_agents_skills_screens():
     if not _HAS_TEXTUAL:
         return
     asyncio.run(_drive_agents_skills())
+
+
+async def _drive_create_agent_and_skill(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    from textual.widgets import Button, Input
+    from novacode_cli.tui.app import NovaApp, AgentsScreen, AgentCreateModal, SkillsScreen, SkillCreateModal
+    from novacode_cli.ui.ui_elements import TokenTracker
+
+    app = NovaApp(
+        agent=_FakeAgent(),
+        assistant_id="nova-agent",
+        session_state=_SS(),
+        backend=None,
+        token_tracker=TokenTracker(),
+        image_tracker=None,
+        model_name="m",
+    )
+    async with app.run_test() as pilot:
+        # Mock _generate_agent_system_prompt and _generate_skill
+        import novacode_cli.commands.agents_commands as ac
+        import novacode_cli.skills.skill_creation as sc
+        
+        async def mock_gen_prompt(name, desc):
+            return "Mock prompt"
+            
+        async def mock_gen_skill(name, base_dir, description):
+            import os
+            os.makedirs(base_dir / name, exist_ok=True)
+            skill_file = base_dir / name / "SKILL.md"
+            with open(skill_file, "w", encoding="utf-8") as f:
+                f.write("---\ndescription: test\n---\nMock content")
+            return "Mock skill content"
+
+        monkeypatch.setattr(ac, "_generate_agent_system_prompt", mock_gen_prompt)
+        monkeypatch.setattr(sc, "_generate_skill", mock_gen_skill)
+
+        # 1. Test Agent creation
+        inp = app.query_one("#prompt", Input)
+        inp.value = "/agents"
+        inp.focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, AgentsScreen)
+
+        # Click Create
+        app.screen.query_one("#create", Button).press()
+        await pilot.pause()
+        assert isinstance(app.screen, AgentCreateModal)
+
+        # Fill inputs
+        app.screen.query_one("#agent-name", Input).value = "test-reviewer"
+        app.screen.query_one("#agent-desc", Input).value = "Reviews code"
+        app.screen.query_one("#do-create", Button).press()
+        await pilot.pause()
+        # Modal should be dismissed, back to AgentsScreen
+        assert isinstance(app.screen, AgentsScreen)
+
+        # Close AgentsScreen
+        app.screen.query_one("#close", Button).press()
+        await pilot.pause()
+        assert app.screen == app.screen_stack[0] # back to main screen
+
+        # 2. Test Skill creation
+        inp = app.query_one("#prompt", Input)
+        inp.value = "/skills"
+        inp.focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, SkillsScreen)
+
+        # Click Create
+        app.screen.query_one("#create", Button).press()
+        await pilot.pause()
+        assert isinstance(app.screen, SkillCreateModal)
+
+        # Fill inputs
+        app.screen.query_one("#skill-name", Input).value = "test-skill"
+        app.screen.query_one("#skill-desc", Input).value = "Does testing"
+        app.screen.query_one("#do-create", Button).press()
+        await pilot.pause()
+        # Modal dismissed, back to SkillsScreen
+        assert isinstance(app.screen, SkillsScreen)
+
+        # Close SkillsScreen
+        app.screen.query_one("#close", Button).press()
+        await pilot.pause()
+        assert app.screen == app.screen_stack[0]
+
+
+def test_tui_create_agent_and_skill(tmp_path, monkeypatch):
+    if not _HAS_TEXTUAL:
+        return
+    asyncio.run(_drive_create_agent_and_skill(tmp_path, monkeypatch))
 
 
 async def _drive_remote_render():
@@ -1258,6 +1379,52 @@ def test_tui_custom_agent_stream_and_color():
     asyncio.run(_drive_custom_agent_stream_and_color())
 
 
+async def _drive_effort_command():
+    """Verify that the /effort command changes reasoning effort configuration and switches models."""
+    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.ui.ui_elements import TokenTracker
+    from novacode_cli.config.nova_config import NovaConfig
+
+    # Start fresh
+    nova_config = NovaConfig()
+    nova_config.delete("reasoning_effort")
+
+    class _SSTest(_SS):
+        async def switch_model(self, new_model):
+            pass
+
+    app = NovaApp(
+        agent=_FakeAgent(),
+        assistant_id="nova-agent",
+        session_state=_SSTest(),
+        backend=None,
+        token_tracker=TokenTracker(),
+        image_tracker=None,
+        model_name="m",
+    )
+    async with app.run_test() as pilot:
+        # Check default effort
+        await app._passthrough_command("/effort")
+        nova_config._load()
+        assert nova_config.get("reasoning_effort") is None
+
+        # Set effort to high
+        await app._passthrough_command("/effort high")
+        nova_config._load()
+        assert nova_config.get("reasoning_effort") == "high"
+
+        # Disable reasoning effort
+        await app._passthrough_command("/effort off")
+        nova_config._load()
+        assert nova_config.get("reasoning_effort") == "off"
+
+
+def test_tui_effort_command():
+    if not _HAS_TEXTUAL:
+        return
+    asyncio.run(_drive_effort_command())
+
+
 async def _drive_transcript_cap():
     """The transcript is pruned from the top past the cap; tracked in-progress
     widgets survive even when they're the oldest."""
@@ -1287,6 +1454,7 @@ async def _drive_transcript_cap():
             app._init_widget = protected
             for i in range(30):
                 await app._mount(Static(f"line {i}"))
+            await pilot.pause()
             tr = app._transcript()
             assert len(tr.children) <= appmod._MAX_TRANSCRIPT_WIDGETS, len(tr.children)
             assert protected in tr.children  # tracked widget survived pruning
@@ -2749,9 +2917,17 @@ async def _drive_subagent_terminal_preview():
 
         # 3. Stream live output to that tool
         app._on_tool_output("tool_call_1", "searching codebase...\n")
-        await pilot.pause()
-        log_widget = body.query_one("#subagent-log", RichLog)
-        assert any("searching codebase..." in line.text for line in log_widget.lines)
+        
+        # Wait up to 1 second for the log output to be processed and rendered
+        for _ in range(100):
+            await pilot.pause()
+            log_widget = body.query_one("#subagent-log", RichLog)
+            if any("searching codebase..." in getattr(line, "text", "") for line in log_widget.lines):
+                break
+            await asyncio.sleep(0.01)
+        else:
+            log_widget = body.query_one("#subagent-log", RichLog)
+            assert False, f"Expected 'searching codebase...' in log widget lines: {log_widget.lines}"
 
         # 4. Tool result/completion
         await app._render(
@@ -2785,6 +2961,185 @@ def test_tui_subagent_terminal_preview():
     if not _HAS_TEXTUAL:
         return
     asyncio.run(_drive_subagent_terminal_preview())
+
+
+async def _drive_ralph_screen():
+    from novacode_cli.tui.app import NovaApp, RalphScreen
+    from novacode_cli.ui.ui_elements import TokenTracker
+    from textual.widgets import Button, Static
+    from novacode_cli.commands import ralph_events as rev
+
+    app = NovaApp(
+        agent=_FakeAgent(),
+        assistant_id="nova-agent",
+        session_state=_SS(),
+        backend=None,
+        token_tracker=TokenTracker(),
+        image_tracker=None,
+        model_name="m",
+    )
+    
+    import asyncio
+    ralph_called = False
+    
+    async def mock_handle_ralph_command(*args, **kwargs):
+        nonlocal ralph_called
+        ralph_called = True
+        on_event = kwargs.get("on_event")
+        if on_event:
+            on_event(rev.RalphStarted(task="test task", max_iterations=5, background=False))
+            on_event(rev.IterationStarted(iteration=1, max_iterations=5))
+        try:
+            while True:
+                await asyncio.sleep(0.01)
+        except asyncio.CancelledError:
+            if on_event:
+                on_event(rev.RalphFinished(completed=0, failed=0, total=5, reason="stopped"))
+            raise
+
+    import novacode_cli.commands.ralph_handler as rh
+    orig_handle = rh.handle_ralph_command
+    rh.handle_ralph_command = mock_handle_ralph_command
+
+    try:
+        async with app.run_test() as pilot:
+            screen = RalphScreen(
+                session_state=app.session_state,
+                agent=app.agent,
+                assistant_id=app.assistant_id,
+                token_tracker=app.token_tracker,
+                args="test task --iterations 5",
+                execute_fn=app._tui_execute_fn,
+            )
+            await app.push_screen(screen)
+            await pilot.pause()
+            
+            assert ralph_called is True
+            assert screen.query_one("#ralph-stop", Button).disabled is False
+            assert screen.query_one("#ralph-checkpoint", Button).disabled is False
+            assert screen.query_one("#ralph-close", Button).disabled is False
+            
+            screen.query_one("#ralph-checkpoint", Button).press()
+            await pilot.pause()
+            assert app.session_state._ralph_checkpoint_requested is True
+            assert screen.query_one("#ralph-close", Button).disabled is False
+            
+            await pilot.press("escape")
+            await pilot.pause()
+            assert app.screen == app.screen_stack[0]
+    finally:
+        rh.handle_ralph_command = orig_handle
+
+
+def test_tui_ralph_screen():
+    if not _HAS_TEXTUAL:
+        return
+    asyncio.run(_drive_ralph_screen())
+
+
+def test_tui_wiki_screen():
+    if not _HAS_TEXTUAL:
+        return
+    asyncio.run(_drive_wiki_screen())
+
+
+async def _drive_wiki_screen():
+    from textual.widgets import Button, Input, Static, OptionList
+    from novacode_cli.tui.app import NovaApp, WikiScreen
+    from novacode_cli.ui.ui_elements import TokenTracker
+    from novacode_cli.wiki.manager import WikiManager
+    from novacode_cli.wiki.ingest import IngestEngine
+
+    # Mock manager and engine
+    old_init = WikiManager.__init__
+    old_ensure = WikiManager.ensure_structure
+    old_read_index = WikiManager.read_index
+    old_read_page = WikiManager.read_page
+    old_list_sources = IngestEngine.list_raw_sources
+    old_resolve = IngestEngine.resolve_source
+
+    import pathlib
+    WikiManager.__init__ = lambda self, *args, **kwargs: setattr(self, "_root", pathlib.Path("."))
+    WikiManager.ensure_structure = lambda self: None
+
+    WikiManager.read_index = lambda self: {
+        "LangGraph": {"path": "technologies/LangGraph.md", "summary": "LangGraph guide"}
+    }
+    WikiManager.read_page = lambda self, path: "Mock LangGraph content"
+    IngestEngine.list_raw_sources = lambda self: ["Clippings/langgraph.md"]
+    
+    class FakePath:
+        def read_text(self, encoding="utf-8"):
+            return "Mock raw source content"
+        def relative_to(self, root):
+            class FakeRel:
+                def as_posix(self):
+                    return "Clippings/langgraph.md"
+            return FakeRel()
+            
+    IngestEngine.resolve_source = lambda self, path: FakePath()
+
+    app = NovaApp(
+        agent=_FakeAgent(),
+        assistant_id="nova-agent",
+        session_state=_SS(),
+        backend=None,
+        token_tracker=TokenTracker(),
+        image_tracker=None,
+        model_name="m",
+    )
+    try:
+        async with app.run_test() as pilot:
+            # Open wiki screen
+            inp = app.query_one("#prompt", Input)
+            inp.value = "/wiki"
+            inp.focus()
+            await pilot.pause()
+            await pilot.press("enter")
+            
+            # Pushes a modal via push_screen_wait, which blocks dispatch worker.
+            # Pump events until WikiScreen is active.
+            for _ in range(10):
+                await pilot.pause()
+                if isinstance(app.screen, WikiScreen):
+                    break
+
+            assert isinstance(app.screen, WikiScreen)
+            
+            # Check default tab: Synthesized Pages
+            assert app.screen._active_tab == "pages"
+            ol_pages = app.screen.query_one("#wiki-pages-list", OptionList)
+            assert ol_pages.option_count == 1
+            assert "LangGraph" in str(ol_pages.get_option_at_index(0).prompt)
+
+            # Check preview content using Static.content
+            preview = app.screen.query_one("#wiki-detail-preview", Static)
+            content_str = str(preview.content)
+            assert "Mock LangGraph content" in content_str
+
+            # Switch tab
+            tab_inbox = app.screen.query_one("#tab-inbox", Button)
+            tab_inbox.press()
+            await pilot.pause()
+            
+            assert app.screen._active_tab == "inbox"
+            ol_inbox = app.screen.query_one("#wiki-inbox-list", OptionList)
+            assert ol_inbox.option_count == 1
+            
+            # Ingest selected
+            btn_ingest = app.screen.query_one("#ingest-btn", Button)
+            btn_ingest.press()
+            await pilot.pause()
+
+            # Modal should close and trigger ingest command
+            assert not isinstance(app.screen, WikiScreen)
+    finally:
+        WikiManager.__init__ = old_init
+        WikiManager.ensure_structure = old_ensure
+        WikiManager.read_index = old_read_index
+        WikiManager.read_page = old_read_page
+        IngestEngine.list_raw_sources = old_list_sources
+        IngestEngine.resolve_source = old_resolve
 
 
 if __name__ == "__main__":
@@ -2823,13 +3178,15 @@ if __name__ == "__main__":
         asyncio.run(_drive_live_steering())
         asyncio.run(_drive_startup_info())
         asyncio.run(_drive_subagent_terminal_preview())
+        asyncio.run(_drive_ralph_screen())
+        asyncio.run(_drive_wiki_screen())
         print(
             "TUI HEADLESS + ROUTING + SAVE + SESSIONS + MCP + AUTOCOMPLETE + "
             "AGENTS/SKILLS + SKILL/@ + REMOTE + LIVE + APPROVAL + FILEOPS + DIFF + "
             "REMOTE-SCREEN + TODOS + INIT + INIT-STREAM + TRACE/LOG/PLAN + "
             "NATIVE-DIFF + BASH + RESEARCH/DREAM + IMAGES + MENUS + MODE-STYLES + "
             "THEME + NOTIFICATIONS + RESUME-REPLAY + CLEAR + MARKUP-SAFE + CONTEXT + "
-            "LIVE-STEER + SUBAGENT-PREVIEW OK"
+            "LIVE-STEER + SUBAGENT-PREVIEW + RALPH + WIKI OK"
         )
     else:
         print("textual not installed — skipped")
