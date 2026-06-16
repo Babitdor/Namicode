@@ -552,14 +552,11 @@ async def _run_graphify_pipeline(
         from concurrent.futures import ProcessPoolExecutor
         import os
 
-        def init_worker():
-            os.environ["NOVA_INIT_QUIET"] = "1"
-
         loop = asyncio.get_running_loop()
         # Spin up a ProcessPoolExecutor with 1 worker specifically for running
         # the heavy NetworkX / Leiden clustering / analysis steps without holding
         # the GIL on the main Textual/asyncio thread.
-        with ProcessPoolExecutor(max_workers=1, initializer=init_worker) as pool:
+        with ProcessPoolExecutor(max_workers=1, initializer=_init_graphify_worker) as pool:
             # ── Step 3: Build & Cluster ─────────────────────────────────
             emit(StepStarted(3, _TOTAL_STEPS, "Building knowledge graph"))
             G = await loop.run_in_executor(pool, build_project_graph, extraction, None)
@@ -782,6 +779,12 @@ def _fire_init_complete_hook(project_root: Path, session_id: str) -> None:
         )
     except Exception:  # noqa: BLE001
         pass
+
+
+def _init_graphify_worker() -> None:
+    """Initialize a graphify worker process by setting the quiet environment variable."""
+    import os
+    os.environ["NOVA_INIT_QUIET"] = "1"
 
 
 # ---------------------------------------------------------------------------
