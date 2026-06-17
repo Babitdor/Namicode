@@ -36,6 +36,7 @@ from pathlib import Path
 import dotenv
 from rich.console import Console
 from rich.live import Live
+from rich.progress import BarColumn, Progress, TextColumn
 from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
@@ -351,7 +352,7 @@ else:
 
 # Fun rotating boot messages for animated startup
 _BOOT_MESSAGES = [
-    "mcp: mustering tool servers…",
+    "Nova is launching…",
     "mcp: routing through the stars…",
     "mcp: establishing tool links…",
     "memory: warming the neural core…",
@@ -414,7 +415,7 @@ class BootAnimation:
     Usage::
 
         with BootAnimation.start():
-            boot_status("mcp: mustering tool servers…")
+            boot_status("Nova is launching…")
             time.sleep(2)
             boot_status("mcp: all servers online", "ok")
             boot_status("memory: initializing…")
@@ -427,13 +428,20 @@ class BootAnimation:
     _live: Live | None = None
     _messages: list[tuple[str, str]] = []
     _start_time: float = 0.0
+    _total_steps: int = 0
 
     @classmethod
     @contextmanager
-    def start(cls) -> None:
-        """Open the live display (sync version). Yields once, then tears down."""
+    def start(cls, total_steps: int = 0) -> None:
+        """Open the live display (sync version). Yields once, then tears down.
+
+        Args:
+            total_steps: Total number of boot steps for the progress bar.
+                When 0, auto-calculated from ``_BOOT_MESSAGES``.
+        """
         cls._messages = []
         cls._start_time = time.monotonic()
+        cls._total_steps = total_steps or len(_BOOT_MESSAGES)
 
         layout = Table.grid(padding=(0, 1))
         layout.add_column(no_wrap=True)
@@ -454,15 +462,20 @@ class BootAnimation:
 
     @classmethod
     @asynccontextmanager
-    async def async_start(cls) -> None:
+    async def async_start(cls, total_steps: int = 0) -> None:
         """Open the live display (async version). Yields once, then tears down.
 
         Safe to use with ``async with`` in async functions (e.g. ``main()``).
         Rich's ``Live.__enter__`` starts a background rendering thread which
         is compatible with async event loops.
+
+        Args:
+            total_steps: Total number of boot steps for the progress bar.
+                When 0, auto-calculated from ``_BOOT_MESSAGES``.
         """
         cls._messages = []
         cls._start_time = time.monotonic()
+        cls._total_steps = total_steps or len(_BOOT_MESSAGES)
 
         layout = Table.grid(padding=(0, 1))
         layout.add_column(no_wrap=True)
@@ -504,7 +517,7 @@ class BootAnimation:
 
     @classmethod
     def _refresh(cls) -> None:
-        """Rebuild and update the live display."""
+        """Rebuild and update the live display with logo header + progress bar."""
         if not cls._live:
             return
 
@@ -512,19 +525,59 @@ class BootAnimation:
         layout = Table.grid(padding=(0, 1))
         layout.add_column(no_wrap=True)
 
-        # Completed messages (all except the last one)
+        # ── Compact Nova logo header (first 3 lines of ASCII art) ──
+        logo_lines = [
+            "⣿⣿⣿⣿⣟⠊⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠙⢿⣿         ███╗   ██╗  ██████╗  ██╗   ██╗  █████╗    ",
+            "⣿⣿⣿⡏⠁⠀⠀⠀⠀⠀⠀⢀⣰⣶⣶⡄⠀⠀⠀⠀⠀⠀⢀⠀⠀⠈⢻        ████╗  ██║ ██╔═══██╗ ██║   ██║ ██╔══██╗   ",
+            "⣿⣿⣿⠁⠄⠀⠀⠀⠀⠀⣤⣾⣿⣿⣿⣿⡂⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠽       ██╔██╗ ██║ ██║   ██║ ██║   ██║ ███████║   ",
+            "⣿⣿⡏⣸⠀⠀⠀⠀⢀⣼⣿⣿⣿⣿⣿⣿⣿⡆⠀⠀⠈⠀⠀⠀⠀⠀⠀⠰      ██║╚██╗██║ ██║   ██║ ╚██╗ ██╔╝ ██╔══██║    ",
+            "⣿⣿⡇⠁⠀⠀⠀⣤⣍⣙⣿⣿⣏⣠⠄⠲⠲⠦⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢻     ██║ ╚████║ ╚██████╔╝  ╚████╔╝  ██║  ██║    ",
+            "⣿⣿⠁⠀⠀⠀⠀⠀⢤⠙⣿⣿⣿⣇⣀⡐⢂⣠⡄⠠⠀⠀⠀⠀⠀⠀⡀⢠⢸     ╚═╝  ╚═══╝  ╚═════╝    ╚═══╝   ╚═╝  ╚═╝    ",
+            "⣿⣿⠀⠀⠐⠀⣶⣷⣷⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⠀⠀⠐⠈⠀⠀⠀⠉⠘⣼                                               ",
+            "⣿⣿⠀⠈⠀⠀⣿⣿⣿⡿⣿⠿⢿⣿⣿⣿⣿⣿⣿⣧⡀⠀⢄⠲⠀⠀⠀⣱      ~ Secrets, Locks, Firewalls               ",
+            "⣿⣿⡆⠀⠀⠀⠈⣿⣿⣷⣶⣼⣾⣿⣿⣿⣿⣿⣿⣿⣷⠂⠀⠀⠂⢀⢲         Everything has a weakness.              ",
+            "⣿⣿⣿⡆⠀⠀⠀⠙⣿⠋⠠⠄⢀⠉⣹⣿⣿⣿⣿⣿⣿⠀⠀⠀⠀⠀⣿          The right code just knows where to look. ",
+            "⣿⣿⣿⣿⣦⠀⠀⠀⠘⣿⣤⣤⣶⣿⣿⣿⣿⣿⠟⣛⡽⠀⠀⠀⠠⣸            ♥︎ NOVA ~                               ",
+            "⣿⣿⣿⣿⣿⣷⡀⠀⠀⠈⠻⣿⣿⣿⠿⠛⠋⠐⠚⠛⠃   ⣰⣿                                                   ",
+        ]
+        logo = Text("\n".join(logo_lines), style=f"bold {COLORS['primary']}")
+        layout.add_row(logo)
+        layout.add_row(Text("", style="dim"))  # spacer
+
+        # ── Completed messages (all except the last one) ──
         for msg, lvl in cls._messages[:-1]:
             glyph = "✓" if lvl == "ok" else ("⚠" if lvl == "warn" else "·")
-            glyph_style = "green" if lvl == "ok" else ("yellow" if lvl == "warn" else "grey42")
+            glyph_style = (
+                "green" if lvl == "ok" else ("yellow" if lvl == "warn" else "grey42")
+            )
             layout.add_row(Text(f"  {glyph} {msg}", style=glyph_style))
 
-        # Current in-progress message (with spinner glyph)
+        # ── Current in-progress message (with spinner glyph) ──
         if cls._messages:
             last_msg = cls._messages[-1][0]
             spinner = Spinner("dots10", text=last_msg, style="bold cyan")
             layout.add_row(spinner)
 
-        # Elapsed time
+        # ── Progress bar ──
+        completed = sum(1 for _, lvl in cls._messages if lvl in ("ok", "warn"))
+        total = max(cls._total_steps, 1)
+        progress = Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(
+                bar_width=None,
+                style="grey30",
+                complete_style=COLORS["primary"],
+                finished_style="green",
+            ),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            console=console,
+            transient=True,
+        )
+        task = progress.add_task("", total=total)
+        progress.update(task, completed=min(completed, total))
+        layout.add_row(progress)
+
+        # ── Elapsed time ──
         layout.add_row(Text(f"  ⏱ {elapsed:.1f}s", style="grey30"))
         cls._live.update(layout)
 

@@ -99,13 +99,13 @@ from langgraph.pregel import Pregel
 from langgraph.store.base import BaseStore
 from deepagents import create_deep_agent
 from deepagents.backends import CompositeBackend
-from deepagents.backends.filesystem import FilesystemBackend
 from deepagents.backends.local_shell import LocalShellBackend
 from deepagents.backends.protocol import BackendProtocol, SandboxBackendProtocol
 from deepagents.backends.store import StoreBackend
 from deepagents.middleware.subagents import SubAgent
 
 from novacode_cli.agents.default_subagents.subagents import retrieve_core_subagents
+from novacode_cli.backends import OptimizedFilesystemBackend as FilesystemBackend
 from novacode_cli.agents.default_subagents.async_subagents import (
     retrieve_async_subagents,
 )
@@ -1050,7 +1050,7 @@ This file stores your preferences and context that persist across sessions.
         # MCP tools (serena, playwright, …) would never be registered or callable.
         if not mcp_middleware._tools_discovered:
             try:
-                boot_status("mcp: mustering tool servers…")
+                boot_status("Nova is launching…")
                 mcp_middleware._discover_tools_sync()
             except Exception as exc:  # noqa: BLE001
                 boot_status(f"mcp: some servers are still at large ({type(exc).__name__})", "warn")
