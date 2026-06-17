@@ -271,8 +271,6 @@ class DiscordBridge:
             logger.info(f"Message queued (size: {self._queue.qsize()})")
 
         @client.event
-
-        @client.event
         async def on_error(event_name: str, *args: Any, **kwargs: Any) -> None:
             """Log gateway errors for diagnostics."""
             logger.error(f"Discord gateway error in event '{event_name}'")
