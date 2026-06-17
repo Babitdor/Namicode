@@ -8065,67 +8065,50 @@ class NovaApp(App):
           /goal status          — show the current goal
           /goal clear           — remove the active goal
         """
+        from novacode_cli.commands.side_commands import handle_goal_command
+
         parts = text.split(maxsplit=1)
         args = parts[1].strip() if len(parts) > 1 else ""
-        low = args.lower()
 
-        if low == "status":
-            goal = getattr(self.session_state, "active_goal", None)
-            if goal:
+        # Shared parse + state mutation (kept identical across TUI / REPL / remote).
+        result = handle_goal_command(self.session_state, args)
+
+        if result.action == "status":
+            if result.goal:
                 t = Text()
                 t.append("🎯 Active goal\n", style="bold #e0af68")
-                t.append(goal, style="italic")
+                t.append(result.goal, style="italic")
                 self._log(t)
             else:
-                self._log(Text("No active goal. Use /goal <description> to set one.", style="dim"))
+                self._log(Text(result.message, style="dim"))
             return
 
-        if low in ("clear", "off", "done", "stop"):
-            self.session_state.active_goal = None
+        if result.action == "clear":
             self._update_mode_badge()
             self._log(Text("Goal cleared.", style="yellow"))
             return
 
-        if not args:
-            self._log(
-                Text(
-                    "Usage: /goal <description>  ·  /goal status  ·  /goal clear",
-                    style="dim",
-                )
-            )
+        if result.action == "usage":
+            self._log(Text(result.message, style="dim"))
             return
 
-        self.session_state.active_goal = args
+        # action == "set"
         self._update_mode_badge()
-
         t = Text()
         t.append("🎯 Goal set\n", style="bold #e0af68")
-        t.append(args, style="italic")
+        t.append(result.goal or "", style="italic")
         self._log(t)
 
-        kick_off = (
-            f"[GOAL] {args}\n\n"
-            "You are now in goal mode. Work autonomously to achieve the goal above.\n"
-            "1. Analyse what is needed and form a clear execution plan.\n"
-            "2. Execute the plan step by step, using your tools as needed.\n"
-            "3. After each step verify your progress against the goal.\n"
-            "4. When the goal is fully and verifiably achieved, say **GOAL ACHIEVED** "
-            "and summarise what was done.\n"
-            "Start now."
-        )
-        await self._stream_prompt(kick_off)
+        if result.kickoff:
+            await self._stream_prompt(result.kickoff)
 
     # -- btw (concurrent side-channel question with web search) ----------------
 
     def _get_btw_agent(self) -> Any:
-        """Return the cached btw agent, creating it on first call."""
-        if self._btw_agent is None:
-            from novacode_cli.agents.btw_agent import create_btw_agent
-            from novacode_cli.config.model_create import create_model
+        """Return the cached btw agent (shared process-wide with the remote bridge)."""
+        from novacode_cli.commands.side_commands import get_btw_agent
 
-            model = create_model()
-            self._btw_agent, _ = create_btw_agent(model)
-        return self._btw_agent
+        return get_btw_agent()
 
     async def _run_btw(self, text: str) -> None:
         """Dispatch a /btw side question — runs concurrently with the main agent."""
