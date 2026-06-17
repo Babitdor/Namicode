@@ -118,6 +118,63 @@ async def remote_message_processor(
 
     active_tasks: set[asyncio.Task] = set()
 
+    async def _handle_side_command(remote_msg: Any, *, allow_kickoff: bool) -> str:
+        """Handle the /goal and /btw side commands for the remote bridge.
+
+        Shares semantics with the TUI via :mod:`novacode_cli.commands.side_commands`.
+
+        Args:
+            remote_msg: The inbound remote message (its ``text`` may be rewritten).
+            allow_kickoff: When True (no turn running), a ``/goal <desc>`` may run
+                its autonomous kick-off as a turn; when False (busy), the goal is
+                only recorded for the next turn.
+
+        Returns:
+            ``"done"`` (fully handled — stop), ``"run"`` (``remote_msg.text`` has
+            been replaced with a prompt to run as a normal turn), or ``"pass"``
+            (not a side command — proceed normally).
+        """
+        text = remote_msg.text.strip()
+        low = text.lower()
+
+        if low == "/goal" or low.startswith("/goal "):
+            from novacode_cli.commands.side_commands import handle_goal_command
+
+            args = text[len("/goal"):].strip()
+            result = handle_goal_command(session_state, args)
+            msg = result.message
+            if result.kickoff and not allow_kickoff:
+                msg += "\n\n(Recorded — it will guide the task already in progress.)"
+            try:
+                await remote_msg.reply_fn(msg)
+            except Exception:
+                pass
+            if result.kickoff and allow_kickoff:
+                remote_msg.text = result.kickoff
+                return "run"
+            return "done"
+
+        if low == "/btw" or low.startswith("/btw "):
+            from novacode_cli.commands.side_commands import run_btw_question
+
+            question = text[len("/btw"):].strip()
+
+            async def _btw_task() -> None:
+                answer = await run_btw_question(question)
+                try:
+                    await remote_msg.reply_fn(answer)
+                except Exception:
+                    pass
+
+            # Run concurrently so the side question never blocks the main turn
+            # (or the message dequeue loop while a turn is active).
+            btw = asyncio.create_task(_btw_task())
+            active_tasks.add(btw)
+            btw.add_done_callback(active_tasks.discard)
+            return "done"
+
+        return "pass"
+
     async def run_turn(remote_msg: Any) -> None:
         try:
             logger.info(
@@ -143,6 +200,13 @@ async def remote_message_processor(
                 })
             except Exception:
                 pass
+
+            # Side commands (/goal, /btw) — handled before the normal agent turn.
+            # "/goal <desc>" rewrites remote_msg.text to its kick-off and falls
+            # through to run as a turn; everything else is fully handled here.
+            _side = await _handle_side_command(remote_msg, allow_kickoff=True)
+            if _side == "done":
+                return
 
             async with lock:
                 try:
@@ -289,6 +353,15 @@ async def remote_message_processor(
                     low = text.lower()
                     if low.startswith("/steer"):
                         text = text[len("/steer") :].strip()
+                    elif (
+                        low == "/goal" or low.startswith("/goal ")
+                        or low == "/btw" or low.startswith("/btw ")
+                    ):
+                        # /btw runs concurrently; /goal records for the running
+                        # task. Neither needs the turn lock.
+                        await _handle_side_command(remote_msg, allow_kickoff=False)
+                        queue.task_done()
+                        continue
                     elif text.startswith("/"):
                         try:
                             await remote_msg.reply_fn(
