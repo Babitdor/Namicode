@@ -317,8 +317,40 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
 
     @staticmethod
     def _preprocess_command(command: str) -> str:
-        """Inject --yes into npx commands to skip package-install prompts."""
-        return _NPX_YES_RE.sub(r"\1 --yes ", command)
+        """Inject helpers into commands before execution.
+
+        - npx: add --yes to skip package-install prompts.
+        - grep -r / --recursive: add --exclude-dir for .git and other noise dirs.
+          A bare recursive grep walks .git/objects/pack files (100 MB+ binary) and
+          node_modules, which can add hundreds of seconds per call. Skip injection
+          when the caller already set any --exclude-dir flag.
+        """
+        command = _NPX_YES_RE.sub(r"\1 --yes ", command)
+
+        if "--exclude-dir" not in command and re.search(
+            r"\bgrep\b.*(-[a-zA-Z]*r[a-zA-Z]*|--recursive\b)",
+            command,
+            re.IGNORECASE,
+        ):
+            command = re.sub(
+                r"\bgrep\b",
+                (
+                    "grep"
+                    " --exclude-dir=.git"
+                    " --exclude-dir=node_modules"
+                    " --exclude-dir=__pycache__"
+                    " --exclude-dir=.venv"
+                    " --exclude-dir=venv"
+                    " --exclude-dir=.next"
+                    " --exclude-dir=dist"
+                    " --exclude-dir=build"
+                ),
+                command,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+
+        return command
 
     def _run_async(
         self,
@@ -343,8 +375,22 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         if in_loop:
             import concurrent.futures
 
-            with concurrent.futures.ThreadPoolExecutor() as executor:
+            # Don't use `with ThreadPoolExecutor()` — its __exit__ calls
+            # shutdown(wait=True), which blocks until the submitted thread
+            # finishes even when result() already raised TimeoutError. That
+            # adds up to self._timeout extra seconds after the outer deadline.
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            try:
                 return executor.submit(asyncio.run, make_coro()).result(timeout=timeout)
+            except concurrent.futures.TimeoutError:
+                # Re-raise as the built-in TimeoutError so the caller's handler
+                # matches. The inner coroutine has its own self._timeout guard
+                # and will terminate the subprocess and exit on its own.
+                raise TimeoutError from None
+            finally:
+                # Return immediately; don't wait for the thread. It will exit
+                # once the inner asyncio timeout fires (~self._timeout seconds).
+                executor.shutdown(wait=False)
         return asyncio.run(make_coro())
 
     def _supports_sandbox_execution(self) -> bool:

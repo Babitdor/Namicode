@@ -375,6 +375,8 @@ _TUI_SLASH_COMMANDS = [
     "/file",
     "/wiki",
     "/effort",
+    "/goal",
+    "/btw",
 ]
 
 from novacode_cli import ui_events as ev
@@ -4047,6 +4049,16 @@ class NovaApp(App):
     #modal-hint { padding: 0 1; color: $text-muted; }
     Collapsible { margin: 0; }
     Collapsible > .collapsible--title { padding: 0 1; background: $surface; }
+    .btw-card { margin: 1 0; border-left: thick $accent-muted; }
+    .btw-card > .collapsible--title { color: $accent-muted; background: $surface; }
+    .btw-body { padding: 0 2; color: $text-muted; }
+    .bgshell-card { margin: 1 0; border-left: thick $warning-muted; }
+    .bgshell-card > .collapsible--title { color: $warning; background: $surface; }
+    .bgshell-log { height: 10; max-height: 20; border: none; background: $surface; }
+    .bgagent-card { margin: 1 0; border-left: thick $success-muted; }
+    .bgagent-card > .collapsible--title { color: $success; background: $surface; }
+    .bgagent-done > .collapsible--title { color: $success; }
+    .bgagent-failed > .collapsible--title { color: $error; }
     VerticalScroll { scrollbar-gutter: stable; }
     #remote-status-container {
         height: auto; max-height: 12;
@@ -4071,6 +4083,7 @@ class NovaApp(App):
         # familiar ctrl+c-to-quit when nothing is selected. ctrl+q always quits.
         ("ctrl+c", "copy_or_quit", "Copy / Quit"),
         ("ctrl+t", "toggle_terminal", "Terminal"),
+        ("ctrl+b", "run_background", "Background"),
         ("escape", "cancel_turn", "Cancel"),
     ]
 
@@ -4155,6 +4168,8 @@ class NovaApp(App):
         # One-shot guard for the Ollama CPU-offload advisory (set once the model
         # is loaded and checked, so we don't spawn `ollama ps` every turn).
         self._ollama_offload_checked = False
+        self._btw_agent: Any = None  # lazy-init btw side-channel agent (web-search only)
+        self._bg_job_count: int = 0  # monotonic counter for background shell jobs
         self._todo_widget: Static | None = None  # updated in place per turn
         self._init_widget: Static | None = None  # live /init step tracker widget
         self._init_steps: list[dict] = []
@@ -4173,7 +4188,7 @@ class NovaApp(App):
         self._input_pulse_timer: Any = None
         self._pulse_on = False
         # Per-keystroke de-churn: last (plan, bash) mode state + last palette list.
-        self._last_mode_state: tuple[bool, bool] | None = None
+        self._last_mode_state: tuple[bool, bool, bool] | None = None
         self._last_palette: list[str] | None = None
         # Notification badge: last seen unread count (drives status refresh).
         self._last_notif_count = 0
@@ -5600,12 +5615,13 @@ class NovaApp(App):
         """
         plan = getattr(self.session_state, "plan_mode_enabled", False)
         bash = input_value.startswith("!")
+        goal = getattr(self.session_state, "active_goal", None)
         # Skip the badge/class/pulse work entirely when the mode is unchanged —
         # this runs on every keystroke, so the common case (mode didn't change)
         # must be a cheap no-op.
-        if self._last_mode_state == (plan, bash):
+        if self._last_mode_state == (plan, bash, bool(goal)):
             return
-        self._last_mode_state = (plan, bash)
+        self._last_mode_state = (plan, bash, bool(goal))
         try:
             badge = self._w("#mode-badge", Static)
             prompt = self._w("#prompt", Input)
@@ -5623,6 +5639,10 @@ class NovaApp(App):
             badge.display = True
         elif bash:
             badge.update(Text("  $ BASH — runs in your shell", style="bold #bb9af7"))
+            badge.display = True
+        elif goal:
+            short = goal if len(goal) <= 60 else goal[:57] + "…"
+            badge.update(Text(f"  🎯 GOAL — {short}", style="bold #e0af68"))
             badge.display = True
         else:
             badge.update("")
@@ -6024,6 +6044,35 @@ class NovaApp(App):
         """ctrl+t: open a new inline interactive terminal widget in the chat transcript."""
         await self._run_bash("!")
 
+    async def action_run_background(self) -> None:
+        """ctrl+b: run the current input in the background without blocking the terminal.
+
+        Mirrors Claude Code's Ctrl+B behaviour:
+        - ``!<cmd>`` → background subprocess (output streams into a card).
+        - Any other text → background agent turn (full agent, fresh thread_id,
+          auto-approved tools so it never blocks waiting for user input).
+        """
+        try:
+            prompt_widget = self._w("#prompt", Input)
+        except NoMatches:
+            return
+        raw = prompt_widget.value.strip()
+        if not raw:
+            self._log(Text("ctrl+b: type a prompt or !command first", style="dim"))
+            return
+        prompt_widget.value = ""
+        self._update_mode_badge()
+        self._bg_job_count += 1
+        job_id = self._bg_job_count
+        if raw.startswith("!"):
+            cmd = raw[1:].strip()
+            if not cmd:
+                self._log(Text("ctrl+b: empty command after !", style="dim"))
+                return
+            self._bg_shell_worker(cmd, job_id)
+        else:
+            self._bg_agent_worker(raw, job_id)
+
     async def action_copy_or_quit(self) -> None:
         """ctrl+c: copy the active text selection to the clipboard, else quit.
 
@@ -6146,7 +6195,7 @@ class NovaApp(App):
         # Single agent at the start: delegate directly to that one subagent.
         if agent_name:
             await self._add_message(
-                Text(f"You → @{agent_name}", style="bold cyan"), "user", Text(query)
+                Text(f"{agent_name}", style="bold cyan"), "user", Text(query)
             )
             await self._stream_prompt(
                 f"Call the '{agent_name}' subagent to do the following:\n\n{query}"
@@ -6936,6 +6985,210 @@ class NovaApp(App):
         else:
             self._log(Text(f"❌ Command exited with code {exit_code}.", style="red"))
 
+    # -- background shell (ctrl+b) --------------------------------------------
+
+    @work(group="bgshell")
+    async def _bg_shell_worker(self, cmd: str, job_id: int) -> None:
+        """Run *cmd* as a non-blocking background subprocess.
+
+        Each call spawns an independent worker in group ``"bgshell"`` (no
+        ``exclusive=True``) so multiple Ctrl+B jobs run in true parallel.
+        Output streams line-by-line into a ``RichLog`` inside a ``Collapsible``
+        card.  When the process exits the card title flips to ✓/✗ and the
+        process is deregistered from ProcessManager.
+        """
+        import os
+
+        from novacode_cli.config.config import settings
+        from novacode_cli.process_manager import ProcessInfo, ProcessManager, ProcessStatus
+
+        cwd = settings.project_root or Path.cwd()
+        short = cmd if len(cmd) <= 50 else cmd[:47] + "…"
+
+        # Build the card up-front so output starts streaming immediately.
+        log_widget = RichLog(classes="bgshell-log", highlight=True, markup=True)
+        body = Vertical(log_widget)
+        card = Collapsible(body, title=f"⚙ bg[{job_id}]: {short}  [running]", collapsed=False)
+        card.add_class("bgshell-card")
+        self._close_tool_group()
+        await self._transcript().mount(card)
+        self._prune_transcript()
+        self._scroll_end()
+
+        # Spawn the subprocess with merged stdout+stderr so the log shows both.
+        try:
+            process = await asyncio.create_subprocess_shell(
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=str(cwd),
+                env=os.environ.copy(),
+            )
+        except Exception as ex:  # noqa: BLE001
+            log_widget.write(f"[bold red]Failed to start: {ex}[/bold red]")
+            card.title = f"✗ bg[{job_id}]: {short}  [failed to start]"
+            return
+
+        # Register with ProcessManager so `/kill bg-<n>` or `/kill <pid>` works.
+        info = ProcessInfo(
+            pid=process.pid,
+            name=f"bg-{job_id}",
+            command=cmd,
+            status=ProcessStatus.RUNNING,
+            working_dir=str(cwd),
+            _process=process,
+        )
+        ProcessManager.get_instance().register_process(info)
+
+        # Stream output line-by-line into the RichLog.
+        assert process.stdout is not None  # noqa: S101  — PIPE guarantees this
+        try:
+            while True:
+                line_bytes = await process.stdout.readline()
+                if not line_bytes:
+                    break
+                line = line_bytes.decode("utf-8", errors="replace").rstrip()
+                log_widget.write(line)
+                log_widget.scroll_end(animate=False)
+        except asyncio.CancelledError:
+            process.terminate()
+            card.title = f"✗ bg[{job_id}]: {short}  [cancelled]"
+            info.status = ProcessStatus.STOPPED
+            return
+
+        await process.wait()
+        exit_code = process.returncode or 0
+
+        # Update card title and ProcessManager status.
+        if exit_code == 0:
+            card.title = f"✓ bg[{job_id}]: {short}  [exit 0]"
+            card.add_class("bgshell-done")
+            info.status = ProcessStatus.STOPPED
+        else:
+            card.title = f"✗ bg[{job_id}]: {short}  [exit {exit_code}]"
+            card.add_class("bgshell-failed")
+            info.status = ProcessStatus.FAILED
+            log_widget.write(f"[bold red]Exited with code {exit_code}[/bold red]")
+
+        # Collapse finished cards automatically so they don't crowd the transcript.
+        card.collapsed = True
+
+    # -- background agent turn (ctrl+b, non-! input) --------------------------
+
+    @work(group="bgagent")
+    async def _bg_agent_worker(self, prompt: str, job_id: int) -> None:
+        """Run a full agent turn in the background without blocking the main input.
+
+        Uses a fresh thread_id so the background conversation is isolated from the
+        main session. All tool approvals are auto-approved (the user opted in by
+        pressing Ctrl+B), so the turn never blocks waiting for a decision.
+        """
+        import uuid
+
+        from novacode_cli.agent_stream import run_agent_stream
+        from novacode_cli.ui_events import (
+            AssistantMessage,
+            Done,
+            Error,
+            InterruptRequest,
+            ToolCall,
+            ToolResult,
+        )
+
+        thread_id = f"bg-{uuid.uuid4().hex[:12]}"
+        p_short = prompt if len(prompt) <= 50 else prompt[:47] + "…"
+
+        # Minimal proxy session state — only the fields iterate_agent_events reads.
+        # auto_approve=True makes evaluate_tool_actions return allow for every tool
+        # and auto-resolves plan interrupts, so no InterruptRequest is yielded for
+        # either. Only ask_user_question (kind="question") can still interrupt; we
+        # resolve those below with a canned answer.
+        class _BgSession:
+            def __init__(self_inner, real_ss: Any) -> None:  # noqa: N805
+                self_inner.thread_id = thread_id
+                self_inner.auto_approve = True
+                self_inner.plan_mode_enabled = False
+                self_inner.plan_agent = None
+                self_inner.plan_content: Any = None
+                self_inner.active_goal: str | None = getattr(real_ss, "active_goal", None)
+
+            def add_notification(self_inner, **_kw: Any) -> None:  # noqa: N805
+                return None
+
+            def dismiss_notification(self_inner, _nid: Any) -> None:  # noqa: N805
+                pass
+
+            def register_pending_approval(self_inner, _iid: Any, _fut: Any) -> None:  # noqa: N805
+                pass
+
+            def set_approved_plan(self_inner, _plan: Any) -> None:  # noqa: N805
+                pass
+
+            def clear_plan_agent(self_inner) -> None:  # noqa: N805
+                pass
+
+        bg_session = _BgSession(self.session_state)
+        ag, backend = self._active_agent()
+
+        log_widget = RichLog(classes="bgshell-log", highlight=True, markup=True)
+        card = Collapsible(
+            Vertical(log_widget),
+            title=f"⟳ bg[{job_id}]: {p_short}  [running]",
+            collapsed=False,
+        )
+        card.add_class("bgagent-card")
+        self._close_tool_group()
+        await self._transcript().mount(card)
+        self._prune_transcript()
+        self._scroll_end()
+
+        try:
+            async for e in run_agent_stream(
+                prompt,
+                ag,
+                self.assistant_id,
+                bg_session,
+                backend=backend,
+                seen_message_ids=set(),
+            ):
+                if isinstance(e, AssistantMessage) and e.text:
+                    for line in e.text.splitlines():
+                        log_widget.write(line)
+                    log_widget.scroll_end(animate=False)
+                elif isinstance(e, ToolCall):
+                    log_widget.write(f"[dim]{e.icon} {e.name}[/dim]")
+                    log_widget.scroll_end(animate=False)
+                elif isinstance(e, ToolResult) and e.is_error:
+                    log_widget.write(f"[red]✗ {e.preview}[/red]")
+                    log_widget.scroll_end(animate=False)
+                elif isinstance(e, InterruptRequest):
+                    # Only ask_user_question reaches here (tools and plans are
+                    # auto-approved via auto_approve=True on the session).
+                    # Provide a canned answer so the turn continues unblocked.
+                    try:
+                        if e.kind == "question":
+                            e.future.set_result({"answer": "Please continue autonomously."})
+                        else:
+                            from novacode_cli.core.agent_loop import default_interrupt_response
+                            e.future.set_result(default_interrupt_response(e.kind))
+                    except Exception:  # noqa: BLE001
+                        pass
+                elif isinstance(e, (Done, Error)):
+                    break
+        except asyncio.CancelledError:
+            card.title = f"✗ bg[{job_id}]: {p_short}  [cancelled]"
+            return
+        except Exception as ex:  # noqa: BLE001
+            log_widget.write(f"[bold red]Error: {ex}[/bold red]")
+            card.title = f"✗ bg[{job_id}]: {p_short}  [error]"
+            card.add_class("bgagent-failed")
+            card.collapsed = True
+            return
+
+        card.title = f"✓ bg[{job_id}]: {p_short}  [done]"
+        card.add_class("bgagent-done")
+        card.collapsed = True
+
     async def _run_slash(self, text: str) -> None:
         """Handle the TUI-native slash command subset."""
         cmd = text[1:].split(maxsplit=1)[0].lower() if len(text) > 1 else ""
@@ -7048,6 +7301,10 @@ class NovaApp(App):
             await self._run_chat(text)
         elif cmd == "effort":
             await self._run_effort(text)
+        elif cmd == "goal":
+            await self._run_goal(text)
+        elif cmd == "btw":
+            await self._run_btw(text)
         elif cmd in ("plugins", "plugin"):
             await self.push_screen_wait(PluginsScreen())
             # Reload plugin commands so newly-enabled command plugins work this
@@ -7799,6 +8056,164 @@ class NovaApp(App):
         if args:
             await self._stream_prompt(args)
             await self._maybe_run_approved_plan()
+
+    async def _run_goal(self, text: str) -> None:
+        """Set, show, or clear the active goal for autonomous goal-mode execution.
+
+        Usage:
+          /goal <description>   — set the goal and kick off the agent
+          /goal status          — show the current goal
+          /goal clear           — remove the active goal
+        """
+        parts = text.split(maxsplit=1)
+        args = parts[1].strip() if len(parts) > 1 else ""
+        low = args.lower()
+
+        if low == "status":
+            goal = getattr(self.session_state, "active_goal", None)
+            if goal:
+                t = Text()
+                t.append("🎯 Active goal\n", style="bold #e0af68")
+                t.append(goal, style="italic")
+                self._log(t)
+            else:
+                self._log(Text("No active goal. Use /goal <description> to set one.", style="dim"))
+            return
+
+        if low in ("clear", "off", "done", "stop"):
+            self.session_state.active_goal = None
+            self._update_mode_badge()
+            self._log(Text("Goal cleared.", style="yellow"))
+            return
+
+        if not args:
+            self._log(
+                Text(
+                    "Usage: /goal <description>  ·  /goal status  ·  /goal clear",
+                    style="dim",
+                )
+            )
+            return
+
+        self.session_state.active_goal = args
+        self._update_mode_badge()
+
+        t = Text()
+        t.append("🎯 Goal set\n", style="bold #e0af68")
+        t.append(args, style="italic")
+        self._log(t)
+
+        kick_off = (
+            f"[GOAL] {args}\n\n"
+            "You are now in goal mode. Work autonomously to achieve the goal above.\n"
+            "1. Analyse what is needed and form a clear execution plan.\n"
+            "2. Execute the plan step by step, using your tools as needed.\n"
+            "3. After each step verify your progress against the goal.\n"
+            "4. When the goal is fully and verifiably achieved, say **GOAL ACHIEVED** "
+            "and summarise what was done.\n"
+            "Start now."
+        )
+        await self._stream_prompt(kick_off)
+
+    # -- btw (concurrent side-channel question with web search) ----------------
+
+    def _get_btw_agent(self) -> Any:
+        """Return the cached btw agent, creating it on first call."""
+        if self._btw_agent is None:
+            from novacode_cli.agents.btw_agent import create_btw_agent
+            from novacode_cli.config.model_create import create_model
+
+            model = create_model()
+            self._btw_agent, _ = create_btw_agent(model)
+        return self._btw_agent
+
+    async def _run_btw(self, text: str) -> None:
+        """Dispatch a /btw side question — runs concurrently with the main agent."""
+        import uuid
+
+        parts = text.split(maxsplit=1)
+        question = parts[1].strip() if len(parts) > 1 else ""
+
+        if not question:
+            self._log(Text("Usage: /btw <question>", style="dim"))
+            return
+
+        try:
+            agent = self._get_btw_agent()
+        except Exception as ex:  # noqa: BLE001
+            self._log(Text(f"↩ btw: could not start web-search agent — {ex}", style="red"))
+            return
+
+        thread_id = f"btw-{uuid.uuid4().hex[:12]}"
+        self._btw_worker(question, agent, thread_id)
+
+    @work(group="btw")
+    async def _btw_worker(self, question: str, agent: Any, thread_id: str) -> None:
+        """Run the btw question on its own thread, concurrently with the main agent.
+
+        Uses a dedicated ``group="btw"`` work group so it never blocks — or is
+        blocked by — the main ``group="turn"`` agent. Multiple /btw calls queue
+        within the "btw" group and run one at a time (sequential but not blocking
+        the main UI).
+        """
+        from novacode_cli.agent_stream import run_agent_stream
+        from novacode_cli.ui_events import AssistantMessage, Done, Error
+
+        # Minimal session-state shim: only thread_id matters for the btw agent
+        # (no checkpointer sharing, no goal/plan injection).
+        class _BtwSession:
+            def __init__(self) -> None:
+                self.thread_id = thread_id
+                self.active_goal: str | None = None
+                self.plan_mode_enabled: bool = False
+                self.auto_approve: bool = True
+
+        btw_state = _BtwSession()
+
+        q_short = question if len(question) <= 55 else question[:52] + "…"
+        # Show a transient "btw thinking" note while the request is in flight.
+        indicator = Static(
+            Text(f"↩ btw: {q_short}…", style="dim italic"),
+            classes="logline",
+        )
+        self._close_tool_group()
+        await self._transcript().mount(indicator)
+        self._scroll_end()
+
+        answer_parts: list[str] = []
+        try:
+            async for e in run_agent_stream(
+                question,
+                agent,
+                "btw-agent",
+                btw_state,
+                backend=None,
+                seen_message_ids=set(),
+            ):
+                if isinstance(e, AssistantMessage):
+                    answer_parts.append(e.text)
+                elif isinstance(e, (Done, Error)):
+                    break
+                # ToolCall / ToolResult / StatusUpdate / TextDelta — silently
+                # consumed; tool activity is invisible to the user by design.
+        except asyncio.CancelledError:
+            indicator.remove()
+            return
+        except Exception as ex:  # noqa: BLE001
+            indicator.update(Text(f"↩ btw failed: {ex}", style="red"))
+            return
+
+        # Replace the "thinking" indicator with the finished answer card.
+        answer = "\n\n".join(answer_parts).strip() or "(no response)"
+        title_q = question if len(question) <= 50 else question[:47] + "…"
+        body = Static(Markdown(answer), classes="btw-body")
+        card = Collapsible(body, title=f"↩ btw: {title_q}", collapsed=False)
+        card.add_class("btw-card")
+        await indicator.remove()
+        self._close_tool_group()
+        await self._transcript().mount(card)
+        self._prune_transcript()
+        self._scroll_end()
 
     async def _run_compact(self, text: str) -> None:
         """Compact the conversation natively (spinner + result component)."""
@@ -9263,6 +9678,10 @@ class NovaApp(App):
         t.append("list subagents / skills\n", style="dim")
         t.append("  /plan [task]     ", style="cyan")
         t.append("plan mode (status / off)\n", style="dim")
+        t.append("  /goal [text]     ", style="cyan")
+        t.append("set a persistent goal (status / clear)\n", style="dim")
+        t.append("  /btw <question>  ", style="cyan")
+        t.append("ask a side question without touching the main conversation\n", style="dim")
         t.append("  /trace /log      ", style="cyan")
         t.append("tracing status / recent runs\n", style="dim")
         t.append("  /compact         ", style="cyan")

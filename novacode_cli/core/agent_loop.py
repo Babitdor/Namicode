@@ -121,6 +121,10 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
         if not user_input.startswith("[System Directive:"):
             user_input = directive + user_input
 
+    active_goal = getattr(session_state, "active_goal", None)
+    if active_goal and not user_input.startswith("[GOAL]") and not user_input.startswith("[System Directive:"):
+        user_input = f"[GOAL] {active_goal}\n\n{user_input}"
+
     message_content = await prepare_input_content(
         user_input, image_tracker, skip_file_mentions=skip_file_mentions
     )
