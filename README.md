@@ -9,6 +9,8 @@
 
 An open-source, terminal-based AI coding assistant built on LangGraph and the `deepagents` framework. NOVA runs entirely in your terminal with both a Rich console REPL and a Textual TUI — similar to Claude Code, but extensible and transparent.
 
+![Nova CLI Preview](assets/Preview.gif)
+
 ## Features
 
 ### Core Intelligence
