@@ -34,6 +34,12 @@ logger = logging.getLogger(__name__)
 _TELEGRAM_API = "https://api.telegram.org"
 
 
+_LONG_POLL_SERVER_TIMEOUT = 30  # seconds Telegram holds the connection open
+_LONG_POLL_CLIENT_TIMEOUT = aiohttp.ClientTimeout(
+    total=_LONG_POLL_SERVER_TIMEOUT + 5
+)  # client-side deadline: give server 5 s extra, then treat as a network hang
+
+
 class TelegramBridge:
     """Telegram bot bridge for Nova-Code.
 
@@ -51,46 +57,81 @@ class TelegramBridge:
         self._session: aiohttp.ClientSession | None = None
         self._offset: int = 0  # last update_id + 1 for long-polling
         self._running = False
+        self._forum_thread_id: int | None = None  # set if chat is a forum supergroup
 
-    async def _api_call(self, method: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+    def _ensure_session(self) -> aiohttp.ClientSession:
+        """Return the current session, creating a fresh one if needed."""
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
+
+    async def _api_call(
+        self,
+        method: str,
+        payload: dict[str, Any],
+        *,
+        req_timeout: aiohttp.ClientTimeout | None = None,
+    ) -> dict[str, Any] | None:
         """Make a Telegram Bot API call.
 
         Args:
             method: API method name (e.g., "getUpdates", "sendMessage").
             payload: Request body as a dict.
+            req_timeout: Optional per-request aiohttp timeout. Defaults to the
+                session's default (300 s). Long-poll callers should pass
+                ``_LONG_POLL_CLIENT_TIMEOUT`` so a network hang is detected
+                within ~35 seconds instead of ~5 minutes.
 
         Returns:
             Parsed JSON response, or None on error.
         """
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
-
+        session = self._ensure_session()
         url = f"{_TELEGRAM_API}/bot{self._config.token}/{method}"
         try:
-            async with self._session.post(url, json=payload) as resp:
+            async with session.post(url, json=payload, timeout=req_timeout) as resp:
                 data = await resp.json()
                 if not data.get("ok"):
                     logger.error(f"Telegram API error: {data.get('description')}")
                     return None
                 return data
         except aiohttp.ClientError as e:
-            logger.error(f"Telegram HTTP error: {e}")
+            logger.error(f"Telegram HTTP error ({method}): {e}")
+            # Close the stale session so the next call opens a fresh connection.
+            try:
+                await session.close()
+            except Exception:  # noqa: BLE001
+                pass
+            self._session = None
             return None
-        except Exception as e:
-            logger.error(f"Telegram API call error: {e}")
+        except TimeoutError:
+            logger.debug(f"Telegram long-poll timeout on {method} — normal, retrying")
+            try:
+                await session.close()
+            except Exception:  # noqa: BLE001
+                pass
+            self._session = None
+            return None
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Telegram API call error ({method}): {e}")
             return None
 
     async def _get_updates(self) -> list[dict[str, Any]]:
         """Long-poll for updates from Telegram.
 
-        Uses a 30-second timeout so the bridge can check for cancellation
-        every 30 seconds even when no messages arrive.
+        The server holds the connection open for up to ``_LONG_POLL_SERVER_TIMEOUT``
+        seconds while waiting for new messages, then responds with an empty list.
+        We set a client-side deadline of server_timeout + 5 s so any network hang
+        is detected quickly rather than waiting for aiohttp's 5-minute default.
         """
-        result = await self._api_call("getUpdates", {
-            "offset": self._offset,
-            "timeout": 30,
-            "allowed_updates": ["message"],
-        })
+        result = await self._api_call(
+            "getUpdates",
+            {
+                "offset": self._offset,
+                "timeout": _LONG_POLL_SERVER_TIMEOUT,
+                "allowed_updates": ["message"],
+            },
+            req_timeout=_LONG_POLL_CLIENT_TIMEOUT,
+        )
         if result is None:
             return []
 
@@ -99,18 +140,35 @@ class TelegramBridge:
             self._offset = updates[-1]["update_id"] + 1
         return updates
 
-    async def _send_message(self, chat_id: int, text: str) -> None:
-        """Send a message to a Telegram chat.
+    async def create_forum_topic(self, chat_id: int, name: str) -> int | None:
+        """Create a forum topic in a supergroup and return its message_thread_id.
 
-        Handles chunking for messages that exceed the 4096-char limit.
+        Returns None if the chat isn't a forum or the bot lacks permissions.
         """
+        chat_info = await self._api_call("getChat", {"chat_id": chat_id})
+        if chat_info is None:
+            return None
+        if not chat_info.get("result", {}).get("is_forum"):
+            return None
+        result = await self._api_call("createForumTopic", {"chat_id": chat_id, "name": name[:128]})
+        if result is None:
+            return None
+        return result.get("result", {}).get("message_thread_id")
+
+    def _thread_params(self, base: dict[str, Any]) -> dict[str, Any]:
+        """Inject ``message_thread_id`` into an API payload when in a forum topic."""
+        if self._forum_thread_id is not None:
+            return {**base, "message_thread_id": self._forum_thread_id}
+        return base
+
+    async def _send_message(self, chat_id: int, text: str) -> None:
+        """Send a message to a Telegram chat (chunked, forum-topic-aware)."""
         chunks = chunk_message(text, RemotePlatform.TELEGRAM)
         for chunk in chunks:
-            await self._api_call("sendMessage", {
-                "chat_id": chat_id,
-                "text": chunk,
-                "parse_mode": "Markdown",
-            })
+            await self._api_call(
+                "sendMessage",
+                self._thread_params({"chat_id": chat_id, "text": chunk, "parse_mode": "Markdown"}),
+            )
 
     async def run(self) -> None:
         """Start the Telegram long-polling loop.
@@ -118,7 +176,6 @@ class TelegramBridge:
         This is intended to be run as an ``asyncio.Task``.
         """
         self._running = True
-        self._session = aiohttp.ClientSession()
 
         # Get bot info to verify token
         me = await self._api_call("getMe", {})
@@ -132,9 +189,20 @@ class TelegramBridge:
         bot_name = me.get("result", {}).get("username", "unknown")
         logger.info(f"Telegram bridge connected as @{bot_name}")
 
+        _consecutive_errors = 0
+
         try:
             while self._running:
                 updates = await self._get_updates()
+
+                if not updates:
+                    # No messages (normal) or a network error (also returns []).
+                    # Back off briefly after repeated failures to avoid spinning.
+                    if _consecutive_errors > 0:
+                        await asyncio.sleep(min(2 ** _consecutive_errors, 30))
+                    _consecutive_errors += 1
+                else:
+                    _consecutive_errors = 0
 
                 for update in updates:
                     message = update.get("message")
@@ -150,9 +218,16 @@ class TelegramBridge:
                     if not text or chat_id is None:
                         continue
 
-                    # Only process messages from the allowlisted chat
+                    # Only process messages from the allowlisted chat.
+                    # When in a forum topic, also accept messages from the topic thread.
                     if chat_id != self._config.chat_id and chat_id not in self._config.allowed_ids:
                         continue
+
+                    # If we're scoped to a forum topic, only accept messages in that thread.
+                    if self._forum_thread_id is not None:
+                        msg_thread_id = message.get("message_thread_id")
+                        if msg_thread_id != self._forum_thread_id:
+                            continue
 
                     logger.info(
                         f"Telegram message from {user_name}: "
@@ -163,13 +238,11 @@ class TelegramBridge:
                         response_text: str,
                         _chat_id: int = chat_id,
                     ) -> None:
-                        """Send the agent's response back to the Telegram chat."""
                         await self._send_message(_chat_id, response_text)
 
                     async def typing_fn(
                         _chat_id: int = chat_id,
                     ) -> None:
-                        """Trigger 'typing' indicator in the Telegram chat."""
                         await self._trigger_typing(_chat_id)
 
                     # Edit-in-place streaming state. `text` is the FULL accumulated
@@ -189,7 +262,7 @@ class TelegramBridge:
                                 if _live["id"] is None:
                                     sent = await self._api_call(
                                         "sendMessage",
-                                        {"chat_id": _chat_id, "text": block},
+                                        self._thread_params({"chat_id": _chat_id, "text": block}),
                                     )
                                     _live["id"] = (
                                         (sent or {}).get("result", {}).get("message_id")
@@ -208,21 +281,20 @@ class TelegramBridge:
                                 _live["last"] = None
                             remainder = body[_live["base"] :] or "…"
                             if _live["id"] is None:
-                                params = {"chat_id": _chat_id, "text": remainder}
+                                params = self._thread_params({"chat_id": _chat_id, "text": remainder})
                                 if final:
                                     params["parse_mode"] = "Markdown"
                                 sent = await self._api_call("sendMessage", params)
                                 if sent is None and final:
                                     sent = await self._api_call(
                                         "sendMessage",
-                                        {"chat_id": _chat_id, "text": remainder},
+                                        self._thread_params({"chat_id": _chat_id, "text": remainder}),
                                     )
                                 _live["id"] = (
                                     (sent or {}).get("result", {}).get("message_id")
                                 )
                                 _live["last"] = remainder
                             elif remainder != _live["last"]:
-                                # Telegram 400s on identical edits — guarded above.
                                 params = {
                                     "chat_id": _chat_id,
                                     "message_id": _live["id"],
@@ -232,7 +304,6 @@ class TelegramBridge:
                                     params["parse_mode"] = "Markdown"
                                 res = await self._api_call("editMessageText", params)
                                 if res is None and final:
-                                    # Markdown likely rejected — retry as plain text.
                                     await self._api_call(
                                         "editMessageText",
                                         {
@@ -263,7 +334,7 @@ class TelegramBridge:
 
         except asyncio.CancelledError:
             logger.info("Telegram bridge cancelled, shutting down")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Telegram bridge error: {e}")
         finally:
             self._running = False
@@ -273,16 +344,10 @@ class TelegramBridge:
 
     async def _trigger_typing(self, chat_id: int) -> None:
         """Send a 'typing' chat action to Telegram."""
-        if not self._session or self._session.closed:
-            return
-        try:
-            url = f"https://api.telegram.org/bot{self._config.token}/sendChatAction"
-            payload = {"chat_id": chat_id, "action": "typing"}
-            async with self._session.post(url, json=payload) as resp:
-                if resp.status != 200:
-                    logger.debug(f"Telegram typing action failed: {resp.status}")
-        except Exception as e:
-            logger.debug(f"Telegram typing action error: {e}")
+        await self._api_call(
+            "sendChatAction",
+            self._thread_params({"chat_id": chat_id, "action": "typing"}),
+        )
 
     async def stop(self) -> None:
         """Gracefully stop the Telegram bridge."""

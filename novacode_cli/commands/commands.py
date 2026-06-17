@@ -603,11 +603,10 @@ async def _handle_remote_command(cmd_args: str | None, session_state, console) -
     Tokens and IDs are saved to ~/.nova/remote.json so they can be reused
     without re-typing.  Use /remote forget to delete them.
     """
-    from novacode_cli.remote.bridge import RemoteBridgeManager, RemotePlatform
+    from novacode_cli.remote.bridge import RemoteBridgeManager
     from novacode_cli.remote.config import (
         async_load_remote_config,
         async_save_discord_config,
-        async_save_remote_config,
         async_save_telegram_config,
     )
 
@@ -840,15 +839,21 @@ async def _handle_remote_command(cmd_args: str | None, session_state, console) -
                 console.print()
                 return True
 
-            # Auto-create channel if not specified
+            # Auto-create a per-session channel if not specified
             if not chat_id:
-                # Derive channel name from project directory
                 from pathlib import Path
-                project_name = Path.cwd().name.lower().replace(" ", "-")
-                channel_name = re.sub(r"[^a-z0-9-]", "-", project_name).strip("-") or "nova-code"
+
+                project_slug = re.sub(
+                    r"[^a-z0-9-]", "-", Path.cwd().name.lower().replace(" ", "-")
+                ).strip("-") or "nova"
+                # Short session suffix so each Nova session gets its own channel.
+                session_suffix = (getattr(session_state, "session_id", "") or "")[:8]
+                if not session_suffix:
+                    session_suffix = uuid.uuid4().hex[:8]
+                channel_name = f"{project_slug}-{session_suffix}"
 
                 console.print()
-                console.print(f"  No --channel specified. Creating #{channel_name}...")
+                console.print(f"  No --channel specified. Creating #{channel_name} for this session...")
 
                 success, error_msg = await manager.start_discord_auto_channel(
                     token=token, channel_name=channel_name, ping=ping
@@ -871,9 +876,9 @@ async def _handle_remote_command(cmd_args: str | None, session_state, console) -
                     console.print()
                     return True
 
-                console.print(f"  [green]✓[/green] Created channel #{channel_name} (ID: {chat_id})")
-                # Save the auto-created channel
-                await async_save_discord_config(token, str(chat_id), ping=ping)
+                console.print(f"  [green]✓[/green] Created session channel #{channel_name} (ID: {chat_id})")
+                # Save only the token, not the channel ID — each session creates its own channel.
+                await async_save_discord_config(token, "", ping=ping)
 
         elif platform_str == "telegram":
             saved_telegram = saved.get("telegram", {})
@@ -899,7 +904,10 @@ async def _handle_remote_command(cmd_args: str | None, session_state, console) -
 
         # ── Save the config ──
         if platform_str == "discord":
-            await async_save_discord_config(token, str(chat_id), ping=ping)
+            # channel_id may be "" when a per-session channel was auto-created above
+            # (we don't persist the session channel, only the token).
+            _channel_to_save = str(chat_id) if chat_id else ""
+            await async_save_discord_config(token, _channel_to_save, ping=ping)
         else:
             await async_save_telegram_config(token, str(chat_id))
 
@@ -933,6 +941,31 @@ async def _handle_remote_command(cmd_args: str | None, session_state, console) -
             console.print("  [dim]Credentials saved to ~/.nova/remote.json[/dim]")
             if platform_str == "discord":
                 console.print("  [dim]Make sure [bold]Message Content Intent[/bold] is enabled in your bot settings.[/dim]")
+
+            # Telegram: try to create a per-session forum topic so each session
+            # gets its own thread inside a forum supergroup.
+            if platform_str == "telegram":
+                from pathlib import Path as _Path
+
+                _entry = manager._bridges.get(bridge_id, {})
+                _tg_bridge = _entry.get("bridge")
+                if _tg_bridge is not None:
+                    _project_slug = re.sub(
+                        r"[^a-z0-9-]", "-", _Path.cwd().name.lower().replace(" ", "-")
+                    ).strip("-") or "nova"
+                    _session_suffix = (getattr(session_state, "session_id", "") or "")[:8]
+                    _topic_name = f"Nova: {_project_slug} ({_session_suffix})"
+                    try:
+                        _thread_id = await _tg_bridge.create_forum_topic(int(chat_id), _topic_name)
+                        if _thread_id is not None:
+                            _tg_bridge._forum_thread_id = _thread_id
+                            console.print(
+                                f"  [dim]Forum topic created: {_topic_name} "
+                                f"(thread {_thread_id})[/dim]"
+                            )
+                    except Exception:  # noqa: BLE001
+                        pass  # non-forum groups just use the main chat
+
             # Auto-approve tool actions so remote messages don't block waiting
             # for local CLI input.  The processor also sets/restores this per-message,
             # but having it on persistently prevents any approval prompt from hanging.

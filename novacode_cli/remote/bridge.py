@@ -300,11 +300,16 @@ class RemoteBridgeManager:
         - "config": The BridgeConfig
     """
 
+    _WATCHDOG_INTERVAL = 30  # seconds between liveness checks
+    _MAX_RESTARTS = 5        # give up after this many consecutive failures per bridge
+
     def __init__(self, message_queue: asyncio.Queue[RemoteMessage]) -> None:
         self._queue = message_queue
         self._bridges: dict[str, dict[str, Any]] = {}  # bridge_id → {task, bridge, config}
         self._running = False
-        self._on_status: Callable[[str], Awaitable[None]] | None = None  # optional status callback
+        self._on_status: Callable[[str], Awaitable[None]] | None = None
+        self._watchdog_task: asyncio.Task | None = None
+        self._restart_counts: dict[str, int] = {}  # bridge_id → consecutive restart count
 
     def set_status_callback(self, callback: Callable[[str], Awaitable[None]] | None) -> None:
         """Set a callback for status messages from bridges.
@@ -419,6 +424,7 @@ class RemoteBridgeManager:
             if connected:
                 logger.info(f"Discord bridge connected: {bridge_id} as {bridge.bot_user}")
                 logger.info(f"Bridge queue size: {self._queue.qsize()}")
+                self._ensure_watchdog()
                 return True, ""
             else:
                 # Task started but not connected yet — check for immediate errors
@@ -432,6 +438,7 @@ class RemoteBridgeManager:
                         return False, bridge.last_error or error_msg
                 # Still connecting — report success but note pending connection
                 logger.info(f"Discord bridge still connecting: {bridge_id}")
+                self._ensure_watchdog()
                 return True, ""
 
         except ImportError:
@@ -497,6 +504,7 @@ class RemoteBridgeManager:
             }
             self._running = True
             logger.info(f"Telegram bridge started: {bridge_id} (@{bot_name})")
+            self._ensure_watchdog()
             return True, ""
         except ImportError as e:
             logger.error(f"Missing dependency for Telegram bridge: {e}")
@@ -644,6 +652,74 @@ class RemoteBridgeManager:
             entry.get("task") and not entry["task"].done()
             for entry in self._bridges.values()
         )
+        if not self._running and self._watchdog_task and not self._watchdog_task.done():
+            self._watchdog_task.cancel()
+
+    async def _watchdog(self) -> None:
+        """Periodically check that bridge tasks are alive and restart crashed ones.
+
+        Runs as a long-lived asyncio Task while at least one bridge is registered.
+        Respects ``_MAX_RESTARTS`` so permanently broken bridges don't loop forever.
+        """
+        try:
+            while True:
+                await asyncio.sleep(self._WATCHDOG_INTERVAL)
+
+                for bridge_id, entry in list(self._bridges.items()):
+                    task: asyncio.Task | None = entry.get("task")
+                    config: BridgeConfig | None = entry.get("config")
+                    if task is None or config is None:
+                        continue
+                    if not task.done():
+                        # Still alive — reset the failure counter.
+                        self._restart_counts.pop(bridge_id, None)
+                        continue
+
+                    count = self._restart_counts.get(bridge_id, 0)
+                    if count >= self._MAX_RESTARTS:
+                        logger.warning(
+                            "Bridge %s exceeded restart limit (%d) — giving up",
+                            bridge_id, self._MAX_RESTARTS,
+                        )
+                        continue
+
+                    logger.warning("Bridge %s died, restarting (attempt %d)", bridge_id, count + 1)
+                    self._restart_counts[bridge_id] = count + 1
+
+                    try:
+                        if config.platform == RemotePlatform.DISCORD:
+                            from novacode_cli.remote.discord_bridge import DiscordBridge 
+                            bridge = DiscordBridge(
+                                config=config,
+                                message_queue=self._queue,
+                                on_status=self._on_status,
+                            )
+                            new_task = asyncio.create_task(
+                                bridge.run(), name=f"discord-bridge-{bridge_id}"
+                            )
+                        else:
+                            from novacode_cli.remote.telegram_bridge import TelegramBridge
+                            bridge = TelegramBridge(config=config, message_queue=self._queue)
+                            new_task = asyncio.create_task(
+                                bridge.run(), name=f"telegram-bridge-{bridge_id}"
+                            )
+
+                        entry["bridge"] = bridge
+                        entry["task"] = new_task
+                        await self._emit_status(
+                            f"🔄 Restarted {config.platform.value} bridge "
+                            f"(attempt {count + 1}/{self._MAX_RESTARTS})"
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.error("Failed to restart bridge %s: %s", bridge_id, exc)
+
+        except asyncio.CancelledError:
+            pass
+
+    def _ensure_watchdog(self) -> None:
+        """Start the watchdog task if it isn't running."""
+        if self._watchdog_task is None or self._watchdog_task.done():
+            self._watchdog_task = asyncio.create_task(self._watchdog(), name="bridge-watchdog")
 
     async def stop_all(self) -> None:
         """Stop all bridges gracefully."""
