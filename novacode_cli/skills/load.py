@@ -25,9 +25,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from deepagents.backends.filesystem import FilesystemBackend
 from deepagents.middleware.skills import SkillMetadata
 from deepagents.middleware.skills import _list_skills as list_skills_from_backend
+
+from novacode_cli.backends import OptimizedFilesystemBackend as FilesystemBackend
 
 if TYPE_CHECKING:
     from pathlib import Path

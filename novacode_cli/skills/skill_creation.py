@@ -5,9 +5,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from deepagents.backends.filesystem import FilesystemBackend
 from deepagents.graph import create_deep_agent
 
+from novacode_cli.backends import OptimizedFilesystemBackend as FilesystemBackend
 from novacode_cli.config.config import COLORS, Settings, console
 from novacode_cli.config.model_create import create_model
 from novacode_cli.skills.load import list_skills
@@ -1252,8 +1252,8 @@ def _print_skill_installed_banner(
     source: str,
 ) -> None:
     """Print an ASCII art banner celebrating a successful skill install."""
-    from rich.panel import Panel
     from rich import box
+    from rich.panel import Panel
 
     ascii_art = (
         " ░██████╗██╗░░██╗██╗██╗░░░░░██╗░░░░░\n"
