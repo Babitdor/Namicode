@@ -5432,6 +5432,31 @@ class NovaApp(App):
             _divider()
             line.append(self._nova_status, style=self._nova_status_style)
 
+        # Remote bridge indicator — shows 📡 + platform abbreviations when active.
+        try:
+            mgr = getattr(self.session_state, "_remote_bridge_manager", None)
+            if mgr is not None:
+                _active = [
+                    b for b in mgr.active_bridges
+                    if b.get("status") in ("running", "connecting...")
+                ]
+                if _active:
+                    _divider()
+                    line.append("📡 ", style="bold #7dcfff")
+                    _labels = []
+                    for _b in _active:
+                        _plat = str(_b.get("platform", "")).lower()
+                        _label = "tg" if _plat == "telegram" else _plat[:3]
+                        _status = _b.get("status", "")
+                        _style = "dim #7dcfff" if _status == "connecting..." else "#7dcfff"
+                        _labels.append((_label, _style))
+                    for _i, (_lbl, _sty) in enumerate(_labels):
+                        if _i:
+                            line.append(" · ", style="dim #7dcfff")
+                        line.append(_lbl, style=_sty)
+        except Exception:  # noqa: BLE001
+            pass
+
         notif = self._unread_count()
         if notif:
             line.append("   🔔 ", style="bold #e0af68")
@@ -5597,6 +5622,23 @@ class NovaApp(App):
         cur = self._unread_count()
         if cur != self._last_notif_count:
             self._last_notif_count = cur
+            refresh = True
+        # Remote bridge liveness — refresh when the active bridge count changes
+        # (bridge connects, disconnects, or watchdog restarts it).
+        try:
+            _mgr = getattr(self.session_state, "_remote_bridge_manager", None)
+            _bridge_count = (
+                len([
+                    b for b in _mgr.active_bridges
+                    if b.get("status") in ("running", "connecting...")
+                ])
+                if _mgr is not None
+                else 0
+            )
+        except Exception:  # noqa: BLE001
+            _bridge_count = 0
+        if _bridge_count != getattr(self, "_last_bridge_count", -1):
+            self._last_bridge_count = _bridge_count
             refresh = True
         if refresh:
             self._refresh_status()

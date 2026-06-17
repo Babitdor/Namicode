@@ -58,6 +58,12 @@ class TelegramBridge:
         self._offset: int = 0  # last update_id + 1 for long-polling
         self._running = False
         self._forum_thread_id: int | None = None  # set if chat is a forum supergroup
+        self.bot_user: str | None = None  # set after successful getMe
+
+    @property
+    def is_connected(self) -> bool:
+        """True once the bot is verified and the poll loop is running."""
+        return self._running and self.bot_user is not None
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         """Return the current session, creating a fresh one if needed."""
@@ -187,6 +193,7 @@ class TelegramBridge:
             return
 
         bot_name = me.get("result", {}).get("username", "unknown")
+        self.bot_user = bot_name
         logger.info(f"Telegram bridge connected as @{bot_name}")
 
         _consecutive_errors = 0
@@ -338,6 +345,7 @@ class TelegramBridge:
             logger.error(f"Telegram bridge error: {e}")
         finally:
             self._running = False
+            self.bot_user = None
             if self._session and not self._session.closed:
                 await self._session.close()
             logger.info("Telegram bridge stopped")
