@@ -10,27 +10,28 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from deepagents.backends import CompositeBackend
+from deepagents.backends.protocol import BackendProtocol, SandboxBackendProtocol
+from langchain.agents.middleware import ModelRetryMiddleware
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
+
+# Type imports
+from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.pregel import Pregel
 
-from langchain.agents.middleware import ModelRetryMiddleware
-
 from novacode_cli.agents.plan_agent.plan_mode_middleware import PlanModeMiddleware
+
+# Use Nova's optimized backend (non-hanging grep + ripgrep discovery + regex).
+from novacode_cli.backends import OptimizedFilesystemBackend as FilesystemBackend
 from novacode_cli.bootstrap.steering import SteeringMiddleware
+from novacode_cli.config.config import settings
 from novacode_cli.config.plan_mode import (
     BLOCKED_TOOLS_DISPLAY,
     RESTRICTED_WRITE_TOOLS_DISPLAY,
 )
 from novacode_cli.hitl.interrupts import get_interrupt_configs
-from novacode_cli.config.config import settings
 from novacode_cli.prompts import render_template
-
-# Type imports
-from langgraph.checkpoint.memory import InMemorySaver
-from deepagents.backends import CompositeBackend
-from deepagents.backends.filesystem import FilesystemBackend
-from deepagents.backends.protocol import BackendProtocol, SandboxBackendProtocol
 
 __all__ = ["create_plan_agent_with_config", "get_plan_agent_system_prompt"]
 
@@ -107,7 +108,7 @@ def create_plan_agent_with_config(
         2-tuple of (graph, backend)
     """
     # Lazy import for tracing (speeds up startup)
-    from novacode_cli.tracking.tracing import is_tracing_enabled, get_tracing_config
+    from novacode_cli.tracking.tracing import get_tracing_config, is_tracing_enabled
 
     tracing_enabled = False
 
