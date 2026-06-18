@@ -45,9 +45,17 @@ logger = logging.getLogger(__name__)
 
 
 class RemotePlatform(str, Enum):
-    """Supported remote platforms."""
+    """Supported remote platforms / message sources.
+
+    DISCORD and TELEGRAM are interactive chat bridges. CRON and WEBHOOK are
+    one-way *event sources* (Enhancement 3 / 5): they push ``RemoteMessage``s
+    onto the same queue but have no chat to reply to (their ``reply_fn`` is a
+    no-op). The processor handles all four identically.
+    """
     DISCORD = "discord"
     TELEGRAM = "telegram"
+    CRON = "cron"
+    WEBHOOK = "webhook"
 
 
 @dataclass

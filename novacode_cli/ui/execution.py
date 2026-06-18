@@ -58,12 +58,17 @@ async def execute_task(  # type: ignore
     seen_message_ids: set[str] | None = None,
     *,
     skip_file_mentions: bool = False,
+    verify: bool = False,
 ) -> None:
     """Execute any task by passing it directly to the AI agent.
 
     Wraps :func:`~novacode_cli.core.agent_loop.iterate_agent_events`, rendering
     each :mod:`novacode_cli.ui_events` event to the rich console.  Handles
     keyboard interrupt and token tracking around the event loop.
+
+    When ``verify`` (or ``session_state.verify_enabled``) is set, the run is
+    routed through :func:`~novacode_cli.core.verification_loop.run_with_verification`,
+    which grades each turn against a rubric and retries with feedback on failure.
     """
     from novacode_cli.vixie.server import (
         set_idle as vixie_set_idle,
@@ -164,8 +169,15 @@ async def execute_task(  # type: ignore
             status.start()
             spinner_active = True
 
-    try:
-        async for event in iterate_agent_events(
+    # Opt-in inline verification loop (Enhancement 1). Falls back to the plain
+    # canonical generator when off, so existing callers are unaffected.
+    _verify = verify or bool(getattr(session_state, "verify_enabled", False))
+    if _verify and not is_subagent:
+        from novacode_cli.core.verification_loop import run_with_verification
+        from novacode_cli.hermes.verifier import InlineVerifier
+        from novacode_cli.memory.store import get_durable_store
+
+        _event_source = run_with_verification(
             user_input,
             agent,
             assistant_id,
@@ -174,7 +186,22 @@ async def execute_task(  # type: ignore
             image_tracker=image_tracker,
             seen_message_ids=seen_message_ids,
             skip_file_mentions=skip_file_mentions,
-        ):
+            verifier=InlineVerifier(get_durable_store(), enabled=True),
+        )
+    else:
+        _event_source = iterate_agent_events(
+            user_input,
+            agent,
+            assistant_id,
+            session_state,
+            backend=backend,
+            image_tracker=image_tracker,
+            seen_message_ids=seen_message_ids,
+            skip_file_mentions=skip_file_mentions,
+        )
+
+    try:
+        async for event in _event_source:
             if isinstance(event, ev.StatusUpdate):
                 if spinner_active and event.message:
                     status.update(

@@ -19,6 +19,11 @@ An open-source, terminal-based AI coding assistant built on LangGraph and the `d
 - **Autonomous Learning System (Hermes)**: Periodically reviews tool usage patterns, extracts lessons, and autonomously creates reusable skills — the agent improves itself over time without user intervention
 - **Memory System**: Two-tier persistent memory — auto-maintained markdown files (`USER.md`/`MEMORY.md`) plus a LangGraph key/value store (`remember`/`recall`) for cross-session facts
 - **Steering Instructions**: Persistent user-defined directives injected into every model call — set once, always respected
+- **Inline Verification Loop**: After each task, an out-of-band LLM call grades the output against a rubric — on a failing verdict, the agent is automatically re-driven with feedback (up to 3 retries). Fail-open by design
+- **Prompt-Template Hill Climbing**: When reviews repeatedly flag the same class of misunderstanding, the system proposes a targeted rewrite of the relevant `.jinja` template, A/B tests it against the current version using verifier pass/fail as the quality signal, and promotes or discards it. Packaged templates are never modified — all overrides live in `~/.nova/prompt_history/`
+- **Threshold Auto-Tuner**: Reads the durable trace data Hermes already records and nudges review-trigger thresholds toward the observed working style — more real work ⇒ review sooner; more browsing ⇒ review less. Damped convergence with hard floor/ceiling bounds
+- **Cron / Heartbeat Scheduler**: Proactive scheduled tasks via standard 5-field cron expressions — fired jobs go on the same queue as remote bridges, so they run like any prompt. Manage with `/cron`
+- **Webhook Ingress Server**: Let external systems (GitHub, Linear, or any signed sender) trigger a Nova run without a human relaying through Discord/Telegram. Per-source HMAC-SHA256 secrets, timing-safe verification, binds to `127.0.0.1` by default. Manage with `/webhook`
 
 ### UI & Interaction
 - **Rich Console REPL**: Full-featured interactive shell with `prompt-toolkit` — syntax highlighting, tab completion, command history
@@ -312,6 +317,9 @@ nova doctor
 | `/skill:<name>` | Directly invoke a skill by name (e.g., `/skill:api-testing`) |
 | `/remote` | Manage remote sandbox connections |
 | `/reindex` | Rebuild semantic code search index |
+| `/cron` | Manage scheduled (heartbeat) tasks — list, add, remove, fire now |
+| `/webhook` | Manage webhook ingress server — start, stop, register sources, status |
+| `/prompt` | Manage evolving system-prompt templates — status, rollback, accept, reject |
 
 ## Built-in Tools
 
@@ -410,6 +418,24 @@ NOVA includes **Hermes**, an autonomous learning system that runs in the backgro
 - **Skill Creation**: Analyzes repeated successful tool sequences and autonomously creates reusable skills with deterministic naming and refinement
 - **No Interruption**: Reviews run out-of-band in the background — no pause in agent operation
 - **Live Indicator**: Visible indicator in the TUI status line when Hermes is reviewing
+
+### Loop Engineering Enhancements
+
+Hermes has been extended with five self-improving subsystems, each closing a different feedback loop:
+
+| Enhancement | Module | What It Does |
+|-------------|--------|-------------|
+| **1. Inline Verification Loop** | `core/verification_loop.py`, `hermes/verifier.py` | After each task, an out-of-band LLM call grades the output against a rubric. On a failing verdict, the agent is re-driven with feedback (up to 3 retries). Fail-open: any grading error yields a pass |
+| **2. Prompt-Template Hill Climbing** | `hermes/prompt_evolution.py` | When reviews repeatedly flag the same class of misunderstanding, proposes a targeted rewrite of the relevant `.jinja` template, A/B tests it using verifier pass/fail as the quality signal, and promotes or discards it. Packaged templates are never modified — overrides live in `~/.nova/prompt_history/` |
+| **3. Cron / Heartbeat Scheduler** | `remote/scheduler.py`, `commands/cron_handler.py` | Proactive scheduled tasks via standard 5-field cron expressions. Fired jobs go on the same queue as remote bridges, so they run like any prompt. Manage with `/cron` |
+| **4. Threshold Auto-Tuner** | `hermes/tuner.py` | Reads durable trace data and nudges review-trigger thresholds toward the observed working style. Damped convergence (0.2 weight) with hard floor/ceiling bounds — can never starve reviews or burn tokens |
+| **5. Webhook Ingress Server** | `remote/webhook_server.py`, `remote/webhook_adapters.py`, `commands/webhook_handler.py` | Let external systems (GitHub, Linear, or any signed sender) trigger a Nova run. Per-source HMAC-SHA256 secrets, timing-safe verification, binds to `127.0.0.1` by default. Manage with `/webhook` |
+
+All enhancements share the same design principles:
+- **Fail-open**: Any failure logs and degrades gracefully — the agent turn is never blocked
+- **Durable**: State persists in the LangGraph store under named namespaces (`hermes/config.py`)
+- **Background**: Run as fire-and-forget `asyncio` tasks — no pause in agent operation
+- **Configurable**: All thresholds and bounds are centralized in `hermes/config.py`
 
 ## Middleware Stack
 
@@ -741,11 +767,14 @@ make test_watch
 
 | Directory | What it tests |
 |-----------|---------------|
-| `tests/test_hermes/` | Hermes learning system — middleware, memory, skill discovery |
+| `tests/test_hermes/` | Hermes learning system — middleware, memory, skill discovery, verifier, tuner, prompt evolution |
 | `tests/test_tui_app.py` | Textual TUI — animations, chat, modals, tool groups |
 | `tests/test_workdir_grep.py` | Sandbox-backed grep path-rebased execution |
 | `tests/test_notifications.py` | Notification system integration |
 | `tests/test_context_breakdown_tokens.py` | Token budget and context optimization |
+| `tests/test_backends/` | Filesystem backend virtual-path operations |
+| `tests/test_remote_cron.py` | Cron scheduler — expression parsing, job lifecycle, tick loop |
+| `tests/test_webhook_server.py` | Webhook ingress — signature verification, adapter parsing, server lifecycle |
 
 ## Makefile Commands
 
@@ -789,6 +818,8 @@ User Input → CLI Entry (main.py) → Agent Loop (core/agent_loop.py) → UI Re
 - `main.py` — Entry point, CLI loop, argument parsing
 - `cli_session.py` — Session management, auto-save, display helpers
 - `input.py` — prompt_toolkit input handling, completers, image paste, keybindings
+- `core/agent_loop.py` — Canonical async generator driving the LangGraph agent stream
+- `core/verification_loop.py` — Inline verification wrapper around `iterate_agent_events` (Enhancement 1)
 
 **Agent:**
 - `agents/core_agent.py` — Agent creation, configuration, middleware wiring
@@ -798,6 +829,9 @@ User Input → CLI Entry (main.py) → Agent Loop (core/agent_loop.py) → UI Re
 **Commands:**
 - `commands/` — 20+ CLI command handlers (`commands/__init__.py` aggregates via `CommandRegistry`)
 - `commands/chat_handler.py` — `/chat` command — local web chat UI
+- `commands/cron_handler.py` — `/cron` command — scheduled task management (Enhancement 3)
+- `commands/webhook_handler.py` — `/webhook` command — webhook ingress server management (Enhancement 5)
+- `commands/prompt_handler.py` — `/prompt` command — evolving prompt template management (Enhancement 2)
 
 **Configuration:**
 - `config/config.py` — Settings hub (502 connections), color scheme, model factory, console init
@@ -814,6 +848,10 @@ User Input → CLI Entry (main.py) → Agent Loop (core/agent_loop.py) → UI Re
 - `hermes/middleware.py` — NovaLearningMiddleware
 - `hermes/memory_tiers.py` — USER.md / MEMORY.md management
 - `hermes/skill_discovery.py` — Autonomous skill creation from repeated patterns
+- `hermes/config.py` — Centralized thresholds, bounds, and store namespace constants
+- `hermes/verifier.py` — Inline output verifier (Enhancement 1)
+- `hermes/prompt_evolution.py` — Prompt-template hill climbing with A/B testing (Enhancement 2)
+- `hermes/tuner.py` — Threshold auto-tuner via hill-climbing inward (Enhancement 4)
 
 **UI (Rich REPL):**
 - `ui/ui_elements.py` — Token tracking, help, diff rendering, todos
@@ -833,7 +871,10 @@ User Input → CLI Entry (main.py) → Agent Loop (core/agent_loop.py) → UI Re
 **Integrations:**
 - `integrations/` — Sandbox providers and workdir backend
 - `mcp/` — MCP client, config, middleware, presets
-- `remote/` — Discord and Telegram bridge
+- `remote/` — Discord and Telegram bridges, cron scheduler, webhook ingress server
+- `remote/scheduler.py` — Cron / heartbeat scheduler (Enhancement 3)
+- `remote/webhook_server.py` — Webhook ingress HTTP server (Enhancement 5)
+- `remote/webhook_adapters.py` — Per-source payload adapters with timing-safe signature verification
 
 **Infrastructure:**
 - `session/` — Session persistence, restore, summarization, prompt building

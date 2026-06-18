@@ -51,6 +51,7 @@ from langgraph.types import Command
 from typing_extensions import NotRequired
 
 from novacode_cli.events import nova_event_log
+from novacode_cli.hermes import config as _config
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -136,7 +137,7 @@ class NovaLearningMiddleware(AgentMiddleware[NovaState]):
         self,
         store: BaseStore,
         *,
-        review_threshold: int = 10,
+        review_threshold: int = _config.REVIEW_THRESHOLD_DEFAULT,
         skills_dir: Path | None = None,
         agent_dir: Path | None = None,
         enabled: bool = True,

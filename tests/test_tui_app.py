@@ -144,6 +144,62 @@ async def _drive_routing():
         await submit(pilot, "/bogus")  # unknown -> notice, no crash
 
 
+async def _drive_passthrough_sync() -> None:
+    """Regression: a passthrough slash command must not crash on the agent sync.
+
+    /cron, /webhook and /prompt route through ``_passthrough_command``, whose
+    post-run sync reads ``session_state._agent`` / ``_backend`` — SessionState
+    exposes *those* names, not ``.agent`` / ``.backend``. That path was dead
+    code until these commands were added to ``_PASSTHROUGH_SLASH``, so the
+    wrong-attribute bug only surfaced then. ``handle_command`` is patched so the
+    test stays hermetic (no real durable store / background scheduler).
+    """
+    from unittest.mock import patch
+
+    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.ui.ui_elements import TokenTracker
+
+    sentinel_agent = object()
+    ss = _SS()
+    ss._agent = sentinel_agent
+    ss._backend = object()
+
+    app = NovaApp(
+        agent=_FakeAgent(),
+        assistant_id="nova-agent",
+        session_state=ss,
+        backend=None,
+        token_tracker=TokenTracker(),
+        image_tracker=None,
+        model_name="m",
+    )
+
+    async def _fake_handle_command(text, *_a, **_k):
+        from novacode_cli.config.config import console
+
+        console.print(f"ran {text}")
+        return None
+
+    async def submit(pilot, text):
+        inp = app.query_one("#prompt")
+        inp.value = text
+        inp.focus()
+        await pilot.press("enter")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+    with patch(
+        "novacode_cli.commands.commands.handle_command", _fake_handle_command
+    ):
+        async with app.run_test() as pilot:
+            await submit(pilot, "/cron list")
+            # The sync block ran and read `_agent` (the bug read `.agent` and
+            # raised, leaving app.agent unchanged). Proves the fix end-to-end.
+            assert app.agent is sentinel_agent
+            await submit(pilot, "/prompt status")
+            assert app.agent is sentinel_agent
+
+
 async def _drive_save_on_quit():
     """/quit should persist the session via the session manager."""
     from novacode_cli.tui.app import NovaApp, NovaStatusBar
@@ -2541,6 +2597,12 @@ def test_tui_input_routing():
     if not _HAS_TEXTUAL:
         return
     asyncio.run(_drive_routing())
+
+
+def test_tui_passthrough_command_syncs_agent():
+    if not _HAS_TEXTUAL:
+        return
+    asyncio.run(_drive_passthrough_sync())
 
 
 async def _drive_fragmented_paste():

@@ -281,6 +281,33 @@ async def handle_command(
             traceback.print_exc()
         return True
 
+    if cmd == "cron":
+        try:
+            from novacode_cli.commands.cron_handler import handle_cron_command
+
+            return await handle_cron_command(cmd_args, session_state, console)
+        except Exception as e:
+            console.print(f"[red]Error running /cron command: {e}[/red]")
+        return True
+
+    if cmd == "webhook":
+        try:
+            from novacode_cli.commands.webhook_handler import handle_webhook_command
+
+            return await handle_webhook_command(cmd_args, session_state, console)
+        except Exception as e:
+            console.print(f"[red]Error running /webhook command: {e}[/red]")
+        return True
+
+    if cmd == "prompt":
+        try:
+            from novacode_cli.commands.prompt_handler import handle_prompt_command
+
+            return await handle_prompt_command(cmd_args, session_state, console)
+        except Exception as e:
+            console.print(f"[red]Error running /prompt command: {e}[/red]")
+        return True
+
     if cmd == "reindex":
         try:
             from novacode_cli.config.config import settings as _settings

@@ -319,7 +319,9 @@ _DETAILED_TOOL_NAMES = frozenset(
 # use a Live spinner (those would hang or garble inside Textual).
 # Rare subcommands still delegated to handle_command (captured) from within the
 # native handlers (e.g. `/trace enable`, `/log show <id>`). Common forms native.
-_PASSTHROUGH_SLASH: set[str] = set()
+# cron/webhook/prompt are print-or-toggle-only management commands (Loop
+# Engineering event sources + prompt evolution) — captured rather than native.
+_PASSTHROUGH_SLASH: set[str] = {"cron", "webhook", "prompt"}
 
 # The @mention token immediately before the cursor (start-of-line or after
 # whitespace, so emails like user@host don't match). Used to drive @file/@agent
@@ -343,6 +345,9 @@ _TUI_SLASH_COMMANDS = [
     "/plugins",
     "/steer",
     "/notifications",
+    "/cron",
+    "/webhook",
+    "/prompt",
     "/research",
     "/dream",
     "/evolution",
@@ -7527,10 +7532,12 @@ class NovaApp(App):
             out = cap.get()
             if out.strip():
                 self._log(Text.from_ansi(out))
-            # Sync active TUI agent/backend in case model was switched dynamically
+            # Sync active TUI agent/backend in case model was switched dynamically.
+            # SessionState exposes these as `_agent` / `_backend`; fall back to the
+            # current values so a command that doesn't touch them can't blow up.
             if self.session_state is not None:
-                self.agent = self.session_state.agent
-                self.backend = self.session_state.backend
+                self.agent = getattr(self.session_state, "_agent", self.agent)
+                self.backend = getattr(self.session_state, "_backend", self.backend)
                 model = getattr(self.session_state, "model", None)
                 if model:
                     self.model_name = getattr(model, "model_name", None) or getattr(model, "model", "unknown")

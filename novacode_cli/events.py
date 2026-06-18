@@ -40,6 +40,16 @@ The list is cleared after each drain.  Event types:
 - ``nova_skill_created``
 - ``nova_security``
 - ``nova_memory``
+
+Loop-Engineering event types (added with the verification / hill-climbing /
+event-driven enhancements):
+- ``nova_verification_retry``  — inline verifier sent feedback for a retry
+- ``nova_verification_pass``   — output passed the rubric grader
+- ``nova_verification_fail``   — output failed after retries were exhausted
+- ``nova_threshold_tuned``     — auto-tuner adjusted a review threshold
+- ``nova_prompt_evolved``      — a prompt-template candidate was proposed/promoted
+- ``nova_cron_fired``          — a scheduled (heartbeat) task was enqueued
+- ``nova_webhook_received``    — an external webhook produced a task
 """
 
 

@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 from langchain_core.messages import SystemMessage
 
 from novacode_cli.events import cap_event_log, nova_event_log
+from novacode_cli.hermes import config
 from novacode_cli.prompts import render_template
 
 if TYPE_CHECKING:
@@ -50,8 +51,10 @@ _TRIVIAL_BUILTINS: frozenset[str] = frozenset(
     }
 )
 # A burst of failures in the window is worth reviewing *early* (before the count
-# threshold), so the agent captures the recovery while it's fresh.
-_FAILURE_BURST = 3
+# threshold), so the agent captures the recovery while it's fresh. Sourced from
+# the central config so the threshold tuner (Enhancement 4) has one home for it;
+# ReviewRunner prefers a store-tuned value at runtime (see __init__).
+_FAILURE_BURST = config.FAILURE_BURST_DEFAULT
 
 
 def _window_recovered(window: list[dict]) -> bool:
@@ -111,7 +114,7 @@ class ReviewRunner:
         tracker: ToolUsageTracker,
         skill_manager: SkillManager,
         *,
-        review_threshold: int = 10,
+        review_threshold: int = config.REVIEW_THRESHOLD_DEFAULT,
         agent_dir: Path | None = None,
         enabled: bool = True,
     ) -> None:
@@ -119,6 +122,11 @@ class ReviewRunner:
         self._tracker = tracker
         self._skill_manager = skill_manager
         self._review_threshold = review_threshold
+        # Tuner-tunable runtime thresholds. Seeded from config; overridden once
+        # (lazily, on the first should_review) by any value the ThresholdTuner
+        # has persisted to the store. See _ensure_thresholds_loaded.
+        self._failure_burst = config.FAILURE_BURST_DEFAULT
+        self._thresholds_loaded = False
         self._agent_dir = agent_dir
         self._enabled = enabled
 
@@ -141,6 +149,7 @@ class ReviewRunner:
         there's nothing worth distilling. When window history is unavailable we
         treat it as substantive, preserving plain count-based behavior.
         """
+        await self._ensure_thresholds_loaded()
         count = await self._tracker.get_call_count()
         min_floor = max(3, self._review_threshold // 2)
 
@@ -159,7 +168,7 @@ class ReviewRunner:
             for h in window
         )
 
-        failure_burst = failures >= _FAILURE_BURST and count >= min_floor
+        failure_burst = failures >= self._failure_burst and count >= min_floor
         reached = count >= self._review_threshold
         hard_cap = count >= 2 * self._review_threshold
 
@@ -172,6 +181,40 @@ class ReviewRunner:
             return False
 
         return True
+
+    async def _ensure_thresholds_loaded(self) -> None:
+        """Load tuner-adjusted thresholds from the store, once per process.
+
+        The :class:`~novacode_cli.hermes.tuner.ThresholdTuner` persists tuned
+        values to :data:`config.HARNESS_CONFIG_NS`; this picks them up on the
+        first :meth:`should_review`. Absent or malformed entries leave the
+        config defaults in place, so a fresh install behaves exactly as before.
+        Values are clamped defensively against a hand-edited store.
+        """
+        if self._thresholds_loaded:
+            return
+        # Set the flag first so a transient store error doesn't re-hit the store
+        # on every single should_review call for the rest of the session.
+        self._thresholds_loaded = True
+        try:
+            entry = await self._store.aget(
+                config.HARNESS_CONFIG_NS, config.HARNESS_CONFIG_KEY
+            )
+            if entry and isinstance(entry.value, dict):
+                rt = entry.value.get("review_threshold")
+                fb = entry.value.get("failure_burst")
+                if isinstance(rt, int):
+                    self._review_threshold = max(
+                        config.REVIEW_THRESHOLD_FLOOR,
+                        min(config.REVIEW_THRESHOLD_CEILING, rt),
+                    )
+                if isinstance(fb, int):
+                    self._failure_burst = max(
+                        config.FAILURE_BURST_FLOOR,
+                        min(config.FAILURE_BURST_CEILING, fb),
+                    )
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to load tuned thresholds; using defaults")
 
     async def reset_after_review(self) -> None:
         """Reset the counter and mark review-just-completed."""
@@ -351,6 +394,28 @@ class ReviewRunner:
             # Periodic library hygiene: archive unused, flag overlaps.
             if self._skill_manager and new_count % 10 == 0:
                 await self._skill_manager.maybe_curate()
+                # Hill-climb inward: re-tune review thresholds from trace data.
+                # Fire-and-forget (reuses the skill manager's tracked-task pump)
+                # so a slow tuning pass never blocks applying the review. It is
+                # NOT gated on skills_dir — tuning is independent of skills.
+                from novacode_cli.hermes.tuner import ThresholdTuner
+
+                self._skill_manager.spawn_task(
+                    ThresholdTuner(self._store).run_tuning_pass()
+                )
+
+            # Prompt hill-climbing (Enhancement 2): if this review (and enough
+            # recent ones) flag the same template, evolve it. Runs on every
+            # review — persistence is judged inside the engine. Best-effort.
+            if self._skill_manager:
+                from novacode_cli.hermes.prompt_evolution import PromptEvolutionEngine
+
+                engine = PromptEvolutionEngine(
+                    self._store, spawn=self._skill_manager.spawn_task
+                )
+                self._skill_manager.spawn_task(
+                    engine.detect_and_maybe_evolve(response_content)
+                )
 
         except Exception:  # noqa: BLE001
             logger.exception("Failed to apply review content")
