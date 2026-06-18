@@ -296,7 +296,7 @@ COMMANDS = {
     "cron": 'Schedule recurring agent tasks (e.g., /cron add "0 9 * * *" "review project")',
     "webhook": "Manage the webhook ingress server (start/stop/register/status)",
     "prompt": "Manage evolving system-prompt templates (status/rollback/accept/reject)",
-    "voice": "Local voice I/O — status, on/off, mode ptt|listen, test (ctrl+g talk, ctrl+shift+v listen)",
+    "voice": "Local voice I/O — status, on/off, mode ptt|listen, test (ctrl+g talk, ctrl+l listen)",
     "vision": "Analyze images with vision model (e.g., /vision @image.png, /vision @img1.png @img2.png)",
     "files": "Show file operation summary for the session",
     "critique": "Run critique agent on recent changes (e.g., /critique or /critique src/)",

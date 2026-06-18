@@ -65,27 +65,10 @@ dependencies = [
     "semble>=0.1.8",
     "discord.py>=2.3.0",
     "python-telegram-bot>=21.0.0",
-]
-
-[project.optional-dependencies]
-graphify = [
-    "graphifyy>=0.4.0",
-]
-code-search = [
-    "semble>=0.1.8",
-]
-remote-discord = [
-    "discord.py>=2.3.0",
-]
-voice = [
-    # Local, open-source voice stack (no cloud / API keys):
     "faster-whisper>=1.0.0",   # STT
     "silero-vad>=5.1",         # VAD (utterance endpointing)
     "piper-tts>=1.2.0",        # TTS
     "sounddevice>=0.4.6",      # microphone capture + playback
-]
-voice-cloud = [
-    "vision-agents[getstream,gemini,deepgram,elevenlabs]>=0.1.0",
 ]
 
 [project.urls]

@@ -504,11 +504,13 @@ class ChatMessage(Vertical):
         self._custom_color = None
         if header.style:
             from rich.style import Style
+
             if isinstance(header.style, Style) and header.style.color:
                 self._custom_color = header.style.color.name
             else:
                 style_str = str(header.style)
                 import re
+
                 m = re.search(r"#(?:[0-9a-fA-F]{3}){1,2}\b", style_str)
                 if m:
                     self._custom_color = m.group(0)
@@ -550,11 +552,13 @@ class ChatMessage(Vertical):
         self._custom_color = None
         if header.style:
             from rich.style import Style
+
             if isinstance(header.style, Style) and header.style.color:
                 self._custom_color = header.style.color.name
             else:
                 style_str = str(header.style)
                 import re
+
                 m = re.search(r"#(?:[0-9a-fA-F]{3}){1,2}\b", style_str)
                 if m:
                     self._custom_color = m.group(0)
@@ -1127,8 +1131,14 @@ class McpScreen(ModalScreen[None]):
 
             # Show active tool count
             active_section = self.query_one("#mcp-section", Static)
-            active_count = sum(1 for n in active_servers if n in self._config_names and not getattr(servers[n], "disabled", False))
-            disabled_count = sum(1 for n in self._config_names if getattr(servers[n], "disabled", False))
+            active_count = sum(
+                1
+                for n in active_servers
+                if n in self._config_names and not getattr(servers[n], "disabled", False)
+            )
+            disabled_count = sum(
+                1 for n in self._config_names if getattr(servers[n], "disabled", False)
+            )
             inactive_count = len(self._config_names) - active_count - disabled_count
 
             counts_str = []
@@ -1217,6 +1227,7 @@ class McpScreen(ModalScreen[None]):
             btn.disabled = False
             name = self._config_names[idx]
             from novacode_cli.mcp.config import MCPConfig
+
             sc = MCPConfig().get_server(name)
             if sc and getattr(sc, "disabled", False):
                 btn.label = "Activate"
@@ -1251,7 +1262,9 @@ class McpScreen(ModalScreen[None]):
                         style="green",
                     )
                 )
-                if hasattr(self.app, "session_state") and hasattr(self.app.session_state, "reload_mcp_servers"):
+                if hasattr(self.app, "session_state") and hasattr(
+                    self.app.session_state, "reload_mcp_servers"
+                ):
                     new_agent, new_backend = await self.app.session_state.reload_mcp_servers()
                     self.app.agent = new_agent
                     self.app.backend = new_backend
@@ -1285,7 +1298,9 @@ class McpScreen(ModalScreen[None]):
                         style="green",
                     )
                 )
-                if hasattr(self.app, "session_state") and hasattr(self.app.session_state, "reload_mcp_servers"):
+                if hasattr(self.app, "session_state") and hasattr(
+                    self.app.session_state, "reload_mcp_servers"
+                ):
                     new_agent, new_backend = await self.app.session_state.reload_mcp_servers()
                     self.app.agent = new_agent
                     self.app.backend = new_backend
@@ -1338,7 +1353,9 @@ class McpScreen(ModalScreen[None]):
                         style="green",
                     )
                 )
-                if hasattr(self.app, "session_state") and hasattr(self.app.session_state, "reload_mcp_servers"):
+                if hasattr(self.app, "session_state") and hasattr(
+                    self.app.session_state, "reload_mcp_servers"
+                ):
                     new_agent, new_backend = await self.app.session_state.reload_mcp_servers()
                     self.app.agent = new_agent
                     self.app.backend = new_backend
@@ -1376,7 +1393,9 @@ class McpScreen(ModalScreen[None]):
                         style="green",
                     )
                 )
-                if hasattr(self.app, "session_state") and hasattr(self.app.session_state, "reload_mcp_servers"):
+                if hasattr(self.app, "session_state") and hasattr(
+                    self.app.session_state, "reload_mcp_servers"
+                ):
                     new_agent, new_backend = await self.app.session_state.reload_mcp_servers()
                     self.app.agent = new_agent
                     self.app.backend = new_backend
@@ -1534,6 +1553,7 @@ class McpCustomModal(ModalScreen[dict | None]):
             # Validate command locally first to show immediate feedback in modal!
             try:
                 from novacode_cli.mcp.config import MCPServerConfig
+
                 MCPServerConfig.validate_command(cmd)
             except ValueError as ex:
                 hint.update(Text(f"Validation failed: {ex}", style="red"))
@@ -1847,22 +1867,28 @@ class AgentCreateModal(ModalScreen[dict | None]):
 
     def compose(self) -> ComposeResult:
         from novacode_cli.config.config import settings
-        
+
         scope_options = [("Global (all projects)", "global")]
         if settings.project_root is not None:
             scope_options.append(("Project (current project only)", "project"))
 
         with Vertical(id="modal-box"):
             yield Static(Text("Create Custom Subagent", style="bold"), id="modal-title")
-            yield Static(Text("Agent Name (e.g. code-reviewer):", style="bold"), id="agent-name-label")
-            yield Input(placeholder="Name (letters, numbers, hyphens, underscores)", id="agent-name")
-            
+            yield Static(
+                Text("Agent Name (e.g. code-reviewer):", style="bold"), id="agent-name-label"
+            )
+            yield Input(
+                placeholder="Name (letters, numbers, hyphens, underscores)", id="agent-name"
+            )
+
             yield Static(Text("Specialization / Description:", style="bold"), id="agent-desc-label")
-            yield Input(placeholder="e.g. Reviews python code for security vulnerabilities", id="agent-desc")
-            
+            yield Input(
+                placeholder="e.g. Reviews python code for security vulnerabilities", id="agent-desc"
+            )
+
             yield Static(Text("Storage Scope:", style="bold"), id="agent-scope-label")
             yield Select(scope_options, id="agent-scope", value="global")
-            
+
             yield Static(Text("Color Theme:", style="bold"), id="agent-color-label")
             yield Select(
                 [
@@ -1911,8 +1937,11 @@ class AgentCreateModal(ModalScreen[dict | None]):
             return
 
         from novacode_cli.config.config import settings
+
         if not settings._is_valid_agent_name(name):
-            hint.update(Text("Invalid name (use letters, numbers, hyphens, underscores)", style="red"))
+            hint.update(
+                Text("Invalid name (use letters, numbers, hyphens, underscores)", style="red")
+            )
             return
 
         try:
@@ -1933,12 +1962,14 @@ class AgentCreateModal(ModalScreen[dict | None]):
         except Exception:
             color = "#0ea5e9"
 
-        self.dismiss({
-            "name": name,
-            "description": desc,
-            "scope": scope,
-            "color": color,
-        })
+        self.dismiss(
+            {
+                "name": name,
+                "description": desc,
+                "scope": scope,
+                "color": color,
+            }
+        )
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -1986,7 +2017,9 @@ class AgentsScreen(ModalScreen[None]):
 
         if not self._agents:
             ol.add_option(Option("(no custom subagents found)"))
-            self.query_one("#agent-detail-preview", Static).update(Text("No subagents are currently configured.", style="dim"))
+            self.query_one("#agent-detail-preview", Static).update(
+                Text("No subagents are currently configured.", style="dim")
+            )
             self.query_one("#delete", Button).disabled = True
             hint.update(Text("Create one with the Create button", style="dim"))
             return
@@ -1994,15 +2027,14 @@ class AgentsScreen(ModalScreen[None]):
         self.query_one("#delete", Button).disabled = False
         for name, path, scope in self._agents:
             from novacode_cli.commands.agents_commands import extract_agent_description
+
             desc = ""
             try:
                 desc = extract_agent_description(path / "agent.md")
             except Exception:
                 pass
             label = Text.assemble(
-                (f"@{name} ", "bold #73daca"),
-                (f" · {scope} · ", "dim"),
-                (desc, "dim")
+                (f"@{name} ", "bold #73daca"), (f" · {scope} · ", "dim"), (desc, "dim")
             )
             ol.add_option(Option(label))
 
@@ -2011,9 +2043,11 @@ class AgentsScreen(ModalScreen[None]):
         else:
             ol.highlighted = 0
         ol.focus()
-        
+
         self._update_preview(ol.highlighted)
-        hint.update(Text("Select an agent to see details · Create/Delete custom agents", style="dim"))
+        hint.update(
+            Text("Select an agent to see details · Create/Delete custom agents", style="dim")
+        )
 
     def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
         if event.option_list.id == "agents-list":
@@ -2027,6 +2061,7 @@ class AgentsScreen(ModalScreen[None]):
 
         name, path, scope = self._agents[idx]
         from novacode_cli.commands.agents_commands import extract_agent_description
+
         desc = ""
         system_prompt = ""
         color = ""
@@ -2050,7 +2085,9 @@ class AgentsScreen(ModalScreen[None]):
         preview_text.append(f"Name: ", style="bold")
         preview_text.append(f"@{name}\n", style="bold #73daca")
         preview_text.append(f"Scope: ", style="bold")
-        preview_text.append(f"{scope}\n", style="bold yellow" if scope == "project" else "bold blue")
+        preview_text.append(
+            f"{scope}\n", style="bold yellow" if scope == "project" else "bold blue"
+        )
         if color:
             preview_text.append(f"Color: ", style="bold")
             preview_text.append(f"{color}\n", style=f"bold {color}")
@@ -2082,6 +2119,7 @@ class AgentsScreen(ModalScreen[None]):
 
             from novacode_cli.config.config import settings
             from pathlib import Path
+
             if scope == "project":
                 agents_dir = settings.ensure_project_agents_dir()
                 agent_dir = agents_dir / name
@@ -2092,7 +2130,9 @@ class AgentsScreen(ModalScreen[None]):
                 if self.is_mounted:
                     try:
                         hint = self.query_one("#agents-hint", Static)
-                        hint.update(Text(f"Agent '{name}' already exists in that scope.", style="yellow"))
+                        hint.update(
+                            Text(f"Agent '{name}' already exists in that scope.", style="yellow")
+                        )
                     except Exception:
                         pass
                 self.app._log(Text(f"Agent '{name}' already exists in that scope.", style="yellow"))
@@ -2108,13 +2148,19 @@ class AgentsScreen(ModalScreen[None]):
 
                 try:
                     hint = self.query_one("#agents-hint", Static)
-                    hint.update(Text(f"Generating system prompt for @{name} using AI... Please wait.", style="bold cyan"))
+                    hint.update(
+                        Text(
+                            f"Generating system prompt for @{name} using AI... Please wait.",
+                            style="bold cyan",
+                        )
+                    )
                 except Exception:
                     pass
             self.app._log(Text(f"Generating system prompt for @{name} using AI...", style="cyan"))
 
             try:
                 from novacode_cli.commands.agents_commands import _generate_agent_system_prompt
+
                 system_prompt = await _generate_agent_system_prompt(name, desc)
                 if not system_prompt:
                     raise RuntimeError("AI generation of system prompt returned empty response.")
@@ -2133,10 +2179,16 @@ description: {desc}
                 if self.is_mounted:
                     try:
                         hint = self.query_one("#agents-hint", Static)
-                        hint.update(Text(f"✓ Custom subagent '@{name}' created successfully!", style="green"))
+                        hint.update(
+                            Text(
+                                f"✓ Custom subagent '@{name}' created successfully!", style="green"
+                            )
+                        )
                     except Exception:
                         pass
-                self.app._log(Text(f"✓ Custom subagent '@{name}' created successfully!", style="green"))
+                self.app._log(
+                    Text(f"✓ Custom subagent '@{name}' created successfully!", style="green")
+                )
                 self.app._agent_names_cache = None
             except Exception as e:
                 if self.is_mounted:
@@ -2146,7 +2198,7 @@ description: {desc}
                     except Exception:
                         pass
                 self.app._log(Text(f"Failed to create agent: {e}", style="red"))
-            
+
             self._generating = False
             if self.is_mounted:
                 try:
@@ -2169,11 +2221,14 @@ description: {desc}
         ok = await self.app.push_screen_wait(
             ConfirmModal(
                 f"Delete custom subagent '@{name}'?",
-                Text("This will delete the agent's folder and prompt config. This cannot be undone."),
+                Text(
+                    "This will delete the agent's folder and prompt config. This cannot be undone."
+                ),
             )
         )
         if ok:
             import shutil
+
             try:
                 shutil.rmtree(path)
                 self.app._log(Text(f"✓ Deleted subagent '@{name}'!", style="green"))
@@ -2195,22 +2250,26 @@ class SkillCreateModal(ModalScreen[dict | None]):
 
     def compose(self) -> ComposeResult:
         from novacode_cli.config.config import settings
-        
+
         scope_options = [("Global (all projects)", "global")]
         if settings.project_root is not None:
             scope_options.append(("Project (current project only)", "project"))
 
         with Vertical(id="modal-box"):
             yield Static(Text("Create Custom Skill", style="bold"), id="modal-title")
-            yield Static(Text("Skill Name (e.g. docker-deploy):", style="bold"), id="skill-name-label")
-            yield Input(placeholder="Name (letters, numbers, hyphens, underscores)", id="skill-name")
-            
+            yield Static(
+                Text("Skill Name (e.g. docker-deploy):", style="bold"), id="skill-name-label"
+            )
+            yield Input(
+                placeholder="Name (letters, numbers, hyphens, underscores)", id="skill-name"
+            )
+
             yield Static(Text("Specialization / Description:", style="bold"), id="skill-desc-label")
             yield Input(placeholder="Description (optional)", id="skill-desc")
-            
+
             yield Static(Text("Storage Scope:", style="bold"), id="skill-scope-label")
             yield Select(scope_options, id="skill-scope", value="global")
-            
+
             yield Static("", id="skill-create-hint")
             with Horizontal(id="modal-buttons"):
                 yield Button("Create", id="do-create", variant="primary")
@@ -2243,6 +2302,7 @@ class SkillCreateModal(ModalScreen[dict | None]):
             return
 
         from novacode_cli.skills.skill_creation import _validate_name
+
         is_valid, err = _validate_name(name)
         if not is_valid:
             hint.update(Text(f"Invalid name: {err}", style="red"))
@@ -2258,11 +2318,13 @@ class SkillCreateModal(ModalScreen[dict | None]):
         except Exception:
             scope = "global"
 
-        self.dismiss({
-            "name": name,
-            "description": desc,
-            "scope": scope,
-        })
+        self.dismiss(
+            {
+                "name": name,
+                "description": desc,
+                "scope": scope,
+            }
+        )
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -2304,7 +2366,9 @@ class SkillsScreen(ModalScreen[None]):
 
         if not names:
             ol.add_option(Option("(no skills found)"))
-            self.query_one("#skill-detail-preview", Static).update(Text("No skills are currently installed.", style="dim"))
+            self.query_one("#skill-detail-preview", Static).update(
+                Text("No skills are currently installed.", style="dim")
+            )
             hint.update(Text("Create one with the Create button", style="dim"))
             return
 
@@ -2332,13 +2396,13 @@ class SkillsScreen(ModalScreen[None]):
             return
 
         skill_name = names[idx]
-        
+
         from pathlib import Path
         from novacode_cli.config.config import Settings, settings
 
         skill_path = None
         scope = "unknown"
-        
+
         search_dirs = []
         try:
             search_dirs.append((settings.ensure_user_skills_dir(), "global"))
@@ -2385,12 +2449,17 @@ class SkillsScreen(ModalScreen[None]):
         preview_text.append(f"Name: ", style="bold")
         preview_text.append(f"{skill_name}\n", style="bold #e0af68")
         preview_text.append(f"Scope: ", style="bold")
-        preview_text.append(f"{scope}\n", style="bold yellow" if scope == "project" else "bold blue")
+        preview_text.append(
+            f"{scope}\n", style="bold yellow" if scope == "project" else "bold blue"
+        )
         if desc:
             preview_text.append(f"Description: ", style="bold")
             preview_text.append(f"{desc}\n\n", style="dim")
         preview_text.append(f"Instructions / Content:\n", style="bold")
-        preview_text.append(instructions[:1000] + "..." if len(instructions) > 1000 else instructions, style="italic dim")
+        preview_text.append(
+            instructions[:1000] + "..." if len(instructions) > 1000 else instructions,
+            style="italic dim",
+        )
 
         preview.update(preview_text)
 
@@ -2409,6 +2478,7 @@ class SkillsScreen(ModalScreen[None]):
             scope = result["scope"]
 
             from novacode_cli.config.config import settings
+
             if scope == "project":
                 base_dir = settings.ensure_project_skills_dir()
             else:
@@ -2434,15 +2504,20 @@ class SkillsScreen(ModalScreen[None]):
 
                 try:
                     hint = self.query_one("#skills-hint", Static)
-                    hint.update(Text(f"Generating skill '{name}' using AI... Please wait.", style="bold cyan"))
+                    hint.update(
+                        Text(
+                            f"Generating skill '{name}' using AI... Please wait.", style="bold cyan"
+                        )
+                    )
                 except Exception:
                     pass
             self.app._log(Text(f"Generating skill '{name}' using AI...", style="cyan"))
 
             try:
                 skill_dir.mkdir(parents=True, exist_ok=True)
-                
+
                 from novacode_cli.skills.skill_creation import _generate_skill
+
                 content = await _generate_skill(
                     name,
                     base_dir=base_dir,
@@ -2467,7 +2542,7 @@ class SkillsScreen(ModalScreen[None]):
                     except Exception:
                         pass
                 self.app._log(Text(f"Failed to create skill: {e}", style="red"))
-            
+
             self._generating = False
             if self.is_mounted:
                 try:
@@ -2494,23 +2569,23 @@ class WikiScreen(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="modal-box"):
             yield Static(Text("Obsidian LLM Wiki Browser", style="bold"), id="modal-title")
-            
+
             with Horizontal(id="wiki-tab-buttons"):
                 yield Button("Synthesized Pages", id="tab-pages", variant="primary")
                 yield Button("Web Clipper Inbox", id="tab-inbox")
-            
+
             with Vertical(id="pages-container"):
                 yield Static(Text("Synthesized Pages:", style="bold cyan"), id="pages-header")
                 yield OptionList(id="wiki-pages-list")
-            
+
             with Vertical(id="inbox-container"):
                 yield Static(Text("Clipper Inbox / raw:", style="bold cyan"), id="inbox-header")
                 yield OptionList(id="wiki-inbox-list")
-                
+
             yield Static(Text("Preview:", style="bold yellow"), id="wiki-detail-header")
             yield Static("", id="wiki-detail-preview", classes="preview-box")
             yield Static("", id="wiki-hint")
-            
+
             with Horizontal(id="modal-buttons"):
                 yield Button("Ask About Page", id="ask-btn", variant="primary")
                 yield Button("Ingest Selected", id="ingest-btn", variant="primary")
@@ -2533,7 +2608,7 @@ class WikiScreen(ModalScreen[None]):
             entries = mgr.read_index()
             self._pages = sorted(
                 [(topic, info["path"], info.get("summary", "")) for topic, info in entries.items()],
-                key=lambda x: x[0].lower()
+                key=lambda x: x[0].lower(),
             )
         except Exception:
             self._pages = []
@@ -2552,7 +2627,7 @@ class WikiScreen(ModalScreen[None]):
             label = Text.assemble(
                 (f"{topic} ", "bold #7bb6ec"),
                 (f"({path}) ", "dim"),
-                (f"— {summary}" if summary else "", "dim")
+                (f"— {summary}" if summary else "", "dim"),
             )
             ol_pages.add_option(Option(label))
         if self._pages:
@@ -2608,6 +2683,7 @@ class WikiScreen(ModalScreen[None]):
             if idx is not None and 0 <= idx < len(self._pages):
                 topic, path, summary = self._pages[idx]
                 from novacode_cli.wiki.manager import WikiManager
+
                 try:
                     mgr = WikiManager()
                     content = mgr.read_page(path)
@@ -2629,6 +2705,7 @@ class WikiScreen(ModalScreen[None]):
             if idx is not None and 0 <= idx < len(self._sources):
                 source_path = self._sources[idx]
                 from novacode_cli.wiki.ingest import IngestEngine
+
                 try:
                     engine = IngestEngine()
                     source_full = engine.resolve_source(source_path)
@@ -2693,17 +2770,23 @@ class HookCreateModal(ModalScreen[dict | None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="modal-box"):
             yield Static(Text("Add New Hook", style="bold"), id="modal-title")
-            yield Static(Text("Command to execute (e.g. python script.py):", style="bold"), id="hook-command-label")
+            yield Static(
+                Text("Command to execute (e.g. python script.py):", style="bold"),
+                id="hook-command-label",
+            )
             yield Input(placeholder="e.g. python /path/to/script.py", id="hook-command")
 
-            yield Static(Text("Events to subscribe to (comma-separated, blank for all):", style="bold"), id="hook-events-label")
+            yield Static(
+                Text("Events to subscribe to (comma-separated, blank for all):", style="bold"),
+                id="hook-events-label",
+            )
             yield Input(placeholder="e.g. session.start, tool.call", id="hook-events")
             yield Static(
                 "Valid events: session.start, session.end, session.save, session.continue, "
                 "model.switch, tool.call, tool.result, agent.message, user.message, error, "
                 "remote.message, context.warning, compact, init.complete, notification",
                 classes="modal-hint",
-                id="events-help-text"
+                id="events-help-text",
             )
             yield Static("", id="hook-create-hint")
             with Horizontal(id="modal-buttons"):
@@ -2752,18 +2835,19 @@ class HookCreateModal(ModalScreen[dict | None]):
             events = [e.strip() for e in events_str.split(",") if e.strip()]
             # Validate events
             from novacode_cli.hooks import HookEvent
-            valid_events = {getattr(HookEvent, attr) for attr in dir(HookEvent) if not attr.startswith("_") and isinstance(getattr(HookEvent, attr), str)}
+
+            valid_events = {
+                getattr(HookEvent, attr)
+                for attr in dir(HookEvent)
+                if not attr.startswith("_") and isinstance(getattr(HookEvent, attr), str)
+            }
             valid_events.add("notification")
             invalid_events = [e for e in events if e not in valid_events]
             if invalid_events:
                 hint.update(Text(f"Invalid events: {', '.join(invalid_events)}", style="red"))
                 return
 
-        self.dismiss({
-            "command": cmd_str.split(),
-            "events": events,
-            "enabled": True
-        })
+        self.dismiss({"command": cmd_str.split(), "events": events, "enabled": True})
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -2800,6 +2884,7 @@ class HooksScreen(ModalScreen[None]):
 
     def _reload(self) -> None:
         from novacode_cli.hooks import _load_hooks
+
         try:
             self._hooks = _load_hooks()
         except Exception:
@@ -2812,7 +2897,9 @@ class HooksScreen(ModalScreen[None]):
 
         if not self._hooks:
             ol.add_option(Option("(no hooks configured)"))
-            self.query_one("#hook-detail-preview", Static).update(Text("No hooks are currently configured.", style="dim"))
+            self.query_one("#hook-detail-preview", Static).update(
+                Text("No hooks are currently configured.", style="dim")
+            )
             self.query_one("#toggle", Button).disabled = True
             self.query_one("#test", Button).disabled = True
             self.query_one("#remove", Button).disabled = True
@@ -2843,7 +2930,9 @@ class HooksScreen(ModalScreen[None]):
         ol.focus()
 
         self._update_preview(ol.highlighted)
-        hint.update(Text("Select a hook to see details · Add/Toggle/Test/Remove hooks", style="dim"))
+        hint.update(
+            Text("Select a hook to see details · Add/Toggle/Test/Remove hooks", style="dim")
+        )
 
     def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
         if event.option_list.id == "hooks-list":
@@ -2866,7 +2955,9 @@ class HooksScreen(ModalScreen[None]):
         preview_text.append("Events: ", style="bold")
         preview_text.append(f"{events}\n", style="cyan")
         preview_text.append("Status: ", style="bold")
-        preview_text.append("Enabled\n" if enabled else "Disabled\n", style="bold green" if enabled else "bold red")
+        preview_text.append(
+            "Enabled\n" if enabled else "Disabled\n", style="bold green" if enabled else "bold red"
+        )
 
         preview.update(preview_text)
 
@@ -2889,9 +2980,17 @@ class HooksScreen(ModalScreen[None]):
         result = await self.app.push_screen_wait(HookCreateModal())
         if result is not None:
             from novacode_cli.commands.hooks_handler import _save_hooks
+
             self._hooks.append(result)
             ok = _save_hooks(self._hooks)
-            self.app._log(Text(f"✓ Hook added: {' '.join(result['command'])}" if ok else "Failed to save hook configuration", style="green" if ok else "red"))
+            self.app._log(
+                Text(
+                    f"✓ Hook added: {' '.join(result['command'])}"
+                    if ok
+                    else "Failed to save hook configuration",
+                    style="green" if ok else "red",
+                )
+            )
             self._reload()
 
     @work
@@ -2901,10 +3000,18 @@ class HooksScreen(ModalScreen[None]):
         if idx is not None and 0 <= idx < len(self._hooks):
             h = self._hooks[idx]
             from novacode_cli.commands.hooks_handler import _save_hooks
+
             h["enabled"] = not h.get("enabled", True)
             ok = _save_hooks(self._hooks)
             action = "enabled" if h["enabled"] else "disabled"
-            self.app._log(Text(f"✓ Hook {action}: {' '.join(h['command'])}" if ok else "Failed to save hook configuration", style="green" if ok else "red"))
+            self.app._log(
+                Text(
+                    f"✓ Hook {action}: {' '.join(h['command'])}"
+                    if ok
+                    else "Failed to save hook configuration",
+                    style="green" if ok else "red",
+                )
+            )
             self._reload()
 
     @work
@@ -2917,14 +3024,17 @@ class HooksScreen(ModalScreen[None]):
             self.app._log(Text(f"Testing hook: {' '.join(command)}...", style="cyan"))
             import time
             from novacode_cli.hooks import dispatch_hook
+
             test_payload = {
                 "test": True,
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                "message": "This is a test event"
+                "message": "This is a test event",
             }
             try:
                 await dispatch_hook("test", test_payload)
-                self.app._log(Text("✓ Test event fired successfully! Check hook logs.", style="green"))
+                self.app._log(
+                    Text("✓ Test event fired successfully! Check hook logs.", style="green")
+                )
             except Exception as e:
                 self.app._log(Text(f"✗ Test failed: {e}", style="red"))
 
@@ -2942,13 +3052,22 @@ class HooksScreen(ModalScreen[None]):
             )
             if ok:
                 from novacode_cli.commands.hooks_handler import _save_hooks
+
                 removed = self._hooks.pop(idx)
                 saved = _save_hooks(self._hooks)
-                self.app._log(Text(f"✓ Removed hook: {' '.join(removed.get('command', []))}" if saved else "Failed to save hook configuration", style="green" if saved else "red"))
+                self.app._log(
+                    Text(
+                        f"✓ Removed hook: {' '.join(removed.get('command', []))}"
+                        if saved
+                        else "Failed to save hook configuration",
+                        style="green" if saved else "red",
+                    )
+                )
                 self._reload()
 
     def _reload_hooks(self) -> None:
         from novacode_cli.hooks import reload_hooks
+
         reload_hooks()
         self.app._log(Text("✓ Hooks configuration reloaded from disk", style="green"))
         self._reload()
@@ -2986,6 +3105,7 @@ class ServersScreen(ModalScreen[None]):
 
     def _reload(self) -> None:
         from novacode_cli.server_runner.dev_server import list_servers
+
         try:
             self._servers = list_servers(include_external=True)
         except Exception:
@@ -2998,7 +3118,9 @@ class ServersScreen(ModalScreen[None]):
 
         if not self._servers:
             ol.add_option(Option("(no dev servers running)"))
-            self.query_one("#server-detail-preview", Static).update(Text("No dev servers are currently running.", style="dim"))
+            self.query_one("#server-detail-preview", Static).update(
+                Text("No dev servers are currently running.", style="dim")
+            )
             self.query_one("#open-browser", Button).disabled = True
             self.query_one("#stop-server", Button).disabled = True
             self.query_one("#stop-all", Button).disabled = True
@@ -3054,7 +3176,9 @@ class ServersScreen(ModalScreen[None]):
         preview_text.append("PID: ", style="bold")
         preview_text.append(f"{'external' if ext else s.pid}\n", style="dim")
         preview_text.append("Command:\n", style="bold")
-        preview_text.append(s.command if s.command else "(external server, command unknown)", style="italic dim")
+        preview_text.append(
+            s.command if s.command else "(external server, command unknown)", style="italic dim"
+        )
 
         preview.update(preview_text)
         # Disable stop server button for external servers
@@ -3075,6 +3199,7 @@ class ServersScreen(ModalScreen[None]):
         idx = ol.highlighted
         if idx is not None and 0 <= idx < len(self._servers):
             import webbrowser
+
             webbrowser.open(self._servers[idx].url)
             self.app._log(Text(f"✓ Opened {self._servers[idx].url}", style="green"))
 
@@ -3087,15 +3212,29 @@ class ServersScreen(ModalScreen[None]):
             if s.pid == 0 and "external" in s.name:
                 return
             from novacode_cli.server_runner.dev_server import stop_server
+
             ok = await stop_server(pid=s.pid)
-            self.app._log(Text(f"✓ Stopped '{s.name}' (PID {s.pid})" if ok else f"Failed to stop server '{s.name}'", style="green" if ok else "red"))
+            self.app._log(
+                Text(
+                    f"✓ Stopped '{s.name}' (PID {s.pid})"
+                    if ok
+                    else f"Failed to stop server '{s.name}'",
+                    style="green" if ok else "red",
+                )
+            )
             self._reload()
 
     @work
     async def _stop_all(self) -> None:
         from novacode_cli.process_manager import ProcessManager
+
         count = await ProcessManager.get_instance().stop_all()
-        self.app._log(Text(f"✓ Stopped {count} managed server(s)" if count else "No managed servers to stop", style="green" if count else "yellow"))
+        self.app._log(
+            Text(
+                f"✓ Stopped {count} managed server(s)" if count else "No managed servers to stop",
+                style="green" if count else "yellow",
+            )
+        )
         self._reload()
 
     def action_close(self) -> None:
@@ -3378,16 +3517,8 @@ class RalphScreen(ModalScreen[None]):
 
         if isinstance(event, rev.RalphStarted):
             self._iter_cards.clear()
-            iters = (
-                "unlimited"
-                if event.max_iterations == 0
-                else str(event.max_iterations)
-            )
-            title = (
-                "🔁 Ralph Mode (Resumed)"
-                if event.resumed_from
-                else "🔁 Ralph Mode"
-            )
+            iters = "unlimited" if event.max_iterations == 0 else str(event.max_iterations)
+            title = "🔁 Ralph Mode (Resumed)" if event.resumed_from else "🔁 Ralph Mode"
             t = Text()
             t.append(f"{title}\n", style="bold")
             t.append("Task: ", style="bold")
@@ -3398,17 +3529,11 @@ class RalphScreen(ModalScreen[None]):
                 t.append("Resuming from: ", style="bold")
                 t.append(f"iteration {event.resumed_from}\n")
             t.append("Mode: ", style="bold")
-            t.append(
-                "background (non-blocking)"
-                if event.background
-                else "foreground"
-            )
+            t.append("background (non-blocking)" if event.background else "foreground")
             self.query_one("#ralph-header", Static).update(t)
 
         elif isinstance(event, rev.IterationStarted):
-            text = self._iter_text(
-                event.iteration, event.max_iterations, "running"
-            )
+            text = self._iter_text(event.iteration, event.max_iterations, "running")
             card = Static(text, classes="ralph-iter-card running")
             self._iter_cards[event.iteration] = card
             self.query_one("#ralph-iters", VerticalScroll).mount(card)
@@ -3493,9 +3618,7 @@ class RalphScreen(ModalScreen[None]):
         summary.append(f"  ·  running {snap.running}", style="yellow")
         summary.append(f"  ·  completed {snap.completed}", style="green")
         summary.append(f"  ·  failed {snap.failed}", style="red")
-        self.query_one("#ralph-status-table", Static).update(
-            Group(header, table, summary)
-        )
+        self.query_one("#ralph-status-table", Static).update(Group(header, table, summary))
 
     def _iter_text(
         self,
@@ -3507,11 +3630,7 @@ class RalphScreen(ModalScreen[None]):
     ) -> Text:
         """One iteration card, styled by status."""
         glyph, color = self._ITER_GLYPH.get(status, ("•", "dim"))
-        disp = (
-            f"{iteration}/{max_iterations}"
-            if max_iterations > 0
-            else str(iteration)
-        )
+        disp = f"{iteration}/{max_iterations}" if max_iterations > 0 else str(iteration)
         t = Text()
         t.append(f"{glyph} Iteration {disp}", style=f"bold {color}")
         if status == "running":
@@ -3538,9 +3657,7 @@ class RalphScreen(ModalScreen[None]):
         def _emit(message: str = "") -> None:
             """Thread-safe Rich-markup emitter — logs to main transcript."""
             try:
-                renderable = (
-                    Text.from_markup(message) if message else Text("")
-                )
+                renderable = Text.from_markup(message) if message else Text("")
             except Exception:  # noqa: BLE001
                 renderable = Text(message)
             app = self.app
@@ -4224,6 +4341,7 @@ class NovaApp(App):
     def _current_agent_info(self) -> tuple[str, str]:
         from novacode_cli.ui.input_preparation import get_agent_display_name
         from novacode_cli.config.config import get_agent_color
+
         aid = self._current_assistant_id or self.assistant_id
         name = get_agent_display_name(aid)
         color = get_agent_color(aid) if name != "Nova" else "#10b981"
@@ -4282,6 +4400,7 @@ class NovaApp(App):
 
     def on_mount(self) -> None:
         import threading
+
         self._thread_id = threading.get_ident()
         # Register Nova's palette and apply the saved (or default) theme first,
         # so the whole UI renders with the right colors from the first frame.
@@ -5455,8 +5574,7 @@ class NovaApp(App):
             mgr = getattr(self.session_state, "_remote_bridge_manager", None)
             if mgr is not None:
                 _active = [
-                    b for b in mgr.active_bridges
-                    if b.get("status") in ("running", "connecting...")
+                    b for b in mgr.active_bridges if b.get("status") in ("running", "connecting...")
                 ]
                 if _active:
                     _divider()
@@ -5587,9 +5705,7 @@ class NovaApp(App):
                 branch = result.stdout.strip() or "—"
         except Exception:  # noqa: BLE001
             branch = "—"
-        self.call_from_thread(
-            self._set_info, "#info-branch", Text(branch, style="bold #bb9af7")
-        )
+        self.call_from_thread(self._set_info, "#info-branch", Text(branch, style="bold #bb9af7"))
 
     def _refresh_quota(self) -> None:
         """Lightweight quota-only refresh (called from _tick during active turns)."""
@@ -5628,10 +5744,13 @@ class NovaApp(App):
         try:
             _mgr = getattr(self.session_state, "_remote_bridge_manager", None)
             _bridge_count = (
-                len([
-                    b for b in _mgr.active_bridges
-                    if b.get("status") in ("running", "connecting...")
-                ])
+                len(
+                    [
+                        b
+                        for b in _mgr.active_bridges
+                        if b.get("status") in ("running", "connecting...")
+                    ]
+                )
                 if _mgr is not None
                 else 0
             )
@@ -5796,23 +5915,36 @@ class NovaApp(App):
         # unless it is a command like `/ingest` or `/file` that takes arguments.
         if " " in value or not value:
             if value.startswith("/ingest "):
-                prefix = value[len("/ingest "):].strip()
+                prefix = value[len("/ingest ") :].strip()
                 try:
                     from novacode_cli.wiki.ingest import IngestEngine
                     from pathlib import Path
+
                     engine = IngestEngine()
                     sources = engine.list_raw_sources()
                     matches = []
                     for s in sources:
-                        if not prefix or prefix.lower() in s.lower() or prefix.lower() in Path(s).name.lower():
+                        if (
+                            not prefix
+                            or prefix.lower() in s.lower()
+                            or prefix.lower() in Path(s).name.lower()
+                        ):
                             matches.append(s)
                     return [f"/ingest {s}" for s in matches[:50]]
                 except Exception:
                     return []
             elif value.startswith("/file "):
-                prefix = value[len("/file "):].strip()
-                categories = ["technologies/", "frameworks/", "patterns/", "projects/", "comparisons/"]
-                matches = [c for c in categories if not prefix or c.lower().startswith(prefix.lower())]
+                prefix = value[len("/file ") :].strip()
+                categories = [
+                    "technologies/",
+                    "frameworks/",
+                    "patterns/",
+                    "projects/",
+                    "comparisons/",
+                ]
+                matches = [
+                    c for c in categories if not prefix or c.lower().startswith(prefix.lower())
+                ]
                 return [f"/file {c}" for c in matches]
             return []
         v = value.lower()
@@ -6096,9 +6228,12 @@ class NovaApp(App):
 
             cfg = NovaConfig().get_voice_config()
             self._voice_pipeline = VoicePipeline(
-                stt_model=cfg["stt_model"],
-                stt_device=cfg["stt_device"],
-                tts_voice=cfg["tts_voice"],
+                stt_provider=cfg.get("stt_provider", "faster-whisper"),
+                tts_provider=cfg.get("tts_provider", "piper"),
+                provider_configs=cfg.get("providers", {}),
+                stt_model=cfg.get("stt_model", "base"),
+                stt_device=cfg.get("stt_device", "auto"),
+                tts_voice=cfg.get("tts_voice", "en_US-lessac-medium"),
             )
             self._voice_speak_responses = bool(cfg["speak_responses"])
         return True
@@ -6360,9 +6495,7 @@ class NovaApp(App):
 
         # Single agent at the start: delegate directly to that one subagent.
         if agent_name:
-            await self._add_message(
-                Text(f"{agent_name}", style="bold cyan"), "user", Text(query)
-            )
+            await self._add_message(Text(f"{agent_name}", style="bold cyan"), "user", Text(query))
             await self._stream_prompt(
                 f"Call the '{agent_name}' subagent to do the following:\n\n{query}"
             )
@@ -6504,9 +6637,7 @@ class NovaApp(App):
                     style="italic #9ece6a",
                 )
             )
-            await self._add_message(
-                Text("You", style="bold cyan"), "user", Text(prompt)
-            )
+            await self._add_message(Text("You", style="bold cyan"), "user", Text(prompt))
             await self._stream_prompt(prompt)
 
     async def _check_context(self) -> None:
@@ -6631,7 +6762,7 @@ class NovaApp(App):
                             continue
                         if not text:
                             continue
-                        
+
                         self._add_live_steer(text)
                         react_fn = getattr(msg, "react_fn", None)
                         reply_fn = getattr(msg, "reply_fn", None)
@@ -6719,6 +6850,7 @@ class NovaApp(App):
                                 await self._stream_prompt(prompt_text)
                             elif callable(prompt_text):
                                 import inspect
+
                                 if inspect.iscoroutinefunction(prompt_text):
                                     await prompt_text()
                                 else:
@@ -6917,6 +7049,7 @@ class NovaApp(App):
 
         if cmd == "research":
             from novacode_cli.commands.research_handler import handle_research_command
+
             if not arg:
                 with _rich_console.capture() as cap:
                     await handle_research_command(
@@ -6925,16 +7058,24 @@ class NovaApp(App):
                 out = Text.from_ansi(cap.get()).plain.strip()
                 return out, None
 
-            from novacode_cli.commands.research_handler import _parse_args, _MODE_AGENTS, _MODE_DESCRIPTIONS
+            from novacode_cli.commands.research_handler import (
+                _parse_args,
+                _MODE_AGENTS,
+                _MODE_DESCRIPTIONS,
+            )
+
             mode, query, agent_count, fast_mode = _parse_args(arg)
             if not query:
-                return f"Error: no research query provided.\nUsage: /research {mode} <your question>", None
+                return (
+                    f"Error: no research query provided.\nUsage: /research {mode} <your question>",
+                    None,
+                )
 
             async def run_res(msg_obj=self._remote_msg):
                 self._log(
                     Text(
                         f"📡 Remote ({msg_obj.platform.value if msg_obj else 'Remote'}) triggered research swarm: {query}",
-                        style="bold cyan"
+                        style="bold cyan",
                     )
                 )
                 base_agents = _MODE_AGENTS[mode]
@@ -6948,6 +7089,7 @@ class NovaApp(App):
                 conversation_context = ""
                 try:
                     from novacode_cli.context import ContextManager
+
                     conversation_context = await ContextManager().digest(
                         self.agent, self.session_state.thread_id
                     )
@@ -6982,18 +7124,25 @@ class NovaApp(App):
                     self.token_tracker,
                     self.backend,
                 )
+
             return None, run_res
 
         if cmd == "evolution":
+
             async def run_evo(msg_obj=self._remote_msg):
                 lines = []
+
                 def _emit(m=""):
-                    if m: lines.append(m)
+                    if m:
+                        lines.append(m)
+
                 from novacode_cli.commands.evolution_command import handle_evolution_command
+
                 try:
                     await handle_evolution_command(emit=_emit)
                 except ImportError:
                     from novacode_cli.commands.evolution_handler import handle_evolution_command
+
                     await handle_evolution_command(emit=_emit)
                 text_out = "\n".join(lines)
                 plain = Text.from_markup(text_out).plain.strip()
@@ -7002,15 +7151,23 @@ class NovaApp(App):
                         await msg_obj.reply_fn(plain or "No evolution logs yet.")
                     except Exception:
                         pass
+
             return None, run_evo
 
         if cmd == "dream":
+
             async def run_dream(msg_obj=self._remote_msg):
                 status_lines = []
+
                 def _emit(m=""):
-                    if m: status_lines.append(m)
+                    if m:
+                        status_lines.append(m)
+
                 from novacode_cli.commands.dream_handler import handle_dream_command
-                result = await handle_dream_command(self.session_state, self.assistant_id, emit=_emit)
+
+                result = await handle_dream_command(
+                    self.session_state, self.assistant_id, emit=_emit
+                )
                 if status_lines and msg_obj is not None:
                     plain = Text.from_markup("\n".join(status_lines)).plain.strip()
                     try:
@@ -7019,15 +7176,20 @@ class NovaApp(App):
                         pass
                 if isinstance(result, str) and result.strip():
                     await self._stream_prompt(result)
+
             return None, run_dream
 
         if cmd == "ralph":
             # For --status, it's fast, so return directly
             if arg.strip() == "--status":
                 lines = []
+
                 def _emit(m=""):
-                    if m: lines.append(m)
+                    if m:
+                        lines.append(m)
+
                 from novacode_cli.commands.ralph_handler import handle_ralph_status
+
                 await handle_ralph_status(self.session_state, emit=_emit)
                 text_out = "\n".join(lines)
                 plain = Text.from_markup(text_out).plain
@@ -7038,9 +7200,10 @@ class NovaApp(App):
                 self._log(
                     Text(
                         f"📡 Remote ({msg_obj.platform.value if msg_obj else 'Remote'}) triggered autonomous Ralph run: {arg or '(resume)'}",
-                        style="bold cyan"
+                        style="bold cyan",
                     )
                 )
+
                 # We want to forward ralph's emit events to both the local TUI and the remote user
                 async def _emit_remote(message: str = "") -> None:
                     if not message:
@@ -7049,10 +7212,10 @@ class NovaApp(App):
                         renderable = Text.from_markup(message)
                     except Exception:
                         renderable = Text(message)
-                    
+
                     # Log to TUI locally
                     self._log(renderable)
-                    
+
                     # Reply to remote user
                     plain = renderable.plain.strip()
                     if plain and msg_obj is not None:
@@ -7062,6 +7225,7 @@ class NovaApp(App):
                             pass
 
                 from novacode_cli.commands.ralph_handler import handle_ralph_command
+
                 parts = text.split(maxsplit=1)
                 ralph_args = parts[1].strip() if len(parts) > 1 else ""
 
@@ -7074,6 +7238,7 @@ class NovaApp(App):
                     execute_fn=self._tui_execute_fn,
                     emit=_emit_remote,
                 )
+
             return None, run_ralph
 
         if cmd in self._REMOTE_LOCAL_ONLY:
@@ -7336,6 +7501,7 @@ class NovaApp(App):
                             e.future.set_result({"answer": "Please continue autonomously."})
                         else:
                             from novacode_cli.core.agent_loop import default_interrupt_response
+
                             e.future.set_result(default_interrupt_response(e.kind))
                     except Exception:  # noqa: BLE001
                         pass
@@ -7659,7 +7825,9 @@ class NovaApp(App):
                 self.backend = getattr(self.session_state, "_backend", self.backend)
                 model = getattr(self.session_state, "model", None)
                 if model:
-                    self.model_name = getattr(model, "model_name", None) or getattr(model, "model", "unknown")
+                    self.model_name = getattr(model, "model_name", None) or getattr(
+                        model, "model", "unknown"
+                    )
                     if self.token_tracker is not None:
                         try:
                             self.token_tracker.set_model(self.model_name)
@@ -8574,7 +8742,9 @@ class NovaApp(App):
         if val in ("none", "default"):
             val = "off"
         if val not in ("low", "medium", "high", "off"):
-            self._log(Text(f"Invalid effort level '{args}'. Choose: low, medium, high, off", style="red"))
+            self._log(
+                Text(f"Invalid effort level '{args}'. Choose: low, medium, high, off", style="red")
+            )
             return
 
         nova_config.set("reasoning_effort", val)
@@ -8598,7 +8768,9 @@ class NovaApp(App):
                 t.append("✓ Model recreated with new reasoning effort dynamically!", style="green")
             except Exception as e:
                 t.append(f"⚠ Could not recreate model dynamically: {e}", style="yellow")
-                t.append("\nThe change will take effect on next model switch or restart.", style="dim")
+                t.append(
+                    "\nThe change will take effect on next model switch or restart.", style="dim"
+                )
         else:
             t.append("The change will take effect on restart.", style="dim")
 

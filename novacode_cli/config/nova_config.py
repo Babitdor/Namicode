@@ -123,9 +123,19 @@ class NovaConfig:
         "enabled": False,
         "mode": "push_to_talk",  # "push_to_talk" | "listen"
         "speak_responses": True,
+        "stt_provider": "faster-whisper",
+        "tts_provider": "piper",
+        # Legacy flat keys (deprecated — kept for backward compat; merged into providers dict on save).
         "stt_model": "base",
-        "stt_device": "auto",  # "auto" | "cuda" | "cpu"
+        "stt_device": "auto",
         "tts_voice": "en_US-lessac-medium",
+        # Per-provider configuration (keys match provider ids in audio/providers.py).
+        "providers": {
+            "faster-whisper": {"model": "base", "device": "auto"},
+            "deepgram": {"api_key": "", "model": "nova-2"},
+            "piper": {"voice": "en_US-lessac-medium"},
+            "elevenlabs": {"api_key": "", "voice_id": "21m00Tcm4TlvDq8ikWAM"},
+        },
     }
 
     def get_voice_config(self) -> dict[str, Any]:
@@ -143,6 +153,24 @@ class NovaConfig:
         self._config["voice"] = cfg
         self._save()
         return cfg
+
+    def get_voice_provider_config(self, provider: str) -> dict[str, Any]:
+        """Return saved config for a specific voice provider (e.g. deepgram, elevenlabs)."""
+        cfg = self.get_voice_config()
+        providers = cfg.get("providers", {})
+        return dict(providers.get(provider, {}))
+
+    def set_voice_provider_config(self, provider: str, **updates: Any) -> dict[str, Any]:
+        """Merge ``updates`` into a provider's config and persist."""
+        cfg = self.get_voice_config()
+        providers = dict(cfg.get("providers", {}))
+        pcfg = dict(providers.get(provider, {}))
+        pcfg.update(updates)
+        providers[provider] = pcfg
+        cfg["providers"] = providers
+        self._config["voice"] = cfg
+        self._save()
+        return pcfg
 
     def get(self, key: str, default: Any = None) -> Any:
         """Get a configuration value.

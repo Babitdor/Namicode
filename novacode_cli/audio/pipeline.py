@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from novacode_cli.audio.providers import VoiceSTT, VoiceTTS
+
 logger = logging.getLogger("nova.audio.pipeline")
 
 _TTS_POLL_S = 0.1
@@ -26,14 +28,24 @@ class VoicePipeline:
     def __init__(
         self,
         *,
+        stt_provider: str = "faster-whisper",
+        tts_provider: str = "piper",
+        provider_configs: dict[str, Any] | None = None,
+        # Legacy flat params (kept for backward compat, merged into provider_configs).
         stt_model: str = "base",
         stt_device: str = "auto",
         tts_voice: str = "en_US-lessac-medium",
     ) -> None:
         """Record component config; nothing is loaded until first use."""
-        self._stt_model = stt_model
-        self._stt_device = stt_device
-        self._tts_voice = tts_voice
+        self._stt_provider = stt_provider
+        self._tts_provider = tts_provider
+        _pc = dict(provider_configs or {})
+        _pc.setdefault("faster-whisper", {})
+        _pc["faster-whisper"].setdefault("model", stt_model)
+        _pc["faster-whisper"].setdefault("device", stt_device)
+        _pc.setdefault("piper", {})
+        _pc["piper"].setdefault("voice", tts_voice)
+        self._provider_configs = _pc
         self._capture: Any = None
         self._vad: Any = None
         self._stt: Any = None
@@ -47,8 +59,6 @@ class VoicePipeline:
 
     def _ensure_components(self) -> None:
         from novacode_cli.audio.capture import AudioCapture
-        from novacode_cli.audio.stt import Transcriber
-        from novacode_cli.audio.tts import Speaker
         from novacode_cli.audio.vad import SileroVad
 
         if self._capture is None:
@@ -56,9 +66,52 @@ class VoicePipeline:
         if self._vad is None:
             self._vad = SileroVad()
         if self._stt is None:
-            self._stt = Transcriber(model_size=self._stt_model, device=self._stt_device)
+            self._stt = self._build_stt()
         if self._tts is None:
-            self._tts = Speaker(voice=self._tts_voice)
+            self._tts = self._build_tts()
+
+    def _build_stt(self) -> VoiceSTT:
+        """Create the STT provider selected by ``stt_provider``."""
+        provider = self._stt_provider
+        cfg = self._provider_configs.get(provider, {})
+        if provider == "faster-whisper":
+            from novacode_cli.audio.stt import Transcriber
+
+            return Transcriber(
+                model_size=cfg.get("model", "base"),
+                device=cfg.get("device", "auto"),
+            )
+        if provider == "deepgram":
+            from novacode_cli.audio.stt_deepgram import DeepgramTranscriber
+
+            return DeepgramTranscriber(
+                api_key=cfg.get("api_key", ""),
+                model=cfg.get("model", "nova-2"),
+            )
+        msg = f"Unknown STT provider: {provider!r}"
+        raise ValueError(msg)
+
+    def _build_tts(self) -> VoiceTTS:
+        """Create the TTS provider selected by ``tts_provider``."""
+        provider = self._tts_provider
+        cfg = self._provider_configs.get(provider, {})
+        if provider == "piper":
+            from novacode_cli.audio.tts import Speaker
+
+            return Speaker(voice=cfg.get("voice", "en_US-lessac-medium"))
+        if provider == "elevenlabs":
+            from novacode_cli.audio.stt_elevenlabs import ElevenLabsSpeaker
+
+            return ElevenLabsSpeaker(
+                api_key=cfg.get("api_key", ""),
+                voice_id=cfg.get("voice_id", "21m00Tcm4TlvDq8ikWAM"),
+            )
+        if provider == "none":
+            from novacode_cli.audio.providers import _NullTTS
+
+            return _NullTTS()
+        msg = f"Unknown TTS provider: {provider!r}"
+        raise ValueError(msg)
 
     async def warmup(self) -> None:
         """Pre-load the STT model and TTS voice so first use isn't laggy."""
