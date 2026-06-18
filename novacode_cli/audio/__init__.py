@@ -57,7 +57,12 @@ def is_voice_available() -> bool:
 def install_hint() -> str:
     """A one-line, user-facing hint for enabling voice."""
     missing = ", ".join(missing_deps())
-    return f"Voice needs: {missing}. Install with:  uv pip install -e '.[voice]'"
+    return (
+        "Install voice deps with one command:\n"
+        f"  uv tool install -e .[voice]     # global 'nova' command\n"
+        f"  uv pip install -e '.[voice]'    # uv run nova\n"
+        f"Missing: {missing}"
+    )
 
 
 __all__ = [

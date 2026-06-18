@@ -24,6 +24,8 @@ An open-source, terminal-based AI coding assistant built on LangGraph and the `d
 - **Threshold Auto-Tuner**: Reads the durable trace data Hermes already records and nudges review-trigger thresholds toward the observed working style — more real work ⇒ review sooner; more browsing ⇒ review less. Damped convergence with hard floor/ceiling bounds
 - **Cron / Heartbeat Scheduler**: Proactive scheduled tasks via standard 5-field cron expressions — fired jobs go on the same queue as remote bridges, so they run like any prompt. Manage with `/cron`
 - **Webhook Ingress Server**: Let external systems (GitHub, Linear, or any signed sender) trigger a Nova run without a human relaying through Discord/Telegram. Per-source HMAC-SHA256 secrets, timing-safe verification, binds to `127.0.0.1` by default. Manage with `/webhook`
+- **Reasoning Effort Control**: Dynamically adjust LLM reasoning effort (`/effort low|medium|high|off`) — hot-swaps the model without restarting. Supports OpenAI o-series, Gemini 2.5/3, and Claude 3.7 Sonnet
+- **Self-Evolution Log**: Track the agent's own growth over time (`/evolution`) — skills unlocked and levelled up at the completion of complex tasks, persisted in durable store
 
 ### UI & Interaction
 - **Rich Console REPL**: Full-featured interactive shell with `prompt-toolkit` — syntax highlighting, tab completion, command history
@@ -31,7 +33,7 @@ An open-source, terminal-based AI coding assistant built on LangGraph and the `d
 - **Condensed Tool UI**: Consecutive tool calls grouped into collapsible sections — full diffs shown for code edits; reads, searches, and other calls stay compact
 - **Modal Animations**: Entrance effects (fade/slide/zoom) for all modal dialogs, pulsing borders, and a shimmer status bar
 - **Web Chat UI**: Launch a local browser-based chat interface via `/chat` — dark-themed, Claude-inspired, with Markdown rendering and code highlighting
-- **Local Voice I/O** (optional): Speak prompts and hear Nova's prose replies, fully offline — Faster-Whisper (STT), Silero VAD (utterance endpointing), and Piper (TTS). Push-to-talk (`ctrl+g`) or hands-free always-listening (`ctrl+shift+v`); code blocks are stripped before speaking. Install with `uv pip install -e '.[voice]'`; manage with `/voice`
+- **Local Voice I/O** (optional): Speak prompts and hear Nova's prose replies, fully offline — Faster-Whisper (STT), Silero VAD (utterance endpointing), and Piper (TTS). Push-to-talk (`ctrl+g`) or hands-free always-listening (`ctrl+l`); code blocks are stripped before speaking. One-command install: `uv tool install -e .[voice]`, or `uv pip install -e '.[voice]'` for uv run; manage with `/voice`
 
 ### Tools & Capabilities
 - **25+ Built-in Tools**: File operations, shell commands, web search (Tavily + DuckDuckGo), docs search, HTTP fetch, subagent delegation, semantic code search, project graph queries, and more
@@ -46,6 +48,7 @@ An open-source, terminal-based AI coding assistant built on LangGraph and the `d
 - **Plugin System**: Python entry-point based plugins that can register slash commands, add middleware at defined slots, and extend the agent
 - **Custom Subagents**: 20+ built-in specialized subagents (code review, security audit, refactoring, testing, research swarm, browser automation, frontend/backend/docker engineering, and more)
 - **Async Subagents**: Background task execution on remote LangGraph servers — documentation updates, code reviews, test generation, dependency audits, refactoring
+- **Wiki System**: Persistent project wiki at `.nova/wiki/` — ingest web clippings (`/ingest`), ask questions with wiki context (`/ask`), file conversation knowledge as wiki pages (`/file`), and browse the vault (`/wiki`)
 
 ### Sandbox & Safety
 - **Sandbox Execution**: Run code safely in remote sandboxes — Modal, Runloop, Daytona, Docker, E2B. Default Docker sandbox with workspace binding
@@ -98,6 +101,20 @@ uv sync
 
 # 5. Install the package in editable mode
 uv pip install -e .
+
+### Optional: Global `nova` command (works from any directory)
+
+After step 5, run this once to make `nova` available globally:
+
+```bash
+# Without voice (lightweight):
+uv tool install -e .
+
+# With voice I/O (Faster-Whisper, Silero VAD, Piper TTS):
+uv tool install -e .[voice]
+```
+
+The voice deps (torch, ONNX, etc.) add ~2 GB. They remain optional — `nova` runs fine without them, and `/voice status` shows the install hint.
 ```
 
 #### Option 2: Install with pip
@@ -321,7 +338,14 @@ nova doctor
 | `/cron` | Manage scheduled (heartbeat) tasks — list, add, remove, fire now |
 | `/webhook` | Manage webhook ingress server — start, stop, register sources, status |
 | `/prompt` | Manage evolving system-prompt templates — status, rollback, accept, reject |
-| `/voice` | Local voice I/O — status, on/off, mode ptt\|listen, test (ctrl+g talk, ctrl+shift+v listen) |
+| `/voice` | Local voice I/O — status, on/off, mode ptt\|listen, test (ctrl+g talk, ctrl+l listen) |
+| `/effort` | Set reasoning effort level — `low`, `medium`, `high`, or `off` (hot-swaps model) |
+| `/evolution` | View the self-evolution log — skills unlocked (🧬) and levelled up (⬆️) |
+| `/create` | Launch the Skills & Agents web UI for browsing, editing, and creating skills/agents |
+| `/ingest` | Ingest captured sources (Obsidian Web Clipper) into synthesized wiki pages |
+| `/ask` | Ask a question informed by wiki context — searches wiki and answers with relevant knowledge |
+| `/file` | File recent conversation knowledge as a wiki page under a topic path |
+| `/wiki` | List all synthesized pages in the project wiki vault |
 
 ## Built-in Tools
 
@@ -902,6 +926,7 @@ User Input → CLI Entry (main.py) → Agent Loop (core/agent_loop.py) → UI Re
 - `vision/` — Vision model support
 - `vixie/` — Desktop companion server (notifications, system tray)
 - `plugins/` — Plugin system
+- `wiki/` — Persistent project wiki: ingest, ask, file, and vault management
 - `hooks.py` — Lifecycle hook dispatch
 - `compaction.py` — Conversation summarization via LLM
 - `plans.py` — Plan management and persistence
