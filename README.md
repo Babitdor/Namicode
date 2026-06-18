@@ -68,54 +68,35 @@ An open-source, terminal-based AI coding assistant built on LangGraph and the `d
 - **Onboarding System**: Interactive first-run setup with secure API key management via OS keychain
 - **Configuration Migration**: Migrate from legacy directory structure to Claude Code-compatible layout
 
-## Installation
-
-### Prerequisites
-
-- **Python 3.11 or higher**
-- **Git** for cloning the repository
-- **[uv](https://docs.astral.sh/uv/)** (recommended) or pip for package management
-
-### Step-by-Step Installation
-
-#### Option 1: Install with uv (Recommended)
+## Quick Start (Two Commands)
 
 ```bash
-# 1. Clone the repository
 git clone https://github.com/Babitdor/NovaCode.git
 cd NovaCode
-
-# 2. Create a virtual environment with Python 3.11+
-uv venv --python 3.11
-
-# 3. Activate the virtual environment
-# On Windows (PowerShell):
-.venv\Scripts\Activate.ps1
-# On Windows (Command Prompt):
-.venv\Scripts\activate.bat
-# On macOS/Linux:
-source .venv/bin/activate
-
-# 4. Install dependencies
 uv sync
+```
 
-# 5. Install the package in editable mode
-uv pip install -e .
-
-### Optional: Global `nova` command (works from any directory)
-
-After step 5, run this once to make `nova` available globally:
-
+**Run it:**
 ```bash
-# Without voice (lightweight):
-uv tool install -e .
-
-# With voice I/O (Faster-Whisper, Silero VAD, Piper TTS):
-uv tool install -e .[voice]
+uv run nova
 ```
 
-The voice deps (torch, ONNX, etc.) add ~2 GB. They remain optional — `nova` runs fine without them, and `/voice status` shows the install hint.
+**Optional — voice I/O adds STT, TTS, and VAD (~2 GB extra):**
+```bash
+uv run nova
+/voice test     # verify it works
+ctrl+g          # push-to-talk
 ```
+
+No need to install anything globally. `uv run nova` always runs the latest code from the repo — no stale snapshots, no PATH issues, no "which Python".
+
+If you want a global `nova` command that works from any directory, add the repo's `.venv` to your PATH:
+```bash
+# Windows PowerShell:
+$env:Path += ";$pwd\.venv\Scripts"
+# Or add `B:\Summer Project 2026\Nova-Code\nova-code-cli\.venv\Scripts` to your system PATH
+```
+Then just type `nova` anywhere.
 
 #### Option 2: Install with pip
 
