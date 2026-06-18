@@ -6133,8 +6133,14 @@ class NovaApp(App):
         try:
             transcript = await self._voice_pipeline.capture_utterance()
         except Exception as _mic_err:  # noqa: BLE001 — a mic/STT error must never crash the TUI
+            msg = str(_mic_err)
             self._set_nova_indicator("🎤 mic error", style="red", auto_clear=3.0)
-            self._log(Text(f"[🎤 Mic error] {_mic_err}", style="red"))
+            self._log(
+                Text(
+                    f"[🎤 Mic error] {msg[:200]}",
+                    style="red",
+                )
+            )
             return
         finally:
             self._voice_capturing = False

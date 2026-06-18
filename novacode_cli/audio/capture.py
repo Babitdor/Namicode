@@ -10,6 +10,7 @@ cleanly when ``sounddevice`` isn't installed.
 
 from __future__ import annotations
 
+import ctypes
 import logging
 import queue
 from typing import TYPE_CHECKING, Any
@@ -46,6 +47,14 @@ class AudioCapture:
         if self._stream is not None:
             return
         import sounddevice as sd
+
+        # Pre-flight: force PortAudio DLL to load so a missing procedure
+        # surfaces here with a clear message, not deep inside the callback.
+        try:
+            sd.check_input_settings(device=None)
+        except Exception as exc:
+            msg = str(exc)
+            raise OSError(f"sounddevice / PortAudio check failed: {msg}") from exc
 
         # If no default input device exists, try finding one by name.
         no_device = sd.default.device is None or (

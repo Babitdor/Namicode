@@ -80,11 +80,12 @@ class Speaker:
         import sounddevice as sd
 
         self._ensure_voice()
-        chunks = [
-            np.frombuffer(audio_bytes, dtype="int16")
-            for audio_bytes in self._voice.synthesize_stream_raw(text)
-        ]
-        if not chunks:
+        audio_chunks: list[np.ndarray] = []
+        for chunk in self._voice.synthesize(text):
+            arr = getattr(chunk, "audio_int16_array", None)
+            if arr is not None and len(arr) > 0:
+                audio_chunks.append(arr)
+        if not audio_chunks:
             return
-        sd.play(np.concatenate(chunks), self._samplerate)
+        sd.play(np.concatenate(audio_chunks), self._samplerate)
         sd.wait()
