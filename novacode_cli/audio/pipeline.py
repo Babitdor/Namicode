@@ -74,8 +74,8 @@ class VoicePipeline:
         self._capture.start()
         self._capture.drain()
         try:
-            pcm = await asyncio.to_thread(
-                self._vad.collect_utterance, self._capture.read, should_stop=should_stop
+            pcm = await self._vad.collect_utterance_async(
+                self._capture.read, should_stop=should_stop
             )
         finally:
             self._capture.stop()  # PTT releases the mic between utterances
@@ -115,8 +115,7 @@ class VoicePipeline:
                     await asyncio.sleep(_TTS_POLL_S)
                     continue
 
-                pcm = await asyncio.to_thread(
-                    self._vad.collect_utterance,
+                pcm = await self._vad.collect_utterance_async(
                     self._capture.read,
                     should_stop=lambda: self._tts_active or bool(should_stop and should_stop()),
                 )

@@ -4092,7 +4092,7 @@ class NovaApp(App):
         ("ctrl+t", "toggle_terminal", "Terminal"),
         ("ctrl+b", "run_background", "Background"),
         ("ctrl+g", "voice_talk", "Talk"),
-        ("ctrl+shift+v", "voice_toggle", "Voice"),
+        ("ctrl+l", "voice_toggle", "Listen"),
         ("escape", "cancel_turn", "Cancel"),
     ]
 
@@ -6132,8 +6132,9 @@ class NovaApp(App):
         transcript: str | None = None
         try:
             transcript = await self._voice_pipeline.capture_utterance()
-        except Exception:  # noqa: BLE001 — a mic/STT error must never crash the TUI
+        except Exception as _mic_err:  # noqa: BLE001 — a mic/STT error must never crash the TUI
             self._set_nova_indicator("🎤 mic error", style="red", auto_clear=3.0)
+            self._log(Text(f"[🎤 Mic error] {_mic_err}", style="red"))
             return
         finally:
             self._voice_capturing = False

@@ -47,9 +47,20 @@ class AudioCapture:
             return
         import sounddevice as sd
 
+        # If no default input device exists, try finding one by name.
+        no_device = sd.default.device is None or (
+            isinstance(sd.default.device, tuple) and sd.default.device[0] is None
+        )
+        if no_device:
+            msg = (
+                "No default input device found. Try a specific device with:\n"
+                '  python -c "import sounddevice as sd; sd.InputStream(device=1).start()"'
+            )
+            raise OSError(msg)
+
         def _callback(indata: np.ndarray, _frames: int, _time: object, status: object) -> None:
             if status:
-                logger.debug("Audio capture status: %s", status)
+                logger.warning("Audio capture status: %s", status)
             try:
                 self._queue.put_nowait(indata.copy().reshape(-1))
             except queue.Full:

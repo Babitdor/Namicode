@@ -58,18 +58,22 @@ class SileroVad:
         audio = torch.from_numpy(window).float() / 32768.0
         return float(self._model(audio, self._samplerate).item())
 
-    def collect_utterance(
+    async def collect_utterance_async(
         self,
         read_block: Callable[[], np.ndarray | None],
         *,
         should_stop: Callable[[], bool] | None = None,
     ) -> np.ndarray | None:
-        """Block until one utterance is captured; return it as int16, or ``None``.
+        """Async version of :meth:`collect_utterance` — polls via ``await asyncio.to_thread``.
 
-        Args:
-            read_block: Returns the next int16 audio block, or ``None`` on timeout.
-            should_stop: Optional cancel check polled between blocks.
+        ``read_block()`` is run in a brief thread-pool call so a blocking queue
+        get never stalls the event loop. The VAD inference itself runs on the
+        event loop thread. This avoids the PortAudio DLL thread-affinity issue
+        on Windows (the sounddevice stream is opened on the main thread and must
+        be read from it, not from a long-lived thread-pool thread).
         """
+        import asyncio
+
         self._ensure_model()
         import numpy as np
 
@@ -83,7 +87,7 @@ class SileroVad:
         while True:
             if should_stop is not None and should_stop():
                 return None
-            block = read_block()
+            block = await asyncio.to_thread(read_block)
             if block is None:
                 continue
             for window in _windows(block, _WINDOW):
