@@ -117,6 +117,33 @@ class NovaConfig:
             del self._config["vision_model"]
             self._save()
 
+    # ── Voice config (local STT / VAD / TTS) ────────────────────────────────
+
+    VOICE_DEFAULTS: dict[str, Any] = {  # noqa: RUF012
+        "enabled": False,
+        "mode": "push_to_talk",  # "push_to_talk" | "listen"
+        "speak_responses": True,
+        "stt_model": "base",
+        "stt_device": "auto",  # "auto" | "cuda" | "cpu"
+        "tts_voice": "en_US-lessac-medium",
+    }
+
+    def get_voice_config(self) -> dict[str, Any]:
+        """Return the saved voice settings merged over the defaults."""
+        merged = dict(self.VOICE_DEFAULTS)
+        cfg = self._config.get("voice")
+        if isinstance(cfg, dict):
+            merged.update({k: cfg[k] for k in cfg if k in self.VOICE_DEFAULTS})
+        return merged
+
+    def set_voice_config(self, **updates: Any) -> dict[str, Any]:
+        """Merge ``updates`` (known keys only) into the voice config and persist."""
+        cfg = self.get_voice_config()
+        cfg.update({k: v for k, v in updates.items() if k in self.VOICE_DEFAULTS})
+        self._config["voice"] = cfg
+        self._save()
+        return cfg
+
     def get(self, key: str, default: Any = None) -> Any:
         """Get a configuration value.
 

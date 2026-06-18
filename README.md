@@ -31,6 +31,7 @@ An open-source, terminal-based AI coding assistant built on LangGraph and the `d
 - **Condensed Tool UI**: Consecutive tool calls grouped into collapsible sections — full diffs shown for code edits; reads, searches, and other calls stay compact
 - **Modal Animations**: Entrance effects (fade/slide/zoom) for all modal dialogs, pulsing borders, and a shimmer status bar
 - **Web Chat UI**: Launch a local browser-based chat interface via `/chat` — dark-themed, Claude-inspired, with Markdown rendering and code highlighting
+- **Local Voice I/O** (optional): Speak prompts and hear Nova's prose replies, fully offline — Faster-Whisper (STT), Silero VAD (utterance endpointing), and Piper (TTS). Push-to-talk (`ctrl+g`) or hands-free always-listening (`ctrl+shift+v`); code blocks are stripped before speaking. Install with `uv pip install -e '.[voice]'`; manage with `/voice`
 
 ### Tools & Capabilities
 - **25+ Built-in Tools**: File operations, shell commands, web search (Tavily + DuckDuckGo), docs search, HTTP fetch, subagent delegation, semantic code search, project graph queries, and more
@@ -320,6 +321,7 @@ nova doctor
 | `/cron` | Manage scheduled (heartbeat) tasks — list, add, remove, fire now |
 | `/webhook` | Manage webhook ingress server — start, stop, register sources, status |
 | `/prompt` | Manage evolving system-prompt templates — status, rollback, accept, reject |
+| `/voice` | Local voice I/O — status, on/off, mode ptt\|listen, test (ctrl+g talk, ctrl+shift+v listen) |
 
 ## Built-in Tools
 

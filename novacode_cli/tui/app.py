@@ -321,7 +321,8 @@ _DETAILED_TOOL_NAMES = frozenset(
 # native handlers (e.g. `/trace enable`, `/log show <id>`). Common forms native.
 # cron/webhook/prompt are print-or-toggle-only management commands (Loop
 # Engineering event sources + prompt evolution) — captured rather than native.
-_PASSTHROUGH_SLASH: set[str] = {"cron", "webhook", "prompt"}
+# `voice` manages voice prefs + a test phrase (live capture is on keybindings).
+_PASSTHROUGH_SLASH: set[str] = {"cron", "webhook", "prompt", "voice"}
 
 # The @mention token immediately before the cursor (start-of-line or after
 # whitespace, so emails like user@host don't match). Used to drive @file/@agent
@@ -348,6 +349,7 @@ _TUI_SLASH_COMMANDS = [
     "/cron",
     "/webhook",
     "/prompt",
+    "/voice",
     "/research",
     "/dream",
     "/evolution",
@@ -4089,6 +4091,8 @@ class NovaApp(App):
         ("ctrl+c", "copy_or_quit", "Copy / Quit"),
         ("ctrl+t", "toggle_terminal", "Terminal"),
         ("ctrl+b", "run_background", "Background"),
+        ("ctrl+g", "voice_talk", "Talk"),
+        ("ctrl+shift+v", "voice_toggle", "Voice"),
         ("escape", "cancel_turn", "Cancel"),
     ]
 
@@ -4158,6 +4162,11 @@ class NovaApp(App):
         self._subagent_tool_to_task: dict[str, str] = {}
         self._remote_msg: Any = None  # current RemoteMessage during remote turn
         self._remote_question_future: asyncio.Future | None = None
+        # Voice I/O (lazy: only built when first used; None when deps absent).
+        self._voice_pipeline: Any = None
+        self._voice_listening: bool = False
+        self._voice_capturing: bool = False
+        self._voice_speak_responses: bool = False  # set from config on first use
         # Tool/subagent names used during the current remote turn — collapsed
         # into the compact live status line's condensed counts.
         self._remote_activity: list[str] = []
@@ -4300,6 +4309,10 @@ class NovaApp(App):
         self._update_mode_badge()
         self._refresh_hint_bar()
         self._refresh_info_bar()
+        # Keep the info bar live: model / branch / sandbox / quota can change
+        # outside any single command (e.g. the agent runs `git checkout`), so
+        # refresh on a slow timer (branch git runs off-thread, so it's cheap).
+        self.set_interval(3.0, self._refresh_info_bar)
         # Load slash commands contributed by enabled plugins (TUI dispatch).
         self._load_plugin_commands()
         # Animate the live status (~5 fps) while a turn is active.
@@ -5526,18 +5539,41 @@ class NovaApp(App):
         self._refresh_status()
 
     def _refresh_info_bar(self) -> None:
-        """Populate the info-bar columns below the input: workspace, branch, sandbox, model, quota."""
-        from pathlib import Path
-        import subprocess
+        """Refresh the info-bar columns below the input.
 
-        # Workspace
-        cwd = str(Path.cwd())
+        Workspace / sandbox / model / quota update synchronously; the git branch
+        is read off-thread (``_refresh_branch_worker``) so a slow repo can't stall
+        the UI. Safe to call repeatedly — used at mount and on a refresh timer, so
+        a model switch, branch change, or sandbox change shows up live.
+        """
+        from pathlib import Path
+
+        self._set_info("#info-workspace", Text(str(Path.cwd()), style="bold"))
+
+        sandbox_type = getattr(self.session_state, "_sandbox_type", None)
+        if sandbox_type:
+            sandbox_text = Text(str(sandbox_type), style="bold yellow")
+        else:
+            sandbox_text = Text("no sandbox", style="#e0af68")
+        self._set_info("#info-sandbox", sandbox_text)
+
+        self._set_info("#info-model", Text(str(self.model_name or "—"), style="bold #7aa2f7"))
+        self._refresh_quota()
+        self._refresh_branch_worker()
+
+    def _set_info(self, selector: str, renderable: Text) -> None:
+        """Update an info-bar Static, ignoring it if not mounted yet."""
         try:
-            self._w("#info-workspace", Static).update(Text(cwd, style="bold"))
+            self._w(selector, Static).update(renderable)
         except NoMatches:
             pass
 
-        # Branch (git)
+    @work(thread=True, exclusive=True, group="infobar")
+    def _refresh_branch_worker(self) -> None:
+        """Read the current git branch off the event loop and update the info bar."""
+        import subprocess
+        from pathlib import Path
+
         branch = "—"
         try:
             result = subprocess.run(
@@ -5545,56 +5581,15 @@ class NovaApp(App):
                 capture_output=True,
                 text=True,
                 timeout=3,
-                cwd=cwd,
+                cwd=str(Path.cwd()),
             )
             if result.returncode == 0:
                 branch = result.stdout.strip() or "—"
         except Exception:  # noqa: BLE001
-            pass
-        try:
-            self._w("#info-branch", Static).update(Text(branch, style="bold #bb9af7"))
-        except NoMatches:
-            pass
-
-        # Sandbox
-        sandbox_type = getattr(self.session_state, "_sandbox_type", None)
-        if sandbox_type:
-            sandbox_text = Text(str(sandbox_type), style="bold yellow")
-        else:
-            sandbox_text = Text("no sandbox", style="#e0af68")
-        try:
-            self._w("#info-sandbox", Static).update(sandbox_text)
-        except NoMatches:
-            pass
-
-        # Model
-        try:
-            self._w("#info-model", Static).update(
-                Text(str(self.model_name or "—"), style="bold #7aa2f7")
-            )
-        except NoMatches:
-            pass
-
-        # Quota (context usage)
-        quota_text = Text("—", style="dim")
-        if self.token_tracker is not None:
-            try:
-                bd = self.token_tracker.get_breakdown()
-                if bd is not None:
-                    p = bd.usage_percentage
-                    if p >= 90:
-                        c = "#f7768e"
-                    elif p >= 75:
-                        c = "#e0af68"
-                    else:
-                        c = "#9ece6a"
-                    quota_text = Text(f"{p:.0f}% used", style=f"bold {c}")
-            except Exception:  # noqa: BLE001
-                pass
-        try:
-            self._w("#info-quota", Static).update(quota_text)
-        except NoMatches:
-            pass
+            branch = "—"
+        self.call_from_thread(
+            self._set_info, "#info-branch", Text(branch, style="bold #bb9af7")
+        )
 
     def _refresh_quota(self) -> None:
         """Lightweight quota-only refresh (called from _tick during active turns)."""
@@ -6086,6 +6081,123 @@ class NovaApp(App):
     def action_cancel_turn(self) -> None:
         self.workers.cancel_all()
         self._set_status("cancelling…")
+
+    # ── Voice I/O ─────────────────────────────────────────────────────────
+
+    def _ensure_voice_pipeline(self) -> bool:
+        """Build the voice pipeline if needed; return whether voice is usable."""
+        from novacode_cli import audio
+
+        if not audio.is_voice_available():
+            return False
+        if self._voice_pipeline is None:
+            from novacode_cli.audio.pipeline import VoicePipeline
+            from novacode_cli.config.nova_config import NovaConfig
+
+            cfg = NovaConfig().get_voice_config()
+            self._voice_pipeline = VoicePipeline(
+                stt_model=cfg["stt_model"],
+                stt_device=cfg["stt_device"],
+                tts_voice=cfg["tts_voice"],
+            )
+            self._voice_speak_responses = bool(cfg["speak_responses"])
+        return True
+
+    def _voice_unavailable_notice(self) -> None:
+        self._set_nova_indicator(
+            "🎤 voice not installed — see /voice status",
+            style="yellow",
+            auto_clear=4.0,
+        )
+
+    def _submit_voice_text(self, text: str) -> None:
+        """Route a transcript like typed input: steer an active turn, else dispatch."""
+        text = self._sanitize_user_text(text)
+        if not text:
+            return
+        if self._turn_active:
+            self._add_live_steer(text)
+        else:
+            self._dispatch(text)
+
+    async def action_voice_talk(self) -> None:
+        """ctrl+g: capture one spoken utterance (VAD-endpointed) and submit it."""
+        if not self._ensure_voice_pipeline():
+            self._voice_unavailable_notice()
+            return
+        if self._voice_capturing:
+            return  # debounce double-press
+        self._voice_capturing = True
+        self._set_nova_indicator("🎤 listening…", style="bold cyan")
+        transcript: str | None = None
+        try:
+            transcript = await self._voice_pipeline.capture_utterance()
+        except Exception:  # noqa: BLE001 — a mic/STT error must never crash the TUI
+            self._set_nova_indicator("🎤 mic error", style="red", auto_clear=3.0)
+            return
+        finally:
+            self._voice_capturing = False
+        if transcript:
+            self._set_nova_indicator("")
+            self._submit_voice_text(transcript)
+        else:
+            self._set_nova_indicator("🎤 (nothing heard)", style="dim", auto_clear=2.0)
+
+    async def action_voice_toggle(self) -> None:
+        """ctrl+shift+v: toggle hands-free always-listening mode."""
+        if not self._ensure_voice_pipeline():
+            self._voice_unavailable_notice()
+            return
+        if self._voice_listening:
+            self._voice_listening = False
+            self.workers.cancel_group("voice")
+            self._set_nova_indicator("🎤 voice off", style="dim", auto_clear=2.0)
+            return
+        self._voice_listening = True
+        self._set_nova_indicator("🎤 listening (hands-free)…", style="bold cyan")
+        self._voice_listen_loop()
+
+    @work(group="voice", exclusive=True)
+    async def _voice_listen_loop(self) -> None:
+        """Continuously capture utterances and submit each; pauses during TTS."""
+        if not self._ensure_voice_pipeline():
+            return
+        try:
+            await self._voice_pipeline.listen_loop(
+                self._submit_voice_text,
+                should_stop=lambda: not self._voice_listening,
+            )
+        except Exception:  # noqa: BLE001 — never let the audio loop crash the TUI
+            self._voice_listening = False
+            self._set_nova_indicator("🎤 listen error", style="red", auto_clear=3.0)
+
+    @work(group="voice_tts")
+    async def _speak_reply(self, text: str) -> None:
+        """Speak an assistant reply's prose via TTS (separate group from listen).
+
+        No-op unless voice has been activated this session and ``speak_responses``
+        is on. Code blocks / tables / URLs are stripped first; all-code replies
+        are skipped entirely.
+        """
+        if self._voice_pipeline is None or not self._voice_speak_responses:
+            return
+        from novacode_cli.audio.speakable import speakable_text
+
+        prose = speakable_text(text)
+        if not prose:
+            return
+        self._set_nova_indicator("🔊 speaking…", style="dim cyan")
+        spoke = True
+        try:
+            await self._voice_pipeline.speak(prose)
+        except Exception:  # noqa: BLE001 — TTS failure must never crash the TUI
+            spoke = False
+        if not spoke:
+            self._set_nova_indicator("🔊 tts error", style="red", auto_clear=3.0)
+        elif self._voice_listening:
+            self._set_nova_indicator("🎤 listening (hands-free)…", style="bold cyan")
+        else:
+            self._set_nova_indicator("")
 
     async def action_toggle_terminal(self) -> None:
         """ctrl+t: open a new inline interactive terminal widget in the chat transcript."""
@@ -7611,6 +7723,7 @@ class NovaApp(App):
                 except Exception:  # noqa: BLE001
                     pass
             self._set_status("ready")
+            self._refresh_info_bar()  # reflect the new model in the footer at once
             self._log(
                 Text(
                     f"✓ Switched to {preset['name']} · {self.model_name}",
@@ -8483,6 +8596,7 @@ class NovaApp(App):
             t.append("The change will take effect on restart.", style="dim")
 
         self._log(t)
+        self._refresh_info_bar()  # the model may have been recreated — refresh footer
 
     async def _run_steer(self, text: str) -> None:
         """Manage persistent steering instructions natively (add/list/clear/remove)."""
@@ -9841,6 +9955,8 @@ class NovaApp(App):
             self._live_buf = ""
             await self._remove_reasoning()
             self._scroll_end()
+            # Speak the reply's prose if voice output is active (Enhancement: voice).
+            self._speak_reply(e.text)
         elif isinstance(e, ev.ToolCall):
             self._set_status(f"running {e.name}…")
             base = f"{e.icon} {_esc(e.display_str)}"

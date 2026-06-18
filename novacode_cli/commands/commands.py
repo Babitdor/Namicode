@@ -308,6 +308,15 @@ async def handle_command(
             console.print(f"[red]Error running /prompt command: {e}[/red]")
         return True
 
+    if cmd == "voice":
+        try:
+            from novacode_cli.commands.voice_handler import handle_voice_command
+
+            return await handle_voice_command(cmd_args, session_state, console)
+        except Exception as e:
+            console.print(f"[red]Error running /voice command: {e}[/red]")
+        return True
+
     if cmd == "reindex":
         try:
             from novacode_cli.config.config import settings as _settings
