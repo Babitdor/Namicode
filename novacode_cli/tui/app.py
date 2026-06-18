@@ -6157,7 +6157,7 @@ class NovaApp(App):
             return
         if self._voice_listening:
             self._voice_listening = False
-            self.workers.cancel_group("voice")
+            self.workers.cancel_group(self, "voice")
             self._set_nova_indicator("🎤 voice off", style="dim", auto_clear=2.0)
             return
         self._voice_listening = True
