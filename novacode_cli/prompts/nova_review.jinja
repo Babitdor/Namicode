@@ -24,6 +24,13 @@ Is the user model (`agent.md`) up to date? Any stale facts to prune?
 ### 4. Pending Work
 What's left unfinished or blocked?
 
+### 5. Prompt Issues (rare)
+Only if you notice the agent *consistently* misreading a whole class of task
+because the system prompt itself is unclear or misleading — not a one-off slip —
+flag it so the prompt can be improved. Emit a `<prompt_issue>` block naming the
+offending template (e.g. `core_agent_system`). Skip this unless it's a real,
+repeating pattern.
+
 Keep it concise — this is a checkpoint, not a full summary.
 
 ### Output Format
@@ -32,6 +39,7 @@ Record learnings in XML blocks. Omit empty blocks.
 - `<user_model>` — user model entries (each as `## Section Header`). Merged into `agent.md` (always in context).
 - `<lesson topic="...">` — cross-session decisions, patterns, facts as bullets, grouped under a short kebab-case `topic`. Written to `memories/<topic>.md` and indexed (surfaced in context via the memory INDEX). Emit one block per topic.
 - `<skill>` — at most one. Only if step 2 identified a genuinely reusable workflow.
+- `<prompt_issue template="...">` — rare. Only per step 5, when a system-prompt template repeatedly misleads the agent. One short paragraph describing the misunderstanding.
 
 <!--
 Example blocks — these are illustrative, do not output them unless you have real content:

@@ -911,6 +911,16 @@ async def simple_cli(
             except Exception:
                 pass
 
+        async def _stop_event_sources():
+            """Stop the cron scheduler and webhook server (Enhancements 3 / 5)."""
+            for attr in ("_cron_scheduler", "_webhook_server"):
+                try:
+                    src = getattr(session_state, attr, None)
+                    if src is not None:
+                        await asyncio.wait_for(src.stop(), timeout=3.0)
+                except Exception:
+                    pass
+
         # Run all cleanup concurrently with a shared 20s deadline.
         # Individual steps have their own per-step timeouts as well.
         try:
@@ -921,6 +931,7 @@ async def simple_cli(
                     _stop_remote_bridges(),
                     _stop_trello(),
                     _cancel_remote_processor(),
+                    _stop_event_sources(),
                 ),
                 timeout=20.0,
             )
@@ -1749,6 +1760,30 @@ async def _run_agent_session(
         )
         console.print(
             f"  [red]\u274c Failed to start remote message processor: {_remote_proc_exc}[/red]"
+        )
+
+    # Resume any persisted cron jobs (Enhancement 3). The scheduler is a queue
+    # *producer*, so it works in both CLI and TUI mode (both consume the same
+    # queue). Start, keep only if jobs exist \u2014 users who never use /cron pay
+    # nothing for an idle ticker.
+    try:
+        from novacode_cli.memory.store import get_durable_store as _get_store
+        from novacode_cli.remote.scheduler import CronScheduler
+
+        _cron_sched = CronScheduler(
+            session_state._remote_message_queue, store=_get_store()
+        )
+        await _cron_sched.start()
+        if _cron_sched.list_jobs():
+            session_state._cron_scheduler = _cron_sched
+            _proc_logger.info(
+                "Cron scheduler resumed %d job(s)", len(_cron_sched.list_jobs())
+            )
+        else:
+            await _cron_sched.stop()
+    except Exception as _cron_exc:
+        logging.getLogger("novacode_cli.remote").error(
+            f"Failed to resume cron scheduler: {_cron_exc}", exc_info=True
         )
 
     # Inject initial messages if continuing a session

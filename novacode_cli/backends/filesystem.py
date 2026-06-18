@@ -267,6 +267,10 @@ class OptimizedFilesystemBackend(FilesystemBackend):
 
         results: dict[str, list[tuple[int, str]]] = {}
         base_resolved = base_full.resolve()
+        # On Windows, proc.stdout can be None even with a 0/1 returncode.
+        # Treat that as "no matches" rather than crashing on splitlines().
+        if not proc.stdout:
+            return results
         for line in proc.stdout.splitlines():
             try:
                 data = json.loads(line)
