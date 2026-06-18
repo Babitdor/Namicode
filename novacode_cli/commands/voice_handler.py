@@ -134,9 +134,9 @@ def _print_settings(config: NovaConfig, console: Console) -> None:
     console.print(f"  mode:         [cyan]{cfg['mode']}[/cyan]")
     console.print(f"  speak:        [cyan]{cfg['speak_responses']}[/cyan]")
     console.print(f"  STT provider: [cyan]{cfg['stt_provider']}[/cyan]")
-    _show_provider_options("STT", STT_PROVIDERS, cfg["stt_provider"], config, console)
+    _show_provider_options(STT_PROVIDERS, cfg["stt_provider"], config, console)
     console.print(f"  TTS provider: [cyan]{cfg['tts_provider']}[/cyan]")
-    _show_provider_options("TTS", TTS_PROVIDERS, cfg["tts_provider"], config, console)
+    _show_provider_options(TTS_PROVIDERS, cfg["tts_provider"], config, console)
 
 
 def _show_provider_options(
