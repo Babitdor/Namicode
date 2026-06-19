@@ -27,8 +27,9 @@ logger = logging.getLogger("nova.audio.summarize")
 #: Replies whose speakable form is already this short skip the LLM call — a
 #: one-line "Done." ack shouldn't pay a model round-trip before speaking.
 _SHORT_REPLY_CHARS = 200
-#: Hard cap on the spoken summary (defence against a chatty model).
-_SUMMARY_MAX_CHARS = 300
+#: Hard cap on the spoken summary (a paragraph; defence against a chatty model).
+#: ~90 words ≈ 600 chars, with headroom so a full paragraph isn't cut mid-sentence.
+_SUMMARY_MAX_CHARS = 700
 
 
 async def summarize_for_speech(text: str, *, model: BaseChatModel | None = None) -> str:
