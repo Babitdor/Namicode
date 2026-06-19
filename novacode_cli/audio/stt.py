@@ -17,7 +17,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("nova.audio.stt")
 
-_DEFAULT_MODEL = "base"
+#: distil-large-v3 — near-large-v3 accuracy, much faster (good even on CPU).
+_DEFAULT_MODEL = "distil-large-v3"
+#: Default transcription language. Forcing a language avoids per-utterance
+#: language mis-detection that garbles short push-to-talk clips.
+_DEFAULT_LANGUAGE = "en"
 
 
 def _resolve_device(device: str) -> tuple[str, str]:
@@ -43,10 +47,21 @@ def _resolve_device(device: str) -> tuple[str, str]:
 class Transcriber:
     """Transcribes 16 kHz int16 audio to text with Faster-Whisper."""
 
-    def __init__(self, *, model_size: str = _DEFAULT_MODEL, device: str = "auto") -> None:
-        """Configure the model; loading is deferred to first transcription."""
+    def __init__(
+        self,
+        *,
+        model_size: str = _DEFAULT_MODEL,
+        device: str = "auto",
+        language: str | None = _DEFAULT_LANGUAGE,
+    ) -> None:
+        """Configure the model; loading is deferred to first transcription.
+
+        ``language`` forces the decode language (e.g. ``"en"``); pass ``None`` to
+        auto-detect (less reliable on short utterances).
+        """
         self._model_size = model_size
         self._device_pref = device
+        self._language = language or None
         self._model: Any = None
 
     def _ensure_model(self) -> None:
@@ -69,5 +84,15 @@ class Transcriber:
     def _transcribe_sync(self, pcm_int16: np.ndarray) -> str:
         self._ensure_model()
         audio = pcm_int16.astype("float32") / 32768.0
-        segments, _info = self._model.transcribe(audio, language=None, vad_filter=False)
+        segments, _info = self._model.transcribe(
+            audio,
+            language=self._language,
+            # Whisper's own VAD trims silence and suppresses phantom transcripts
+            # it otherwise hallucinates from breath / room noise.
+            vad_filter=True,
+            # Wider beam = better accuracy on short clips (negligible cost here).
+            beam_size=5,
+            # One-shot utterances: don't let a prior segment bias the decode.
+            condition_on_previous_text=False,
+        )
         return " ".join(seg.text.strip() for seg in segments).strip()

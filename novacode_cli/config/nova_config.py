@@ -131,7 +131,7 @@ class NovaConfig:
         "tts_voice": "en_US-lessac-medium",
         # Per-provider configuration (keys match provider ids in audio/providers.py).
         "providers": {
-            "faster-whisper": {"model": "base", "device": "auto"},
+            "faster-whisper": {"model": "distil-large-v3", "device": "auto"},
             "deepgram": {"api_key": "", "model": "nova-2"},
             "piper": {"voice": "en_US-lessac-medium"},
             "elevenlabs": {"api_key": "", "voice_id": "21m00Tcm4TlvDq8ikWAM"},

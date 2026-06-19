@@ -78,14 +78,15 @@ class VoicePipeline:
             from novacode_cli.audio.stt import Transcriber
 
             return Transcriber(
-                model_size=cfg.get("model", "base"),
+                model_size=cfg.get("model", "distil-large-v3"),
                 device=cfg.get("device", "auto"),
+                language=cfg.get("language", "en"),
             )
         if provider == "deepgram":
             from novacode_cli.audio.stt_deepgram import DeepgramTranscriber
 
             return DeepgramTranscriber(
-                api_key=cfg.get("api_key", ""),
+                api_key=cfg.get("api_key") or cfg.get("key") or "",
                 model=cfg.get("model", "nova-2"),
             )
         msg = f"Unknown STT provider: {provider!r}"
@@ -103,7 +104,7 @@ class VoicePipeline:
             from novacode_cli.audio.stt_elevenlabs import ElevenLabsSpeaker
 
             return ElevenLabsSpeaker(
-                api_key=cfg.get("api_key", ""),
+                api_key=cfg.get("api_key") or cfg.get("key") or "",
                 voice_id=cfg.get("voice_id", "21m00Tcm4TlvDq8ikWAM"),
             )
         if provider == "none":
