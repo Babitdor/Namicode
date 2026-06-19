@@ -6324,17 +6324,17 @@ class NovaApp(App):
 
     @work(group="voice_tts")
     async def _speak_reply(self, text: str) -> None:
-        """Speak an assistant reply's prose via TTS (separate group from listen).
+        """Speak a natural 1-2 sentence summary of an assistant reply via TTS.
 
         No-op unless voice has been activated this session and ``speak_responses``
-        is on. Code blocks / tables / URLs are stripped first; all-code replies
-        are skipped entirely.
+        is on. The reply is condensed into a short spoken summary (out-of-band
+        LLM call, fail-open); short replies are spoken as-is.
         """
         if self._voice_pipeline is None or not self._voice_speak_responses:
             return
-        from novacode_cli.audio.speakable import speakable_text
+        from novacode_cli.audio.summarize import summarize_for_speech
 
-        prose = speakable_text(text)
+        prose = await summarize_for_speech(text)
         if not prose:
             return
         self._set_nova_indicator("🔊 speaking…", style="dim cyan")
