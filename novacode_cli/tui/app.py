@@ -4441,6 +4441,9 @@ class NovaApp(App):
         self._show_home_banner()
         # Native startup panel (model / cwd / sandbox / memory / web-search).
         self._render_startup_info()
+        # If voice is enabled in config, pre-download models at startup
+        # so the first push-to-talk or spoken reply is instant.
+        self._eager_voice_warmup()
         # Replay prior conversation when resuming a session.
         self._replay_history()
         # Route remote bridge status messages into the transcript (not stdout).
@@ -6224,18 +6227,22 @@ class NovaApp(App):
         if not audio.is_voice_available():
             return False
         if self._voice_pipeline is None:
-            from novacode_cli.audio.pipeline import VoicePipeline
             from novacode_cli.config.nova_config import NovaConfig
 
             cfg = NovaConfig().get_voice_config()
-            self._voice_pipeline = VoicePipeline(
-                stt_provider=cfg.get("stt_provider", "faster-whisper"),
-                tts_provider=cfg.get("tts_provider", "piper"),
-                provider_configs=cfg.get("providers", {}),
-                stt_model=cfg.get("stt_model", "base"),
-                stt_device=cfg.get("stt_device", "auto"),
-                tts_voice=cfg.get("tts_voice", "en_US-lessac-medium"),
-            )
+            if getattr(self.session_state, "_voice_pipeline", None) is not None:
+                self._voice_pipeline = self.session_state._voice_pipeline
+            else:
+                from novacode_cli.audio.pipeline import VoicePipeline
+
+                self._voice_pipeline = VoicePipeline(
+                    stt_provider=cfg.get("stt_provider", "faster-whisper"),
+                    tts_provider=cfg.get("tts_provider", "piper"),
+                    provider_configs=cfg.get("providers", {}),
+                    stt_model=cfg.get("stt_model", "base"),
+                    stt_device=cfg.get("stt_device", "auto"),
+                    tts_voice=cfg.get("tts_voice", "en_US-lessac-medium"),
+                )
             self._voice_speak_responses = bool(cfg["speak_responses"])
             # Pre-load the heavy models in the background so the first PTT /
             # spoken reply doesn't pay the load cost inline.
@@ -6252,6 +6259,14 @@ class NovaApp(App):
 
         with suppress(Exception):
             await self._voice_pipeline.warmup()
+
+    def _eager_voice_warmup(self) -> None:
+        """If voice is enabled in config, pre-download STT/TTS/VAD models."""
+        from novacode_cli.config.nova_config import NovaConfig
+
+        cfg = NovaConfig().get_voice_config()
+        if cfg.get("enabled") is True:
+            self._ensure_voice_pipeline()
 
     def _voice_unavailable_notice(self) -> None:
         self._set_nova_indicator(
