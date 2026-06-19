@@ -114,10 +114,26 @@ class VoicePipeline:
         raise ValueError(msg)
 
     async def warmup(self) -> None:
-        """Pre-load the STT model and TTS voice so first use isn't laggy."""
+        """Pre-load VAD + STT + TTS models off the loop so first use isn't laggy.
+
+        Only the local providers have models to pre-load (cloud providers have
+        nothing to warm up). Best-effort: any load error is logged and ignored —
+        the model simply loads on first real use instead.
+        """
         self._ensure_components()
-        await asyncio.to_thread(self._stt._ensure_model)
-        await asyncio.to_thread(self._tts._ensure_voice)
+        # (label, awaitable-or-None) — cloud providers expose no eager loader.
+        _stt_load = getattr(self._stt, "_ensure_model", None)
+        _tts_load = getattr(self._tts, "_ensure_voice", None)
+        tasks: list[tuple[str, Any]] = [("VAD", self._vad.ensure_model_async())]
+        if _stt_load is not None:
+            tasks.append(("STT", asyncio.to_thread(_stt_load)))
+        if _tts_load is not None:
+            tasks.append(("TTS", asyncio.to_thread(_tts_load)))
+        for label, loader in tasks:
+            try:
+                await loader
+            except Exception:
+                logger.exception("Voice warmup failed for %s; will load on first use", label)
 
     async def capture_utterance(
         self, *, should_stop: Callable[[], bool] | None = None

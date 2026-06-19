@@ -11,6 +11,7 @@ back to a short :func:`speakable_text` slice, so speech still happens.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING
 
@@ -31,6 +32,21 @@ _SHORT_REPLY_CHARS = 200
 #: ~90 words ≈ 600 chars, with headroom so a full paragraph isn't cut mid-sentence.
 _SUMMARY_MAX_CHARS = 700
 
+#: Process-wide cache of the summarization model. ``create_model()`` does config
+#: file I/O (+ provider probing), so building it once and reusing it avoids that
+#: cost on every long spoken reply.
+_cached_model: BaseChatModel | None = None
+
+
+async def _get_summary_model() -> BaseChatModel:
+    """Return the cached summary model, building it off the loop on first use."""
+    global _cached_model  # noqa: PLW0603 — module-level memoization
+    if _cached_model is None:
+        from novacode_cli.config.model_create import create_model
+
+        _cached_model = await asyncio.to_thread(create_model)
+    return _cached_model
+
 
 async def summarize_for_speech(text: str, *, model: BaseChatModel | None = None) -> str:
     """Return a 1-2 sentence spoken summary of an assistant reply (fail-open).
@@ -45,11 +61,7 @@ async def summarize_for_speech(text: str, *, model: BaseChatModel | None = None)
         return base
 
     try:
-        chat = model
-        if chat is None:
-            from novacode_cli.config.model_create import create_model
-
-            chat = create_model()
+        chat = model if model is not None else await _get_summary_model()
         prompt = render_template("voice_summary.jinja", response=base)
         resp = await chat.ainvoke(
             [HumanMessage(content=prompt)],

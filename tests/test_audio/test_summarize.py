@@ -86,5 +86,24 @@ class TestSummarize:
         assert "Done" in out
 
 
+class TestModelCache:
+    async def test_default_model_built_once_and_reused(self, monkeypatch):
+        """create_model() is called at most once across summary calls (off-loop)."""
+        import novacode_cli.audio.summarize as mod
+
+        monkeypatch.setattr(mod, "_cached_model", None)
+        builds = {"n": 0}
+
+        def _fake_create_model():
+            builds["n"] += 1
+            return FakeModel("a cached summary of the reply")
+
+        # Patch where create_model is imported (inside _get_summary_model).
+        monkeypatch.setattr("novacode_cli.config.model_create.create_model", _fake_create_model)
+        await summarize_for_speech(_long_reply())
+        await summarize_for_speech(_long_reply())
+        assert builds["n"] == 1  # built once, reused on the second call
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

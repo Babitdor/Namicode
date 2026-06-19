@@ -4705,6 +4705,7 @@ class NovaApp(App):
                         pass
             finally:
                 from contextlib import suppress
+
                 with suppress(ValueError):
                     queue.task_done()
                     pass
@@ -6236,7 +6237,21 @@ class NovaApp(App):
                 tts_voice=cfg.get("tts_voice", "en_US-lessac-medium"),
             )
             self._voice_speak_responses = bool(cfg["speak_responses"])
+            # Pre-load the heavy models in the background so the first PTT /
+            # spoken reply doesn't pay the load cost inline.
+            self._voice_warmup()
         return True
+
+    @work(group="voice_warmup", exclusive=True)
+    async def _voice_warmup(self) -> None:
+        """Background pre-load of the voice models (best-effort, never crashes)."""
+        if self._voice_pipeline is None:
+            return
+        # warmup() already swallows per-model errors; this guards the call itself.
+        from contextlib import suppress
+
+        with suppress(Exception):
+            await self._voice_pipeline.warmup()
 
     def _voice_unavailable_notice(self) -> None:
         self._set_nova_indicator(
@@ -6901,6 +6916,7 @@ class NovaApp(App):
                 self._remote_react("❌", msg)
             finally:
                 from contextlib import suppress
+
                 with suppress(ValueError):
                     queue.task_done()
 

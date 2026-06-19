@@ -52,6 +52,13 @@ class SileroVad:
 
             self._model = load_silero_vad()
 
+    async def ensure_model_async(self) -> None:
+        """Load the VAD model off the event loop (idempotent; used by warmup)."""
+        if self._model is None:
+            import asyncio
+
+            await asyncio.to_thread(self._ensure_model)
+
     def _speech_prob(self, window: np.ndarray) -> float:
         import torch
 
@@ -74,7 +81,9 @@ class SileroVad:
         """
         import asyncio
 
-        self._ensure_model()
+        # Load the model off the loop — load_silero_vad() is a blocking torch
+        # call (and may download), so it must not run on the event loop thread.
+        await self.ensure_model_async()
         import numpy as np
 
         ms_per_window = 1000 * _WINDOW / self._samplerate
