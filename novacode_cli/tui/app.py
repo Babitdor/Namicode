@@ -4704,9 +4704,9 @@ class NovaApp(App):
                     except Exception:  # noqa: BLE001
                         pass
             finally:
-                try:
+                from contextlib import suppress
+                with suppress(ValueError):
                     queue.task_done()
-                except Exception:  # noqa: BLE001
                     pass
 
     def _remote_react(self, emoji: str, msg: Any = None) -> None:
@@ -6269,7 +6269,8 @@ class NovaApp(App):
             transcript = await self._voice_pipeline.capture_utterance()
         except Exception as _mic_err:  # noqa: BLE001 — a mic/STT error must never crash the TUI
             msg = str(_mic_err)
-            self._set_nova_indicator("🎤 mic error", style="red", auto_clear=3.0)
+            short = msg[:80].replace("\n", " ")
+            self._set_nova_indicator(f"🎤 mic error: {short}", style="red", auto_clear=4.0)
             self._log(
                 Text(
                     f"[🎤 Mic error] {msg[:200]}",
@@ -6309,9 +6310,17 @@ class NovaApp(App):
                 self._submit_voice_text,
                 should_stop=lambda: not self._voice_listening,
             )
-        except Exception:  # noqa: BLE001 — never let the audio loop crash the TUI
+        except Exception as _listen_err:  # noqa: BLE001 — never let the audio loop crash the TUI
             self._voice_listening = False
-            self._set_nova_indicator("🎤 listen error", style="red", auto_clear=3.0)
+            msg = str(_listen_err)
+            short = msg[:80].replace("\n", " ")
+            self._set_nova_indicator(f"🎤 listen error: {short}", style="red", auto_clear=4.0)
+            self._log(
+                Text(
+                    f"[🎤 Listen error] {msg[:200]}",
+                    style="red",
+                )
+            )
 
     @work(group="voice_tts")
     async def _speak_reply(self, text: str) -> None:
@@ -6891,7 +6900,9 @@ class NovaApp(App):
                 self._log(Text(f"Remote error: {ex}", style="red"))
                 self._remote_react("❌", msg)
             finally:
-                queue.task_done()
+                from contextlib import suppress
+                with suppress(ValueError):
+                    queue.task_done()
 
     # Slash commands that require the interactive local TUI (modals, pickers,
     # launchers) and can't be driven over a chat bridge.
