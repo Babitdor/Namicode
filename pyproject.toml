@@ -81,6 +81,11 @@ voice = [
 voice-orpheus = [
     "orpheus-cpp>=0.0.3",
 ]
+# Optional STT: NVIDIA Parakeet via sherpa-onnx (CPU/CUDA). Opt-in — the model
+# downloads on first use. Select with /voice settings stt parakeet.
+voice-parakeet = [
+    "sherpa-onnx>=1.10.0",
+]
 
 [project.urls]
     Homepage = "https://github.com/Babitdor/NovaCode"

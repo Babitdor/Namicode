@@ -85,9 +85,13 @@ class TestOrpheusSpeaker:
 
 
 class TestCapability:
-    def test_is_orpheus_available_false_in_ci(self):
-        # orpheus-cpp isn't installed in CI.
-        assert audio.is_orpheus_available() is False
+    def test_is_orpheus_available_matches_import(self):
+        # The flag must reflect whether orpheus_cpp actually imports — not a
+        # hardcoded value (it may or may not be installed in a given env).
+        import importlib.util
+
+        present = importlib.util.find_spec("orpheus_cpp") is not None
+        assert audio.is_orpheus_available() is present
 
     def test_install_hint_mentions_packages(self):
         hint = audio.orpheus_install_hint()
