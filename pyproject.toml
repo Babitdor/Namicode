@@ -65,10 +65,21 @@ dependencies = [
     "semble>=0.1.8",
     "discord.py>=2.3.0",
     "python-telegram-bot>=21.0.0",
+    ]
+
+[project.optional-dependencies]
+voice = [
     "faster-whisper>=1.0.0",   # STT
     "silero-vad>=5.1",         # VAD (utterance endpointing)
     "piper-tts>=1.2.0",        # TTS
     "sounddevice>=0.4.6",      # microphone capture + playback
+]
+# Optional, heavy: Orpheus LLM-based TTS (CPU via llama.cpp). Opt-in — kept out
+# of [voice] because it pulls a ~2GB model + llama-cpp-python. llama-cpp-python
+# needs its CPU wheel index: --extra-index-url
+#   https://abetlen.github.io/llama-cpp-python/whl/cpu
+voice-orpheus = [
+    "orpheus-cpp>=0.0.3",
 ]
 
 [project.urls]

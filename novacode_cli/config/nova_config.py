@@ -135,6 +135,7 @@ class NovaConfig:
             "deepgram": {"api_key": "", "model": "nova-2"},
             "piper": {"voice": "en_US-lessac-medium"},
             "elevenlabs": {"api_key": "", "voice_id": "21m00Tcm4TlvDq8ikWAM"},
+            "orpheus": {"voice": "tara", "lang": "en"},
         },
     }
 

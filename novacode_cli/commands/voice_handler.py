@@ -4,6 +4,7 @@ Subcommands::
 
     /voice                       show status (availability + current settings)
     /voice status
+    /voice doctor                run full voice stack diagnostics
     /voice on | off              enable/disable voice (persisted default)
     /voice mode ptt|listen       push-to-talk vs always-listening
     /voice speak on|off          enable/disable spoken replies
@@ -97,6 +98,10 @@ async def handle_voice_command(  # noqa: PLR0911 — command dispatcher, one ret
         await _run_test(config, console)
         return True
 
+    if action == "doctor":
+        _run_doctor(console)
+        return True
+
     console.print(f"[yellow]Unknown /voice subcommand:[/yellow] {action}")
     return True
 
@@ -152,7 +157,7 @@ def _show_provider_options(
         desc = meta.get("description", "")
         if meta.get("requires_key"):
             pcfg = config.get_voice_provider_config(key)
-            key_ok = bool(pcfg.get("api_key"))
+            key_ok = bool(pcfg.get("api_key") or pcfg.get("key"))
             key_status = " [green](key set)[/green]" if key_ok else " [yellow](no key)[/yellow]"
         else:
             key_status = ""
@@ -186,14 +191,15 @@ async def _handle_settings(  # noqa: PLR0912 — settings sub-dispatch
             # Configure — parse --key, --model
             flags = _parse_flags(rest[1:])
             config.set_voice_provider_config(provider, **flags)
-            console.print(f"  [green]✓[/green] {meta['name']} configured.")
+            config.set_voice_config(stt_provider=provider)
+            console.print(f"  [green]✓[/green] {meta['name']} configured and selected as active STT.")
         else:
             # Switch provider
             config.set_voice_config(stt_provider=provider)
             console.print(f"  [green]✓[/green] STT provider set to [cyan]{meta['name']}[/cyan].")
             if meta.get("requires_key"):
                 pcfg = config.get_voice_provider_config(provider)
-                if not pcfg.get("api_key"):
+                if not (pcfg.get("api_key") or pcfg.get("key")):
                     console.print(
                         f"  [yellow]Set key:[/yellow] /voice settings stt {provider} --key <key>"
                     )
@@ -212,16 +218,20 @@ async def _handle_settings(  # noqa: PLR0912 — settings sub-dispatch
         if len(rest) > 1:
             flags = _parse_flags(rest[1:])
             config.set_voice_provider_config(provider, **flags)
-            console.print(f"  [green]✓[/green] {meta['name']} configured.")
+            config.set_voice_config(tts_provider=provider)
+            console.print(f"  [green]✓[/green] {meta['name']} configured and selected as active TTS.")
         else:
             config.set_voice_config(tts_provider=provider)
             console.print(f"  [green]✓[/green] TTS provider set to [cyan]{meta['name']}[/cyan].")
             if meta.get("requires_key"):
                 pcfg = config.get_voice_provider_config(provider)
-                if not pcfg.get("api_key"):
+                if not (pcfg.get("api_key") or pcfg.get("key")):
                     console.print(
                         f"  [yellow]Set key:[/yellow] /voice settings tts {provider} --key <key>"
                     )
+        # Orpheus is an optional heavy dep — warn if selected but not installed.
+        if provider == "orpheus" and not audio.is_orpheus_available():
+            console.print(f"  [yellow]{audio.orpheus_install_hint()}[/yellow]")
     else:
         console.print(f"[yellow]Unknown settings category:[/yellow] {action}. Use stt or tts.")
 
@@ -250,6 +260,26 @@ async def _run_test(config: NovaConfig, console: Console) -> None:
         console.print(f"  [red]Voice test failed:[/red] {exc}")
 
 
+# ── Doctor ────────────────────────────────────────────────────────────────────
+
+
+def _run_doctor(console: Console) -> None:
+    """Run full voice stack diagnostics and print them."""
+    console.print("  [bold]Voice diagnostics[/bold]")
+    console.print()
+    lines = audio.diagnose_voice()
+    for line in lines:
+        console.print(f"  {line}")
+    console.print()
+    # Summarize.
+    from novacode_cli.audio import is_voice_available
+
+    if is_voice_available():
+        console.print("  [bold green]Voice stack is complete.[/bold green]")
+    else:
+        console.print(f"  [bold yellow]{audio.install_hint()}[/bold yellow]")
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
@@ -260,7 +290,10 @@ def _parse_flags(tokens: list[str]) -> dict[str, str]:
     while i < len(tokens):
         tok = tokens[i]
         if tok.startswith("--") and i + 1 < len(tokens):
-            flags[tok[2:]] = tokens[i + 1]
+            key = tok[2:]
+            if key == "key":
+                key = "api_key"
+            flags[key] = tokens[i + 1]
             i += 2
         else:
             i += 1

@@ -64,6 +64,13 @@ STT_PROVIDERS: dict[str, dict[str, Any]] = {
         "requires_key": True,
         "default_model": "nova-2",
     },
+    "parakeet": {
+        "name": "Parakeet (NVIDIA)",
+        "description": "NVIDIA Parakeet-TDT-0.6B-v2 via sherpa-onnx (CPU/CUDA)",
+        "local": True,
+        "requires_key": False,
+        "default_model": "parakeet-tdt-0.6b-v2",
+    },
 }
 
 TTS_PROVIDERS: dict[str, dict[str, Any]] = {
@@ -80,6 +87,13 @@ TTS_PROVIDERS: dict[str, dict[str, Any]] = {
         "local": False,
         "requires_key": True,
         "default_voice": "21m00Tcm4TlvDq8ikWAM",
+    },
+    "orpheus": {
+        "name": "Orpheus (local, natural)",
+        "description": "LLM-based, very natural — heavy (~2GB, slow on CPU)",
+        "local": True,
+        "requires_key": False,
+        "default_voice": "tara",
     },
     "none": {
         "name": "Off",

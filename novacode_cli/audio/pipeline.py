@@ -89,6 +89,20 @@ class VoicePipeline:
                 api_key=cfg.get("api_key") or cfg.get("key") or "",
                 model=cfg.get("model", "nova-2"),
             )
+        if provider == "parakeet":
+            try:
+                import sherpa_onnx  # noqa: F401
+            except ImportError as e:
+                raise ImportError(
+                    "The 'sherpa-onnx' package is required for Parakeet STT.\n"
+                    "Install it using: pip install sherpa-onnx"
+                ) from e
+
+            from novacode_cli.audio.stt_parakeet import ParakeetTranscriber
+
+            return ParakeetTranscriber(
+                num_threads=cfg.get("threads", 2),
+            )
         msg = f"Unknown STT provider: {provider!r}"
         raise ValueError(msg)
 
@@ -106,6 +120,13 @@ class VoicePipeline:
             return ElevenLabsSpeaker(
                 api_key=cfg.get("api_key") or cfg.get("key") or "",
                 voice_id=cfg.get("voice_id", "21m00Tcm4TlvDq8ikWAM"),
+            )
+        if provider == "orpheus":
+            from novacode_cli.audio.tts_orpheus import OrpheusSpeaker
+
+            return OrpheusSpeaker(
+                voice=cfg.get("voice", "tara"),
+                lang=cfg.get("lang", "en"),
             )
         if provider == "none":
             from novacode_cli.audio.providers import _NullTTS
@@ -205,3 +226,9 @@ class VoicePipeline:
         """Release the microphone."""
         if self._capture is not None:
             self._capture.stop()
+
+    @property
+    def tts_needs_download(self) -> bool:
+        """Whether the TTS provider needs to download files before speaking."""
+        self._ensure_components()
+        return getattr(self._tts, "needs_download", False)
