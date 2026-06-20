@@ -75,16 +75,22 @@ voice = [
     "sounddevice>=0.4.6",      # microphone capture + playback
 ]
 # Optional, heavy: Orpheus LLM-based TTS (CPU via llama.cpp). Opt-in — kept out
-# of [voice] because it pulls a ~2GB model + llama-cpp-python. llama-cpp-python
-# needs its CPU wheel index: --extra-index-url
-#   https://abetlen.github.io/llama-cpp-python/whl/cpu
+# of [voice] because it pulls a ~2GB model. orpheus-cpp imports llama-cpp-python
+# at runtime but does NOT declare it as a dependency, so we add it here; it's
+# pinned to the prebuilt CPU wheel index below (no compiler needed).
 voice-orpheus = [
     "orpheus-cpp>=0.0.3",
+    "llama-cpp-python>=0.3.0",
 ]
 # Optional STT: NVIDIA Parakeet via sherpa-onnx (CPU/CUDA). Opt-in — the model
 # downloads on first use. Select with /voice settings stt parakeet.
 voice-parakeet = [
     "sherpa-onnx>=1.10.0",
+]
+# Optional TTS: Kyutai Pocket-TTS (CPU). Opt-in — the model downloads on
+# first use. Select with /voice settings tts pocket.
+voice-pocket = [
+    "pocket-tts>=0.1.0",
 ]
 
 [project.urls]
@@ -95,6 +101,19 @@ voice-parakeet = [
 
 [project.scripts]
 nova = "novacode_cli.main:cli_main"
+
+# llama-cpp-python (used by the optional [voice-orpheus] extra) ships only an
+# sdist on PyPI — installing it from there needs a C++ toolchain. The abetlen
+# index serves prebuilt CPU wheels for Windows/Linux/macOS. The named index +
+# explicit source below makes uv fetch llama-cpp-python ONLY from there, while
+# every other package still resolves from PyPI.
+[[tool.uv.index]]
+name = "llama-cpp-cpu"
+url = "https://abetlen.github.io/llama-cpp-python/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+llama-cpp-python = { index = "llama-cpp-cpu" }
 
 [tool.setuptools.package-data]
 "*" = ["*.jinja"]

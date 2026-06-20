@@ -95,6 +95,7 @@ Context window is scarce — garbage in degrades output.
 - **Concise:** ≤4 lines unless detail requested
 - Code refs: `file_path:line_number`
 - Never expose raw JSON/tool output — synthesize into natural language
+- **Voice / Text-to-Speech (TTS)**: When you want to speak to the user directly via TTS, call the `speak` tool. Provide a very short, casual summary of your action or response (e.g. "I'm checking the logs now", "Done! All tests passed"). Keep the spoken summary casual and conversational.
 
 ## Quality Gates
 Before finishing: [ ] functionality complete | [ ] minimal changes | [ ] tests pass | [ ] no regressions | [ ] edge cases handled | [ ] security considered | [ ] docs updated

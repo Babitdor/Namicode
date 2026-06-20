@@ -49,6 +49,9 @@ except ImportError:
 # Reflection tools
 from novacode_cli.tools.reflection_tools import think
 
+# Speak tool
+from novacode_cli.tools.speak_tool import speak
+
 # Skill management (agent-facing write path for self-improvement)
 from novacode_cli.tools.skill_tools import skill_manage
 
@@ -92,6 +95,8 @@ __all__ = [
     "forget",
     # Reflection tools
     "think",
+    # Speak tool
+    "speak",
     # Skill management (agent self-improvement write path)
     "skill_manage",
     # Web search tools

@@ -38,6 +38,7 @@ _HAS_SILERO_VAD = _has("silero_vad")
 _HAS_PIPER = _has("piper")  # the `piper-tts` distribution imports as `piper`
 # Optional — NOT part of the required base stack (heavy 3B LLM TTS, opt-in).
 _HAS_ORPHEUS = _has("orpheus_cpp")
+_HAS_POCKET = _has("pocket_tts")
 
 #: Distribution name -> present? (distribution names are what users `pip install`).
 _REQUIRED: dict[str, bool] = {
@@ -63,6 +64,11 @@ def is_orpheus_available() -> bool:
     return _HAS_ORPHEUS
 
 
+def is_pocket_available() -> bool:
+    """Return whether the optional Pocket TTS backend (pocket-tts) is installed."""
+    return _HAS_POCKET
+
+
 def orpheus_install_hint() -> str:
     """One-line, user-facing hint for enabling the Orpheus TTS provider."""
     return (
@@ -70,6 +76,16 @@ def orpheus_install_hint() -> str:
         "  uv pip install orpheus-cpp\n"
         "  uv pip install llama-cpp-python "
         "--extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu"
+    )
+
+
+def pocket_install_hint() -> str:
+    """One-line, user-facing hint for enabling the Pocket TTS provider."""
+    return (
+        "Pocket-TTS needs the pocket-tts package. Install with:\n"
+        "  uv pip install pocket-tts\n"
+        "  # Or if global uv tool install:\n"
+        "  uv tool install --with pocket-tts novacode-cli --reinstall"
     )
 
 
@@ -131,6 +147,7 @@ def diagnose_voice() -> list[str]:
         ("silero-vad", "silero_vad", "silero-vad"),
         ("piper-tts", "piper", "piper-tts"),
         ("sherpa-onnx (optional)", "sherpa_onnx", "sherpa-onnx"),
+        ("pocket-tts (optional)", "pocket_tts", "pocket-tts"),
     ]:
         present = _has(mod_name)
         if present:
@@ -242,7 +259,9 @@ def _fmt_bytes(n: int) -> str:
 __all__ = [
     "diagnose_voice",
     "is_orpheus_available",
+    "is_pocket_available",
     "is_voice_available",
     "missing_deps",
     "orpheus_install_hint",
+    "pocket_install_hint",
 ]

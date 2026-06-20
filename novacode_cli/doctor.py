@@ -195,6 +195,25 @@ def run_doctor() -> int:
             # Skip permission check on Windows or if stat fails
             pass
 
+    # Check 6: Voice stack
+    from novacode_cli import audio as _audio
+
+    if _audio.is_voice_available():
+        results.append(("✓", "Voice stack imported", ""))
+        # Deeper: try sounddevice early
+        try:
+            import sounddevice as _sd
+            _sd.check_input_settings(device=None)
+            dll_path = getattr(_sd, "_libname", "?")
+            results.append(("✓", "PortAudio / default input device", dll_path))
+        except Exception as _v_e:
+            results.append(("✗", f"PortAudio: {_v_e}", f"See /voice doctor"))
+            all_passed = False
+    else:
+        missing = ", ".join(_audio.missing_deps())
+        results.append(("⚠", "Voice stack incomplete", missing))
+        results.append(("ℹ", "See /voice doctor or run:", _audio.install_hint()))
+
     # Display results in a table
     table = Table(show_header=False, box=None, padding=(0, 2))
     table.add_column("Status", style="bold", width=3)

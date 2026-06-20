@@ -21,6 +21,13 @@ logger = logging.getLogger("nova.audio.pipeline")
 
 _TTS_POLL_S = 0.1
 
+_ACTIVE_PIPELINE: VoicePipeline | None = None
+
+
+def get_active_pipeline() -> VoicePipeline | None:
+    """Return the currently active VoicePipeline instance."""
+    return _ACTIVE_PIPELINE
+
 
 class VoicePipeline:
     """High-level voice I/O: one-shot capture, continuous listen, and speak."""
@@ -37,6 +44,8 @@ class VoicePipeline:
         tts_voice: str = "en_US-lessac-medium",
     ) -> None:
         """Record component config; nothing is loaded until first use."""
+        global _ACTIVE_PIPELINE
+        _ACTIVE_PIPELINE = self
         self._stt_provider = stt_provider
         self._tts_provider = tts_provider
         _pc = dict(provider_configs or {})
@@ -95,7 +104,8 @@ class VoicePipeline:
             except ImportError as e:
                 raise ImportError(
                     "The 'sherpa-onnx' package is required for Parakeet STT.\n"
-                    "Install it using: pip install sherpa-onnx"
+                    "If developer/local install, run: pip install sherpa-onnx\n"
+                    "If global uv tool install, run: uv tool install --with sherpa-onnx novacode-cli --reinstall"
                 ) from e
 
             from novacode_cli.audio.stt_parakeet import ParakeetTranscriber
@@ -127,6 +137,21 @@ class VoicePipeline:
             return OrpheusSpeaker(
                 voice=cfg.get("voice", "tara"),
                 lang=cfg.get("lang", "en"),
+            )
+        if provider == "pocket":
+            try:
+                import pocket_tts  # noqa: F401
+            except ImportError as e:
+                raise ImportError(
+                    "The 'pocket-tts' package is required for Pocket-TTS.\n"
+                    "If developer/local install, run: pip install pocket-tts\n"
+                    "If global uv tool install, run: uv tool install --with pocket-tts novacode-cli --reinstall"
+                ) from e
+
+            from novacode_cli.audio.tts_pocket import PocketSpeaker
+
+            return PocketSpeaker(
+                voice=cfg.get("voice", "alba"),
             )
         if provider == "none":
             from novacode_cli.audio.providers import _NullTTS
@@ -232,3 +257,23 @@ class VoicePipeline:
         """Whether the TTS provider needs to download files before speaking."""
         self._ensure_components()
         return getattr(self._tts, "needs_download", False)
+
+    @property
+    def stt_needs_download(self) -> bool:
+        """Whether the STT provider needs to download its model before use."""
+        self._ensure_components()
+        return getattr(self._stt, "needs_download", False)
+
+    def downloads_pending(self) -> list[str]:
+        """Return labels (``["STT", "TTS"]``) for models still needing download.
+
+        Cheap: only stats the filesystem / HF cache via each provider's
+        ``needs_download`` — no model is loaded. Empty when everything is cached.
+        """
+        self._ensure_components()
+        pending: list[str] = []
+        if getattr(self._stt, "needs_download", False):
+            pending.append("STT")
+        if getattr(self._tts, "needs_download", False):
+            pending.append("TTS")
+        return pending

@@ -95,6 +95,13 @@ TTS_PROVIDERS: dict[str, dict[str, Any]] = {
         "requires_key": False,
         "default_voice": "tara",
     },
+    "pocket": {
+        "name": "Pocket-TTS (Kyutai)",
+        "description": "Local, CPU-optimized with voice cloning (CPU)",
+        "local": True,
+        "requires_key": False,
+        "default_voice": "alba",
+    },
     "none": {
         "name": "Off",
         "description": "Silence — no spoken output",

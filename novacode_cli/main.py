@@ -190,6 +190,7 @@ from novacode_cli.tools import (
     reddit_posts,
     remember,
     skill_manage,
+    speak,
     think,
     web_search,
     wiki_read,
@@ -1586,6 +1587,7 @@ async def _run_agent_session(
         # Utility tools
         package_info,
         think,
+        speak,
         skill_manage,
         query_project_graph,
         # Web search (always available, no API key needed)
@@ -1655,6 +1657,30 @@ async def _run_agent_session(
             sandbox_type=sandbox_type,
             sandbox_id=getattr(sandbox_backend, "id", None) if sandbox_backend else None,
         )
+
+        # Eagerly preload voice models if voice is active/enabled.
+        from novacode_cli.config.nova_config import NovaConfig
+        from novacode_cli import audio
+
+        cfg = NovaConfig().get_voice_config()
+        if cfg.get("enabled") is True and audio.is_voice_available():
+            boot_status("voice: preloading models (downloading if not present)…")
+            try:
+                from novacode_cli.audio.pipeline import VoicePipeline
+
+                voice_pipeline = VoicePipeline(
+                    stt_provider=cfg.get("stt_provider", "faster-whisper"),
+                    tts_provider=cfg.get("tts_provider", "piper"),
+                    provider_configs=cfg.get("providers", {}),
+                    stt_model=cfg.get("stt_model", "base"),
+                    stt_device=cfg.get("stt_device", "auto"),
+                    tts_voice=cfg.get("tts_voice", "en_US-lessac-medium"),
+                )
+                await voice_pipeline.warmup()
+                session_state._voice_pipeline = voice_pipeline
+                boot_status("voice: stack ready", "ok")
+            except Exception as e:
+                boot_status(f"voice: warmup failed ({e})", "warn")
 
     # Wire the SteeringMiddleware's instruction list to the session state.
     #

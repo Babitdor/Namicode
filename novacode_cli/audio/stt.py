@@ -24,6 +24,21 @@ _DEFAULT_MODEL = "distil-large-v3"
 _DEFAULT_LANGUAGE = "en"
 
 
+def _hf_repo_for(model_size: str) -> str:
+    """Map a Whisper model size to its HuggingFace repo (for cache detection).
+
+    A full ``org/repo`` or local path is returned unchanged. Bare sizes map to
+    the Systran faster-whisper conversions that faster-whisper downloads.
+    """
+    if "/" in model_size:
+        return model_size
+    if model_size.startswith("distil-"):
+        # distil-large-v3 → Systran/faster-distil-whisper-large-v3
+        suffix = model_size.removeprefix("distil-")
+        return f"Systran/faster-distil-whisper-{suffix}"
+    return f"Systran/faster-whisper-{model_size}"
+
+
 def _resolve_device(device: str) -> tuple[str, str]:
     """Map a requested device to a concrete ``(device, compute_type)`` pair.
 
@@ -63,6 +78,25 @@ class Transcriber:
         self._device_pref = device
         self._language = language or None
         self._model: Any = None
+
+    @property
+    def needs_download(self) -> bool:
+        """Whether the Whisper model isn't in the HF cache yet (cheap, fail-open).
+
+        Stats the HuggingFace cache only — never loads the model. Any error
+        returns ``False`` (assume present) so a detection failure can't show a
+        "downloading" state that never clears.
+        """
+        try:
+            from huggingface_hub import try_to_load_from_cache
+
+            repo = _hf_repo_for(self._model_size)
+            hit = try_to_load_from_cache(repo, "model.bin")
+        except Exception:  # noqa: BLE001 — best-effort; assume present on any error
+            logger.debug("Whisper cache probe failed; assuming present", exc_info=True)
+            return False
+        else:
+            return hit is None
 
     def _ensure_model(self) -> None:
         if self._model is None:

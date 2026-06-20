@@ -54,6 +54,7 @@ class AudioCapture:
             sd.check_input_settings(device=None)
         except Exception as exc:
             msg = str(exc)
+            logger.error("PortAudio check failed: %s", msg)
             raise OSError(f"sounddevice / PortAudio check failed: {msg}") from exc
 
         # If no default input device exists, try finding one by name.
@@ -80,14 +81,34 @@ class AudioCapture:
                 except queue.Empty:
                     pass
 
-        self._stream = sd.InputStream(
-            samplerate=self._samplerate,
-            blocksize=self._block_size,
-            channels=1,
-            dtype="int16",
-            callback=_callback,
-        )
-        self._stream.start()
+        try:
+            self._stream = sd.InputStream(
+                samplerate=self._samplerate,
+                blocksize=self._block_size,
+                channels=1,
+                dtype="int16",
+                callback=_callback,
+            )
+            self._stream.start()
+        except Exception as exc:
+            msg = str(exc)
+            logger.error("PortAudio stream start failed: %s", msg)
+            # WinError 127 means PortAudio's bundled DLL tried to call a Windows
+            # API function that doesn't exist on this system. This usually happens
+            # when the wrong Python/nova is on PATH (e.g. conda shadows uv tool).
+            from novacode_cli.audio import diagnose_voice
+
+            try:
+                diag = "\n".join(diagnose_voice())
+            except Exception:
+                diag = "(diagnostics unavailable)"
+            hint = (
+                f"Microphone stream failed: {msg}\n\n"
+                "  Run /voice doctor for full diagnostics, or check manually:\n"
+                "    uv tool install -e '.[voice]' --reinstall novacode-cli\n\n"
+                f"[dim]{diag}[/dim]"
+            )
+            raise OSError(hint) from exc
 
     def read(self, timeout: float = 1.0) -> np.ndarray | None:
         """Block (off the event loop) for the next audio block, or ``None`` on timeout."""

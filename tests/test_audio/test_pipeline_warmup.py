@@ -83,5 +83,50 @@ class TestWarmup:
         assert tts.loaded is True
 
 
+class _NeedsDownload:
+    """Provider exposing a controllable needs_download flag."""
+
+    def __init__(self, needs: bool) -> None:  # noqa: FBT001
+        self.needs_download = needs
+
+
+class TestDownloadsPending:
+    def test_both_pending(self):
+        pipeline = VoicePipeline()
+        _wire(
+            pipeline,
+            vad=FakeVad(),
+            stt=_NeedsDownload(needs=True),
+            tts=_NeedsDownload(needs=True),
+        )
+        assert pipeline.downloads_pending() == ["STT", "TTS"]
+
+    def test_subset_pending(self):
+        pipeline = VoicePipeline()
+        _wire(
+            pipeline,
+            vad=FakeVad(),
+            stt=_NeedsDownload(needs=False),
+            tts=_NeedsDownload(needs=True),
+        )
+        assert pipeline.downloads_pending() == ["TTS"]
+
+    def test_none_pending(self):
+        pipeline = VoicePipeline()
+        _wire(
+            pipeline,
+            vad=FakeVad(),
+            stt=_NeedsDownload(needs=False),
+            tts=_NeedsDownload(needs=False),
+        )
+        assert pipeline.downloads_pending() == []
+
+    def test_provider_without_flag_is_not_pending(self):
+        # Cloud providers (no needs_download attr) never count as pending.
+        pipeline = VoicePipeline()
+        _wire(pipeline, vad=FakeVad(), stt=FakeCloudProvider(), tts=FakeCloudProvider())
+        assert pipeline.downloads_pending() == []
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

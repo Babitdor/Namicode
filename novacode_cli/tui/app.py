@@ -194,6 +194,15 @@ class MatrixRain(Static):
         Early-returns (no work) when the widget is scrolled out of the visible
         viewport, so transcript messages push the rain off-screen cheaply.
         """
+        # Pause animation updates while TTS is playing to prevent audio stuttering
+        # due to thread / GIL contention on the main loop.
+        try:
+            vp = getattr(self.app, "_voice_pipeline", None)
+            if vp is not None and vp.tts_active:
+                return
+        except Exception:  # noqa: BLE001
+            pass
+
         # Skip the (expensive) frame build when the banner is scrolled out of the
         # transcript viewport. Both regions are in SCREEN coordinates, so they're
         # directly comparable: if the widget sits entirely above or below the
@@ -4248,6 +4257,7 @@ class NovaApp(App):
         # Prior conversation turns to replay into the transcript on resume.
         self._restored_messages = list(restored_messages or [])
         self._seen: set[str] = set()
+        self._speech_lock = asyncio.Lock()
         self._live_buf = ""  # accumulating streamed answer prose
         self._reasoning_buf = ""  # accumulating reasoning trace
         self._stream_msg: ChatMessage | None = None  # in-progress Nova answer widget
@@ -4337,6 +4347,7 @@ class NovaApp(App):
         self._nova_status: str | None = None
         self._nova_status_style: str = "dim"
         self._nova_indicator_timer: Any = None
+        self._os_focused = True
 
     def _current_agent_info(self) -> tuple[str, str]:
         from novacode_cli.ui.input_preparation import get_agent_display_name
@@ -4525,15 +4536,19 @@ class NovaApp(App):
 
     def on_app_blur(self) -> None:
         """Pause MatrixRain when the terminal loses OS focus."""
+        self._os_focused = False
         rain = self._matrix_rain()
         if rain is not None:
             rain.pause()
 
     def on_app_focus(self) -> None:
         """Resume MatrixRain when the terminal regains OS focus."""
+        self._os_focused = True
         rain = self._matrix_rain()
         if rain is not None:
-            rain.resume()
+            vp = getattr(self, "_voice_pipeline", None)
+            if vp is None or not vp.tts_active:
+                rain.resume()
 
     # -- helpers --------------------------------------------------------------
     def _w(self, selector: str, kind: Any) -> Any:
@@ -5008,6 +5023,7 @@ class NovaApp(App):
         self._subagent_tool_to_task.clear()
         self._todo_widget = None  # next turn starts a fresh todo block
         self._current_assistant_id = None
+        self._accumulated_reply = ""
 
     def _flush_stream(self) -> None:
         """Repaint the in-progress stream/reasoning widgets from their buffers.
@@ -6251,14 +6267,28 @@ class NovaApp(App):
 
     @work(group="voice_warmup", exclusive=True)
     async def _voice_warmup(self) -> None:
-        """Background pre-load of the voice models (best-effort, never crashes)."""
+        """Background pre-load of the voice models (best-effort, never crashes).
+
+        If any model still needs downloading, surface a status-line indicator
+        while warmup runs so launching Nova doesn't look frozen.
+        """
         if self._voice_pipeline is None:
             return
-        # warmup() already swallows per-model errors; this guards the call itself.
         from contextlib import suppress
 
+        pending: list[str] = []
+        with suppress(Exception):
+            pending = self._voice_pipeline.downloads_pending()
+        if pending:
+            self._set_nova_indicator(
+                f"⬇ downloading voice models… ({', '.join(pending)})",
+                style="dim cyan",
+            )
+        # warmup() already swallows per-model errors; this guards the call itself.
         with suppress(Exception):
             await self._voice_pipeline.warmup()
+        if pending:
+            self._set_nova_indicator("✓ voice models ready", style="dim green", auto_clear=3.0)
 
     def _eager_voice_warmup(self) -> None:
         """If voice is enabled in config, pre-download STT/TTS/VAD models."""
@@ -6292,6 +6322,7 @@ class NovaApp(App):
             return
         if self._voice_capturing:
             return  # debounce double-press
+        self.workers.cancel_group(self, "voice_tts")
         self._voice_capturing = True
         self._set_nova_indicator("🎤 listening…", style="bold cyan")
         transcript: str | None = None
@@ -6324,6 +6355,7 @@ class NovaApp(App):
         if self._voice_listening:
             self._voice_listening = False
             self.workers.cancel_group(self, "voice")
+            self.workers.cancel_group(self, "voice_tts")
             self._set_nova_indicator("🎤 voice off", style="dim", auto_clear=2.0)
             return
         self._voice_listening = True
@@ -6360,19 +6392,59 @@ class NovaApp(App):
         is on. The reply is condensed into a short spoken summary (out-of-band
         LLM call, fail-open); short replies are spoken as-is.
         """
-        if self._voice_pipeline is None or not self._voice_speak_responses:
+        pipeline = self._voice_pipeline
+        if pipeline is None or not self._voice_speak_responses:
             return
         from novacode_cli.audio.summarize import summarize_for_speech
 
         prose = await summarize_for_speech(text)
         if not prose:
             return
+
+        # Re-check self._voice_pipeline in case it was reset during the await
+        pipeline = self._voice_pipeline
+        if pipeline is None:
+            return
+
+        # Check if the voice model needs to be downloaded before speaking
+        if getattr(pipeline, "tts_needs_download", False):
+            self._set_nova_indicator("🔊 downloading voice…", style="dim cyan")
+            # Force the pipeline warmup (downloads the voice model)
+            try:
+                await pipeline.warmup()
+            except Exception as w_err:  # noqa: BLE001
+                self._log(Text(f"[🔊 TTS error] Voice download failed: {w_err}", style="red"))
+                self._set_nova_indicator("🔊 tts error", style="red", auto_clear=3.0)
+                return
+
+        # Re-check again after warmup just in case
+        pipeline = self._voice_pipeline
+        if pipeline is None:
+            return
+
         self._set_nova_indicator("🔊 speaking…", style="dim cyan")
+        rain = self._matrix_rain()
+        if rain is not None:
+            rain.pause()
         spoke = True
         try:
-            await self._voice_pipeline.speak(prose)
-        except Exception:  # noqa: BLE001 — TTS failure must never crash the TUI
-            spoke = False
+            try:
+                async with self._speech_lock:
+                    await pipeline.speak(prose)
+            except Exception as tts_err:  # noqa: BLE001 — TTS failure must never crash the TUI
+                spoke = False
+                msg = str(tts_err)
+                self._log(
+                    Text(
+                        f"[🔊 TTS error] {msg}",
+                        style="red",
+                    )
+                )
+        finally:
+            if self._os_focused:
+                rain = self._matrix_rain()
+                if rain is not None:
+                    rain.resume()
         if not spoke:
             self._set_nova_indicator("🔊 tts error", style="red", auto_clear=3.0)
         elif self._voice_listening:
@@ -6488,6 +6560,7 @@ class NovaApp(App):
     @work(exclusive=True, group="turn")
     async def _dispatch(self, text: str) -> None:
         """Route input: quit / !bash / slash command / @agent / agent prompt."""
+        self.workers.cancel_group(self, "voice_tts")
         low = text.lower()
         if low in ("/quit", "/exit", "quit", "exit", "q"):
             await self.action_quit()
@@ -6568,7 +6641,29 @@ class NovaApp(App):
             self._reset_streaming()
             self._log(Text("Cancelled.", style="yellow"))
         except Exception as ex:  # noqa: BLE001
-            self._log(Text(f"Error: {ex}", style="red"))
+            msg = str(ex).lower()
+            if any(
+                kw in msg
+                for kw in ("429", "rate limit", "usage limit", "quota", "too many requests")
+            ):
+                self._log(Text("⚠️ Warning: Rate Limit / Quota Reached", style="bold yellow"))
+                self._log(
+                    Text(
+                        "The model provider is rate-limiting requests or your usage limit is exhausted.",
+                        style="yellow",
+                    )
+                )
+                self._log(Text(f"Detail: {ex}", style="dim yellow"))
+            elif any(
+                kw in msg for kw in ("401", "unauthorized", "api key", "auth", "forbidden", "403")
+            ):
+                self._log(Text("⚠️ Warning: Authentication / API Key Error", style="bold yellow"))
+                self._log(
+                    Text("Please verify your API keys or subscription status.", style="yellow")
+                )
+                self._log(Text(f"Detail: {ex}", style="dim yellow"))
+            else:
+                self._log(Text(f"Error: {ex}", style="red"))
         finally:
             self._turn_active = False
             self._set_status("ready")
@@ -7684,6 +7779,8 @@ class NovaApp(App):
             # Reload plugin commands so newly-enabled command plugins work this
             # session (middleware/subagents still need a restart, as noted).
             self._load_plugin_commands()
+        elif cmd == "voice":
+            self._run_voice(text)
         elif cmd in _PASSTHROUGH_SLASH:
             await self._passthrough_command(text)
         # A slash command contributed by an enabled plugin.
@@ -7878,8 +7975,55 @@ class NovaApp(App):
             # Some handlers return a prompt string to feed back to the agent.
             if isinstance(result, str):
                 await self._stream_prompt(result)
+
+            # Reset the voice pipeline on `/voice` settings change so it is re-initialized with the new config.
+            if text.strip().lower().startswith(("/voice ", "/voice")):
+                self._voice_pipeline = None
+                if hasattr(self.session_state, "_voice_pipeline"):
+                    self.session_state._voice_pipeline = None
         except Exception as ex:  # noqa: BLE001
             self._log(Text(f"/{text[1:].split()[0]} failed: {ex}", style="red"))
+
+    @work(group="voice_cmd", exclusive=True)
+    async def _run_voice(self, text: str) -> None:
+        """Run a ``/voice`` subcommand off the UI coroutine.
+
+        ``/voice test`` and ``/voice download`` can take seconds (model load /
+        synthesis / download). Running them in a worker keeps the TUI responsive
+        instead of freezing on the captured-output passthrough. Fast subcommands
+        (status, on/off, settings…) work here too — the worker just returns
+        quickly. Output is captured the same way as ``_passthrough_command``.
+        """
+        from novacode_cli.commands.commands import handle_command
+
+        try:
+            with _rich_console.capture() as cap:
+                await handle_command(
+                    text,
+                    self.agent,
+                    self.token_tracker,
+                    self.session_state,
+                    self.assistant_id,
+                    model_name=self.model_name,
+                    image_tracker=self.image_tracker,
+                    sandbox_id=self._sandbox_id,
+                    sandbox_type=self._sandbox_type,
+                )
+            out = cap.get()
+            if out.strip():
+                self._log(Text.from_ansi(out))
+            # A config-changing subcommand (on/off/mode/speak/settings) must
+            # rebuild the cached pipeline so the next use picks up the new config.
+            # test/download/status/doctor don't change config — leave the warmed
+            # pipeline intact.
+            sub = text.split(maxsplit=1)
+            subcmd = sub[1].split()[0].lower() if len(sub) > 1 and sub[1].split() else ""
+            if subcmd in ("on", "off", "mode", "speak", "settings"):
+                self._voice_pipeline = None
+                if hasattr(self.session_state, "_voice_pipeline"):
+                    self.session_state._voice_pipeline = None
+        except Exception as ex:  # noqa: BLE001 — a voice command must never crash the TUI
+            self._log(Text(f"/voice failed: {ex}", style="red"))
 
     async def _run_model(self) -> None:
         """Native /model: choose provider + model, store key, hot-swap the agent."""
@@ -10176,8 +10320,13 @@ class NovaApp(App):
             self._live_buf = ""
             await self._remove_reasoning()
             self._scroll_end()
-            # Speak the reply's prose if voice output is active (Enhancement: voice).
-            self._speak_reply(e.text)
+            # Accumulate the reply's prose instead of speaking immediately.
+            # Speech is deferred until the turn finishes (ev.Done) or pauses (ev.InterruptRequest)
+            # to prevent it from getting cut off by intermediate events or subsequent steps.
+            if getattr(self, "_accumulated_reply", None):
+                self._accumulated_reply += "\n\n" + e.text
+            else:
+                self._accumulated_reply = e.text
         elif isinstance(e, ev.ToolCall):
             self._set_status(f"running {e.name}…")
             base = f"{e.icon} {_esc(e.display_str)}"
@@ -10316,12 +10465,42 @@ class NovaApp(App):
                 except Exception:  # noqa: BLE001
                     pass
         elif isinstance(e, ev.InterruptRequest):
+            if getattr(self, "_accumulated_reply", None):
+                self._speak_reply(self._accumulated_reply)
+                self._accumulated_reply = ""
             await self._handle_interrupt(e)
         elif isinstance(e, ev.Cancelled):
+            self._accumulated_reply = ""
             self._log(Text("Interrupted.", style="yellow"))
         elif isinstance(e, ev.Error):
-            self._log(Text(f"Error: {e.message}", style="red"))
-        # ev.Done -> nothing to render
+            self._accumulated_reply = ""
+            msg = str(e.message).lower()
+            if any(
+                kw in msg
+                for kw in ("429", "rate limit", "usage limit", "quota", "too many requests")
+            ):
+                self._log(Text("⚠️ Warning: Rate Limit / Quota Reached", style="bold yellow"))
+                self._log(
+                    Text(
+                        "The model provider is rate-limiting requests or your usage limit is exhausted.",
+                        style="yellow",
+                    )
+                )
+                self._log(Text(f"Detail: {e.message}", style="dim yellow"))
+            elif any(
+                kw in msg for kw in ("401", "unauthorized", "api key", "auth", "forbidden", "403")
+            ):
+                self._log(Text("⚠️ Warning: Authentication / API Key Error", style="bold yellow"))
+                self._log(
+                    Text("Please verify your API keys or subscription status.", style="yellow")
+                )
+                self._log(Text(f"Detail: {e.message}", style="dim yellow"))
+            else:
+                self._log(Text(f"Error: {e.message}", style="red"))
+        elif isinstance(e, ev.Done):
+            if getattr(self, "_accumulated_reply", None):
+                self._speak_reply(self._accumulated_reply)
+                self._accumulated_reply = ""
 
     async def _ask_remote_question(self, question_request: dict) -> dict:
         """Route an agent question to the remote user via Discord/Telegram."""

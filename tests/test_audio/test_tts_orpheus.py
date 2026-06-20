@@ -83,6 +83,34 @@ class TestOrpheusSpeaker:
         spk._ensure_voice()  # idempotent
         assert builds["n"] == 1
 
+    def test_illegal_instruction_becomes_actionable_error(self, monkeypatch):
+        import novacode_cli.audio.tts_orpheus as mod
+
+        def _boom(**_kw):
+            err = OSError("Windows Error 0xc000001d")
+            err.winerror = -1073741795
+            raise err
+
+        monkeypatch.setitem(
+            __import__("sys").modules, "orpheus_cpp", SimpleNamespace(OrpheusCpp=_boom)
+        )
+        spk = mod.OrpheusSpeaker()
+        with pytest.raises(RuntimeError, match="instruction set"):
+            spk._ensure_voice()
+
+    def test_other_oserror_propagates(self, monkeypatch):
+        import novacode_cli.audio.tts_orpheus as mod
+
+        def _boom(**_kw):
+            raise OSError("disk full")
+
+        monkeypatch.setitem(
+            __import__("sys").modules, "orpheus_cpp", SimpleNamespace(OrpheusCpp=_boom)
+        )
+        spk = mod.OrpheusSpeaker()
+        with pytest.raises(OSError, match="disk full"):
+            spk._ensure_voice()
+
 
 class TestCapability:
     def test_is_orpheus_available_matches_import(self):

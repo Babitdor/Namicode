@@ -15,8 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from novacode_cli.config.config import HOME_DIR
 
-if TYPE_CHECKING:
-    from pathlib import Path
+from pathlib import Path
 
 logger = logging.getLogger("nova.audio.tts")
 
@@ -34,10 +33,21 @@ def _voice_url_path(voice: str) -> str:
 
 
 def _download(url: str, dest: Path) -> None:
+    import os
+    import tempfile
+
     dest.parent.mkdir(parents=True, exist_ok=True)
     logger.info("Downloading Piper asset %s", url)
-    with urllib.request.urlopen(url) as resp, dest.open("wb") as out:  # noqa: S310 — fixed HTTPS host
-        out.write(resp.read())
+    # Download to a temp file in the same folder to guarantee atomic replacement on the same drive.
+    tmp_fd, tmp_path_str = tempfile.mkstemp(dir=str(dest.parent), suffix=".tmp")
+    tmp_path = Path(tmp_path_str)
+    try:
+        with os.fdopen(tmp_fd, "wb") as out, urllib.request.urlopen(url) as resp:  # noqa: S310 — fixed HTTPS host
+            out.write(resp.read())
+        tmp_path.replace(dest)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
 
 def ensure_voice_model(voice: str = _DEFAULT_VOICE) -> Path:
@@ -61,6 +71,13 @@ class Speaker:
         self._voice: Any = None
         self._samplerate = 22_050
 
+    @property
+    def needs_download(self) -> bool:
+        """Return whether the voice model files are missing and need to be downloaded."""
+        onnx = _VOICE_DIR / f"{self._voice_name}.onnx"
+        config = _VOICE_DIR / f"{self._voice_name}.onnx.json"
+        return not (onnx.exists() and config.exists())
+
     def _ensure_voice(self) -> None:
         if self._voice is None:
             from piper import PiperVoice
@@ -73,7 +90,15 @@ class Speaker:
         """Synthesise ``text`` and play it (off the event loop). No-op if empty."""
         if not text.strip():
             return
-        await asyncio.to_thread(self._speak_sync, text)
+        try:
+            await asyncio.to_thread(self._speak_sync, text)
+        except asyncio.CancelledError:
+            try:
+                import sounddevice as sd
+                sd.stop()
+            except Exception:  # noqa: BLE001
+                pass
+            raise
 
     def _speak_sync(self, text: str) -> None:
         import numpy as np
@@ -87,5 +112,10 @@ class Speaker:
                 audio_chunks.append(arr)
         if not audio_chunks:
             return
-        sd.play(np.concatenate(audio_chunks), self._samplerate)
+        audio = np.concatenate(audio_chunks)
+        # Pad with 0.25 seconds of silence to prevent abrupt cutoff on some audio drivers
+        silence_len = int(self._samplerate * 0.25)
+        silence = np.zeros(silence_len, dtype=audio.dtype)
+        audio = np.concatenate([audio, silence])
+        sd.play(audio, self._samplerate)
         sd.wait()

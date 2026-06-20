@@ -9,6 +9,7 @@ Subcommands::
     /voice mode ptt|listen       push-to-talk vs always-listening
     /voice speak on|off          enable/disable spoken replies
     /voice test                  synthesize + play a phrase to verify the pipeline
+    /voice download              pre-fetch the configured STT + TTS models
     /voice settings              show all voice settings with available providers
     /voice settings stt          choose STT provider (faster-whisper / deepgram)
     /voice settings tts          choose TTS provider (piper / elevenlabs / none)
@@ -96,6 +97,10 @@ async def handle_voice_command(  # noqa: PLR0911 — command dispatcher, one ret
 
     if action == "test":
         await _run_test(config, console)
+        return True
+
+    if action == "download":
+        await _run_download(config, console)
         return True
 
     if action == "doctor":
@@ -192,7 +197,9 @@ async def _handle_settings(  # noqa: PLR0912 — settings sub-dispatch
             flags = _parse_flags(rest[1:])
             config.set_voice_provider_config(provider, **flags)
             config.set_voice_config(stt_provider=provider)
-            console.print(f"  [green]✓[/green] {meta['name']} configured and selected as active STT.")
+            console.print(
+                f"  [green]✓[/green] {meta['name']} configured and selected as active STT."
+            )
         else:
             # Switch provider
             config.set_voice_config(stt_provider=provider)
@@ -219,7 +226,9 @@ async def _handle_settings(  # noqa: PLR0912 — settings sub-dispatch
             flags = _parse_flags(rest[1:])
             config.set_voice_provider_config(provider, **flags)
             config.set_voice_config(tts_provider=provider)
-            console.print(f"  [green]✓[/green] {meta['name']} configured and selected as active TTS.")
+            console.print(
+                f"  [green]✓[/green] {meta['name']} configured and selected as active TTS."
+            )
         else:
             config.set_voice_config(tts_provider=provider)
             console.print(f"  [green]✓[/green] TTS provider set to [cyan]{meta['name']}[/cyan].")
@@ -232,6 +241,8 @@ async def _handle_settings(  # noqa: PLR0912 — settings sub-dispatch
         # Orpheus is an optional heavy dep — warn if selected but not installed.
         if provider == "orpheus" and not audio.is_orpheus_available():
             console.print(f"  [yellow]{audio.orpheus_install_hint()}[/yellow]")
+        if provider == "pocket" and not audio.is_pocket_available():
+            console.print(f"  [yellow]{audio.pocket_install_hint()}[/yellow]")
     else:
         console.print(f"[yellow]Unknown settings category:[/yellow] {action}. Use stt or tts.")
 
@@ -258,6 +269,46 @@ async def _run_test(config: NovaConfig, console: Console) -> None:
         console.print("  [green]✓[/green] Heard it? Voice output is working.")
     except Exception as exc:  # noqa: BLE001 — surface any audio/device error to the user
         console.print(f"  [red]Voice test failed:[/red] {exc}")
+
+
+# ── Download ─────────────────────────────────────────────────────────────────
+
+
+async def _run_download(config: NovaConfig, console: Console) -> None:
+    """Pre-fetch the configured STT + TTS models so first use isn't laggy.
+
+    Downloads on demand via the pipeline's ``warmup`` (off the event loop). Safe
+    to re-run — already-cached models are detected and skipped.
+    """
+    if not audio.is_voice_available():
+        console.print(f"  [yellow]{audio.install_hint()}[/yellow]")
+        return
+    from novacode_cli.audio.pipeline import VoicePipeline
+
+    cfg = config.get_voice_config()
+    pipeline = VoicePipeline(
+        stt_provider=cfg.get("stt_provider", "faster-whisper"),
+        tts_provider=cfg.get("tts_provider", "piper"),
+        provider_configs=cfg.get("providers", {}),
+    )
+    try:
+        pending = pipeline.downloads_pending()
+    except Exception as exc:  # noqa: BLE001 — detection is best-effort
+        console.print(f"  [yellow]Could not check model cache: {exc}[/yellow]")
+        pending = ["STT", "TTS"]  # download anyway
+
+    if not pending:
+        console.print("  [green]✓[/green] Voice models are already downloaded.")
+        return
+
+    console.print(
+        f"  [dim]Downloading voice models ({', '.join(pending)})… this may take a while.[/dim]"
+    )
+    try:
+        await pipeline.warmup()
+        console.print("  [green]✓[/green] Voice models ready.")
+    except Exception as exc:  # noqa: BLE001 — surface any download/network error
+        console.print(f"  [red]Download failed:[/red] {exc}")
 
 
 # ── Doctor ────────────────────────────────────────────────────────────────────

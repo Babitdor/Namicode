@@ -88,6 +88,8 @@ class SileroVad:
 
         ms_per_window = 1000 * _WINDOW / self._samplerate
         collected: list[np.ndarray] = []
+        history: list[np.ndarray] = []
+        max_history = 10  # keep last ~320ms of audio before speech starts
         in_speech = False
         silence_ms = 0.0
         speech_ms = 0.0
@@ -103,6 +105,9 @@ class SileroVad:
                 prob = self._speech_prob(window)
                 is_speech = prob >= self._threshold
                 if is_speech:
+                    if not in_speech:
+                        collected.extend(history)
+                        history.clear()
                     in_speech = True
                     speech_ms += ms_per_window
                     silence_ms = 0.0
@@ -115,10 +120,16 @@ class SileroVad:
                         if speech_ms < _MIN_SPEECH_MS:
                             # Too short to be a real utterance — reset and keep listening.
                             collected.clear()
+                            history.clear()
                             in_speech = False
                             silence_ms = speech_ms = total_ms = 0.0
                             continue
                         return np.concatenate(collected).astype(np.int16)
+                else:
+                    history.append(window)
+                    if len(history) > max_history:
+                        history.pop(0)
+
 
 
 def _windows(block: np.ndarray, size: int) -> Iterator[np.ndarray]:
