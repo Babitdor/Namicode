@@ -56,3 +56,24 @@ def test_explicit_rule_overrides_synthesis(tmp_path):  # noqa: ANN001
 def test_unknown_kind_raises():
     with pytest.raises(ValueError, match="unknown remember kind"):
         apply_remember("forever", "shell", {"command": "ls"})
+
+
+def test_always_write_failure_degrades_to_session(tmp_path, monkeypatch):  # noqa: ANN001
+    reset_session_allow()
+    reset_policy_cache()
+    from novacode_cli.security import policy_writer
+
+    def _boom(*_args: object, **_kwargs: object) -> object:
+        msg = "disk full"
+        raise OSError(msg)
+
+    monkeypatch.setattr(policy_writer, "append_rule", _boom)
+    result = apply_remember(
+        "always", "shell", {"command": "ls"}, target="project", project_root=tmp_path
+    )
+    # Persist failed, but the rule is still active for this session and no raise.
+    assert result.saved_path is None
+    assert result.error is not None
+    assert "disk full" in result.error
+    assert get_session_allow().matches("shell", {"command": "ls -la"}) is True
+    reset_session_allow()

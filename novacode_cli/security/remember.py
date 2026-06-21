@@ -20,10 +20,17 @@ if TYPE_CHECKING:
 
 @dataclass
 class RememberResult:
-    """Outcome of :func:`apply_remember` for the UI to display."""
+    """Outcome of :func:`apply_remember` for the UI to display.
+
+    ``saved_path`` is the file written for a successful ``"always"`` persist, or
+    ``None`` for a session-only result *or* a persist that failed. ``error`` is
+    set only when an ``"always"`` persist failed (the rule is still active for
+    the session); the UI should then show a "kept for this session" notice.
+    """
 
     rule: ProposedRule
-    saved_path: Path | None  # None for session-only
+    saved_path: Path | None  # None for session-only or a failed persist
+    error: str | None = None
 
 
 def apply_remember(
@@ -57,12 +64,16 @@ def apply_remember(
         get_session_allow().add(rule)
         return RememberResult(rule=rule, saved_path=None)
     if kind == "always":
-        path = policy_writer.append_rule(
-            rule, target=target or "project", project_root=project_root
-        )
-        # Add to the session layer too so it takes effect even if a later policy
-        # refresh races or the file write is slow to be picked up.
+        # Remember for the session FIRST so a failed file write still benefits
+        # the current run — the rule must take effect even if persistence fails,
+        # and a write error must never crash the turn (degrade to session-only).
         get_session_allow().add(rule)
+        try:
+            path = policy_writer.append_rule(
+                rule, target=target or "project", project_root=project_root
+            )
+        except OSError as exc:
+            return RememberResult(rule=rule, saved_path=None, error=str(exc))
         return RememberResult(rule=rule, saved_path=path)
     msg = f"unknown remember kind: {kind!r}"
     raise ValueError(msg)

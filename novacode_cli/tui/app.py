@@ -10666,7 +10666,16 @@ class NovaApp(App):
                             res = apply_remember(
                                 "always", name, args, target=out["target"], rule=edited
                             )
-                            self._log(Text(f"✓ Saved to {res.saved_path}", style="green"))
+                            if res.saved_path is not None:
+                                self._log(Text(f"✓ Saved to {res.saved_path}", style="green"))
+                            else:
+                                self._log(
+                                    Text(
+                                        f"⚠ Could not save rule ({res.error}); "
+                                        "kept for this session.",
+                                        style="yellow",
+                                    )
+                                )
                         else:
                             self._log(Text("Not saved — approved this call only.", style="dim"))
                 e.future.set_result(

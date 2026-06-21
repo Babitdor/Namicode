@@ -275,7 +275,13 @@ async def process_hitl_approval(
                     project_root=Path.cwd(),
                     rule=edited or rule,
                 )
-                console.print(f"[green]✓ Saved to[/green] {result.saved_path}")
+                if result.saved_path is not None:
+                    console.print(f"[green]✓ Saved to[/green] {result.saved_path}")
+                else:
+                    console.print(
+                        f"[yellow]⚠ Could not save rule ({result.error}); "
+                        f"kept for this session.[/yellow]"
+                    )
             else:
                 console.print("[dim]Not saved — approved this call only.[/dim]")
             decisions.append({"type": "approve"})
