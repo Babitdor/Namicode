@@ -12,8 +12,9 @@ import shlex
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
-# Programs whose first argument is a meaningful subcommand worth keeping, so
-# "npm run build" generalizes to `npm run` rather than all of `npm`.
+# Programs whose following words are meaningful subcommands worth keeping, so
+# "npm run build" generalizes to `npm run build` (not all of `npm`), while a
+# bare program like `pytest` generalizes to just `pytest`.
 _MULTIPLEXERS: frozenset[str] = frozenset(
     {"npm", "yarn", "pnpm", "uv", "git", "cargo", "docker", "make", "poetry", "go", "dotnet"}
 )
@@ -22,8 +23,9 @@ _SHELL_TOOLS: frozenset[str] = frozenset({"shell", "execute", "run_tests", "star
 _PATH_TOOLS: frozenset[str] = frozenset({"write_file", "edit_file"})
 _URL_TOOLS: frozenset[str] = frozenset({"fetch_url"})
 
-# Minimum token count needed to capture a meaningful subcommand for multiplexers.
-_MIN_MULTIPLEXER_TOKENS: int = 2
+# For a multiplexer, keep at most this many leading tokens (program + up to two
+# non-flag subcommand words, e.g. `npm run build`) so the rule stays bounded.
+_MAX_MULTIPLEXER_TOKENS: int = 3
 
 
 @dataclass(frozen=True)
@@ -55,11 +57,16 @@ def _shell_rule(tool_name: str, command: str) -> ProposedRule:
     if not tokens:
         return _tool_fallback(tool_name)
     prog = tokens[0]
-    keep = (
-        tokens[:_MIN_MULTIPLEXER_TOKENS]
-        if prog in _MULTIPLEXERS and len(tokens) >= _MIN_MULTIPLEXER_TOKENS
-        else tokens[:1]
-    )
+    if prog in _MULTIPLEXERS:
+        # Keep the program plus following non-flag subcommand words (e.g.
+        # `npm run build`), stopping at the first flag and a bounded length.
+        keep = [prog]
+        for token in tokens[1:]:
+            if token.startswith("-") or len(keep) >= _MAX_MULTIPLEXER_TOKENS:
+                break
+            keep.append(token)
+    else:
+        keep = [prog]
     value = r"^\s*" + r"\s+".join(re.escape(t) for t in keep) + r"\b"
     human = " ".join(keep)
     return ProposedRule("shell", value, f"Allow shell commands starting with `{human}`", tool_name)

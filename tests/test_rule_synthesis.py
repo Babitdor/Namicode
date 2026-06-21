@@ -8,8 +8,14 @@ from novacode_cli.security.rule_synthesis import ProposedRule, synthesize_rule
 def test_shell_multiplexer_keeps_subcommand():
     r = synthesize_rule("shell", {"command": "npm run build"})
     assert r.category == "shell"
-    assert r.value == r"^\s*npm\s+run\b"
+    assert r.value == r"^\s*npm\s+run\s+build\b"
     assert r.tool_name == "shell"
+
+
+def test_shell_multiplexer_stops_at_first_flag():
+    r = synthesize_rule("shell", {"command": "git commit -m wip"})
+    assert r.category == "shell"
+    assert r.value == r"^\s*git\s+commit\b"
 
 
 def test_shell_bare_program_only_first_token():
