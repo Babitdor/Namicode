@@ -197,6 +197,35 @@ def test_gate_plan_mode_blocks(monkeypatch):
     assert res[0]["type"] == "reject"
 
 
+# --- session-allow layer in the gate ---------------------------------------
+
+
+def test_gate_session_allow_approves_matching_ask():
+    from novacode_cli.security.rule_synthesis import synthesize_rule
+    from novacode_cli.security.session_allow import get_session_allow, reset_session_allow
+
+    reset_policy_cache()
+    reset_session_allow()
+    # frobnicate is an unknown program -> default 'ask'.
+    assert evaluate_tool_actions(_req(("shell", {"command": "frobnicate --now"})), _SS()) == [None]
+    get_session_allow().add(synthesize_rule("shell", {"command": "frobnicate --now"}))
+    res = evaluate_tool_actions(_req(("shell", {"command": "frobnicate --now"})), _SS())
+    assert res == [{"type": "approve"}]
+    reset_session_allow()
+
+
+def test_gate_session_allow_cannot_override_deny():
+    from novacode_cli.security.rule_synthesis import synthesize_rule
+    from novacode_cli.security.session_allow import get_session_allow, reset_session_allow
+
+    reset_policy_cache()
+    reset_session_allow()
+    get_session_allow().add(synthesize_rule("shell", {"command": "sudo apt update"}))
+    res = evaluate_tool_actions(_req(("shell", {"command": "sudo apt update"})), _SS())
+    assert res[0]["type"] == "reject"  # deny still wins over a session rule
+    reset_session_allow()
+
+
 if __name__ == "__main__":
     test_shell_deny_destructive_and_injection()
     test_shell_allow_safe_commands()

@@ -154,7 +154,14 @@ def evaluate_tool_actions(
                 }
             )
         else:
-            resolutions.append(None)
+            # ask tier: honor an in-session "allow for session" rule the user
+            # accepted earlier this run; otherwise surface the prompt.
+            from novacode_cli.security.session_allow import get_session_allow
+
+            if get_session_allow().matches(name, args):
+                resolutions.append({"type": "approve"})
+            else:
+                resolutions.append(None)
     return resolutions
 
 
