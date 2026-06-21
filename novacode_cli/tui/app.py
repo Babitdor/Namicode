@@ -717,6 +717,8 @@ class ApprovalModal(ModalScreen[str]):
 
     BINDINGS = [
         ("y", "approve", "Approve"),
+        ("s", "session", "Session"),
+        ("l", "always", "Always"),
         ("a", "auto", "Auto-approve"),
         ("n", "reject", "Reject"),
         ("escape", "reject", "Reject"),
@@ -748,6 +750,8 @@ class ApprovalModal(ModalScreen[str]):
         animate_modal_screen(self)
         ol = self.query_one("#choices", OptionList)
         ol.add_option(Option("Approve (y)"))
+        ol.add_option(Option("Allow for session (s)"))
+        ol.add_option(Option("Always allow… (l)"))
         if self._allow_auto:
             ol.add_option(Option("Auto-approve for this thread (a)"))
         ol.add_option(Option("Reject (n)"))
@@ -758,6 +762,10 @@ class ApprovalModal(ModalScreen[str]):
         label = str(event.option.prompt)
         if label.startswith("Approve"):
             self.dismiss("approve")
+        elif label.startswith("Allow for session"):
+            self.dismiss("session")
+        elif label.startswith("Always"):
+            self.dismiss("always")
         elif label.startswith("Auto"):
             self.dismiss("auto")
         else:
@@ -766,11 +774,60 @@ class ApprovalModal(ModalScreen[str]):
     def action_approve(self) -> None:
         self.dismiss("approve")
 
+    def action_session(self) -> None:
+        self.dismiss("session")
+
+    def action_always(self) -> None:
+        self.dismiss("always")
+
     def action_auto(self) -> None:
         self.dismiss("auto" if self._allow_auto else "approve")
 
     def action_reject(self) -> None:
         self.dismiss("reject")
+
+
+class RememberRuleModal(ModalScreen[dict | None]):
+    """Confirm an 'always allow' rule: editable value + project/global target.
+
+    Dismisses with ``{"value": <str>, "target": "project"|"global"}`` or ``None``
+    if cancelled.
+    """
+
+    BINDINGS = [("escape", "cancel", "Cancel")]
+
+    def __init__(self, rule: Any) -> None:
+        super().__init__()
+        self._rule = rule
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="modal-box"):
+            yield Static(Text(">>> Always allow <<<", style="bold yellow"), id="modal-title")
+            yield Static(
+                Text(f"{self._rule.human}\n({self._rule.category} rule)", style="dim"),
+                id="modal-body",
+            )
+            yield Input(value=self._rule.value, id="rule-value")
+            with Horizontal(id="remember-buttons"):
+                yield Button("Project", id="btn-project", variant="primary")
+                yield Button("Global", id="btn-global")
+                yield Button("Cancel", id="btn-cancel", variant="error")
+
+    def on_mount(self) -> None:
+        animate_modal_screen(self)
+        self.query_one("#rule-value", Input).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        value = self.query_one("#rule-value", Input).value.strip() or self._rule.value
+        if event.button.id == "btn-project":
+            self.dismiss({"value": value, "target": "project"})
+        elif event.button.id == "btn-global":
+            self.dismiss({"value": value, "target": "global"})
+        else:
+            self.dismiss(None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
 
 
 class QuestionModal(ModalScreen[dict]):
@@ -10588,17 +10645,48 @@ class NovaApp(App):
                         "any_rejected": True,
                     }
                 )
-            else:
-                if choice == "auto":
-                    # Approve everything for the rest of this session.
-                    self.session_state.auto_approve = True
-                    self._log(Text("✓ Auto-approve enabled for this session.", style="green"))
+                return
+
+            if choice in ("session", "always"):
+                from dataclasses import replace
+
+                from novacode_cli.security.remember import apply_remember
+                from novacode_cli.security.rule_synthesis import synthesize_rule
+
+                for ar in action_requests:
+                    name, args = ar.get("name", ""), ar.get("args", {})
+                    if choice == "session":
+                        apply_remember("session", name, args)
+                        self._log(Text(f"✓ Allowed `{name}` for this session.", style="green"))
+                    else:
+                        rule = synthesize_rule(name, args)
+                        out = await self.push_screen_wait(RememberRuleModal(rule))
+                        if out:
+                            edited = replace(rule, value=out["value"])
+                            res = apply_remember(
+                                "always", name, args, target=out["target"], rule=edited
+                            )
+                            self._log(Text(f"✓ Saved to {res.saved_path}", style="green"))
+                        else:
+                            self._log(Text("Not saved — approved this call only.", style="dim"))
                 e.future.set_result(
                     {
                         "decisions": [{"type": "approve"} for _ in action_requests],
                         "any_rejected": False,
                     }
                 )
+                return
+
+            if choice == "auto":
+                # Approve everything for the rest of this session.
+                self.session_state.auto_approve = True
+                self._log(Text("✓ Auto-approve enabled for this session.", style="green"))
+            e.future.set_result(
+                {
+                    "decisions": [{"type": "approve"} for _ in action_requests],
+                    "any_rejected": False,
+                }
+            )
         elif e.kind == "question":
             if self._remote_msg is not None:
                 result = await self._ask_remote_question(e.payload)
