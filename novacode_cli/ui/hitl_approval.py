@@ -4,9 +4,40 @@ This module handles the approval/rejection flow for tool actions
 that require user confirmation, including plan mode blocking.
 """
 
+from pathlib import Path
+
 from novacode_cli.config.config import console
 from novacode_cli.config.plan_mode import BLOCKED_TOOLS, RESTRICTED_WRITE_TOOLS
 from novacode_cli.file_ops import get_session_file_op_tracker
+from novacode_cli.security.remember import apply_remember
+from novacode_cli.security.rule_synthesis import synthesize_rule
+from novacode_cli.ui.tool_approval import prompt_for_batch_approval
+
+
+def _confirm_remember(rule):  # noqa: ANN001, ANN202
+    """Confirm an 'always allow' rule: show it, pick project/global, optional edit.
+
+    Returns ``(target, edited_rule_or_None)`` where target is ``"project"`` /
+    ``"global"``, or ``(None, None)`` if the user cancels.
+    """
+    from dataclasses import replace
+
+    console.print()
+    console.print(f"[bold]Always allow:[/bold] {rule.human}")
+    console.print(f"[dim]Rule ({rule.category}):[/dim] {rule.value}")
+    choice = input("Save where?  [P]roject  [G]lobal  [E]dit  [C]ancel: ").strip().lower()
+    if choice in {"e", "edit"}:
+        new_value = input(f"Edit rule value [{rule.value}]: ").strip() or rule.value
+        rule = replace(rule, value=new_value)
+        choice = input("Save where?  [P]roject  [G]lobal  [C]ancel: ").strip().lower()
+        edited = rule
+    else:
+        edited = None
+    if choice in {"p", "project"}:
+        return "project", edited
+    if choice in {"g", "global"}:
+        return "global", edited
+    return None, None
 
 
 def _is_plan_file_path(file_path: str) -> bool:
@@ -188,8 +219,6 @@ async def process_hitl_approval(
     Returns:
         Tuple of (decisions list, any_rejected bool, new spinner_active state)
     """
-    from novacode_cli.ui.tool_approval import prompt_for_batch_approval
-
     # Check plan mode blocking first
     is_blocked, rejection_response = check_plan_mode_blocked(
         hitl_request,
@@ -226,6 +255,32 @@ async def process_hitl_approval(
     decisions = []
     auto_approve_triggered = False
     for action_index, decision in enumerate(raw_decisions):
+        if isinstance(decision, dict) and decision.get("type") == "allow_session":
+            ar = action_requests[action_index]
+            apply_remember("session", ar.get("name", ""), ar.get("args", {}))
+            console.print(f"[green]✓ Allowed for this session:[/green] {ar.get('name')}")
+            decisions.append({"type": "approve"})
+            continue
+
+        if isinstance(decision, dict) and decision.get("type") == "allow_always":
+            ar = action_requests[action_index]
+            rule = synthesize_rule(ar.get("name", ""), ar.get("args", {}))
+            target, edited = _confirm_remember(rule)
+            if target is not None:
+                result = apply_remember(
+                    "always",
+                    ar.get("name", ""),
+                    ar.get("args", {}),
+                    target=target,
+                    project_root=Path.cwd(),
+                    rule=edited or rule,
+                )
+                console.print(f"[green]✓ Saved to[/green] {result.saved_path}")
+            else:
+                console.print("[dim]Not saved — approved this call only.[/dim]")
+            decisions.append({"type": "approve"})
+            continue
+
         if isinstance(decision, dict) and decision.get("type") == "auto_approve_all":
             session_state.auto_approve = True
             auto_approve_triggered = True

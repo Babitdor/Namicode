@@ -66,6 +66,13 @@ def prompt_for_batch_approval(
     ]
     selected = 0
 
+    _BATCH_LABELS = {
+        0: ("Approve all", "1;32"),
+        1: ("Reject all", "1;31"),
+        2: ("Decide individually", "1;33"),
+        3: ("Auto-accept all going forward", "1;34"),
+    }
+
     try:
         import termios, tty  # noqa: E401
 
@@ -80,12 +87,11 @@ def prompt_for_batch_approval(
                 if not first_render:
                     sys.stdout.write(f"\033[{len(options)}A\r")
                 first_render = False
-                for i, opt in enumerate(options):
+                for i, _opt in enumerate(options):
                     sys.stdout.write("\r\033[K")
-                    label = opt.capitalize()
+                    label, colour = _BATCH_LABELS[i]
                     if i == selected:
-                        colours = {0: "1;32", 1: "1;31", 2: "1;33", 3: "1;34"}
-                        sys.stdout.write(f"\033[{colours[i]}m☑ {label}\033[0m\n")
+                        sys.stdout.write(f"\033[{colour}m☑ {label}\033[0m\n")
                     else:
                         sys.stdout.write(f"\033[2m☐ {label}\033[0m\n")
                 sys.stdout.flush()
@@ -136,10 +142,16 @@ def prompt_for_batch_approval(
     if selected == 0:  # approve all
         return [ApproveDecision(type="approve") for _ in action_requests]
     if selected == 1:  # reject all
-        return [RejectDecision(type="reject", message="User rejected the command") for _ in action_requests]
+        return [
+            RejectDecision(type="reject", message="User rejected the command")
+            for _ in action_requests
+        ]
     if selected == 3:  # auto-accept all going forward
-        return [{"type": "auto_approve_all"}, *[ApproveDecision(type="approve") for _ in action_requests[1:]]]
-    # Individual — fall back to sequential prompts
+        return [
+            {"type": "auto_approve_all"},
+            *[ApproveDecision(type="approve") for _ in action_requests[1:]],
+        ]
+    # Individual — fall back to sequential prompts (session/always available there)
     return [prompt_for_tool_approval(req, assistant_id) for req in action_requests]
 
 
@@ -177,8 +189,7 @@ def prompt_for_tool_approval(
     # Display action info first
     console.print(
         Panel(
-            "[bold yellow]Tool Action Requires Approval[/bold yellow]\n\n"
-            + "\n".join(body_lines),
+            "[bold yellow]Tool Action Requires Approval[/bold yellow]\n\n" + "\n".join(body_lines),
             border_style="yellow",
             box=box.ROUNDED,
             padding=(0, 1),
@@ -188,7 +199,13 @@ def prompt_for_tool_approval(
         console.print()
         render_diff_block(preview.diff, preview.diff_title or preview.title)
 
-    options = ["approve", "reject", "auto-accept all going forward"]
+    options = [
+        "approve",
+        "reject",
+        "allow for session",
+        "always allow…",
+        "auto-accept all going forward",
+    ]
     selected = 0  # Start with approve selected
 
     try:
@@ -208,40 +225,26 @@ def prompt_for_tool_approval(
             # Initial render flag
             first_render = True
 
+            _labels = {
+                0: ("Approve", "1;32"),
+                1: ("Reject", "1;31"),
+                2: ("Allow for session", "1;36"),
+                3: ("Always allow…", "1;35"),
+                4: ("Auto-accept all going forward", "1;34"),
+            }
             while True:
                 if not first_render:
-                    # Move cursor back to start of menu (up 3 lines, then to start of line)
-                    sys.stdout.write("\033[3A\r")
+                    sys.stdout.write(f"\033[{len(options)}A\r")
 
                 first_render = False
 
-                # Display options vertically with ANSI color codes
-                for i, option in enumerate(options):
-                    sys.stdout.write("\r\033[K")  # Clear line from cursor to end
-
+                for i, _option in enumerate(options):
+                    sys.stdout.write("\r\033[K")
+                    label, colour = _labels[i]
                     if i == selected:
-                        if option == "approve":
-                            # Green bold with filled checkbox
-                            sys.stdout.write("\033[1;32m☑ Approve\033[0m\n")
-                        elif option == "reject":
-                            # Red bold with filled checkbox
-                            sys.stdout.write("\033[1;31m☑ Reject\033[0m\n")
-                        else:
-                            # Blue bold with filled checkbox for auto-accept
-                            sys.stdout.write(
-                                "\033[1;34m☑ Auto-accept all going forward\033[0m\n"
-                            )
-                    elif option == "approve":
-                        # Dim with empty checkbox
-                        sys.stdout.write("\033[2m☐ Approve\033[0m\n")
-                    elif option == "reject":
-                        # Dim with empty checkbox
-                        sys.stdout.write("\033[2m☐ Reject\033[0m\n")
+                        sys.stdout.write(f"\033[{colour}m☑ {label}\033[0m\n")
                     else:
-                        # Dim with empty checkbox
-                        sys.stdout.write(
-                            "\033[2m☐ Auto-accept all going forward\033[0m\n"
-                        )
+                        sys.stdout.write(f"\033[2m☐ {label}\033[0m\n")
 
                 sys.stdout.flush()
 
@@ -270,6 +273,14 @@ def prompt_for_tool_approval(
                     selected = 1
                     sys.stdout.write("\r\n")  # Move to start of line and add newline
                     break
+                elif char.lower() == "s":
+                    selected = 2
+                    sys.stdout.write("\r\n")
+                    break
+                elif char.lower() == "l":
+                    selected = 3
+                    sys.stdout.write("\r\n")
+                    break
 
         finally:
             # Show cursor again
@@ -282,19 +293,19 @@ def prompt_for_tool_approval(
         # or any other terminal-related errors
         console.print("  ☐ (A)pprove  (default)")
         console.print("  ☐ (R)eject")
+        console.print("  ☐ (S)ession allow")
+        console.print("  ☐ A(l)ways allow")
         console.print("  ☐ (Auto)-accept all going forward")
-        choice = input("\nChoice (A/R/Auto, default=Approve): ").strip().lower()
-        if choice in {"r", "reject"}:
-            selected = 1
-        elif choice in {"auto", "auto-accept"}:
-            selected = 2
-        else:
-            selected = 0
+        choice = input("\nChoice (A/R/S/L/Auto, default=Approve): ").strip().lower()
+        mapping = {"r": 1, "reject": 1, "s": 2, "l": 3, "auto": 4, "auto-accept": 4}
+        selected = mapping.get(choice, 0)
 
-    # Return decision based on selection
     if selected == 0:
         return ApproveDecision(type="approve")
     if selected == 1:
         return RejectDecision(type="reject", message="User rejected the command")
-    # Return special marker for auto-approve mode
+    if selected == 2:  # noqa: PLR2004
+        return {"type": "allow_session"}
+    if selected == 3:  # noqa: PLR2004
+        return {"type": "allow_always"}
     return {"type": "auto_approve_all"}
