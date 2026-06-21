@@ -203,7 +203,14 @@ class Cancelled:
 
 @dataclass
 class Error:
-    """The run failed with an error to surface."""
+    """The run failed with an error to surface.
+
+    ``is_provider_notice`` marks a recognised model-provider failure (usage/rate
+    limit, auth, connectivity) whose ``message`` has already been formatted into
+    a clean, actionable notice by :func:`novacode_cli.errors.friendly_model_error`.
+    Renderers use it to style the message as a warning rather than a raw error.
+    """
 
     message: str
     exception: BaseException | None = None
+    is_provider_notice: bool = False

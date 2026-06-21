@@ -10474,27 +10474,18 @@ class NovaApp(App):
             self._log(Text("Interrupted.", style="yellow"))
         elif isinstance(e, ev.Error):
             self._accumulated_reply = ""
-            msg = str(e.message).lower()
-            if any(
-                kw in msg
-                for kw in ("429", "rate limit", "usage limit", "quota", "too many requests")
-            ):
-                self._log(Text("⚠️ Warning: Rate Limit / Quota Reached", style="bold yellow"))
-                self._log(
-                    Text(
-                        "The model provider is rate-limiting requests or your usage limit is exhausted.",
-                        style="yellow",
-                    )
-                )
-                self._log(Text(f"Detail: {e.message}", style="dim yellow"))
-            elif any(
-                kw in msg for kw in ("401", "unauthorized", "api key", "auth", "forbidden", "403")
-            ):
-                self._log(Text("⚠️ Warning: Authentication / API Key Error", style="bold yellow"))
-                self._log(
-                    Text("Please verify your API keys or subscription status.", style="yellow")
-                )
-                self._log(Text(f"Detail: {e.message}", style="dim yellow"))
+            # Provider failures (usage/rate limit, auth, connectivity) are
+            # pre-formatted into a clean notice upstream and flagged; render them
+            # as a calm warning. The formatter fallback covers any Error that
+            # carries a raw provider exception without the flag.
+            notice = e.message if e.is_provider_notice else None
+            if notice is None and e.exception is not None:
+                from novacode_cli.errors import friendly_model_error
+
+                notice = friendly_model_error(e.exception)
+            if notice:
+                for line in notice.splitlines():
+                    self._log(Text(line, style="yellow"))
             else:
                 self._log(Text(f"Error: {e.message}", style="red"))
         elif isinstance(e, ev.Done):

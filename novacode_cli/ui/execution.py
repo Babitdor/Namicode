@@ -123,9 +123,7 @@ async def execute_task(  # type: ignore
     status.start()
     spinner_active = True
 
-    file_op_tracker = get_session_file_op_tracker(
-        assistant_id=assistant_id, backend=backend
-    )
+    file_op_tracker = get_session_file_op_tracker(assistant_id=assistant_id, backend=backend)
 
     displayed_tool_ids: set[str] = set()
     _tool_preview_buffer: list[Text] = []
@@ -204,9 +202,7 @@ async def execute_task(  # type: ignore
         async for event in _event_source:
             if isinstance(event, ev.StatusUpdate):
                 if spinner_active and event.message:
-                    status.update(
-                        f"[bold {COLORS['thinking']}]{event.message}"
-                    )
+                    status.update(f"[bold {COLORS['thinking']}]{event.message}")
 
             elif isinstance(event, ev.TextDelta):
                 pass  # Rich batching: text accumulated in core loop, rendered via AssistantMessage
@@ -328,8 +324,7 @@ async def execute_task(  # type: ignore
                             )
                     else:
                         status.update(
-                            f"[bold {COLORS['thinking']}]"
-                            f"{agent_display_name} is thinking..."
+                            f"[bold {COLORS['thinking']}]{agent_display_name} is thinking..."
                         )
 
             elif isinstance(event, ev.FileOp):
@@ -368,14 +363,11 @@ async def execute_task(  # type: ignore
                     subagent_remaining += 1
                     if subagent_remaining > 1:
                         status.update(
-                            f"[bold {COLORS['thinking']}]"
-                            f"{subagent_remaining} agents thinking..."
+                            f"[bold {COLORS['thinking']}]{subagent_remaining} agents thinking..."
                         )
                     else:
                         sub_color = event.color or COLORS["thinking"]
-                        status.update(
-                            f"[bold {sub_color}]{event.subagent_type} is thinking..."
-                        )
+                        status.update(f"[bold {sub_color}]{event.subagent_type} is thinking...")
                     if not spinner_active:
                         status.start()
                         spinner_active = True
@@ -409,16 +401,14 @@ async def execute_task(  # type: ignore
                             "HITL-TOOL",
                             f"auto_approve={session_state.auto_approve}",
                         )
-                        decisions, any_rejected, spinner_active = (
-                            await process_hitl_approval(
-                                hitl_request=event.payload,
-                                session_state=session_state,
-                                assistant_id=assistant_id,
-                                backend=backend,
-                                spinner_active=spinner_active,
-                                status=status,
-                                dbg_func=_dbg,
-                            )
+                        decisions, any_rejected, spinner_active = await process_hitl_approval(
+                            hitl_request=event.payload,
+                            session_state=session_state,
+                            assistant_id=assistant_id,
+                            backend=backend,
+                            spinner_active=spinner_active,
+                            status=status,
+                            dbg_func=_dbg,
                         )
                         event.future.set_result(
                             {"decisions": decisions, "any_rejected": any_rejected}
@@ -445,15 +435,18 @@ async def execute_task(  # type: ignore
                             "HITL-PLAN",
                             f"plan_mode={getattr(session_state, 'plan_mode_enabled', '?')}",
                         )
-                        response, occurred, spinner_active, cmd_state_update = (
-                            await handle_plan_approval_interrupt(
-                                current_todos=current_todos,
-                                session_state=session_state,
-                                spinner_active=spinner_active,
-                                status=status,
-                                dbg_func=_dbg,
-                                interrupt_payload=event.payload,
-                            )
+                        (
+                            response,
+                            occurred,
+                            spinner_active,
+                            cmd_state_update,
+                        ) = await handle_plan_approval_interrupt(
+                            current_todos=current_todos,
+                            session_state=session_state,
+                            spinner_active=spinner_active,
+                            status=status,
+                            dbg_func=_dbg,
+                            interrupt_payload=event.payload,
                         )
                         event.future.set_result(
                             {
@@ -463,9 +456,7 @@ async def execute_task(  # type: ignore
                         )
                 finally:
                     if not event.future.done():
-                        event.future.set_result(
-                            default_interrupt_response(event.kind)
-                        )
+                        event.future.set_result(default_interrupt_response(event.kind))
 
             elif isinstance(event, ev.ErrorOutput):
                 if spinner_active:
@@ -480,7 +471,18 @@ async def execute_task(  # type: ignore
                 if spinner_active:
                     status.stop()
                     spinner_active = False
-                console.print(f"[red]{event.message}[/red]")
+                # Provider failures (usage/rate limit, auth, connectivity) are
+                # pre-formatted into a clean notice upstream and flagged; show
+                # them as a calm warning rather than a raw red error.
+                notice = event.message if event.is_provider_notice else None
+                if notice is None and event.exception is not None:
+                    from novacode_cli.errors import friendly_model_error
+
+                    notice = friendly_model_error(event.exception)
+                if notice:
+                    console.print(f"[yellow]{notice}[/yellow]")
+                else:
+                    console.print(f"[red]{event.message}[/red]")
                 return
 
             elif isinstance(event, ev.Cancelled):
@@ -495,9 +497,7 @@ async def execute_task(  # type: ignore
 
             elif isinstance(event, ev.CompactionNotice):
                 console.print()
-                console.print(
-                    "[dim]⟳ Context compacted — old messages replaced with summary[/dim]"
-                )
+                console.print("[dim]⟳ Context compacted — old messages replaced with summary[/dim]")
 
             elif isinstance(event, ev.ContextMessage):
                 flush_tool_previews()
@@ -514,12 +514,8 @@ async def execute_task(  # type: ignore
                     spinner_active = True
 
             elif isinstance(event, ev.UsageUpdate):
-                captured_input_tokens = max(
-                    captured_input_tokens, event.input_tokens
-                )
-                captured_output_tokens = max(
-                    captured_output_tokens, event.output_tokens
-                )
+                captured_input_tokens = max(captured_input_tokens, event.input_tokens)
+                captured_output_tokens = max(captured_output_tokens, event.output_tokens)
                 captured_cache_read_tokens = max(
                     captured_cache_read_tokens, event.cache_read_tokens
                 )
@@ -608,9 +604,7 @@ async def execute_task(  # type: ignore
                     _last_known_state = _bd_state
                 _bd_msgs = _bd_state.values.get("messages", [])
                 if _bd_msgs and token_tracker.model_name:
-                    breakdown = ContextManager(token_tracker.model_name).breakdown(
-                        _bd_msgs
-                    )
+                    breakdown = ContextManager(token_tracker.model_name).breakdown(_bd_msgs)
                     token_tracker.set_breakdown(breakdown)
             except Exception:
                 pass

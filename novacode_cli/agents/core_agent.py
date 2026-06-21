@@ -22,6 +22,7 @@ The agent is built using LangGraph's Pregel architecture with:
 - Middleware for memory, skills, MCP, and shell execution
 - Checkpointing for conversation state persistence
 """
+
 import os
 import re
 import shutil
@@ -537,6 +538,7 @@ def _harden_subagent_specs(specs: list) -> list:
     """
     from langchain.agents.middleware import ModelRetryMiddleware
     from novacode_cli.bootstrap import VisionCaptionMiddleware
+    from novacode_cli.errors import is_retryable_model_error
     from novacode_cli.security.middleware import SecurityMiddleware
 
     # Tools that raise a HITL ``interrupt()`` directly in their body (not via
@@ -568,7 +570,13 @@ def _harden_subagent_specs(specs: list) -> list:
         mw_to_add = []
         if not has_retry:
             mw_to_add.append(
-                ModelRetryMiddleware(max_retries=3, backoff_factor=2.0, initial_delay=1.0)
+                ModelRetryMiddleware(
+                    max_retries=3,
+                    retry_on=is_retryable_model_error,
+                    on_failure="error",
+                    backoff_factor=2.0,
+                    initial_delay=1.0,
+                )
             )
         if not has_vision:
             mw_to_add.append(VisionCaptionMiddleware())
@@ -915,7 +923,12 @@ This file stores your preferences and context that persist across sessions.
 
     # Lazy imports for middleware (speeds up startup)
     from langchain.agents.middleware import ModelRetryMiddleware
-    from novacode_cli.bootstrap import BootstrapMiddleware, GraphContextMiddleware, VisionCaptionMiddleware
+    from novacode_cli.errors import is_retryable_model_error
+    from novacode_cli.bootstrap import (
+        BootstrapMiddleware,
+        GraphContextMiddleware,
+        VisionCaptionMiddleware,
+    )
     from novacode_cli.bootstrap.steering import SteeringMiddleware
     from novacode_cli.hermes.middleware import NovaLearningMiddleware
     from novacode_cli.memory.agent_memory import AgentMemoryMiddleware
@@ -942,8 +955,16 @@ This file stores your preferences and context that persist across sessions.
     agent_middleware = [
         # Retry transient model failures (rate limits / 429, timeouts, network
         # blips) with exponential backoff before surfacing an error to the user.
+        # retry_on skips *permanent* failures (usage/quota cap, bad API key) so
+        # they surface at once instead of after 4 pointless waits. on_failure=
+        # "error" RE-RAISES once retries are exhausted (the default "continue"
+        # would hide the failure inside a fake AIMessage); the re-raised
+        # exception then hits the funnel in iterate_agent_events, which renders a
+        # clean provider notice via friendly_model_error in both UIs.
         ModelRetryMiddleware(
             max_retries=3,
+            retry_on=is_retryable_model_error,
+            on_failure="error",
             backoff_factor=2.0,
             initial_delay=1.0,
         ),

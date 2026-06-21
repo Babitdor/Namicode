@@ -13,6 +13,8 @@ from deepagents.graph import create_deep_agent
 from langchain.agents.middleware import ModelRetryMiddleware
 from langgraph.checkpoint.memory import InMemorySaver
 
+from novacode_cli.errors import is_retryable_model_error
+
 if TYPE_CHECKING:
     from langchain_core.language_models import BaseChatModel
     from langgraph.pregel import Pregel
@@ -55,6 +57,8 @@ def create_btw_agent(model: BaseChatModel) -> tuple[Pregel, Any]:
         middleware=[
             ModelRetryMiddleware(
                 max_retries=2,
+                retry_on=is_retryable_model_error,
+                on_failure="error",
                 backoff_factor=1.5,
                 initial_delay=0.5,
             ),

@@ -91,7 +91,6 @@ async def _safe_stream(stream_gen: AsyncIterator[Any]) -> AsyncIterator[Any]:
         pass
 
 
-
 async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
     user_input: str,
     agent,
@@ -122,7 +121,11 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
             user_input = directive + user_input
 
     active_goal = getattr(session_state, "active_goal", None)
-    if active_goal and not user_input.startswith("[GOAL]") and not user_input.startswith("[System Directive:"):
+    if (
+        active_goal
+        and not user_input.startswith("[GOAL]")
+        and not user_input.startswith("[System Directive:")
+    ):
         user_input = f"[GOAL] {active_goal}\n\n{user_input}"
 
     message_content = await prepare_input_content(
@@ -237,6 +240,7 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
     _current_stream_gen: Any = None
 
     from novacode_cli.tools.plan_mode_tools import _auto_approve_var
+
     auto_approve_val = bool(getattr(session_state, "auto_approve", False))
     token = _auto_approve_var.set(auto_approve_val)
 
@@ -531,7 +535,8 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
                         # Set plan_mode_enabled=False on session_state and clear plan agent
                         session_state.plan_mode_enabled = False
                         using_separate_plan_agent = (
-                            hasattr(session_state, "plan_agent") and session_state.plan_agent is not None
+                            hasattr(session_state, "plan_agent")
+                            and session_state.plan_agent is not None
                         )
                         if using_separate_plan_agent:
                             # Try to extract the plan content from the payload
@@ -648,8 +653,6 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
                 if any_rejected:
                     yield ev.ErrorOutput("Command rejected. Tell the agent what to do differently.")
 
-
-
                 stream_input = Command(
                     resume=hitl_response,
                     update=command_state_update or None,
@@ -727,6 +730,15 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
                 "automated flows.",
                 exception=e,
             )
+            return
+        # Recognised provider failures (usage/rate limit, auth, connectivity)
+        # get a clean, actionable notice instead of a raw SDK string/traceback —
+        # surfaced identically in both front-ends.
+        from novacode_cli.errors import friendly_model_error
+
+        friendly = friendly_model_error(e)
+        if friendly is not None:
+            yield ev.Error(friendly, exception=e, is_provider_notice=True)
             return
         yield ev.Error(str(e), exception=e)
         return

@@ -78,7 +78,8 @@ def handle_goal_command(session_state: Any, args: str) -> GoalCommandResult:  # 
         if goal:
             return GoalCommandResult("status", f"🎯 Active goal:\n{goal}", goal=goal)
         return GoalCommandResult(
-            "status", "No active goal. Use /goal <description> to set one.",
+            "status",
+            "No active goal. Use /goal <description> to set one.",
         )
 
     if low in _GOAL_CLEAR_WORDS:
@@ -171,7 +172,11 @@ async def run_btw_question(
                 on_event(e)
             if isinstance(e, AssistantMessage):
                 answer_parts.append(e.text)
-            elif isinstance(e, (Done, Error)):
+            elif isinstance(e, Error):
+                # Surface a recognised provider failure (usage cap, etc.) as the
+                # answer rather than silently returning "(no response)".
+                return e.message if e.is_provider_notice else f"↩ btw failed: {e.message}"
+            elif isinstance(e, Done):
                 break
     except Exception as ex:  # noqa: BLE001
         return f"↩ btw failed: {ex}"

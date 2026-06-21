@@ -30,6 +30,7 @@ from novacode_cli.config.plan_mode import (
     BLOCKED_TOOLS_DISPLAY,
     RESTRICTED_WRITE_TOOLS_DISPLAY,
 )
+from novacode_cli.errors import is_retryable_model_error
 from novacode_cli.hitl.interrupts import get_interrupt_configs
 from novacode_cli.prompts import render_template
 
@@ -269,8 +270,13 @@ def create_plan_agent_with_config(
         middleware=[
             # Retry transient model failures (rate limits / 429, timeouts,
             # network blips) with exponential backoff before erroring out.
+            # Skip retries on permanent failures (usage cap / bad key) and
+            # re-raise on exhaustion so the agent-loop funnel renders a clean
+            # provider notice instead of hiding it in a fake AIMessage.
             ModelRetryMiddleware(
                 max_retries=3,
+                retry_on=is_retryable_model_error,
+                on_failure="error",
                 backoff_factor=2.0,
                 initial_delay=1.0,
             ),
@@ -279,9 +285,7 @@ def create_plan_agent_with_config(
             # `or []` would swap in a fresh list and break live steering, since
             # the list is usually empty at plan-agent creation time.
             SteeringMiddleware(
-                instructions=(
-                    steering_instructions if steering_instructions is not None else []
-                )
+                instructions=(steering_instructions if steering_instructions is not None else [])
             ),
         ],
     )
