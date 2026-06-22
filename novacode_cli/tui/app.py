@@ -221,6 +221,10 @@ class MatrixRain(Static):
         except Exception:  # noqa: BLE001
             pass
 
+        self.update(self._build_frame())
+
+    def _build_frame(self) -> Text:
+        """Build one rain frame as a Rich ``Text`` (no side effects)."""
         cols = self._col_count
         rows = self._row_count
         lines = self._frame_lines
@@ -297,7 +301,7 @@ class MatrixRain(Static):
             if y < rows - 1:
                 segments.append(("\n", None))
 
-        self.update(RichText.assemble(*segments))
+        return RichText.assemble(*segments)
 
 
 # Transcript is pruned from the top once it exceeds this many widgets, down to
