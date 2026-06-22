@@ -33,9 +33,10 @@ from pathlib import Path
 
 import wcmatch.glob as wcglob
 from deepagents.backends.filesystem import FilesystemBackend
+from deepagents.backends.local_shell import LocalShellBackend
 from deepagents.backends.protocol import GrepResult
 
-__all__ = ["OptimizedFilesystemBackend"]
+__all__ = ["OptimizedFilesystemBackend", "OptimizedLocalShellBackend"]
 
 # Wall-clock budget for a single grep, in seconds. Defined locally rather than
 # imported from deepagents.backends.protocol: the constant only exists in
@@ -118,38 +119,41 @@ def _glob_abs(windows_pattern: str) -> list[Path]:
     anchor = p.anchor
     if not anchor:
         return list(Path().glob(str(p).replace("\\", "/")))
-    rel = str(p)[len(anchor):].replace("\\", "/")
+    rel = str(p)[len(anchor) :].replace("\\", "/")
     try:
         return list(Path(anchor).glob(rel))
     except (OSError, ValueError):
         return []
 
+
 # Directory names pruned during the Python grep fallback. These are virtually
 # always gitignored and can each hold millions of files; descending into them is
 # what made the fallback hang. An explicit search *into* one of these (e.g.
 # path="/node_modules") still works — only nested occurrences are skipped.
-_SKIP_DIRS = frozenset({
-    ".venv",
-    ".env",
-    "venv",
-    ".git",
-    ".hg",
-    ".svn",
-    "node_modules",
-    "__pycache__",
-    ".pytest_cache",
-    ".mypy_cache",
-    ".ruff_cache",
-    "dist",
-    "build",
-    ".next",
-    ".turbo",
-    ".cargo",
-    "target",
-    "out",
-    ".vscode",
-    ".idea",
-})
+_SKIP_DIRS = frozenset(
+    {
+        ".venv",
+        ".env",
+        "venv",
+        ".git",
+        ".hg",
+        ".svn",
+        "node_modules",
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        "dist",
+        "build",
+        ".next",
+        ".turbo",
+        ".cargo",
+        "target",
+        "out",
+        ".vscode",
+        ".idea",
+    }
+)
 
 
 class OptimizedFilesystemBackend(FilesystemBackend):
@@ -350,8 +354,7 @@ class OptimizedFilesystemBackend(FilesystemBackend):
 
                 # Prune in place so os.walk never descends into skipped subtrees.
                 dirnames[:] = [
-                    d for d in dirnames
-                    if d not in _SKIP_DIRS and not d.endswith(".egg-info")
+                    d for d in dirnames if d not in _SKIP_DIRS and not d.endswith(".egg-info")
                 ]
 
                 for filename in filenames:
@@ -395,3 +398,19 @@ class OptimizedFilesystemBackend(FilesystemBackend):
             return results, msg
 
         return results, None
+
+
+class OptimizedLocalShellBackend(LocalShellBackend, OptimizedFilesystemBackend):
+    """A ``LocalShellBackend`` that uses Nova's guarded, non-hanging grep.
+
+    Nova's local-mode composite default backend must support the ``execute``
+    tool (so subagents can run commands), which is why deepagents'
+    :class:`LocalShellBackend` is used. But ``LocalShellBackend`` subclasses the
+    *base* deepagents ``FilesystemBackend``, whose ``_ripgrep_search`` lacks the
+    Windows None-stdout guard and whose Python fallback walks ``.venv`` /
+    ``node_modules`` (the hang this package fixes). The MRO here —
+    ``LocalShellBackend`` → :class:`OptimizedFilesystemBackend` → ``FilesystemBackend``
+    — keeps ``execute`` from the former while resolving ``grep`` /
+    ``_ripgrep_search`` to the optimized, guarded versions. No new behaviour of
+    its own.
+    """

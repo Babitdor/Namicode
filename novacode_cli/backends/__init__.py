@@ -4,6 +4,9 @@ Provides performance and feature enhancements to deepagents backends while
 maintaining full backward compatibility.
 """
 
-from novacode_cli.backends.filesystem import OptimizedFilesystemBackend
+from novacode_cli.backends.filesystem import (
+    OptimizedFilesystemBackend,
+    OptimizedLocalShellBackend,
+)
 
-__all__ = ["OptimizedFilesystemBackend"]
+__all__ = ["OptimizedFilesystemBackend", "OptimizedLocalShellBackend"]

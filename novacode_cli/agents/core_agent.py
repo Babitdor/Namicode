@@ -100,13 +100,13 @@ from langgraph.pregel import Pregel
 from langgraph.store.base import BaseStore
 from deepagents import create_deep_agent
 from deepagents.backends import CompositeBackend
-from deepagents.backends.local_shell import LocalShellBackend
 from deepagents.backends.protocol import BackendProtocol, SandboxBackendProtocol
 from deepagents.backends.store import StoreBackend
 from deepagents.middleware.subagents import SubAgent
 
 from novacode_cli.agents.default_subagents.subagents import retrieve_core_subagents
 from novacode_cli.backends import OptimizedFilesystemBackend as FilesystemBackend
+from novacode_cli.backends import OptimizedLocalShellBackend
 from novacode_cli.agents.default_subagents.async_subagents import (
     retrieve_async_subagents,
 )
@@ -783,11 +783,14 @@ This file stores your preferences and context that persist across sessions.
         # subagents inherit that tool but do not get Nova's ShellMiddleware. In
         # local mode the previous default (a plain FilesystemBackend) caused the
         # `execute` tool to fail with "Default backend doesn't support command
-        # execution". We use LocalShellBackend as the default instead: it is a
-        # FilesystemBackend subclass, so project reads/writes keep their existing
-        # virtual-root semantics, and it also implements SandboxBackendProtocol so
-        # the subagent's `execute` tool can run commands locally.
-        _default_backend = LocalShellBackend(
+        # execution". We use OptimizedLocalShellBackend as the default instead: a
+        # LocalShellBackend subclass that also mixes in OptimizedFilesystemBackend,
+        # so project reads/writes keep their virtual-root semantics, the subagent's
+        # `execute` tool can run commands locally (SandboxBackendProtocol), AND grep
+        # uses Nova's guarded, non-hanging ripgrep search (a plain LocalShellBackend
+        # would hit deepagents' base grep, which crashes on Windows when ripgrep
+        # returns stdout=None — "'NoneType' object has no attribute 'splitlines'").
+        _default_backend = OptimizedLocalShellBackend(
             root_dir=str(workspace_root),
             virtual_mode=True,
             env=dict(os.environ),
