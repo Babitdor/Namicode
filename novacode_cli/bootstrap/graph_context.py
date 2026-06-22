@@ -21,9 +21,7 @@ so it is reusable outside the middleware stack (TUI dashboard, CLI reports).
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
@@ -34,6 +32,13 @@ from langchain.agents.middleware.types import (
 from langchain_core.messages import SystemMessage
 
 from novacode_cli.bootstrap.graph_reader import ProjectGraphReader
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
+    from langchain_core.messages.tool import ToolMessage
+    from langchain_core.tools import Command
+    from langgraph.prebuilt.tool_node import ToolCallRequest
 
 
 class GraphContextMiddleware(AgentMiddleware):
@@ -68,18 +73,17 @@ class GraphContextMiddleware(AgentMiddleware):
 
     def before_agent(  # type: ignore[override]
         self,
-        state: AgentState,
+        state: AgentState,  # noqa: ARG002
     ) -> None:
         """Pre-warm the instance cache on session start."""
         if not self._enabled:
-            return None
+            return
         import asyncio
         try:
             loop = asyncio.get_running_loop()
             loop.run_in_executor(None, self._reader.load)
         except RuntimeError:
             self._reader.load()
-        return None
 
     def _inject(self, request: ModelRequest) -> ModelRequest:
         """Inject graph context into the system prompt."""
@@ -160,3 +164,74 @@ class GraphContextMiddleware(AgentMiddleware):
         """
         injected = await self._inject_async(request)
         return await handler(injected)
+
+    # ------------------------------------------------------------------
+    # File-read annotation (Phase 2 of graph-awareness design)
+    # ------------------------------------------------------------------
+
+    def _annotate_read_file(self, request: ToolCallRequest) -> ToolCallRequest:
+        """Inject a one-line community annotation when the agent reads a file.
+
+        Looks up the file path in the graph index and, if found, appends a
+        compact community note to the system prompt. Scoped to one turn —
+        the annotation is dropped after the model call completes.
+
+        Args:
+            request: The tool call request to annotate.
+
+        Returns:
+            The (possibly annotated) request.
+        """
+        if not self._enabled:
+            return request
+
+        tool_call = request.tool_call
+        tool_name = tool_call.get("name", "")
+        if tool_name != "read_file":
+            return request
+
+        args = tool_call.get("args", {})
+        file_path = args.get("file_path", args.get("path", ""))
+        if not file_path:
+            return request
+
+        # Load the index for O(1) file lookups
+        index = self._reader._load_index()
+        if index is None:
+            return request
+
+        file_map = index.get("file_map", {})
+        entry = file_map.get(file_path)
+        if entry is None:
+            return request
+
+        label = entry.get("community_label", f"Community {entry.get('community', '?')}")
+        count = entry.get("symbols", [])
+        connections = entry.get("connections", 0)
+        annotation = (
+            f"Note: {file_path} → community {label} "
+            f"({len(count)} components, {connections} connections)"
+        )
+
+        # Inject into system prompt — scoped to this turn only
+        system_prompt = request.system_prompt or ""
+        new_prompt = system_prompt + "\n" + annotation
+        return request.override(system_message=SystemMessage(new_prompt))
+
+    def wrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]],
+    ) -> ToolMessage | Command[Any]:
+        """Synchronous wrapper — annotate read_file calls."""
+        annotated = self._annotate_read_file(request)
+        return handler(annotated)
+
+    async def awrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
+    ) -> ToolMessage | Command[Any]:
+        """Async wrapper — annotate read_file calls."""
+        annotated = self._annotate_read_file(request)
+        return await handler(annotated)

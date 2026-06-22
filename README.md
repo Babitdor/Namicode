@@ -36,7 +36,7 @@ An open-source, terminal-based AI coding assistant built on LangGraph and the `d
 - **Local Voice I/O** (optional): Speak prompts and hear Nova's prose replies, fully offline — Faster-Whisper (STT), Silero VAD (utterance endpointing), and Piper (TTS). Push-to-talk (`ctrl+g`) or hands-free always-listening (`ctrl+l`); code blocks are stripped before speaking. One-command install: `uv tool install -e .[voice]`, or `uv pip install -e '.[voice]'` for uv run; manage with `/voice`. Swappable TTS/STT providers: cloud (ElevenLabs / Deepgram), **Orpheus** — an optional, very natural LLM-based local TTS (`/voice settings tts orpheus`; `uv pip install -e '.[voice-orpheus]'` + the CPU `llama-cpp-python` wheel; ~2GB model, slower than Piper), or **Parakeet** — NVIDIA's local STT via sherpa-onnx (`/voice settings stt parakeet`; `uv pip install -e '.[voice-parakeet]'`)
 
 ### Tools & Capabilities
-- **25+ Built-in Tools**: File operations, shell commands, web search (Tavily + DuckDuckGo), docs search, HTTP fetch, subagent delegation, semantic code search, project graph queries, and more
+- **30+ Built-in Tools**: File operations, shell commands, web search (Tavily + DuckDuckGo), docs search, HTTP fetch, subagent delegation, semantic code search, project graph queries, wiki management, plan mode, and more
 - **Web Scraping**: GitHub trending repos, Hacker News headlines, LinkedIn jobs, Reddit posts — no external API keys required
 - **Semantic Code Search**: Find code by description or meaning, not just exact text matches (`code_search`, `find_related_code`)
 - **LSP Integration**: Language Server Protocol support for go-to-definition, find references, rename, diagnostics, and more
@@ -51,7 +51,7 @@ An open-source, terminal-based AI coding assistant built on LangGraph and the `d
 - **Wiki System**: Persistent project wiki at `.nova/wiki/` — ingest web clippings (`/ingest`), ask questions with wiki context (`/ask`), file conversation knowledge as wiki pages (`/file`), and browse the vault (`/wiki`)
 
 ### Sandbox & Safety
-- **Sandbox Execution**: Run code safely in remote sandboxes — Modal, Runloop, Daytona, Docker, E2B. Default Docker sandbox with workspace binding
+- **Sandbox Execution**: Run code safely in sandboxes — OS (workspace-confined), Docker, Modal, Runloop, Daytona, LangSmith (hardware-virtualized microVMs)
 - **Security-First**: Automatic `.gitignore` enforcement, command injection detection, URL sanitization, and input validation
 - **File Recovery**: Automatic snapshots before destructive operations — restore deleted or overwritten files via `/restore` or agent tools (`list_trash`, `restore_file`)
 - **Human-in-the-Loop (HITL)**: Configurable interrupt system requiring user approval before destructive or external operations
@@ -199,44 +199,6 @@ make lint
 mypy novacode_cli/
 ```
 
-## Quick Start
-
-```bash
-# Start the CLI
-nova
-
-# Use a specific agent configuration
-nova --agent mybot
-
-# Auto-approve tool usage (skip HITL prompts)
-nova --auto-approve
-
-# Execute in a remote sandbox
-nova --sandbox modal
-
-# Use the classic Rich REPL (instead of Textual TUI)
-nova --legacy-ui
-
-# Skip the splash screen
-nova --no-splash
-
-# Continue from a previous session
-nova --continue
-nova --continue <session-id>
-
-# Interactively select a session to resume
-nova --resume
-
-# Force local execution (disable default Docker sandbox)
-nova --no-sandbox
-
-# Docker sandbox with port forwarding
-nova --sandbox docker --ports 8080:8080,3000:3000
-
-# Run system diagnostics
-nova doctor
-```
-
 ## CLI Reference
 
 ### Top-Level Subcommands
@@ -261,11 +223,16 @@ nova doctor
 |------|---------|-------------|
 | `--agent` | `"nova-agent"` | Agent identifier for separate memory stores |
 | `--auto-approve` | off | Auto-approve tool usage (disables HITL) |
-| `--sandbox` | `none` | Sandbox provider: `none`, `modal`, `daytona`, `runloop`, `docker` |
-| `--no-sandbox` | off | Force local execution (disables default Docker sandbox) |
+| `--sandbox` | `os` (Linux/macOS), `none` (Windows) | Sandbox provider: `none`, `os`, `modal`, `daytona`, `runloop`, `docker`, `langsmith` |
+| `--no-sandbox` | off | Run shell commands unconfined on the host (disables OS/Docker sandbox) |
 | `--sandbox-id` | `None` | Reuse an existing sandbox (skips create/cleanup) |
 | `--sandbox-setup` | `None` | Path to setup script to run in sandbox after creation |
-| `--ports` | `None` | Port forwarding for Docker sandbox (comma-separated) |
+| `--sandbox-vcpus` | `None` | Number of virtual CPUs (LangSmith sandbox only) |
+| `--sandbox-mem-bytes` | `None` | Memory in bytes (LangSmith sandbox only, e.g. 8589934592 for 8GB) |
+| `--sandbox-fs-capacity-bytes` | `None` | Filesystem capacity in bytes (LangSmith sandbox only) |
+| `--sandbox-snapshot` | `None` | Snapshot name to boot from (LangSmith only) |
+| `--sandbox-snapshot-id` | `None` | Snapshot ID to boot from (LangSmith only) |
+| `--ports` | `None` | Port forwarding for Docker sandbox (format: `PORT` or `HOST:CONTAINER`, comma-separated) |
 | `--no-splash` | off | Disable the startup splash screen |
 | `--tui` / `--legacy-ui` | off | Use classic Rich REPL instead of Textual TUI |
 | `--continue` / `-c` | off | Continue last session (optionally specify session ID) |
@@ -287,6 +254,15 @@ nova doctor
 | `/compact` | Compact conversation history with optional focus |
 | `/sessions` | List, select, or delete saved sessions |
 | `/restore` | Restore a previous file version from snapshots |
+| `/files` | Show file operation summary for the session |
+| `/images` | Manage tracked image references |
+| `/log` | Show workspace log files |
+| `/servers` | Show active server processes |
+| `/tests` | Run test suites |
+| `/kill` | Kill a process by PID |
+| `/notifications` | Review and manage notifications |
+| `/remote` | Manage remote sandbox connections |
+| `/reindex` | Rebuild semantic code search index |
 
 | Command | Description |
 |---------|-------------|
@@ -306,23 +282,14 @@ nova doctor
 | `/research` | Multi-agent research swarm (academic/market/stocks/technical/general) |
 | `/dream` | Run memory consolidation |
 | `/browser-use` | AI-powered browser automation |
-| `/servers` | Show active server processes |
-| `/tests` | Run test suites |
-| `/kill` | Kill a process by PID |
-| `/files` | Show file operation summary for the session |
-| `/images` | Manage tracked image references |
-| `/notifications` | Review and manage notifications |
-| `/log` | Show workspace log files |
+| `/create` | Launch the Skills & Agents web UI for browsing, editing, and creating skills/agents |
 | `/skill:<name>` | Directly invoke a skill by name (e.g., `/skill:api-testing`) |
-| `/remote` | Manage remote sandbox connections |
-| `/reindex` | Rebuild semantic code search index |
 | `/cron` | Manage scheduled (heartbeat) tasks — list, add, remove, fire now |
 | `/webhook` | Manage webhook ingress server — start, stop, register sources, status |
 | `/prompt` | Manage evolving system-prompt templates — status, rollback, accept, reject |
 | `/voice` | Local voice I/O — status, on/off, mode ptt\|listen, test (ctrl+g talk, ctrl+l listen) |
 | `/effort` | Set reasoning effort level — `low`, `medium`, `high`, or `off` (hot-swaps model) |
 | `/evolution` | View the self-evolution log — skills unlocked (🧬) and levelled up (⬆️) |
-| `/create` | Launch the Skills & Agents web UI for browsing, editing, and creating skills/agents |
 | `/ingest` | Ingest captured sources (Obsidian Web Clipper) into synthesized wiki pages |
 | `/ask` | Ask a question informed by wiki context — searches wiki and answers with relevant knowledge |
 | `/file` | File recent conversation knowledge as a wiki page under a topic path |
@@ -365,6 +332,15 @@ nova doctor
 | `update_async_task` | Send updated instructions to a running background task |
 | `cancel_async_task` | Cancel a running background task |
 | `list_async_tasks` | List all tracked background tasks |
+| `speak` | Speak a short summary aloud via TTS |
+| `skill_manage` | Create, refine, or remove reusable skills |
+| `wiki_read` | Read a wiki page by path |
+| `wiki_search` | Search the project wiki for pages matching a query |
+| `wiki_update_index` | Add or update an entry in the wiki index |
+| `wiki_write` | Write or overwrite a wiki page |
+| `enter_plan_mode` | Switch to read-only investigation mode before coding |
+| `exit_plan_mode` | Present a plan for user approval and exit plan mode |
+| `ask_user_question` | Ask the user a multiple-choice question and wait for response |
 
 > **Note**: Potentially destructive operations require user approval. Use `--auto-approve` to skip prompts.
 
@@ -423,6 +399,12 @@ NOVA includes **Hermes**, an autonomous learning system that runs in the backgro
   - `USER.md` — User model: communication style, preferences, workflows, recurring frustrations
   - `MEMORY.md` — Cross-session memory: architecture decisions, reusable patterns, key facts
 - **Skill Creation**: Analyzes repeated successful tool sequences and autonomously creates reusable skills with deterministic naming and refinement
+- **Skill Debate**: `skill_debate.py` — Multi-perspective skill evaluation that compares new skills against existing ones, flags overlap, and suggests merges
+- **Skill Manager**: `skill_manager.py` — Orchestrates skill creation from review feedback, failure-grounded refinement, and background curation
+- **Tool Usage Tracker**: `tracker.py` — Counts tool calls, maintains per-tool stats, and tracks skill invocations to drive refinement decisions
+- **Review Runner**: `review.py` — Decides *when* to review (signal-based: failure bursts, substantive windows, hard cap) and runs out-of-band LLM reviews
+- **Curator**: `curator.py` — Archives unused skills and flags overlapping ones to keep the skill library lean
+- **Evolution Logger**: `evolution.py` — Tracks skill unlocks and level-ups, persisted in durable store, viewable via `/evolution`
 - **No Interruption**: Reviews run out-of-band in the background — no pause in agent operation
 - **Live Indicator**: Visible indicator in the TUI status line when Hermes is reviewing
 
@@ -450,14 +432,17 @@ Every model call passes through this middleware chain (in order):
 
 | Layer | Module | Purpose |
 |-------|--------|---------|
-| `SteeringMiddleware` | `bootstrap/steering.py` | Injects persistent user instructions |
-| `GraphContextMiddleware` | `bootstrap/graph_context.py` | Injects project graph legend summary |
-| `ShellMiddleware` | `shell.py` | Shell tool + interactive prompt detection |
-| `AgentMemoryMiddleware` | `memory/` | Agent memory loading |
+| `ModelRetryMiddleware` | `deepagents` | Retry transient model failures (rate limits, 429) with exponential backoff |
+| `VisionCaptionMiddleware` | `bootstrap/vision_router.py` | Convert images to text so text-only models never receive image blocks |
+| `NovaLearningMiddleware` | `hermes/middleware.py` | Hermes learning system — tool usage tracking, review cycles, memory tiers |
 | `SecurityMiddleware` | `security/` | URL sanitization, unicode attack prevention |
-| `FileTrackerMiddleware` | `tracking/` | Read-before-edit enforcement |
-| `MCPMiddleware` | `mcp/middleware.py` | MCP tool provisioning |
-| `NovaLearningMiddleware` | `hermes/middleware.py` | Hermes learning system — tool call review |
+| `MCPMiddleware` | `mcp/middleware.py` | MCP tool provisioning (inserted dynamically when MCP servers configured) |
+| `BootstrapMiddleware` | `bootstrap/` | Environment snapshot injection |
+| `GraphContextMiddleware` | `bootstrap/graph_context.py` | Injects project graph legend summary |
+| `SteeringMiddleware` | `bootstrap/steering.py` | Injects persistent user instructions (mid-run steering) |
+| `FileTrackerMiddleware` | `tracking/` | Read-before-edit enforcement, result truncation |
+| `ShellMiddleware` | `shell.py` | Shell tool + sandbox execution |
+| `AgentMemoryMiddleware` | `memory/` | Agent memory loading (USER.md, MEMORY.md) |
 
 ## Project Graph
 
@@ -679,7 +664,10 @@ nova mcp remove my-server  # Remove a server
 NOVA supports multiple sandbox providers for safe code execution:
 
 ```bash
-# Docker (default, with workspace binding)
+# OS sandbox (default on Linux/macOS — host files, shell confined to workspace)
+nova --sandbox os
+
+# Docker (opt-in on Windows, with workspace binding)
 nova --sandbox docker
 
 # Modal (cloud)
@@ -691,7 +679,10 @@ nova --sandbox runloop
 # Daytona (cloud)
 nova --sandbox daytona
 
-# Force local execution
+# LangSmith Sandboxes (hardware-virtualized microVMs)
+nova --sandbox langsmith
+
+# Force unconfined local execution
 nova --no-sandbox
 
 # Reuse an existing sandbox
@@ -699,6 +690,9 @@ nova --sandbox-id <id>
 
 # Port forwarding (Docker)
 nova --sandbox docker --ports 8080:8080
+
+# LangSmith sandbox resource config
+nova --sandbox langsmith --sandbox-vcpus 2 --sandbox-mem-bytes 8589934592
 ```
 
 The default sandbox image is `python:3.11-slim`.
@@ -787,17 +781,17 @@ make test_watch
 
 | Command | Description |
 |---------|-------------|
-| `make test` | Run unit tests |
+| `make test` | Run unit tests (ignores shell/process/e2e tests) |
 | `make test_integration` | Run integration tests |
 | `make test_all` | Run all tests |
-| `make test_watch` | Watch mode testing |
-| `make test_cov` | Run tests with coverage |
+| `make test_watch` | Watch mode with `ptw` |
+| `make test_cov` | Run tests with coverage (term-missing report) |
 | `make run` | Run `uv run nova` |
-| `make sync` | Sync dependencies |
-| `make lock` | Lock dependencies |
-| `make tree` | Show dependency tree |
-| `make outdated` | Show outdated packages |
-| `make add PACKAGE=<name>` | Add a dependency |
+| `make sync` | Sync dependencies (`uv sync`) |
+| `make lock` | Lock dependencies (`uv lock`) |
+| `make tree` | Show dependency tree (`uv tree`) |
+| `make outdated` | Show outdated packages (`uv tree --outdated`) |
+| `make add PACKAGE=<name>` | Add a dependency (`uv add`) |
 | `make add-dev PACKAGE=<name>` | Add a dev dependency |
 | `make remove PACKAGE=<name>` | Remove a dependency |
 | `make reinstall` | Full reinstall of novacode-cli + deepagents |
@@ -817,7 +811,7 @@ User Input → CLI Entry (main.py) → Agent Loop (core/agent_loop.py) → UI Re
 1. **CLI Entry** (`main.py` → `cli_main()`) — parses args, initializes `SessionState`, runs optional onboarding, enters interactive REPL
 2. **Agent Loop** (`core/agent_loop.py` → `iterate_agent_events()`) — the single canonical async generator driving the LangGraph agent stream
 3. **UI Events** (`ui_events.py`) — dataclass instances decoupled from rendering; both Rich console and Textual TUI consume the same event types
-4. **Middleware Stack** — wraps every model call (Steering → GraphContext → Shell → AgentMemory → Security → FileTracker → MCP → NovaLearning)
+4. **Middleware Stack** — wraps every model call (ModelRetry → VisionCaption → NovaLearning → Security → MCP → Bootstrap → GraphContext → Steering → FileTracker → Shell → AgentMemory)
 
 ### Module Structure
 
@@ -852,9 +846,15 @@ User Input → CLI Entry (main.py) → Agent Loop (core/agent_loop.py) → UI Re
 - `prompts/` — Jinja2 template rendering
 
 **Learning (Hermes):**
-- `hermes/middleware.py` — NovaLearningMiddleware
-- `hermes/memory_tiers.py` — USER.md / MEMORY.md management
-- `hermes/skill_discovery.py` — Autonomous skill creation from repeated patterns
+- `hermes/middleware.py` — NovaLearningMiddleware (thin orchestrator)
+- `hermes/tracker.py` — ToolUsageTracker: counters, per-tool stats, skill invocation tracking
+- `hermes/review.py` — ReviewRunner: signal-based review scheduling, out-of-band LLM review
+- `hermes/skill_manager.py` — SkillManager: create-from-review, failure-grounded refinement
+- `hermes/skill_discovery.py` — Skill spec parsing/writing, effectiveness checks, refinement
+- `hermes/curator.py` — Archive unused skills, flag overlapping ones
+- `hermes/skill_debate.py` — Multi-perspective skill evaluation and merge suggestions
+- `hermes/evolution.py` — Skill unlock/level-up tracking, viewable via `/evolution`
+- `hermes/memory_tiers.py` — USER.md / MEMORY.md auto-maintenance
 - `hermes/config.py` — Centralized thresholds, bounds, and store namespace constants
 - `hermes/verifier.py` — Inline output verifier (Enhancement 1)
 - `hermes/prompt_evolution.py` — Prompt-template hill climbing with A/B testing (Enhancement 2)
@@ -904,7 +904,7 @@ User Input → CLI Entry (main.py) → Agent Loop (core/agent_loop.py) → UI Re
 - `init/` — Project initialization (detect → extract → generate → graph)
 - `skills/` — Skill loading, creation, locking, system prompt generation
 - `hitl/` — Human-in-the-loop interrupt configuration
-- `vision/` — Vision model support
+- `bootstrap/vision_router.py` — Vision captioning middleware (converts images to text for text-only models)
 - `vixie/` — Desktop companion server (notifications, system tray)
 - `plugins/` — Plugin system
 - `wiki/` — Persistent project wiki: ingest, ask, file, and vault management
@@ -918,17 +918,17 @@ User Input → CLI Entry (main.py) → Agent Loop (core/agent_loop.py) → UI Re
 ## Optional Dependencies
 
 ```bash
-# Graph visualization
-pip install novacode-cli[graphify]
-
-# Code search
-pip install novacode-cli[code-search]
-
-# Discord bridge
-pip install novacode-cli[remote-discord]
-
-# Voice agent
+# Voice I/O (STT + TTS + VAD) — ~2 GB extra
 pip install novacode-cli[voice]
+
+# Orpheus TTS — very natural LLM-based local TTS
+pip install novacode-cli[voice-orpheus]
+
+# Parakeet STT — NVIDIA local speech-to-text via sherpa-onnx
+pip install novacode-cli[voice-parakeet]
+
+# Pocket TTS — lightweight local TTS
+pip install novacode-cli[voice-pocket]
 ```
 
 ## Docker

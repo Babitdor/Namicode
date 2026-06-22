@@ -68,9 +68,12 @@ When available (built by `/init`):
 - **Central hubs** = high-degree nodes; changes ripple widely — check blast radius first
 - **Refresh**: `/init` (full) or `/init --update` (incremental)
 
-**Use `query_project_graph("<file/symbol>")` proactively:**
-- Before editing unfamiliar file → check community + blast radius
-- Before refactor/rename → find callers and cross-module seams
+**Use `query_project_graph("<file/symbol>")` when:**
+- You're about to edit a file you haven't read yet → check its community + blast radius
+- `grep` returns hits across multiple files → check if they span communities
+- You're renaming a symbol → check its connections to avoid breaking callers
+- You see an error in an unfamiliar module → check which community it belongs to
+- You need to understand why two files are coupled → check cross-module connections
 </project_graph>
 
 <todo_management>
