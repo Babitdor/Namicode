@@ -822,6 +822,70 @@ class ApprovalModal(ModalScreen[str]):
         self.dismiss("reject")
 
 
+class PlanApprovalModal(ModalScreen[str]):
+    """Plan-mode approval dialog. Returns 'auto', 'manual', or 'refine'.
+
+    Distinct from the tool ``ApprovalModal``: a plan has no session/always-allow
+    rules. The three choices mirror the rich-console flow — auto-approve edits,
+    approve each edit, or keep refining the plan. Esc maps to 'refine' so the
+    safe default never throws the plan away."""
+
+    BINDINGS = [
+        ("a", "auto", "Auto-approve edits"),
+        ("m", "manual", "Manual edits"),
+        ("r", "refine", "Refine"),
+        ("escape", "refine", "Refine"),
+    ]
+
+    def __init__(self, title: str, body: Any) -> None:
+        super().__init__()
+        self._title = title
+        self._body = body
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="modal-box"):
+            yield Static(Text(f">>> {self._title} <<<", style="bold yellow"), id="modal-title")
+            # Bound + scroll the body so a long plan can't push the choices
+            # off-screen — the options must always stay visible.
+            with VerticalScroll(id="modal-body-scroll"):
+                yield Static(self._body, id="modal-body")
+            yield OptionList(id="choices")
+            yield Static(
+                Text(
+                    "↑/↓ navigate · Enter select · a/m/r quick keys · Esc refine",
+                    style="dim",
+                ),
+                id="modal-hint",
+            )
+
+    def on_mount(self) -> None:
+        animate_modal_screen(self)
+        ol = self.query_one("#choices", OptionList)
+        ol.add_option(Option("Auto-approve edits — run the plan, auto-approve each edit (a)"))
+        ol.add_option(Option("Manual edits — run the plan, approve each edit (m)"))
+        ol.add_option(Option("Refine — keep planning, describe the changes (r)"))
+        ol.highlighted = 0
+        ol.focus()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        label = str(event.option.prompt)
+        if label.startswith("Auto-approve"):
+            self.dismiss("auto")
+        elif label.startswith("Manual"):
+            self.dismiss("manual")
+        else:
+            self.dismiss("refine")
+
+    def action_auto(self) -> None:
+        self.dismiss("auto")
+
+    def action_manual(self) -> None:
+        self.dismiss("manual")
+
+    def action_refine(self) -> None:
+        self.dismiss("refine")
+
+
 class RememberRuleModal(ModalScreen[dict | None]):
     """Confirm an 'always allow' rule: editable value + project/global target.
 
@@ -10755,8 +10819,8 @@ class NovaApp(App):
                     body = Markdown(content)
             except Exception:  # noqa: BLE001
                 pass
-            choice = await self.push_screen_wait(ApprovalModal("Plan requires approval", body))
-            if choice in ("approve", "auto"):
+            choice = await self.push_screen_wait(PlanApprovalModal("Plan requires approval", body))
+            if choice in ("auto", "manual"):
                 self.session_state.plan_mode_enabled = False
                 self._update_mode_badge()
                 if choice == "auto":
@@ -10771,17 +10835,19 @@ class NovaApp(App):
                     {
                         "response": {
                             "approved": True,
-                            "mode": "auto" if choice == "auto" else "manual",
+                            "mode": choice,
                         },
                         "state_update": {"plan_mode_enabled": False},
                     }
                 )
             else:
+                # Refine — stay in plan mode; the user's next message routes to
+                # the plan agent to revise (the "chat to refine" flow).
                 e.future.set_result(
                     {
                         "response": {
                             "approved": False,
-                            "action": "reject",
+                            "action": "refine",
                             "feedback": "",
                         },
                         "state_update": {},

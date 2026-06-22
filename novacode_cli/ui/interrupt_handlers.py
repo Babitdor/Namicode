@@ -111,9 +111,7 @@ async def handle_question_interrupt(
                 answer="Please proceed with a reasonable default approach.",
                 selected_index=None,
             )
-            console.print(
-                "[dim][Background mode] Auto-responded to open question[/dim]"
-            )
+            console.print("[dim][Background mode] Auto-responded to open question[/dim]")
     else:
         # Handle the question and get user response
         response = await handle_agent_question(question_request)
@@ -165,11 +163,7 @@ def resolve_plan_content(
         return inline_plan, None
 
     # Priority 1: Check session state for stored plan content (current session)
-    if (
-        session_state
-        and hasattr(session_state, "plan_content")
-        and session_state.plan_content
-    ):
+    if session_state and hasattr(session_state, "plan_content") and session_state.plan_content:
         plan_content = session_state.plan_content
         # Guard: plan_content must be a string (may be a stale object from a
         # previous buggy read).
@@ -177,7 +171,10 @@ def resolve_plan_content(
             plan_content = None
         else:
             if dbg_func:
-                dbg_func("PLAN-CONTENT", f"Using plan content from session state ({len(plan_content)} chars)")  # type: ignore
+                dbg_func(
+                    "PLAN-CONTENT",
+                    f"Using plan content from session state ({len(plan_content)} chars)",
+                )  # type: ignore
             # Still try to get the path for display
             try:
                 from novacode_cli.config.config import settings
@@ -406,10 +403,10 @@ async def handle_plan_approval_interrupt(
             session_state.auto_approve = False
             hitl_response = {"approved": True, "mode": "manual"}
     else:
-        # User rejected or wants to edit - stay in plan mode
+        # User wants to refine - stay in plan mode and revise
         hitl_response = {
             "approved": False,
-            "action": result.get("action", "reject"),
+            "action": result.get("action", "refine"),
             "feedback": result.get("feedback", ""),
         }
 

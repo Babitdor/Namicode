@@ -257,7 +257,7 @@ class PlanApprovalResult(TypedDict):
     """Result of plan approval prompt."""
 
     approved: bool
-    action: str  # "proceed_auto", "proceed_manual", "reject", "edit"
+    action: str  # "proceed_auto", "proceed_manual", "refine"
     feedback: str  # User feedback text for reject/edit actions
 
 
@@ -314,14 +314,13 @@ def prompt_for_plan_approval(
     )
     console.print()
 
-    # Colors per option index: green (auto), blue (manual), red (reject), yellow (edit)
-    option_colors = ["\033[1;32m", "\033[1;34m", "\033[1;31m", "\033[1;33m"]
+    # Colors per option index: green (auto), blue (manual), cyan (refine)
+    option_colors = ["\033[1;32m", "\033[1;34m", "\033[1;36m"]
 
     options = [
-        "Auto-accept: execute the full plan autonomously (a)",
-        "Manual-accept: approve each step as it runs (m)",
-        "Reject: stay in plan mode and revise (n)",
-        "Edit: continue planning (e)",
+        "Auto-approve edits: run the plan, auto-approve each edit (a)",
+        "Manual edits: run the plan, approve each edit (m)",
+        "Refine: keep planning — describe the changes you want (r)",
     ]
 
     selected = 0
@@ -373,20 +372,16 @@ def prompt_for_plan_approval(
                 elif char in {"\r", "\n"}:  # Enter
                     sys.stdout.write("\r\n")
                     break
-                elif char in {"a", "A"}:  # Quick key for auto-accept
+                elif char in {"a", "A"}:  # Quick key for auto-approve edits
                     selected = 0
                     sys.stdout.write("\r\n")
                     break
-                elif char in {"m", "M"}:  # Quick key for manual-accept
+                elif char in {"m", "M"}:  # Quick key for manual edits
                     selected = 1
                     sys.stdout.write("\r\n")
                     break
-                elif char in {"n", "N"}:  # Quick key for reject
+                elif char in {"r", "R"}:  # Quick key for refine
                     selected = 2
-                    sys.stdout.write("\r\n")
-                    break
-                elif char in {"e", "E"}:  # Quick key for edit
-                    selected = 3
                     sys.stdout.write("\r\n")
                     break
                 elif char.isdigit():
@@ -407,48 +402,43 @@ def prompt_for_plan_approval(
     except (ImportError, AttributeError, Exception):
         # Fallback for non-Unix systems (Windows)
         console.print("[bold]Options:[/bold]")
-        console.print("  [green]1. Auto-accept: execute the full plan autonomously (a)[/green]")
-        console.print("  [blue]2. Manual-accept: approve each step as it runs (m)[/blue]")
-        console.print("  [red]3. Reject: stay in plan mode and revise (n)[/red]")
-        console.print("  [yellow]4. Edit: continue planning (e)[/yellow]")
+        console.print(
+            "  [green]1. Auto-approve edits: run the plan, auto-approve each edit (a)[/green]"
+        )
+        console.print("  [blue]2. Manual edits: run the plan, approve each edit (m)[/blue]")
+        console.print("  [cyan]3. Refine: keep planning — describe the changes you want (r)[/cyan]")
 
-        choice = input("\nEnter choice (1-4 or a/m/n/e): ").strip().lower()
+        choice = input("\nEnter choice (1-3 or a/m/r): ").strip().lower()
         if choice in {"1", "a", "auto"}:
             selected = 0
         elif choice in {"2", "m", "manual"}:
             selected = 1
-        elif choice in {"3", "n", "no", "reject"}:
+        elif choice in {"3", "r", "refine"}:
             selected = 2
-        elif choice in {"4", "e", "edit"}:
-            selected = 3
         else:
-            selected = 2  # Default to reject on invalid input
+            selected = 2  # Default to refine on invalid input
 
-    # Collect feedback text if user wants to reject or request edits
+    # Collect feedback text when refining (the changes to apply to the plan)
     feedback = ""
-    if selected in {2, 3}:
+    if selected == 2:
         try:
             console.print()
-            feedback = input("Feedback for the agent (optional, press Enter to skip): ").strip()
+            feedback = input("Describe the changes you want (optional, Enter to skip): ").strip()
         except (EOFError, KeyboardInterrupt):
             feedback = ""
 
     # Map selection to result
     if selected == 0:
-        console.print("[green]Plan approved — executing autonomously[/green]")
+        console.print("[green]Plan approved — running with edits auto-approved[/green]")
         console.print()
         return PlanApprovalResult(approved=True, action="proceed_auto", feedback="")
     if selected == 1:
-        console.print("[blue]Plan approved — you'll review each step[/blue]")
+        console.print("[blue]Plan approved — you'll approve each edit[/blue]")
         console.print()
         return PlanApprovalResult(approved=True, action="proceed_manual", feedback="")
-    if selected == 2:
-        console.print("[yellow]Plan rejected — staying in plan mode[/yellow]")
-        console.print()
-        return PlanApprovalResult(approved=False, action="reject", feedback=feedback)
-    console.print("[cyan]Continuing to edit plan[/cyan]")
+    console.print("[cyan]Refining — staying in plan mode[/cyan]")
     console.print()
-    return PlanApprovalResult(approved=False, action="edit", feedback=feedback)
+    return PlanApprovalResult(approved=False, action="refine", feedback=feedback)
 
 
 __all__ = [

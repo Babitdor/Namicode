@@ -23,8 +23,9 @@ from novacode_cli.prompts import render_template
 
 _PLAN_MODE_PROMPT = render_template("planning.jinja")
 
-_auto_approve_var: contextvars.ContextVar[bool] = contextvars.ContextVar("_auto_approve_var", default=False)
-
+_auto_approve_var: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "_auto_approve_var", default=False
+)
 
 
 # ---------------------------------------------------------------------------
@@ -88,9 +89,7 @@ def ask_user_question(
     response = interrupt({"type": "question", "request": request})
 
     raw_answer = (
-        response["answer"]
-        if isinstance(response, dict) and "answer" in response
-        else str(response)
+        response["answer"] if isinstance(response, dict) and "answer" in response else str(response)
     )
     return value_map.get(raw_answer, raw_answer)
 
@@ -150,10 +149,10 @@ def exit_plan_mode(plan: str = "") -> str:
     if isinstance(response, dict):
         if response.get("approved"):
             return "Plan approved. Proceed with implementation."
-        action = response.get("action", "reject")
+        action = response.get("action", "refine")
         feedback = response.get("feedback", "")
         feedback_suffix = f"\n\nUser feedback: {feedback}" if feedback else ""
-        if action == "edit":
+        if action == "refine":
             return f"Plan needs refinement. Continue iterating on the plan.{feedback_suffix}"
         return f"Plan rejected. Revise the plan based on user feedback.{feedback_suffix}"
     return str(response)
