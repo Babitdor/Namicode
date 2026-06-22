@@ -17,6 +17,14 @@ Did this session include a concrete, multi-step workflow worth repeating on a fu
 {% if recovered_from_error %}
 **You recovered from an error** — strongly consider capturing the working fix + gotcha as a skill.
 {% endif %}
+{% if clean_win %}
+### 2b. Did you do something notably well?
+This window was clean (substantive work, no failed tool calls). If it used a
+reusable approach worth repeating — a good fix pattern, an elegant
+simplification, a production-ready practice — capture it as a short, general
+**habit** (NOT a step-by-step workflow; that's a skill). 1-2 bullets, phrased as
+durable guidance. Skip generic edits and anything already known above.
+{% endif %}
 
 ### 3. Memory Health Check
 Is the user model (`agent.md`) up to date? Any stale facts to prune?
@@ -39,6 +47,7 @@ Record learnings in XML blocks. Omit empty blocks.
 - `<user_model>` — user model entries (each as `## Section Header`). Merged into `agent.md` (always in context).
 - `<lesson topic="...">` — cross-session decisions, patterns, facts as bullets, grouped under a short kebab-case `topic`. Written to `memories/<topic>.md` and indexed (surfaced in context via the memory INDEX). Emit one block per topic.
 - `<skill>` — at most one. Only if step 2 identified a genuinely reusable workflow.
+- `<habit>` — at most one. Only on a clean win (step 2b): 1-2 bullets of reusable good-practice guidance. Written to `HABITS.md` (always injected). Omit unless genuinely notable.
 - `<prompt_issue template="...">` — rare. Only per step 5, when a system-prompt template repeatedly misleads the agent. One short paragraph describing the misunderstanding.
 
 <!--
