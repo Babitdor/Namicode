@@ -159,14 +159,14 @@ class ProjectGraphReader:
         for cid, cdata in community_map.items():
             communities.append({
                 "id": int(cid),
-                "label": cdata["label"],
-                "node_count": cdata["node_count"],
-                "nodes": cdata["files"],
+                "label": cdata.get("label", f"Community {cid}"),
+                "node_count": cdata.get("node_count", 0),
+                "nodes": cdata.get("files", []),
             })
 
         return {
             "total_nodes": sum(c.get("node_count", 0) for c in communities),
-            "total_edges": 0,  # Not stored in index
+            "total_edges": index.get("total_edges", 0),
             "communities": communities,
             "god_nodes": index.get("god_nodes", []),
             "surprising_connections": [],
@@ -180,11 +180,26 @@ class ProjectGraphReader:
             Parsed graph summary, or None if no graph exists.
         """
         # Try index first (fast path)
-        index = self._load_index()
-        if index is not None:
-            graph_data = self._extract_from_index(index)
-            self._graph_summary = GraphSummary(graph_data)
-            self._last_load_time = time.time()
+        index_path = self._index_path()
+        if index_path.exists():
+            try:
+                current_mtime = index_path.stat().st_mtime
+            except OSError:
+                current_mtime = 0.0
+
+            now = time.time()
+            cache_expired = (now - self._last_load_time) > _GRAPH_CACHE_TTL
+            file_changed = current_mtime != self._graph_mtime
+
+            if not self._graph_summary or cache_expired or file_changed:
+                index = self._load_index()
+                if index is not None:
+                    graph_data = self._extract_from_index(index)
+                    self._graph_summary = GraphSummary(graph_data)
+                    self._graph_mtime = current_mtime
+                    self._last_load_time = now
+                    return self._graph_summary
+
             return self._graph_summary
 
         # Fall back to full graph JSON (slow path)

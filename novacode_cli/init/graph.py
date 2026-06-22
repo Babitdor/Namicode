@@ -1149,6 +1149,8 @@ def _build_graph_index(
         "version": 1,
 
         "built_at": time.time(),
+        "total_nodes": len(nodes),
+        "total_edges": len(graph_data.get("links", graph_data.get("edges", []))),
 
         "symbol_map": symbol_map,
 

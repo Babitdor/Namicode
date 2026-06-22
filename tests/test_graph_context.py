@@ -129,7 +129,6 @@ async def test_graph_context_middleware_async(monkeypatch):
 
 def test_reader_loads_index(tmp_path):
     from novacode_cli.bootstrap.graph_reader import ProjectGraphReader
-    import json
     index = {"version": 1, "built_at": 0.0, "symbol_map": {"func_a": {"community": 0, "file": "src/a.py", "connections": 2}}, "file_map": {"src/a.py": {"community": 0, "community_label": "Core", "symbols": ["func_a"], "connections": 2}}, "community_map": {"0": {"label": "Core", "node_count": 1, "files": ["src/a.py"]}}, "god_nodes": []}
     nova_dir = tmp_path / ".nova"
     nova_dir.mkdir()
@@ -143,7 +142,6 @@ def test_reader_loads_index(tmp_path):
 
 def test_reader_falls_back_to_full_graph(tmp_path):
     from novacode_cli.bootstrap.graph_reader import ProjectGraphReader
-    import json
     graph = {"total_nodes": 2, "total_edges": 1, "nodes": [{"id": "a", "label": "a", "community": 0}, {"id": "b", "label": "b", "community": 0}], "links": [{"source": "a", "target": "b"}], "metadata": {"communities": [{"id": 0, "label": "Core", "nodes": ["a", "b"]}]}}
     nova_dir = tmp_path / ".nova"
     nova_dir.mkdir()
