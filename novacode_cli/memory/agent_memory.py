@@ -143,6 +143,7 @@ class AgentMemoryMiddleware(AgentMiddleware):
         self._cached_user_memory: str | None = None
         self._cached_project_memory: str | None = None
         self._cached_memory_index: str | None = None
+        self._cached_habits_memory: str | None = None
         # Cache for rendered memory section to avoid re-rendering on every request
         self._memory_section_cache: str | None = None
         self._memory_section_cache_time: float = 0
@@ -507,19 +508,26 @@ class AgentMemoryMiddleware(AgentMiddleware):
         user_memory = state.get("user_memory")
         project_memory = state.get("project_memory")
         memory_index = state.get("memory_index")
+        habits_memory = state.get("habits_memory")
         base_system_prompt = request.system_prompt
 
         current_time = time.time()
 
         # Check if we can use cached memory section (sliding window)
         # Cache is valid if: TTL not expired AND memory content hasn't changed
-        memory_content = (user_memory or "", project_memory or "", memory_index or "")
+        memory_content = (
+            user_memory or "",
+            project_memory or "",
+            memory_index or "",
+            habits_memory or "",
+        )
         can_use_cache = (
             self._memory_section_cache is not None
             and current_time - self._memory_section_cache_time < self._memory_section_cache_ttl
             and (self._cached_user_memory or "") == memory_content[0]
             and (self._cached_project_memory or "") == memory_content[1]
             and (self._cached_memory_index or "") == memory_content[2]
+            and (self._cached_habits_memory or "") == memory_content[3]
         )
 
         if can_use_cache:
@@ -555,6 +563,7 @@ class AgentMemoryMiddleware(AgentMiddleware):
                 project_memory_info=project_memory_info,
                 project_deepagents_dir=project_deepagents_dir,
                 memory_index=memory_index,
+                habits_memory=habits_memory,
             )
 
             # Cache the result
@@ -563,6 +572,7 @@ class AgentMemoryMiddleware(AgentMiddleware):
             self._cached_user_memory = memory_content[0]
             self._cached_project_memory = memory_content[1]
             self._cached_memory_index = memory_content[2]
+            self._cached_habits_memory = memory_content[3]
 
         # memory_section is guaranteed to be set at this point
         assert memory_section is not None

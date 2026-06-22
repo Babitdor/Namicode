@@ -72,5 +72,15 @@ Keep it current — when you add or change a topic memory, update this index too
 </memory_index>
 {% endif %}
 
+{% if habits_memory %}
+<good_habits>
+These are good habits you've reinforced from your own clean, successful work
+(maintained automatically by self-review). Keep doing them — they reflect what
+"good" has looked like for this user and codebase.
+
+{{ habits_memory }}
+</good_habits>
+{% endif %}
+
 {{ agent_dir_absolute }}
 {{ project_memory_info }}

@@ -26,3 +26,30 @@ def test_review_prompt_omits_habit_section_without_clean_win():
         clean_win=False,
     )
     assert "notably well" not in out.lower()
+
+
+def test_longterm_memory_renders_good_habits_when_present():
+    out = render_template(
+        "longterm_memory.jinja",
+        agent_dir_absolute="/x",
+        agent_dir_display="x",
+        project_memory_info="None",
+        project_deepagents_dir="/project-memory/",
+        memory_index="",
+        habits_memory="- Test-first for races.",
+    )
+    assert "Test-first for races" in out
+    assert "good_habits" in out.lower()
+
+
+def test_longterm_memory_omits_good_habits_when_absent():
+    out = render_template(
+        "longterm_memory.jinja",
+        agent_dir_absolute="/x",
+        agent_dir_display="x",
+        project_memory_info="None",
+        project_deepagents_dir="/project-memory/",
+        memory_index="",
+        habits_memory="",
+    )
+    assert "good_habits" not in out.lower()
