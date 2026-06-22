@@ -266,6 +266,29 @@ class TestSignalBasedTriggers:
         assert await review.should_review() is True  # flag cleared
 
 
+class TestCleanWinTrigger:
+    async def test_clean_substantive_window_triggers_below_threshold(self, store):
+        # threshold=10 -> min_floor=5. 5 clean substantive calls, no failures,
+        # below the substantive threshold and below the failure-burst count.
+        review = _make_review(store, threshold=10)
+        await _seed_window(store, [{"tool": "edit_file", "success": True}] * 5)
+        assert await review.should_review() is True
+        assert review._pending_clean_win is True
+
+    async def test_window_with_failure_is_not_clean_win(self, store):
+        review = _make_review(store, threshold=10)
+        window = [{"tool": "edit_file", "success": True}] * 4 + [
+            {"tool": "execute", "success": False}
+        ]
+        await _seed_window(store, window)  # 5 calls, 1 failure, below threshold
+        assert await review.should_review() is False
+
+    async def test_all_trivial_window_is_not_clean_win(self, store):
+        review = _make_review(store, threshold=10)
+        await _seed_window(store, [{"tool": "read_file", "success": True}] * 5)
+        assert await review.should_review() is False
+
+
 # ── 3. Stronger success signal ───────────────────────────────────────────────
 
 

@@ -129,6 +129,9 @@ class ReviewRunner:
         self._thresholds_loaded = False
         self._agent_dir = agent_dir
         self._enabled = enabled
+        # Set by should_review when a clean-win review fires; read (and cleared)
+        # by run_review to render the good-habit prompt section.
+        self._pending_clean_win = False
 
     # -- Trigger decision ---------------------------------------------------
 
@@ -171,8 +174,11 @@ class ReviewRunner:
         failure_burst = failures >= self._failure_burst and count >= min_floor
         reached = count >= self._review_threshold
         hard_cap = count >= 2 * self._review_threshold
+        # A clean win: real substantive work, zero failures, past the floor. The
+        # window is non-empty here because count >= min_floor (>= 3).
+        clean_win = bool(window) and substantive and failures == 0 and count >= min_floor
 
-        if not (hard_cap or failure_burst or (reached and substantive)):
+        if not (hard_cap or failure_burst or (reached and substantive) or clean_win):
             return False
 
         just_completed = await self._get_review_just_completed()
@@ -180,6 +186,7 @@ class ReviewRunner:
             await self._set_review_just_completed(False)
             return False
 
+        self._pending_clean_win = clean_win
         return True
 
     async def _ensure_thresholds_loaded(self) -> None:
@@ -197,9 +204,7 @@ class ReviewRunner:
         # on every single should_review call for the rest of the session.
         self._thresholds_loaded = True
         try:
-            entry = await self._store.aget(
-                config.HARNESS_CONFIG_NS, config.HARNESS_CONFIG_KEY
-            )
+            entry = await self._store.aget(config.HARNESS_CONFIG_NS, config.HARNESS_CONFIG_KEY)
             if entry and isinstance(entry.value, dict):
                 rt = entry.value.get("review_threshold")
                 fb = entry.value.get("failure_burst")
@@ -243,11 +248,14 @@ class ReviewRunner:
             except Exception:  # noqa: BLE001
                 recent = []
             recovered_from_error = _window_recovered(recent)
+            clean_win = self._pending_clean_win
+            self._pending_clean_win = False
             review_content = render_template(
                 "nova_review.jinja",
                 tool_call_count=self._review_threshold,
                 prior_lessons=prior_lessons,
                 recovered_from_error=recovered_from_error,
+                clean_win=clean_win,
             )
             messages = [*request.messages, SystemMessage(content=review_content)]
 
@@ -361,6 +369,12 @@ class ReviewRunner:
                     len(parsed["lessons"]),
                 )
 
+            if self._agent_dir and parsed.get("habits"):
+                from novacode_cli.hermes.memory_tiers import record_habit
+
+                record_habit(self._agent_dir, parsed["habits"])
+                logger.info("Nova review recorded a good habit")
+
             current_count = await self._get_review_count()
 
             review_id = f"review_{int(time.time())}"
@@ -400,9 +414,7 @@ class ReviewRunner:
                 # NOT gated on skills_dir — tuning is independent of skills.
                 from novacode_cli.hermes.tuner import ThresholdTuner
 
-                self._skill_manager.spawn_task(
-                    ThresholdTuner(self._store).run_tuning_pass()
-                )
+                self._skill_manager.spawn_task(ThresholdTuner(self._store).run_tuning_pass())
 
             # Prompt hill-climbing (Enhancement 2): if this review (and enough
             # recent ones) flag the same template, evolve it. Runs on every
@@ -410,12 +422,8 @@ class ReviewRunner:
             if self._skill_manager:
                 from novacode_cli.hermes.prompt_evolution import PromptEvolutionEngine
 
-                engine = PromptEvolutionEngine(
-                    self._store, spawn=self._skill_manager.spawn_task
-                )
-                self._skill_manager.spawn_task(
-                    engine.detect_and_maybe_evolve(response_content)
-                )
+                engine = PromptEvolutionEngine(self._store, spawn=self._skill_manager.spawn_task)
+                self._skill_manager.spawn_task(engine.detect_and_maybe_evolve(response_content))
 
         except Exception:  # noqa: BLE001
             logger.exception("Failed to apply review content")
