@@ -81,6 +81,11 @@ class MatrixRain(Static):
         self._chars = list(MatrixRain.KATAKANA)
         self._width: int | None = None
         self._timer: Any = None  # set_interval handle for pause/resume
+        # Theme-derived render values, recomputed only when the theme changes
+        # (keyed by _theme_key) instead of every frame.
+        self._palette: tuple[str, str, str, str] | None = None
+        self._art_style_str: str = ""
+        self._palette_key: str | None = None
         self._configure(art, width)
 
     def _configure(self, art: str, width: int | None) -> None:
@@ -141,6 +146,26 @@ class MatrixRain(Static):
     def _art_style(self) -> str:
         """Bold style for the logo — the theme's primary color at full strength."""
         return f"bold {self._theme_base_color().hex}"
+
+    def _theme_key(self) -> str:
+        """The active theme's primary color string — the palette cache key."""
+        raw = None
+        try:
+            raw = self.app.current_theme.primary
+        except Exception:  # noqa: BLE001
+            try:
+                raw = self.app.theme_variables.get("primary")
+            except Exception:  # noqa: BLE001
+                raw = None
+        return (raw or "#00ff88").strip()
+
+    def _ensure_theme_cache(self) -> None:
+        """Recompute the palette + art style only when the theme color changes."""
+        key = self._theme_key()
+        if key != self._palette_key:
+            self._palette = self._rain_palette()
+            self._art_style_str = self._art_style()
+            self._palette_key = key
 
     def _rain_palette(self) -> tuple[str, str, str, str]:
         """(head, near, mid, tail) hex colors — a *dimmed* theme-tinted gradient.
@@ -236,7 +261,8 @@ class MatrixRain(Static):
                 lines[y][x] = " "
                 styles[y][x] = ""
 
-        head_c, near_c, mid_c, tail_c = self._rain_palette()
+        self._ensure_theme_cache()
+        head_c, near_c, mid_c, tail_c = self._palette
         choice = random.choice
         chars = self._chars
 
@@ -264,7 +290,7 @@ class MatrixRain(Static):
         # Composite the logo on top. Solid art cells occlude the rain; regular
         # spaces stay transparent so the rain shows through the gaps.
         if self._art_lines:
-            art_style = self._art_style()
+            art_style = self._art_style_str
             for ay, art_line in enumerate(self._art_lines):
                 gy = self._art_top + ay
                 if not 0 <= gy < rows:

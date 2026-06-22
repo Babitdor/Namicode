@@ -33,3 +33,18 @@ def test_build_frame_runs_many_times_without_error():
     mw = _rain()
     for _ in range(200):
         mw._build_frame()
+
+
+def test_palette_cache_reuses_until_theme_changes(monkeypatch):  # noqa: ANN001
+    mw = _rain()
+    keys = iter(["#abcdef", "#abcdef", "#123456"])
+    monkeypatch.setattr(mw, "_theme_key", lambda: next(keys))
+    mw._ensure_theme_cache()
+    p1 = mw._palette
+    mw._ensure_theme_cache()
+    p2 = mw._palette  # same key -> cached (same object)
+    mw._ensure_theme_cache()
+    p3 = mw._palette  # key changed -> recomputed (new object)
+    assert p1 is p2
+    assert p3 is not p2
+    assert mw._art_style_str  # populated alongside the palette
