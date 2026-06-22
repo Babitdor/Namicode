@@ -8,6 +8,7 @@ detail are intentionally NOT injected — they live behind ``query_project_graph
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import pytest
 
@@ -124,3 +125,30 @@ async def test_graph_context_middleware_async(monkeypatch):
     assert "100 nodes, 250 edges" in res.system_prompt
 
 
+
+
+def test_reader_loads_index(tmp_path):
+    from novacode_cli.bootstrap.graph_reader import ProjectGraphReader
+    import json
+    index = {"version": 1, "built_at": 0.0, "symbol_map": {"func_a": {"community": 0, "file": "src/a.py", "connections": 2}}, "file_map": {"src/a.py": {"community": 0, "community_label": "Core", "symbols": ["func_a"], "connections": 2}}, "community_map": {"0": {"label": "Core", "node_count": 1, "files": ["src/a.py"]}}, "god_nodes": []}
+    nova_dir = tmp_path / ".nova"
+    nova_dir.mkdir()
+    (nova_dir / "graph-index.json").write_text(json.dumps(index), encoding="utf-8")
+    reader = ProjectGraphReader(str(tmp_path))
+    summary = reader.load()
+    assert summary is not None
+    assert summary.total_nodes == 1
+    assert len(summary.communities) == 1
+    assert summary.communities[0]["label"] == "Core"
+
+def test_reader_falls_back_to_full_graph(tmp_path):
+    from novacode_cli.bootstrap.graph_reader import ProjectGraphReader
+    import json
+    graph = {"total_nodes": 2, "total_edges": 1, "nodes": [{"id": "a", "label": "a", "community": 0}, {"id": "b", "label": "b", "community": 0}], "links": [{"source": "a", "target": "b"}], "metadata": {"communities": [{"id": 0, "label": "Core", "nodes": ["a", "b"]}]}}
+    nova_dir = tmp_path / ".nova"
+    nova_dir.mkdir()
+    (nova_dir / "project-graph.json").write_text(json.dumps(graph), encoding="utf-8")
+    reader = ProjectGraphReader(str(tmp_path))
+    summary = reader.load()
+    assert summary is not None
+    assert summary.total_nodes == 2

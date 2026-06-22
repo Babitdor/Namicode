@@ -127,12 +127,67 @@ class ProjectGraphReader:
         """Return the path to the project graph JSON file."""
         return self._workspace_root / ".nova" / "project-graph.json"
 
+    def _index_path(self) -> Path:
+        """Return the path to the graph index JSON file."""
+        return self._workspace_root / ".nova" / "graph-index.json"
+
+    def _load_index(self) -> dict[str, Any] | None:
+        """Load the pre-computed graph index.
+
+        Returns:
+            Parsed index data, or None if no index exists.
+        """
+        index_path = self._index_path()
+        if not index_path.exists():
+            return None
+        try:
+            return json.loads(index_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+            return None
+
+    def _extract_from_index(self, index: dict[str, Any]) -> dict[str, Any]:
+        """Convert index data into the same format as _extract_summary.
+
+        Args:
+            index: Parsed graph-index.json data.
+
+        Returns:
+            Dict with communities, god_nodes, total_nodes, total_edges.
+        """
+        community_map = index.get("community_map", {})
+        communities = []
+        for cid, cdata in community_map.items():
+            communities.append({
+                "id": int(cid),
+                "label": cdata["label"],
+                "node_count": cdata["node_count"],
+                "nodes": cdata["files"],
+            })
+
+        return {
+            "total_nodes": sum(c.get("node_count", 0) for c in communities),
+            "total_edges": 0,  # Not stored in index
+            "communities": communities,
+            "god_nodes": index.get("god_nodes", []),
+            "surprising_connections": [],
+            "key_files": [],
+        }
+
     def load(self) -> GraphSummary | None:
         """Load and parse the project graph, with caching.
 
         Returns:
             Parsed graph summary, or None if no graph exists.
         """
+        # Try index first (fast path)
+        index = self._load_index()
+        if index is not None:
+            graph_data = self._extract_from_index(index)
+            self._graph_summary = GraphSummary(graph_data)
+            self._last_load_time = time.time()
+            return self._graph_summary
+
+        # Fall back to full graph JSON (slow path)
         graph_path = self.graph_path()
         if not graph_path.exists():
             return None
