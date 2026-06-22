@@ -40,6 +40,9 @@ class AgentMemoryState(AgentState):
     memory_index: NotRequired[str]
     """The topic-memory index (~/.nova/{agent}/memories/INDEX.md), if present."""
 
+    habits_memory: NotRequired[str]
+    """Good-habits surface (~/.nova/{agent}/HABITS.md), always injected."""
+
 
 class AgentMemoryStateUpdate(TypedDict):
     """A state update for the agent memory middleware."""
@@ -52,6 +55,9 @@ class AgentMemoryStateUpdate(TypedDict):
 
     memory_index: NotRequired[str]
     """The topic-memory index (~/.nova/{agent}/memories/INDEX.md), if present."""
+
+    habits_memory: NotRequired[str]
+    """Good-habits surface (~/.nova/{agent}/HABITS.md), always injected."""
 
 
 # Long-term Memory Documentation
@@ -332,10 +338,11 @@ class AgentMemoryMiddleware(AgentMiddleware):
         # Gather all memory file paths to check for changes
         user_path = self.settings.get_user_agent_md_path(self.assistant_id)
         index_path = self.agent_dir / "memories" / "INDEX.md"
+        habits_path = user_path.parent / "HABITS.md"
         project_paths = (
             self.settings.get_project_agent_md_paths() if not self.skip_project_memory else []
         )
-        all_paths = [user_path, index_path] + list(project_paths)
+        all_paths = [user_path, index_path, habits_path] + list(project_paths)
 
         # Check if any files have changed (hot-reload) - only for local filesystem
         # In sandbox mode, we always reload since we can't track mtimes
@@ -360,6 +367,14 @@ class AgentMemoryMiddleware(AgentMiddleware):
                 if len(index_content) > MAX_MEMORY_CHARS:
                     index_content = index_content[:MAX_MEMORY_CHARS] + _MEMORY_TRUNCATION_NOTICE
                 result["memory_index"] = index_content
+
+        # Load the always-injected good-habits file (HABITS.md), if present.
+        if needs_reload or "habits_memory" not in state:
+            habits_content = self._read_file(habits_path)
+            if habits_content is not None and habits_content.strip():
+                if len(habits_content) > MAX_MEMORY_CHARS:
+                    habits_content = habits_content[:MAX_MEMORY_CHARS] + _MEMORY_TRUNCATION_NOTICE
+                result["habits_memory"] = habits_content
 
         # Load project memory from ALL available sources if not in state or if files changed
         # Project memory is read from sandbox when available, local otherwise
@@ -426,10 +441,11 @@ class AgentMemoryMiddleware(AgentMiddleware):
 
         user_path = self.settings.get_user_agent_md_path(self.assistant_id)
         index_path = self.agent_dir / "memories" / "INDEX.md"
+        habits_path = user_path.parent / "HABITS.md"
         project_paths = (
             self.settings.get_project_agent_md_paths() if not self.skip_project_memory else []
         )
-        all_paths = [user_path, index_path, *project_paths]
+        all_paths = [user_path, index_path, habits_path, *project_paths]
         needs_reload = self._files_changed(all_paths) if self._backend is None else True
 
         if needs_reload or "user_memory" not in state:
@@ -445,6 +461,13 @@ class AgentMemoryMiddleware(AgentMiddleware):
                 if len(index_content) > MAX_MEMORY_CHARS:
                     index_content = index_content[:MAX_MEMORY_CHARS] + _MEMORY_TRUNCATION_NOTICE
                 result["memory_index"] = index_content
+
+        if needs_reload or "habits_memory" not in state:
+            habits_content = await self._aread_file(habits_path)
+            if habits_content is not None and habits_content.strip():
+                if len(habits_content) > MAX_MEMORY_CHARS:
+                    habits_content = habits_content[:MAX_MEMORY_CHARS] + _MEMORY_TRUNCATION_NOTICE
+                result["habits_memory"] = habits_content
 
         if not self.skip_project_memory and (needs_reload or "project_memory" not in state):
             combined_memories: list[str] = []
