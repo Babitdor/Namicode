@@ -58,6 +58,8 @@ _MEMORY_TRUNCATION_NOTICE = "\n\n... [older history truncated — only recent en
 
 # Default H1 header for a freshly-created topic lesson file.
 _DEFAULT_TOPIC_HEADER = "# {title}\n\nLessons captured during reviews / dreams.\n"
+# H1 header for a freshly-created HABITS.md (the always-injected good-habits file).
+_HABITS_HEADER = "# Good Habits\n\nReusable practices that worked well, captured during reviews.\n"
 # A safe default topic for unstructured or untagged lessons.
 _DEFAULT_TOPIC = "lessons"
 
@@ -261,6 +263,41 @@ def record_lesson(agent_dir: Path, topic: str, bullets: str) -> None:
     compact_memory_file(topic_file)
 
 
+def record_habit(agent_dir: Path, bullets: str) -> None:
+    """Record good-habit bullets to ``HABITS.md`` (the always-injected file).
+
+    Mirrors :func:`record_lesson`: bullets are prepended (newest-first) under a
+    timestamped section, deduped against what the file already holds, and the
+    file is compacted when it exceeds ``MAX_MEMORY_CHARS``. Best-effort.
+
+    Args:
+        agent_dir: The agent directory (``~/.nova/agents/<id>/``).
+        bullets: Bullet lines describing reusable good habits.
+    """
+    if not (bullets or "").strip():
+        return
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    habits_file = agent_dir / "HABITS.md"
+
+    content = habits_file.read_text(encoding="utf-8") if habits_file.exists() else _HABITS_HEADER
+
+    deduped = _dedup_against(content, bullets)
+    if not deduped:
+        _emit_memory_event("Habit added no new memory (all duplicates)")
+        return
+
+    insert_at = content.find("\n## ")
+    if insert_at == -1:
+        insert_at = len(content)
+    before, after = content[:insert_at], content[insert_at:]
+    timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+    entry = f"\n## Review — {timestamp}\n\n{deduped}\n"
+    habits_file.write_text(before.rstrip() + "\n" + entry + after, encoding="utf-8")
+
+    _emit_memory_event("Recorded good habit to HABITS.md", icon="✨")
+    compact_memory_file(habits_file)
+
+
 _LESSON_BLOCK_RE = re.compile(
     r'<lesson(?:\s+topic\s*=\s*["\']?([^"\'>]*)["\']?)?\s*>(.*?)</lesson>',
     re.DOTALL | re.IGNORECASE,
@@ -290,7 +327,7 @@ def parse_review_response(response_content: str) -> dict[str, Any]:
     Returns:
         ``{"user_model": str, "lessons": [{"topic": str, "bullets": str}, ...]}``.
     """
-    result: dict[str, Any] = {"user_model": "", "lessons": []}
+    result: dict[str, Any] = {"user_model": "", "lessons": [], "habits": ""}
 
     if not response_content:
         return result
@@ -309,8 +346,22 @@ def parse_review_response(response_content: str) -> dict[str, Any]:
         if bullets:
             result["lessons"].append({"topic": topic, "bullets": bullets})
 
+    habit_matches = re.findall(
+        r"<habit>(.*?)</habit>",
+        response_content,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if habit_matches:
+        result["habits"] = "\n".join(m.strip() for m in habit_matches if m.strip())
+
     # Fallback: unstructured response with content → a single default-topic lesson.
-    if not result["user_model"] and not result["lessons"] and response_content.strip():
+    # A habit-only response must not be re-filed as a lesson, so habits gate it too.
+    if (
+        not result["user_model"]
+        and not result["lessons"]
+        and not result["habits"]
+        and response_content.strip()
+    ):
         result["lessons"].append({"topic": _DEFAULT_TOPIC, "bullets": response_content.strip()})
 
     return result

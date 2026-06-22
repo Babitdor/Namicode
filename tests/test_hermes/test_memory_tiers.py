@@ -234,3 +234,49 @@ class TestMigrateLegacyTiers:
         assert "[lessons](lessons.md)" in index
         # Idempotent: a second run finds nothing to scrub.
         assert migrate_legacy_tiers(temp_agent_dir) is False
+
+
+# --- good habits (<habit> parsing + HABITS.md writer) ----------------------
+
+
+def test_parse_extracts_habit_block():
+    from novacode_cli.hermes.memory_tiers import parse_review_response
+
+    content = "<habit>\n- Test-first for races: write the failing test first.\n</habit>"
+    parsed = parse_review_response(content)
+    assert "Test-first for races" in parsed["habits"]
+    assert parsed["lessons"] == []  # habit-only must NOT be misfiled as a lesson
+    assert parsed["user_model"] == ""
+
+
+def test_parse_no_habit_block_is_empty():
+    from novacode_cli.hermes.memory_tiers import parse_review_response
+
+    parsed = parse_review_response("<lesson topic='t'>\n- a fact\n</lesson>")
+    assert parsed["habits"] == ""
+    assert len(parsed["lessons"]) == 1
+
+
+def test_record_habit_creates_and_appends(tmp_path):  # noqa: ANN001
+    from novacode_cli.hermes.memory_tiers import record_habit
+
+    record_habit(tmp_path, "- Flatten nesting with guard clauses.")
+    habits = (tmp_path / "HABITS.md").read_text(encoding="utf-8")
+    assert "Good Habits" in habits  # header
+    assert "Flatten nesting with guard clauses" in habits
+
+
+def test_record_habit_dedups(tmp_path):  # noqa: ANN001
+    from novacode_cli.hermes.memory_tiers import record_habit
+
+    record_habit(tmp_path, "- Extract magic numbers to named constants.")
+    record_habit(tmp_path, "- Extract magic numbers to named constants.")
+    habits = (tmp_path / "HABITS.md").read_text(encoding="utf-8")
+    assert habits.count("Extract magic numbers to named constants") == 1
+
+
+def test_record_habit_empty_is_noop(tmp_path):  # noqa: ANN001
+    from novacode_cli.hermes.memory_tiers import record_habit
+
+    record_habit(tmp_path, "   ")
+    assert not (tmp_path / "HABITS.md").exists()
