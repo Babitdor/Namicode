@@ -122,6 +122,7 @@ from novacode_cli.config.config import (
 from novacode_cli.hitl.interrupts import get_interrupt_configs
 from novacode_cli.integrations.sandbox_factory import get_default_working_dir
 from novacode_cli.prompts import render_template
+from novacode_cli.skills.refreshing_middleware import RefreshingSkillsMiddleware
 
 
 def get_shared_store() -> "BaseStore":
@@ -935,6 +936,10 @@ This file stores your preferences and context that persist across sessions.
     from novacode_cli.security.middleware import SecurityMiddleware
     from novacode_cli.shell import ShellMiddleware
     from novacode_cli.tracking.file_tracker import FileTrackerMiddleware
+    from langchain.agents.middleware import (
+        ClearToolUsesEdit,
+        ContextEditingMiddleware,
+    )
 
     # Check whether MCP servers are configured before instantiating the middleware.
     # MCPMiddleware calls list_servers() (a JSON file read) on every model turn, so
@@ -999,6 +1004,23 @@ This file stores your preferences and context that persist across sessions.
             enforce_read_before_edit=True,
             truncate_results=True,
             include_system_prompt=True,
+        ),
+        # Context editing — clear older tool call outputs when token limits
+        # are reached, preserving only the most recent results. This is a
+        # lightweight, deterministic alternative to LLM-based compaction.
+        # Placed after FileTracker (which needs full history) and before
+        # ShellMiddleware/AgentMemoryMiddleware so it operates on the final
+        # message list that will be sent to the model.
+        ContextEditingMiddleware(
+            edits=[
+                ClearToolUsesEdit(
+                    trigger=60_000,  # ~60k tokens triggers cleanup
+                    keep=5,  # keep last 5 tool results
+                    clear_tool_inputs=False,
+                    exclude_tools=["read_file", "think", "web_search"],
+                    placeholder="[cleared]",
+                ),
+            ],
         ),
         ShellMiddleware(
             workspace_root=str(workspace_root),
@@ -1160,10 +1182,27 @@ This file stores your preferences and context that persist across sessions.
     # It will create the SubAgentMiddleware internally
     # Use provided checkpointer or fallback to InMemorySaver
     final_checkpointer = checkpointer if checkpointer is not None else InMemorySaver()
+
+    # Refresh the injected skills list when the skill dirs change, so a skill
+    # created mid-session (skill_manage / Hermes review) is usable this session
+    # instead of only after a restart. This replaces create_deep_agent's default
+    # SkillsMiddleware (see skills=None below).
+    skill_watch_dirs = [skills_dir]
+    if claude_skills_dir.exists():
+        skill_watch_dirs.append(claude_skills_dir)
+    skill_watch_dirs.extend(project_skills_dirs)
+    agent_middleware.append(
+        RefreshingSkillsMiddleware(
+            backend=composite_backend,
+            sources=skill_sources,
+            watch_dirs=skill_watch_dirs,
+        )
+    )
+
     agent = create_deep_agent(
         name=assistant_id,
         model=wrapped_model,
-        skills=skill_sources,
+        skills=None,  # our RefreshingSkillsMiddleware (in agent_middleware) handles skills
         system_prompt=system_prompt,
         tools=tools,
         checkpointer=final_checkpointer,
