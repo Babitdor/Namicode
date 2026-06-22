@@ -1004,7 +1004,10 @@ This file stores your preferences and context that persist across sessions.
         # take effect on its next step.
         SteeringMiddleware(instructions=steering_instructions),
         FileTrackerMiddleware(
-            enforce_read_before_edit=True,
+            # Read-before-edit rejection disabled — it blocked too many valid
+            # edits (edit_file no longer hard-fails on unread files). File-op
+            # tracking and result truncation below stay on.
+            enforce_read_before_edit=False,
             truncate_results=True,
             include_system_prompt=True,
         ),
