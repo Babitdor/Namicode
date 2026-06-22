@@ -37,3 +37,13 @@ def test_habits_md_absent_leaves_state_unset(tmp_path):  # noqa: ANN001
     mw, _agent_md = _make_middleware(tmp_path)
     result = mw.before_agent({})
     assert "habits_memory" not in result
+
+
+async def test_habits_md_loaded_into_state_async(tmp_path):  # noqa: ANN001
+    # The agent runs the ASYNC path (abefore_agent); cover it too.
+    mw, _agent_md = _make_middleware(tmp_path)
+    (tmp_path / "HABITS.md").write_text(
+        "# Good Habits\n\n- Test-first for races.\n", encoding="utf-8"
+    )
+    result = await mw.abefore_agent({})
+    assert "Test-first for races" in result["habits_memory"]
