@@ -46,6 +46,29 @@ from novacode_cli.ui.ui_elements import (
 )
 
 
+async def _capture_fallback_usage(agent, config, token_tracker: TokenTracker) -> None:
+    """Capture token usage from the persisted final AIMessage.
+
+    LangGraph's ``messages`` stream mode may not yield a final chunk carrying
+    ``usage_metadata`` for some providers (notably Ollama); the aggregated
+    AIMessage in the persisted state always carries it.  Best-effort: any
+    failure leaves the tracker untouched rather than breaking the turn.
+    """
+    try:
+        state = await agent.aget_state(config)
+        messages = state.values.get("messages", [])
+        for msg in reversed(messages):
+            usage = getattr(msg, "usage_metadata", None)
+            if usage:
+                in_tok = usage.get("input_tokens", 0)
+                out_tok = usage.get("output_tokens", 0)
+                if in_tok or out_tok:
+                    token_tracker.add(in_tok, out_tok)
+                break
+    except Exception:
+        pass
+
+
 async def execute_task(  # type: ignore
     user_input: str,
     agent,
@@ -590,6 +613,10 @@ async def execute_task(  # type: ignore
                 cache_read_tokens=captured_cache_read_tokens,
                 cache_creation_tokens=captured_cache_creation_tokens,
             )
+        elif token_tracker and not captured_input_tokens:
+            # Stream mode didn't surface usage (e.g. Ollama) — fall back to the
+            # usage_metadata on the persisted final AIMessage.
+            await _capture_fallback_usage(agent, config, token_tracker)
         if token_tracker:
             token_tracker.increment_assistant_messages()
             if displayed_tool_ids:
