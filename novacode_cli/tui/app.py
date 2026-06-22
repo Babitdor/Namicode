@@ -184,7 +184,7 @@ class MatrixRain(Static):
     def on_mount(self) -> None:
         self._init_columns()
         # ~25 fps: smooth fluid rain. Previous optimizations (buffer reuse,
-        # RichText.assemble) ensure this stays cheap.
+        # char pool, leaner Text assembly) ensure this stays cheap.
         self._timer = self.set_interval(0.04, self._tick)
 
     def pause(self) -> None:
@@ -209,9 +209,15 @@ class MatrixRain(Static):
                     "trail": random.randint(5, 14),
                 }
             )
-        # Pre-allocate frame buffers (reused in _tick to avoid GC churn)
+        # Pre-allocate frame buffers (reused per frame to avoid GC churn).
         self._frame_lines = [[" "] * self._col_count for _ in range(self._row_count)]
         self._frame_styles = [[""] * self._col_count for _ in range(self._row_count)]
+        # Prebuilt blank rows copied in (slice-assign) to clear buffers at C speed.
+        self._blank_line = [" "] * self._col_count
+        self._blank_style = [""] * self._col_count
+        # Precomputed random-char pool: strided per frame from a random offset so
+        # the look stays random without a random.choice() call per cell.
+        self._char_pool = [random.choice(self._chars) for _ in range(512)]
 
     def _tick(self) -> None:
         """Advance one frame of the rain, then stamp the logo over it.
@@ -255,16 +261,18 @@ class MatrixRain(Static):
         lines = self._frame_lines
         styles = self._frame_styles
 
-        # Clear buffers for the new frame.
+        # Clear buffers for the new frame (C-level slice copy of prebuilt rows).
+        blank_l = self._blank_line
+        blank_s = self._blank_style
         for y in range(rows):
-            for x in range(cols):
-                lines[y][x] = " "
-                styles[y][x] = ""
+            lines[y][:] = blank_l
+            styles[y][:] = blank_s
 
         self._ensure_theme_cache()
         head_c, near_c, mid_c, tail_c = self._palette
-        choice = random.choice
-        chars = self._chars
+        pool = self._char_pool
+        pool_len = len(pool)
+        idx = random.randrange(pool_len)  # one RNG call per frame
 
         for col, d in enumerate(self._columns):
             d["pos"] += d["speed"]
@@ -277,7 +285,10 @@ class MatrixRain(Static):
             head = min(rows - 1, int(d["pos"]))
             for y in range(tail_start, head + 1):
                 dist = head - y
-                lines[y][col] = choice(chars)
+                lines[y][col] = pool[idx]
+                idx += 1
+                if idx == pool_len:
+                    idx = 0
                 if dist == 0:
                     styles[y][col] = head_c
                 elif dist <= 2:
@@ -306,12 +317,7 @@ class MatrixRain(Static):
                         row_l[gx] = ch
                         row_s[gx] = art_style
 
-        # Build the frame with run-length coalescing: collect (segment, style)
-        # tuples and build the final RichText in one shot via assemble(). This
-        # is significantly faster than repeated append() calls.
-        from rich.text import Text as RichText
-
-        segments: list[tuple[str, str | None]] = []
+        text = Text()
         for y in range(rows):
             line = lines[y]
             st = styles[y]
@@ -322,12 +328,11 @@ class MatrixRain(Static):
                 while j < cols and st[j] == s:
                     j += 1
                 segment = "".join(line[x:j]) if s else " " * (j - x)
-                segments.append((segment, s or None))
+                text.append(segment, s or None)
                 x = j
             if y < rows - 1:
-                segments.append(("\n", None))
-
-        return RichText.assemble(*segments)
+                text.append("\n")
+        return text
 
 
 # Transcript is pruned from the top once it exceeds this many widgets, down to

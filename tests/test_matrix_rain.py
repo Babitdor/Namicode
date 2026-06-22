@@ -48,3 +48,16 @@ def test_palette_cache_reuses_until_theme_changes(monkeypatch):  # noqa: ANN001
     assert p1 is p2
     assert p3 is not p2
     assert mw._art_style_str  # populated alongside the palette
+
+
+def test_blank_buffers_match_grid_width():
+    mw = _rain()
+    assert mw._blank_line == [" "] * mw._col_count
+    assert mw._blank_style == [""] * mw._col_count
+
+
+def test_char_pool_is_nonempty_valid_katakana():
+    mw = _rain()
+    katakana = set(MatrixRain.KATAKANA)
+    assert mw._char_pool
+    assert all(c in katakana for c in mw._char_pool)
