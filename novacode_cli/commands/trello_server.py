@@ -1,29 +1,41 @@
-"""HTTP server, REST API, and self-contained HTML page for the Trello task board.
+"""HTTP server, REST API, and self-contained HTML page for the Trello kanban board.
 
 The TrelloServer class starts a lightweight HTTP server (stdlib http.server)
-in a background daemon thread, serving a single-page task board app with
-three columns: Loaded (backlog), Processing (in progress), Done (completed).
+in a background daemon thread, serving a single-page kanban app with three
+columns: Loaded (backlog), Processing (in progress), Done (completed). Cards
+move by drag-and-drop or buttons, both directions.
 
-REST API endpoints:
-    GET  /api/tasks       — list all tasks
-    POST /api/tasks       — create a new task (body: {"description": "..."})
-    PATCH /api/tasks/<id> — update task status (body: {"status": "processing"})
-    DELETE /api/tasks/<id>— remove a task
+The server *instance* is the single source of truth for task state (guarded by
+a lock) and is attached to the HTTPServer so the request handler reads it via
+``self.server.backend`` — no class-level mutable state.
 
-An asyncio.Queue bridge notifies the CLI when a task moves to "processing".
+REST API:
+    GET    /api/state        — {tasks: [...], auto_advance: bool, running_id: str|None}
+    GET    /api/tasks        — list all tasks
+    POST   /api/tasks        — create a task        (body: {"description": "..."})
+    PATCH  /api/tasks/<id>   — move a task          (body: {"status": "processing"})
+    DELETE /api/tasks/<id>   — remove a task
+    POST   /api/settings     — board settings       (body: {"auto_advance": true})
+
+The CLI watch loop (see trello_handler.py) reads task state directly: it picks
+the oldest task in "processing" (FIFO), or, when auto-advance is on and nothing
+is processing, pulls the next "loaded" card. No fragile notification queue.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
-import os
-import socket
 import threading
 import uuid
 from datetime import UTC, datetime
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
+
+_VALID_STATUS = ("loaded", "processing", "done")
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat()
 
 
 HTML_PAGE = r"""<!DOCTYPE html>
@@ -31,7 +43,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Nova Task Board</title>
+<title>Nova Kanban Board</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
@@ -69,7 +81,6 @@ HTML_PAGE = r"""<!DOCTYPE html>
     overflow-x: hidden;
   }
 
-  /* Animated grid background */
   body::before {
     content: '';
     position: fixed;
@@ -82,7 +93,6 @@ HTML_PAGE = r"""<!DOCTYPE html>
     z-index: 0;
   }
 
-  /* Subtle radial gradient overlay */
   body::after {
     content: '';
     position: fixed;
@@ -92,7 +102,6 @@ HTML_PAGE = r"""<!DOCTYPE html>
     z-index: 0;
   }
 
-  /* Grain texture overlay */
   .grain {
     position: fixed;
     inset: 0;
@@ -116,11 +125,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
     border-bottom: 1px solid var(--border-subtle);
   }
 
-  .header-left {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-  }
+  .header-left { display: flex; align-items: center; gap: 14px; }
 
   .logo-icon {
     width: 36px;
@@ -146,17 +151,41 @@ HTML_PAGE = r"""<!DOCTYPE html>
     background-clip: text;
   }
 
-  header .subtitle {
-    font-size: 13px;
-    color: var(--text-secondary);
-    font-weight: 400;
-  }
+  header .subtitle { font-size: 13px; color: var(--text-secondary); font-weight: 400; }
 
-  .header-right {
+  .header-right { display: flex; align-items: center; gap: 16px; }
+
+  .toggle {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    user-select: none;
   }
+  .toggle input { display: none; }
+  .toggle .track {
+    width: 38px;
+    height: 20px;
+    border-radius: 20px;
+    background: var(--border-mid);
+    position: relative;
+    transition: background 0.25s ease;
+  }
+  .toggle .track::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--text-secondary);
+    transition: transform 0.25s ease, background 0.25s ease;
+  }
+  .toggle input:checked + .track { background: rgba(34, 211, 238, 0.3); }
+  .toggle input:checked + .track::after { transform: translateX(18px); background: var(--cyan); }
 
   .server-badge {
     font-family: 'JetBrains Mono', monospace;
@@ -170,7 +199,6 @@ HTML_PAGE = r"""<!DOCTYPE html>
     align-items: center;
     gap: 6px;
   }
-
   .server-badge .live-dot {
     width: 6px;
     height: 6px;
@@ -205,15 +233,8 @@ HTML_PAGE = r"""<!DOCTYPE html>
     outline: none;
     transition: all 0.25s ease;
   }
-
-  .add-task input:focus {
-    border-color: var(--cyan);
-    box-shadow: 0 0 0 3px var(--cyan-glow);
-  }
-
-  .add-task input::placeholder {
-    color: var(--text-muted);
-  }
+  .add-task input:focus { border-color: var(--cyan); box-shadow: 0 0 0 3px var(--cyan-glow); }
+  .add-task input::placeholder { color: var(--text-muted); }
 
   .add-task button {
     padding: 12px 24px;
@@ -227,26 +248,9 @@ HTML_PAGE = r"""<!DOCTYPE html>
     cursor: pointer;
     transition: all 0.25s ease;
     letter-spacing: 0.3px;
-    position: relative;
-    overflow: hidden;
   }
-
-  .add-task button::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(135deg, transparent 40%, rgba(255,255,255,0.12) 100%);
-    pointer-events: none;
-  }
-
-  .add-task button:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 4px 20px var(--cyan-glow);
-  }
-
-  .add-task button:active {
-    transform: translateY(0);
-  }
+  .add-task button:hover { transform: translateY(-1px); box-shadow: 0 4px 20px var(--cyan-glow); }
+  .add-task button:active { transform: translateY(0); }
 
   .board {
     position: relative;
@@ -271,14 +275,9 @@ HTML_PAGE = r"""<!DOCTYPE html>
     display: flex;
     flex-direction: column;
     min-height: 320px;
-    backdrop-filter: blur(4px);
     transition: border-color 0.3s ease;
-    position: relative;
   }
-
-  .column:hover {
-    border-color: var(--border-mid);
-  }
+  .column:hover { border-color: var(--border-mid); }
 
   .column-header {
     padding: 16px 18px 14px;
@@ -301,22 +300,11 @@ HTML_PAGE = r"""<!DOCTYPE html>
   }
 
   .column-header.loaded { color: var(--amber); }
-  .column-header.loaded .count {
-    background: rgba(251, 191, 36, 0.1);
-    color: var(--amber);
-  }
-
+  .column-header.loaded .count { background: rgba(251, 191, 36, 0.1); color: var(--amber); }
   .column-header.processing { color: var(--cyan); }
-  .column-header.processing .count {
-    background: rgba(34, 211, 238, 0.1);
-    color: var(--cyan);
-  }
-
+  .column-header.processing .count { background: rgba(34, 211, 238, 0.1); color: var(--cyan); }
   .column-header.done { color: var(--emerald); }
-  .column-header.done .count {
-    background: rgba(52, 211, 153, 0.1);
-    color: var(--emerald);
-  }
+  .column-header.done .count { background: rgba(52, 211, 153, 0.1); color: var(--emerald); }
 
   .task-list {
     flex: 1;
@@ -325,44 +313,39 @@ HTML_PAGE = r"""<!DOCTYPE html>
     display: flex;
     flex-direction: column;
     gap: 8px;
+    transition: background 0.2s ease;
+  }
+  .task-list.drag-over {
+    background: rgba(34, 211, 238, 0.04);
+    outline: 1px dashed var(--border-mid);
+    outline-offset: -4px;
+    border-radius: var(--radius-sm);
   }
 
-  /* Custom scrollbar */
-  .task-list::-webkit-scrollbar {
-    width: 4px;
-  }
-  .task-list::-webkit-scrollbar-track {
-    background: transparent;
-  }
-  .task-list::-webkit-scrollbar-thumb {
-    background: var(--border-mid);
-    border-radius: 4px;
-  }
-  .task-list::-webkit-scrollbar-thumb:hover {
-    background: var(--text-muted);
-  }
+  .task-list::-webkit-scrollbar { width: 4px; }
+  .task-list::-webkit-scrollbar-track { background: transparent; }
+  .task-list::-webkit-scrollbar-thumb { background: var(--border-mid); border-radius: 4px; }
+  .task-list::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
   .task-card {
     background: var(--bg-elevated);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-sm);
     padding: 14px 16px;
-    cursor: pointer;
-    transition: all 0.25s ease;
+    cursor: grab;
+    transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
     position: relative;
     animation: card-enter 0.35s ease both;
   }
+  .task-card:active { cursor: grabbing; }
 
   @keyframes card-enter {
     from { opacity: 0; transform: translateY(8px) scale(0.97); }
     to { opacity: 1; transform: translateY(0) scale(1); }
   }
 
-  .task-card:hover {
-    border-color: var(--border-mid);
-    background: #1c1f2c;
-    transform: translateY(-1px);
-  }
+  .task-card:hover { border-color: var(--border-mid); background: #1c1f2c; transform: translateY(-1px); }
+  .task-card.dragging { opacity: 0.4; }
 
   .task-card .task-text {
     font-size: 14px;
@@ -399,50 +382,40 @@ HTML_PAGE = r"""<!DOCTYPE html>
     opacity: 0;
     transition: all 0.2s ease;
   }
-
   .task-card:hover .delete-btn { opacity: 1; }
-  .task-card .delete-btn:hover {
-    color: #f87171;
-    background: rgba(248, 113, 113, 0.1);
-  }
+  .task-card .delete-btn:hover { color: #f87171; background: rgba(248, 113, 113, 0.1); }
 
-  /* Status-specific card styles */
-  .task-card.loaded {
-    border-left: 3px solid var(--amber);
-  }
-  .task-card.loaded:hover {
-    box-shadow: 0 0 16px var(--amber-glow);
-  }
+  .task-card.loaded { border-left: 3px solid var(--amber); }
+  .task-card.loaded:hover { box-shadow: 0 0 16px var(--amber-glow); }
+  .task-card.processing { border-left: 3px solid var(--cyan); background: linear-gradient(135deg, var(--bg-elevated), rgba(34, 211, 238, 0.03)); }
+  .task-card.processing:hover { box-shadow: 0 0 16px var(--cyan-glow); }
+  .task-card.running { box-shadow: 0 0 18px var(--cyan-glow); border-color: var(--cyan); }
+  .task-card.done { border-left: 3px solid var(--emerald); opacity: 0.78; }
+  .task-card.done:hover { opacity: 1; box-shadow: 0 0 16px var(--emerald-glow); }
 
-  .task-card.processing {
-    border-left: 3px solid var(--cyan);
-    background: linear-gradient(135deg, var(--bg-elevated), rgba(34, 211, 238, 0.03));
+  .run-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--cyan);
+    margin-top: 8px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
   }
-  .task-card.processing:hover {
-    box-shadow: 0 0 16px var(--cyan-glow);
-  }
-  .task-card.processing .task-text::after {
-    content: '';
-    display: inline-block;
+  .run-label.queued { color: var(--text-muted); }
+  .run-label .live-dot {
     width: 6px;
     height: 6px;
-    margin-left: 6px;
     border-radius: 50%;
     background: var(--cyan);
     animation: pulse-dot 1.2s ease-in-out infinite;
-    vertical-align: middle;
   }
 
-  .task-card.done {
-    border-left: 3px solid var(--emerald);
-    opacity: 0.8;
-  }
-  .task-card.done:hover {
-    opacity: 1;
-    box-shadow: 0 0 16px var(--emerald-glow);
-  }
+  .card-actions { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
 
-  .task-card .status-badge {
+  .status-badge {
     display: inline-flex;
     align-items: center;
     gap: 4px;
@@ -451,38 +424,20 @@ HTML_PAGE = r"""<!DOCTYPE html>
     font-weight: 500;
     padding: 3px 8px;
     border-radius: 6px;
-    margin-top: 8px;
     cursor: pointer;
     transition: all 0.2s ease;
     letter-spacing: 0.3px;
     text-transform: uppercase;
+    border: 1px solid transparent;
   }
-
-  .status-badge.amber {
-    background: rgba(251, 191, 36, 0.1);
-    color: var(--amber);
-    border: 1px solid rgba(251, 191, 36, 0.15);
-  }
-  .status-badge.amber:hover {
-    background: rgba(251, 191, 36, 0.18);
-    box-shadow: 0 0 12px var(--amber-glow);
-  }
-
-  .status-badge.cyan {
-    background: rgba(34, 211, 238, 0.1);
-    color: var(--cyan);
-    border: 1px solid rgba(34, 211, 238, 0.15);
-  }
-  .status-badge.cyan:hover {
-    background: rgba(34, 211, 238, 0.18);
-    box-shadow: 0 0 12px var(--cyan-glow);
-  }
-
-  .status-badge.emerald {
-    background: rgba(52, 211, 153, 0.1);
-    color: var(--emerald);
-    border: 1px solid rgba(52, 211, 153, 0.15);
-  }
+  .status-badge.amber { background: rgba(251, 191, 36, 0.1); color: var(--amber); border-color: rgba(251, 191, 36, 0.15); }
+  .status-badge.amber:hover { background: rgba(251, 191, 36, 0.18); box-shadow: 0 0 12px var(--amber-glow); }
+  .status-badge.cyan { background: rgba(34, 211, 238, 0.1); color: var(--cyan); border-color: rgba(34, 211, 238, 0.15); }
+  .status-badge.cyan:hover { background: rgba(34, 211, 238, 0.18); box-shadow: 0 0 12px var(--cyan-glow); }
+  .status-badge.emerald { background: rgba(52, 211, 153, 0.1); color: var(--emerald); border-color: rgba(52, 211, 153, 0.15); }
+  .status-badge.emerald:hover { background: rgba(52, 211, 153, 0.18); box-shadow: 0 0 12px var(--emerald-glow); }
+  .status-badge.neutral { background: rgba(139, 144, 165, 0.08); color: var(--text-secondary); border-color: var(--border-mid); }
+  .status-badge.neutral:hover { background: rgba(139, 144, 165, 0.16); color: var(--text-primary); }
 
   .empty-state {
     padding: 32px 16px;
@@ -491,13 +446,9 @@ HTML_PAGE = r"""<!DOCTYPE html>
     font-size: 13px;
     font-weight: 400;
     letter-spacing: 0.3px;
+    pointer-events: none;
   }
-
-  .empty-state .empty-icon {
-    font-size: 28px;
-    margin-bottom: 8px;
-    opacity: 0.5;
-  }
+  .empty-state .empty-icon { font-size: 28px; margin-bottom: 8px; opacity: 0.5; }
 
   .status-bar {
     position: relative;
@@ -511,33 +462,77 @@ HTML_PAGE = r"""<!DOCTYPE html>
     gap: 24px;
     align-items: center;
   }
-
-  .status-bar span {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-
-  .status-bar strong {
-    color: var(--text-primary);
-    font-weight: 500;
-  }
-
-  .dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    display: inline-block;
-  }
+  .status-bar span { display: flex; align-items: center; gap: 6px; }
+  .status-bar strong { color: var(--text-primary); font-weight: 500; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
   .dot.amber { background: var(--amber); box-shadow: 0 0 6px var(--amber-glow); }
   .dot.cyan { background: var(--cyan); box-shadow: 0 0 6px var(--cyan-glow); }
   .dot.emerald { background: var(--emerald); box-shadow: 0 0 6px var(--emerald-glow); }
+  .status-bar .divider { width: 1px; height: 14px; background: var(--border-subtle); }
+  .status-bar .hint { margin-left: auto; color: var(--text-muted); }
 
-  .status-bar .divider {
-    width: 1px;
-    height: 14px;
-    background: var(--border-subtle);
+  /* Detail modal */
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    background: rgba(5, 6, 9, 0.72);
+    backdrop-filter: blur(4px);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
   }
+  .modal-overlay.open { display: flex; animation: fade 0.2s ease; }
+  @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+
+  .modal {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-mid);
+    border-radius: var(--radius);
+    max-width: 680px;
+    width: 100%;
+    max-height: 82vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
+  }
+  .modal-head {
+    padding: 18px 22px;
+    border-bottom: 1px solid var(--border-subtle);
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .modal-head h2 { font-size: 16px; font-weight: 600; line-height: 1.4; word-break: break-word; }
+  .modal-close { background: none; border: none; color: var(--text-muted); font-size: 24px; cursor: pointer; line-height: 1; }
+  .modal-close:hover { color: var(--text-primary); }
+  .modal-body { padding: 18px 22px; overflow-y: auto; }
+  .modal-meta {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--text-secondary);
+    margin-bottom: 16px;
+  }
+  .modal-label { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); margin-bottom: 8px; }
+  .modal-result {
+    background: var(--bg-deep);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    padding: 14px 16px;
+    font-size: 13px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--text-primary);
+    max-height: 44vh;
+    overflow-y: auto;
+  }
+  .modal-result.empty { color: var(--text-muted); font-style: italic; }
 </style>
 </head>
 <body>
@@ -547,15 +542,17 @@ HTML_PAGE = r"""<!DOCTYPE html>
   <div class="header-left">
     <div class="logo-icon">N</div>
     <div>
-      <h1>Task Board</h1>
-      <span class="subtitle">Add tasks — the agent processes them one at a time</span>
+      <h1>Kanban Board</h1>
+      <span class="subtitle">Drag cards to Processing — the agent works them one at a time</span>
     </div>
   </div>
   <div class="header-right">
-    <div class="server-badge">
-      <span class="live-dot"></span>
-      LIVE
-    </div>
+    <label class="toggle" title="When on, the agent automatically pulls the next Loaded card while idle">
+      <input type="checkbox" id="auto-toggle">
+      <span class="track"></span>
+      <span>Auto-advance</span>
+    </label>
+    <div class="server-badge"><span class="live-dot"></span> LIVE</div>
   </div>
 </header>
 
@@ -566,25 +563,16 @@ HTML_PAGE = r"""<!DOCTYPE html>
 
 <div class="board">
   <div class="column">
-    <div class="column-header loaded">
-      <span>Loaded</span>
-      <span class="count" id="loaded-count">0</span>
-    </div>
-    <div class="task-list" id="loaded-list"></div>
+    <div class="column-header loaded"><span>Loaded</span><span class="count" id="loaded-count">0</span></div>
+    <div class="task-list" id="loaded-list" data-status="loaded"></div>
   </div>
   <div class="column">
-    <div class="column-header processing">
-      <span>Processing</span>
-      <span class="count" id="processing-count">0</span>
-    </div>
-    <div class="task-list" id="processing-list"></div>
+    <div class="column-header processing"><span>Processing</span><span class="count" id="processing-count">0</span></div>
+    <div class="task-list" id="processing-list" data-status="processing"></div>
   </div>
   <div class="column">
-    <div class="column-header done">
-      <span>Done</span>
-      <span class="count" id="done-count">0</span>
-    </div>
-    <div class="task-list" id="done-list"></div>
+    <div class="column-header done"><span>Done</span><span class="count" id="done-count">0</span></div>
+    <div class="task-list" id="done-list" data-status="done"></div>
   </div>
 </div>
 
@@ -594,33 +582,117 @@ HTML_PAGE = r"""<!DOCTYPE html>
   <span><span class="dot cyan"></span> Processing: <strong id="processing-total">0</strong></span>
   <span class="divider"></span>
   <span><span class="dot emerald"></span> Done: <strong id="done-total">0</strong></span>
+  <span class="hint">Click a card for details &middot; drag to move</span>
+</div>
+
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <div class="modal-head">
+      <h2 id="modal-title"></h2>
+      <button class="modal-close" id="modal-close" title="Close">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-meta" id="modal-meta"></div>
+      <div class="modal-label">Result</div>
+      <div class="modal-result" id="modal-result"></div>
+    </div>
+  </div>
 </div>
 
 <script>
-const API = '/api/tasks';
-let tasks = [];
+const state = { tasks: [], auto_advance: false, running_id: null };
+let lastSnapshot = '';
+let isDragging = false;
+let modalTaskId = null;
 
-function formatTime(iso) {
+function fmtTime(iso) {
   if (!iso) return '';
   const d = new Date(iso);
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text == null ? '' : text;
+  return div.innerHTML;
+}
+
+// ---- data ----------------------------------------------------------------
+async function fetchState() {
+  try {
+    const res = await fetch('/api/state');
+    const data = await res.json();
+    state.tasks = data.tasks || [];
+    state.auto_advance = !!data.auto_advance;
+    state.running_id = data.running_id || null;
+    maybeRender();
+  } catch (e) { /* server gone — keep last view */ }
+}
+
+async function addTask(description) {
+  try {
+    await fetch('/api/tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description })
+    });
+    await fetchState();
+  } catch (e) { console.error('add failed', e); }
+}
+
+async function moveTask(id, status) {
+  // optimistic local update so the board feels instant
+  const t = state.tasks.find(x => x.id === id);
+  if (t) { t.status = status; lastSnapshot = ''; render(); }
+  try {
+    await fetch('/api/tasks/' + id, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status })
+    });
+    await fetchState();
+  } catch (e) { console.error('move failed', e); await fetchState(); }
+}
+
+async function deleteTask(id) {
+  try {
+    await fetch('/api/tasks/' + id, { method: 'DELETE' });
+    await fetchState();
+  } catch (e) { console.error('delete failed', e); }
+}
+
+async function setAutoAdvance(on) {
+  try {
+    await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ auto_advance: on })
+    });
+    await fetchState();
+  } catch (e) { console.error('settings failed', e); }
+}
+
+// ---- render --------------------------------------------------------------
+function maybeRender() {
+  if (isDragging) return;                 // never rebuild cards mid-drag
+  const snap = JSON.stringify(state);
+  if (snap === lastSnapshot) { if (modalTaskId) refreshModal(); return; }
+  lastSnapshot = snap;
+  render();
+  if (modalTaskId) refreshModal();
+}
+
 function render() {
-  const loaded = tasks.filter(t => t.status === 'loaded');
-  const processing = tasks.filter(t => t.status === 'processing');
-  const done = tasks.filter(t => t.status === 'done');
+  const cols = { loaded: [], processing: [], done: [] };
+  for (const t of state.tasks) { (cols[t.status] || cols.loaded).push(t); }
 
-  document.getElementById('loaded-count').textContent = loaded.length;
-  document.getElementById('processing-count').textContent = processing.length;
-  document.getElementById('done-count').textContent = done.length;
-  document.getElementById('loaded-total').textContent = loaded.length;
-  document.getElementById('processing-total').textContent = processing.length;
-  document.getElementById('done-total').textContent = done.length;
+  document.getElementById('auto-toggle').checked = state.auto_advance;
 
-  renderList('loaded-list', loaded, 'loaded');
-  renderList('processing-list', processing, 'processing');
-  renderList('done-list', done, 'done');
+  for (const s of ['loaded', 'processing', 'done']) {
+    document.getElementById(s + '-count').textContent = cols[s].length;
+    document.getElementById(s + '-total').textContent = cols[s].length;
+    renderList(s + '-list', cols[s], s);
+  }
 }
 
 function renderList(listId, items, status) {
@@ -629,155 +701,192 @@ function renderList(listId, items, status) {
     el.innerHTML = '<div class="empty-state"><div class="empty-icon">&#9744;</div>No tasks here</div>';
     return;
   }
-  el.innerHTML = items.map((t, i) => {
-    const nextStatus = status === 'loaded' ? 'processing' : status === 'processing' ? 'done' : null;
-    const nextLabel = status === 'loaded' ? 'Start' : status === 'processing' ? 'Complete' : null;
-    const badgeClass = status === 'loaded' ? 'amber' : status === 'processing' ? 'cyan' : 'emerald';
-    return `<div class="task-card ${status}" data-id="${t.id}" style="animation-delay:${i * 0.05}s">
-      <div class="task-text">${escapeHtml(t.description)}</div>
-      <div class="task-meta">
-        ${t.created_at ? 'Added ' + formatTime(t.created_at) : ''}
-        ${t.completed_at ? '&middot; Done ' + formatTime(t.completed_at) : ''}
-        ${t.result ? '&middot; Result available' : ''}
-      </div>
-      ${nextStatus
-        ? `<span class="status-badge ${badgeClass}" data-action="move" data-target="${nextStatus}">&#9654; ${nextLabel}</span>`
-        : `<span class="status-badge emerald">&#10003; Done</span>`}
-      <button class="delete-btn" data-action="delete" title="Delete task">&times;</button>
-    </div>`;
-  }).join('');
+  el.innerHTML = items.map((t, i) => cardHtml(t, status, i)).join('');
+}
 
-  el.querySelectorAll('[data-action="move"]').forEach(badge => {
-    badge.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      const card = badge.closest('.task-card');
-      const id = card.dataset.id;
-      const target = badge.dataset.target;
-      await moveTask(id, target);
-    });
+function cardHtml(t, status, i) {
+  const running = (t.id === state.running_id);
+  let actions = '';
+  if (status === 'loaded') {
+    actions = `<span class="status-badge amber" data-action="move" data-target="processing">&#9654; Start</span>`;
+  } else if (status === 'processing') {
+    actions = `<span class="status-badge cyan" data-action="move" data-target="done">&#10003; Complete</span>`
+            + `<span class="status-badge neutral" data-action="move" data-target="loaded">&#8592; Back</span>`;
+  } else {
+    actions = `<span class="status-badge neutral" data-action="move" data-target="processing">&#8634; Reopen</span>`;
+  }
+
+  let runLabel = '';
+  if (status === 'processing') {
+    runLabel = running
+      ? `<div class="run-label"><span class="live-dot"></span> running</div>`
+      : `<div class="run-label queued">queued</div>`;
+  }
+
+  const meta = [
+    t.created_at ? 'Added ' + fmtTime(t.created_at) : '',
+    t.completed_at ? 'Done ' + fmtTime(t.completed_at) : '',
+    t.result ? '✓ result' : ''
+  ].filter(Boolean).join(' · ');
+
+  return `<div class="task-card ${status}${running ? ' running' : ''}" draggable="true" data-id="${t.id}" style="animation-delay:${Math.min(i * 0.04, 0.3)}s">
+    <div class="task-text">${escapeHtml(t.description)}</div>
+    ${runLabel}
+    <div class="task-meta">${meta}</div>
+    <div class="card-actions">${actions}</div>
+    <button class="delete-btn" data-action="delete" title="Delete task">&times;</button>
+  </div>`;
+}
+
+// ---- detail modal --------------------------------------------------------
+function openModal(id) {
+  const t = state.tasks.find(x => x.id === id);
+  if (!t) return;
+  modalTaskId = id;
+  fillModal(t);
+  document.getElementById('modal').classList.add('open');
+}
+
+function fillModal(t) {
+  document.getElementById('modal-title').textContent = t.description;
+  const meta = [
+    'Status: ' + t.status,
+    t.created_at ? 'Added ' + fmtTime(t.created_at) : '',
+    t.started_at ? 'Started ' + fmtTime(t.started_at) : '',
+    t.completed_at ? 'Done ' + fmtTime(t.completed_at) : ''
+  ].filter(Boolean).map(s => `<span>${escapeHtml(s)}</span>`).join('');
+  document.getElementById('modal-meta').innerHTML = meta;
+
+  const r = document.getElementById('modal-result');
+  if (t.result) {
+    r.textContent = t.result;
+    r.classList.remove('empty');
+  } else {
+    r.classList.add('empty');
+    if (state.running_id === t.id) r.textContent = 'Running… the result will appear here when the agent finishes.';
+    else if (t.status === 'done') r.textContent = 'No output was captured for this task.';
+    else r.textContent = 'Not started yet.';
+  }
+}
+
+function refreshModal() {
+  if (!modalTaskId) return;
+  const t = state.tasks.find(x => x.id === modalTaskId);
+  if (t) fillModal(t);
+  else closeModal();
+}
+
+function closeModal() {
+  modalTaskId = null;
+  document.getElementById('modal').classList.remove('open');
+}
+
+// ---- events (delegated, bound once) --------------------------------------
+const board = document.querySelector('.board');
+
+board.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-action]');
+  const card = e.target.closest('.task-card');
+  if (btn && card) {
+    e.stopPropagation();
+    const id = card.dataset.id;
+    if (btn.dataset.action === 'delete') deleteTask(id);
+    else if (btn.dataset.action === 'move') moveTask(id, btn.dataset.target);
+    return;
+  }
+  if (card) openModal(card.dataset.id);
+});
+
+board.addEventListener('dragstart', (e) => {
+  const card = e.target.closest('.task-card');
+  if (!card) return;
+  isDragging = true;
+  e.dataTransfer.setData('text/plain', card.dataset.id);
+  e.dataTransfer.effectAllowed = 'move';
+  card.classList.add('dragging');
+});
+
+board.addEventListener('dragend', (e) => {
+  isDragging = false;
+  const card = e.target.closest('.task-card');
+  if (card) card.classList.remove('dragging');
+  document.querySelectorAll('.task-list').forEach(l => l.classList.remove('drag-over'));
+  lastSnapshot = '';
+  maybeRender();
+});
+
+['loaded-list', 'processing-list', 'done-list'].forEach(id => {
+  const list = document.getElementById(id);
+  list.addEventListener('dragover', (e) => { e.preventDefault(); list.classList.add('drag-over'); });
+  list.addEventListener('dragleave', (e) => { if (!list.contains(e.relatedTarget)) list.classList.remove('drag-over'); });
+  list.addEventListener('drop', (e) => {
+    e.preventDefault();
+    list.classList.remove('drag-over');
+    const taskId = e.dataTransfer.getData('text/plain');
+    if (taskId) moveTask(taskId, list.dataset.status);
   });
-  el.querySelectorAll('.delete-btn').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      const card = btn.closest('.task-card');
-      const id = card.dataset.id;
-      await deleteTask(id);
-    });
-  });
-}
+});
 
-function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
-}
-
-async function fetchTasks() {
-  try {
-    const res = await fetch(API);
-    tasks = await res.json();
-    render();
-  } catch (e) {
-    console.error('Failed to fetch tasks:', e);
-  }
-}
-
-async function addTask(description) {
-  try {
-    await fetch(API, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ description })
-    });
-    await fetchTasks();
-  } catch (e) {
-    console.error('Failed to add task:', e);
-  }
-}
-
-async function moveTask(id, status) {
-  try {
-    await fetch(`${API}/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status })
-    });
-    await fetchTasks();
-  } catch (e) {
-    console.error('Failed to move task:', e);
-  }
-}
-
-async function deleteTask(id) {
-  try {
-    await fetch(`${API}/${id}`, { method: 'DELETE' });
-    await fetchTasks();
-  } catch (e) {
-    console.error('Failed to delete task:', e);
-  }
-}
-
-document.getElementById('add-btn').addEventListener('click', () => {
+document.getElementById('add-btn').addEventListener('click', submitTask);
+document.getElementById('task-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitTask(); });
+function submitTask() {
   const input = document.getElementById('task-input');
   const text = input.value.trim();
   if (text) { addTask(text); input.value = ''; }
-});
-document.getElementById('task-input').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
-    const input = document.getElementById('task-input');
-    const text = input.value.trim();
-    if (text) { addTask(text); input.value = ''; }
-  }
-});
+}
 
-fetchTasks();
-setInterval(fetchTasks, 2000);
+document.getElementById('auto-toggle').addEventListener('change', (e) => setAutoAdvance(e.target.checked));
+document.getElementById('modal-close').addEventListener('click', closeModal);
+document.getElementById('modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && modalTaskId) closeModal(); });
+
+fetchState();
+setInterval(fetchState, 2000);
 </script>
 </body>
 </html>"""
 
 
 class TrelloRequestHandler(BaseHTTPRequestHandler):
-    """HTTP request handler for the Trello task board API and static page."""
+    """HTTP request handler. Reads task state from ``self.server.backend``."""
 
-    # Shared state — set by TrelloServer
-    tasks: list[dict] = []
-    lock: threading.Lock = threading.Lock()
-
-    def log_message(self, format: str, *args: Any) -> None:
+    def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
         """Suppress default HTTP server logging."""
-        pass
+
+    @property
+    def _backend(self) -> TrelloServer:
+        return self.server.backend  # type: ignore[attr-defined]
 
     def _send_json(self, data: Any, status: int = 200) -> None:
+        payload = json.dumps(data).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
-        self.wfile.write(json.dumps(data).encode("utf-8"))
+        self.wfile.write(payload)
 
     def _send_html(self, html: str, status: int = 200) -> None:
+        payload = html.encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
-        self.wfile.write(html.encode("utf-8"))
+        self.wfile.write(payload)
 
     def _read_body(self) -> dict:
         content_length = int(self.headers.get("Content-Length", 0))
         if content_length == 0:
             return {}
-        body = self.rfile.read(content_length)
-        return json.loads(body.decode("utf-8"))
+        try:
+            return json.loads(self.rfile.read(content_length).decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return {}
 
-    def _get_path_parts(self) -> list[str]:
-        """Parse path into parts, handling /api/tasks/<id>."""
-        path = self.path.rstrip("/")
-        parts = path.split("/")
-        # Remove empty strings from leading slash
-        parts = [p for p in parts if p]
-        return parts
+    def _path_parts(self) -> list[str]:
+        return [p for p in self.path.rstrip("/").split("?")[0].split("/") if p]
 
     def do_OPTIONS(self) -> None:
-        """Handle CORS preflight."""
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
@@ -785,158 +894,91 @@ class TrelloRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self) -> None:
-        parts = self._get_path_parts()
-
-        if self.path == "/" or self.path == "":
+        parts = self._path_parts()
+        if not parts:
             self._send_html(HTML_PAGE)
             return
-
-        if parts == ["api", "tasks"]:
-            with self.lock:
-                self._send_json(list(self.tasks))
+        if parts == ["favicon.ico"]:
+            self.send_response(204)
+            self.end_headers()
             return
-
+        if parts == ["api", "state"]:
+            self._send_json(self._backend.get_state())
+            return
+        if parts == ["api", "tasks"]:
+            self._send_json(self._backend.get_tasks())
+            return
         self._send_json({"error": "Not found"}, 404)
 
     def do_POST(self) -> None:
-        parts = self._get_path_parts()
-
+        parts = self._path_parts()
         if parts == ["api", "tasks"]:
-            body = self._read_body()
-            description = body.get("description", "").strip()
+            description = str(self._read_body().get("description", "")).strip()
             if not description:
                 self._send_json({"error": "description is required"}, 400)
                 return
-
-            task = {
-                "id": str(uuid.uuid4()),
-                "description": description,
-                "status": "loaded",
-                "created_at": datetime.now(UTC).isoformat(),
-                "completed_at": None,
-                "result": None,
-            }
-
-            with self.lock:
-                self.tasks.append(task)
-
-            self._send_json(task, 201)
+            self._send_json(self._backend.add_task(description), 201)
             return
-
+        if parts == ["api", "settings"]:
+            body = self._read_body()
+            self._backend.set_auto_advance(bool(body.get("auto_advance", False)))
+            self._send_json(self._backend.get_state())
+            return
         self._send_json({"error": "Not found"}, 404)
 
     def do_PATCH(self) -> None:
-        parts = self._get_path_parts()
-
-        if len(parts) == 3 and parts[0] == "api" and parts[1] == "tasks":
-            task_id = parts[2]
-            body = self._read_body()
-            new_status = body.get("status", "").strip()
-
-            if new_status not in ("loaded", "processing", "done"):
-                self._send_json({"error": "status must be 'loaded', 'processing', or 'done'"}, 400)
+        parts = self._path_parts()
+        if len(parts) == 3 and parts[:2] == ["api", "tasks"]:
+            new_status = str(self._read_body().get("status", "")).strip()
+            if new_status not in _VALID_STATUS:
+                self._send_json({"error": f"status must be one of {_VALID_STATUS}"}, 400)
                 return
-
-            with self.lock:
-                for task in self.tasks:
-                    if task["id"] == task_id:
-                        old_status = task["status"]
-                        task["status"] = new_status
-                        if new_status == "done":
-                            task["completed_at"] = datetime.now(UTC).isoformat()
-                            task["result"] = body.get("result")
-                        # Notify the asyncio queue if moving to processing
-                        if new_status == "processing" and old_status != "processing":
-                            q = getattr(TrelloRequestHandler, "_queue", None)
-                            if q is not None:
-                                try:
-                                    # Use a thread-safe approach: schedule the put
-                                    # We store the task ref and let the handler pick it up
-                                    TrelloRequestHandler._pending_processing = task.copy()
-                                except Exception:
-                                    pass
-                        self._send_json(task)
-                        return
-
-            self._send_json({"error": "Task not found"}, 404)
+            task = self._backend.move_task(parts[2], new_status)
+            self._send_json(task) if task else self._send_json({"error": "Task not found"}, 404)
             return
-
         self._send_json({"error": "Not found"}, 404)
 
     def do_DELETE(self) -> None:
-        parts = self._get_path_parts()
-
-        if len(parts) == 3 and parts[0] == "api" and parts[1] == "tasks":
-            task_id = parts[2]
-
-            with self.lock:
-                for i, task in enumerate(self.tasks):
-                    if task["id"] == task_id:
-                        removed = self.tasks.pop(i)
-                        self._send_json(removed)
-                        return
-
-            self._send_json({"error": "Task not found"}, 404)
+        parts = self._path_parts()
+        if len(parts) == 3 and parts[:2] == ["api", "tasks"]:
+            task = self._backend.delete_task(parts[2])
+            self._send_json(task) if task else self._send_json({"error": "Task not found"}, 404)
             return
-
         self._send_json({"error": "Not found"}, 404)
 
 
-# Class-level storage for the asyncio queue bridge
-TrelloRequestHandler._queue: asyncio.Queue | None = None
-TrelloRequestHandler._pending_processing: dict | None = None
-
-
 class TrelloServer:
-    """Lightweight HTTP server for the Trello task board.
+    """Lightweight kanban HTTP server — the single source of truth for tasks.
 
-    Runs in a background daemon thread. Exposes REST API endpoints and
-    serves a self-contained HTML single-page app.
-
-    An asyncio.Queue bridge notifies the CLI when a task moves to "processing".
+    Runs in a background daemon thread. The server instance is attached to the
+    HTTPServer so the request handler reads/mutates state through it under a
+    lock. The CLI watch loop reads task state directly (no notification queue).
     """
 
     def __init__(self) -> None:
         self._tasks: list[dict] = []
         self._lock = threading.Lock()
-        self._task_queue: asyncio.Queue = asyncio.Queue()
         self._server: HTTPServer | None = None
         self._thread: threading.Thread | None = None
         self.port: int = 0
         self.is_running: bool = False
+        self.auto_advance: bool = False
+        self.running_id: str | None = None
 
-    def _find_available_port(self) -> int:
-        """Find a random available port on localhost."""
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(("127.0.0.1", 0))
-            return s.getsockname()[1]
-
+    # -- lifecycle ---------------------------------------------------------
     async def start(self) -> int:
-        """Start the HTTP server in a background daemon thread.
-
-        Returns:
-            The port number the server is listening on.
-        """
-        port = self._find_available_port()
-
-        # Wire up shared state to the handler class
-        TrelloRequestHandler.tasks = self._tasks
-        TrelloRequestHandler.lock = self._lock
-        TrelloRequestHandler._queue = self._task_queue
-        TrelloRequestHandler._pending_processing = None
-
-        self._server = HTTPServer(("127.0.0.1", port), TrelloRequestHandler)
-        self.port = port
+        """Start the HTTP server in a background daemon thread; return the port."""
+        self._server = HTTPServer(("127.0.0.1", 0), TrelloRequestHandler)
+        self._server.backend = self  # type: ignore[attr-defined]
+        self.port = self._server.server_address[1]
         self.is_running = True
-
         self._thread = threading.Thread(
             target=self._server.serve_forever,
             daemon=True,
             name="trello-server",
         )
         self._thread.start()
-
-        return port
+        return self.port
 
     def stop(self) -> None:
         """Stop the HTTP server."""
@@ -946,61 +988,95 @@ class TrelloServer:
             self._server.server_close()
             self._server = None
 
-    async def get_next_processing_task(self) -> dict | None:
-        """Wait briefly for a task that entered processing state.
+    # -- task mutations (all guarded) --------------------------------------
+    def add_task(self, description: str) -> dict:
+        task = {
+            "id": str(uuid.uuid4()),
+            "description": description,
+            "status": "loaded",
+            "created_at": _now(),
+            "started_at": None,
+            "completed_at": None,
+            "result": None,
+        }
+        with self._lock:
+            self._tasks.append(task)
+        return task.copy()
 
-        Returns:
-            The task dict if one is available, or None on timeout.
-        """
-        # First check if there's a pending processing notification from the HTTP thread
-        pending = TrelloRequestHandler._pending_processing
-        if pending is not None:
-            TrelloRequestHandler._pending_processing = None
-            return pending
-
-        try:
-            return await asyncio.wait_for(self._task_queue.get(), timeout=0.5)
-        except asyncio.TimeoutError:
+    def move_task(self, task_id: str, status: str) -> dict | None:
+        if status not in _VALID_STATUS:
             return None
+        with self._lock:
+            for task in self._tasks:
+                if task["id"] == task_id:
+                    task["status"] = status
+                    if status == "processing" and not task["started_at"]:
+                        task["started_at"] = _now()
+                    if status == "done":
+                        task["completed_at"] = _now()
+                    else:
+                        task["completed_at"] = None
+                    return task.copy()
+        return None
 
-    async def mark_done(self, task_id: str, result: str | None = None) -> None:
-        """Mark a task as done via the API.
+    def delete_task(self, task_id: str) -> dict | None:
+        with self._lock:
+            for i, task in enumerate(self._tasks):
+                if task["id"] == task_id:
+                    return self._tasks.pop(i)
+        return None
 
-        This sends a PATCH request to the local server to update the task status.
-        """
-        import json
-        import urllib.request
-
-        url = f"http://127.0.0.1:{self.port}/api/tasks/{task_id}"
-        body: dict[str, str] = {"status": "done"}
-        if result:
-            body["result"] = result
-
-        try:
-            req = urllib.request.Request(
-                url,
-                data=json.dumps(body).encode(),
-                headers={"Content-Type": "application/json"},
-                method="PATCH",
-            )
-            urllib.request.urlopen(req, timeout=5)
-        except Exception:
-            # Fallback: update directly
-            with self._lock:
-                for task in self._tasks:
-                    if task["id"] == task_id:
-                        task["status"] = "done"
-                        task["completed_at"] = datetime.now(UTC).isoformat()
+    def mark_done(self, task_id: str, result: str | None = None) -> None:
+        """Mark a task done in-process and attach the agent's result."""
+        with self._lock:
+            for task in self._tasks:
+                if task["id"] == task_id:
+                    task["status"] = "done"
+                    task["completed_at"] = _now()
+                    if result is not None:
                         task["result"] = result
-                        break
+                    return
+
+    def set_auto_advance(self, enabled: bool) -> None:
+        self.auto_advance = enabled
+
+    def set_running(self, task_id: str | None) -> None:
+        self.running_id = task_id
+
+    # -- reads -------------------------------------------------------------
+    def get_tasks(self) -> list[dict]:
+        with self._lock:
+            return [t.copy() for t in self._tasks]
+
+    def get_state(self) -> dict:
+        with self._lock:
+            return {
+                "tasks": [t.copy() for t in self._tasks],
+                "auto_advance": self.auto_advance,
+                "running_id": self.running_id,
+            }
+
+    def next_processing_task(self) -> dict | None:
+        """Return the oldest task in 'processing' (FIFO by creation), or None."""
+        with self._lock:
+            for task in self._tasks:
+                if task["status"] == "processing":
+                    return task.copy()
+        return None
+
+    def pop_next_loaded_task(self) -> dict | None:
+        """Move the oldest 'loaded' task to 'processing' and return it (auto-advance)."""
+        with self._lock:
+            for task in self._tasks:
+                if task["status"] == "loaded":
+                    task["status"] = "processing"
+                    if not task["started_at"]:
+                        task["started_at"] = _now()
+                    return task.copy()
+        return None
 
     def get_task_counts(self) -> dict[str, int]:
-        """Get the count of tasks in each status.
-
-        Returns:
-            Dict with keys 'loaded', 'processing', 'done'.
-        """
-        counts: dict[str, int] = {"loaded": 0, "processing": 0, "done": 0}
+        counts = {"loaded": 0, "processing": 0, "done": 0}
         with self._lock:
             for task in self._tasks:
                 status = task.get("status", "loaded")
@@ -1009,26 +1085,8 @@ class TrelloServer:
         return counts
 
     def get_processing_task(self) -> dict | None:
-        """Get the currently processing task, if any.
-
-        Returns:
-            The task dict if one is processing, or None.
-        """
         with self._lock:
             for task in self._tasks:
-                if task.get("status") == "processing":
-                    return task
-        return None
-
-    def pop_next_loaded_task(self) -> dict | None:
-        """Pop the next 'loaded' task and mark it as 'processing'.
-
-        Returns:
-            The task dict if one was available, or None.
-        """
-        with self._lock:
-            for task in self._tasks:
-                if task.get("status") == "loaded":
-                    task["status"] = "processing"
+                if task["status"] == "processing":
                     return task.copy()
         return None

@@ -10195,32 +10195,22 @@ class NovaApp(App):
         )
 
     async def _trello_watch_loop(self, server: Any) -> None:
-        """Background loop: poll for processing tasks and execute them."""
+        """Background loop: process board tasks via the shared watch loop."""
+        from novacode_cli.commands.trello_handler import trello_watch_loop
+
+        def _log(message: str, style: str = "") -> None:
+            self._log(Text(message, style=style or None))
+
         try:
-            while server.is_running:
-                # First check for tasks explicitly moved to "processing" (web UI click)
-                task = await server.get_next_processing_task()
-                if not task:
-                    # Auto-pick the first "loaded" task
-                    task = server.pop_next_loaded_task()
-                if task:
-                    self._log(Text(f"📋 Processing task: {task['description']}", style="bold"))
-                    await self._tui_execute_fn(
-                        task["description"],
-                        self.agent,
-                        self.assistant_id,
-                        self.session_state,
-                        self.token_tracker,
-                    )
-                    await server.mark_done(task["id"])
-                    self._log(
-                        Text(
-                            f"✓ Task completed: {task['description']}",
-                            style="green",
-                        )
-                    )
-                else:
-                    await asyncio.sleep(0.5)
+            await trello_watch_loop(
+                server,
+                self.agent,
+                self.assistant_id,
+                self.session_state,
+                self.token_tracker,
+                self._tui_execute_fn,
+                _log,
+            )
         except Exception:
             pass  # Server stopped, loop ends
 
