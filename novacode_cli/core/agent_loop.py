@@ -653,6 +653,15 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
                 if any_rejected:
                     yield ev.ErrorOutput("Command rejected. Tell the agent what to do differently.")
 
+                # A separate plan agent (/plan) must not be resumed after approval:
+                # it carries the unconditional PlanModeMiddleware, so resuming runs
+                # the read-only planner straight into the plan-mode write block and
+                # it loops. End the turn instead — the caller hands off to the main
+                # execution agent (_maybe_run_approved_plan). Main-agent self-planning
+                # has no separate plan_agent and falls through to resume in-context.
+                if plan_approved and getattr(session_state, "plan_agent", None) is not None:
+                    break
+
                 stream_input = Command(
                     resume=hitl_response,
                     update=command_state_update or None,
