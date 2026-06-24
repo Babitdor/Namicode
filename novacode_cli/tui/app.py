@@ -2496,24 +2496,41 @@ class SkillCreateModal(ModalScreen[dict | None]):
 
 
 class SkillsScreen(ModalScreen[None]):
-    """Native skills manager: list installed skills, view details, create new skills."""
+    """Native skills manager: list/toggle/view installed skills, create new skills."""
 
-    BINDINGS = [("escape", "close", "Close")]
+    BINDINGS = [
+        ("escape", "close", "Close"),
+        ("space", "toggle", "Toggle on/off"),
+    ]
 
     def __init__(self) -> None:
         super().__init__()
         self._generating = False
+        # Which prefs file toggles are written to ("global" or "project").
+        self._scope = "global"
 
     def compose(self) -> ComposeResult:
+        from novacode_cli.config.config import settings
+
+        in_project = settings.project_root is not None
+
         with Vertical(id="modal-box"):
             yield Static(Text("Skills Manager", style="bold"), id="modal-title")
             yield Static(Text("Installed Skills:", style="bold cyan"), id="skills-section")
+            if in_project:
+                yield Select(
+                    [("Global (all projects)", "global"), ("Project (this repo)", "project")],
+                    id="skill-scope-toggle",
+                    value="global",
+                    allow_blank=False,
+                )
             yield OptionList(id="skills-list")
             yield Static(Text("Skill Details:", style="bold yellow"), id="skill-detail-header")
             yield Static("", id="skill-detail-preview", classes="preview-box")
             yield Static("", id="skills-hint")
             with Horizontal(id="modal-buttons"):
-                yield Button("Create", id="create", variant="primary")
+                yield Button("Toggle", id="toggle", variant="primary")
+                yield Button("Create", id="create")
                 yield Button("Close", id="close")
 
     def on_mount(self) -> None:
@@ -2537,8 +2554,17 @@ class SkillsScreen(ModalScreen[None]):
             hint.update(Text("Create one with the Create button", style="dim"))
             return
 
+        # Mark each skill on/off for the selected scope. [x] = on (passed to the
+        # agent), [ ] = off (hidden). Per-scope view, mirroring the REPL board.
+        from novacode_cli.skills import skills_prefs
+
+        disabled = skills_prefs.load_disabled(skills_prefs.scope_path(self._scope))
         for name in names:
-            ol.add_option(Option(Text(name, style="bold #e0af68")))
+            on = name not in disabled
+            row = Text()
+            row.append("[x] " if on else "[ ] ", style="bold green" if on else "bold red")
+            row.append(name, style="bold #e0af68" if on else "dim")
+            ol.add_option(Option(row))
 
         if keep is not None and 0 <= keep < len(names):
             ol.highlighted = keep
@@ -2547,11 +2573,44 @@ class SkillsScreen(ModalScreen[None]):
         ol.focus()
 
         self._update_preview(ol.highlighted)
-        hint.update(Text("Select a skill to see details · Create custom skills", style="dim"))
+        enabled_count = sum(1 for n in names if n not in disabled)
+        hint.update(
+            Text(
+                f"{enabled_count}/{len(names)} enabled in {self._scope} · "
+                "Space toggles on/off · takes effect next turn",
+                style="dim",
+            )
+        )
 
     def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
         if event.option_list.id == "skills-list":
             self._update_preview(event.option_index)
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        """Switch the scope whose prefs the toggles write to, and re-mark the list."""
+        if event.select.id == "skill-scope-toggle" and isinstance(event.value, str):
+            self._scope = event.value
+            self._reload()
+
+    def action_toggle(self) -> None:
+        """Flip the highlighted skill on/off in the selected scope, then reload."""
+        ol = self.query_one("#skills-list", OptionList)
+        idx = ol.highlighted
+        names = self.app._get_skill_names()
+        if idx is None or not names or not (0 <= idx < len(names)):
+            return
+        name = names[idx]
+
+        from novacode_cli.skills import skills_prefs
+
+        disabled = skills_prefs.load_disabled(skills_prefs.scope_path(self._scope))
+        currently_on = name not in disabled
+        try:
+            skills_prefs.set_skill_enabled(name, enabled=not currently_on, scope=self._scope)
+        except ValueError as e:  # no project for project scope — shouldn't happen via UI
+            self.query_one("#skills-hint", Static).update(Text(str(e), style="red"))
+            return
+        self._reload()
 
     def _update_preview(self, idx: int | None) -> None:
         preview = self.query_one("#skill-detail-preview", Static)
@@ -2631,6 +2690,8 @@ class SkillsScreen(ModalScreen[None]):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "close":
             self.dismiss(None)
+        elif event.button.id == "toggle":
+            self.action_toggle()
         elif event.button.id == "create":
             if not self._generating:
                 self.app.run_worker(self._create_skill(), group="create_skill", exclusive=True)
