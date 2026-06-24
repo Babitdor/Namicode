@@ -152,3 +152,29 @@ async def test_async_clamp_matches_sync(monkeypatch: pytest.MonkeyPatch):
     state = {"skills_metadata": [_skill("a"), _skill("b")]}
     out = await mw.abefore_agent(state, SimpleNamespace(), {})
     assert [s["name"] for s in out["skills_metadata"]] == ["b"]
+
+
+# ── /skills toggle-board helper ──────────────────────────────────────────────
+
+
+def test_index_toggles_flip_in_place():
+    from novacode_cli.commands.skills_commands import _apply_index_toggles
+
+    skills = [_skill("a"), _skill("b"), _skill("c")]
+    disabled: set[str] = set()
+    # "1 3" disables the 1st and 3rd skills.
+    _apply_index_toggles("1 3", skills, disabled)
+    assert disabled == {"a", "c"}
+    # Re-running the same toggles them back on; commas are accepted too.
+    _apply_index_toggles("1,3", skills, disabled)
+    assert disabled == set()
+
+
+def test_index_toggles_ignore_bad_tokens():
+    from novacode_cli.commands.skills_commands import _apply_index_toggles
+
+    skills = [_skill("a"), _skill("b")]
+    disabled: set[str] = set()
+    # Out-of-range and non-numeric tokens are skipped; the valid one still flips.
+    _apply_index_toggles("99 foo 2", skills, disabled)
+    assert disabled == {"b"}

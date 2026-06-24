@@ -45,7 +45,14 @@ class RefreshingSkillsMiddleware(SkillsMiddleware):
         self._last_signature: frozenset[tuple[str, float]] | None = None
 
     def _compute_signature(self) -> frozenset[tuple[str, float]]:
-        """A (path, mtime) frozenset over every ``*/SKILL.md`` under watch dirs."""
+        """A (path, mtime) frozenset over watched ``*/SKILL.md`` files + prefs.
+
+        The skill-curation preference files are folded in so toggling a skill
+        on/off (which only rewrites ``skills_prefs.json``) forces a re-list on
+        the next turn — the curated set updates without a restart.
+        """
+        from novacode_cli.skills.skills_prefs import prefs_signature
+
         sig: set[tuple[str, float]] = set()
         for directory in self._watch_dirs:
             try:
@@ -57,7 +64,7 @@ class RefreshingSkillsMiddleware(SkillsMiddleware):
                     sig.add((str(skill_md), skill_md.stat().st_mtime))
                 except OSError:
                     continue
-        return frozenset(sig)
+        return frozenset(sig | prefs_signature())
 
     def _skills_changed(self) -> bool:
         """True if the skill files changed since the last call (best-effort)."""

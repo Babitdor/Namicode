@@ -122,6 +122,7 @@ from novacode_cli.config.config import (
 from novacode_cli.hitl.interrupts import get_interrupt_configs
 from novacode_cli.integrations.sandbox_factory import get_default_working_dir
 from novacode_cli.prompts import render_template
+from novacode_cli.skills.curation_middleware import SkillCurationMiddleware
 from novacode_cli.skills.refreshing_middleware import RefreshingSkillsMiddleware
 
 
@@ -939,6 +940,7 @@ This file stores your preferences and context that persist across sessions.
     from novacode_cli.security.middleware import SecurityMiddleware
     from novacode_cli.shell import ShellMiddleware
     from novacode_cli.tracking.file_tracker import FileTrackerMiddleware
+    from novacode_cli.tracking.loop_guard import LoopGuardMiddleware
     from langchain.agents.middleware import (
         ClearToolUsesEdit,
         ContextEditingMiddleware,
@@ -1011,6 +1013,11 @@ This file stores your preferences and context that persist across sessions.
             truncate_results=True,
             include_system_prompt=True,
         ),
+        # Break stuck tool-call loops: if the model fires the same tool with the
+        # same args and gets the same result 3× in a row (e.g. a grep that keeps
+        # returning "no matches"), short-circuit the next identical call with a
+        # nudge to change approach instead of letting it spin indefinitely.
+        LoopGuardMiddleware(threshold=3),
         # Context editing — clear older tool call outputs when token limits
         # are reached, preserving only the most recent results. This is a
         # lightweight, deterministic alternative to LLM-based compaction.
@@ -1204,6 +1211,11 @@ This file stores your preferences and context that persist across sessions.
             watch_dirs=skill_watch_dirs,
         )
     )
+    # Skill curation — clamp the loaded skills to the user-enabled set. MUST be
+    # appended AFTER RefreshingSkillsMiddleware so its before_agent node runs
+    # after the loader populates skills_metadata (toggled off skills then vanish
+    # from the system-prompt list and the agent's reach). See /skills toggles.
+    agent_middleware.append(SkillCurationMiddleware())
 
     agent = create_deep_agent(
         name=assistant_id,
