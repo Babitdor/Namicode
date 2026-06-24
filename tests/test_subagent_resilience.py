@@ -133,3 +133,62 @@ def test_non_dict_entries_are_skipped():
     specs = ["not-a-dict", 123]
     out = _harden_subagent_specs(specs)  # must not raise
     assert out == ["not-a-dict", 123]
+
+
+# ── skill grant + curation (subagents had no skills before) ──────────────────
+
+
+def _curations(spec: dict) -> list:
+    return [
+        m
+        for m in spec["middleware"]
+        if type(m).__name__ == "SkillCurationMiddleware"
+    ]
+
+
+def test_skill_sources_grant_skills_and_curation():
+    specs = [{"name": "a", "system_prompt": "p"}]
+    out = _harden_subagent_specs(specs, ["/skills/", "/claude-skills/"])
+    # The subagent now declares the skill sources (deepagents will attach a
+    # SkillsMiddleware on the shared backend) ...
+    assert out[0]["skills"] == ["/skills/", "/claude-skills/"]
+    # ... and gets exactly one curation middleware to clamp them.
+    assert len(_curations(out[0])) == 1
+
+
+def test_no_skill_sources_means_no_skills_no_curation():
+    specs = [{"name": "a", "system_prompt": "p"}]
+    out = _harden_subagent_specs(specs)  # default None
+    assert "skills" not in out[0]
+    assert _curations(out[0]) == []
+
+
+def test_pre_declared_skills_are_respected_and_still_curated():
+    specs = [{"name": "a", "system_prompt": "p", "skills": ["/custom/"]}]
+    out = _harden_subagent_specs(specs, ["/skills/"])
+    # Spec's own skills win; we don't overwrite them ...
+    assert out[0]["skills"] == ["/custom/"]
+    # ... but they're still clamped to the curated set.
+    assert len(_curations(out[0])) == 1
+
+
+def test_curation_not_doubled_when_already_present():
+    from novacode_cli.skills.curation_middleware import SkillCurationMiddleware
+
+    specs = [
+        {"name": "a", "system_prompt": "p", "middleware": [SkillCurationMiddleware()]}
+    ]
+    out = _harden_subagent_specs(specs, ["/skills/"])
+    assert len(_curations(out[0])) == 1
+
+
+def test_compiled_and_remote_untouched_even_with_skill_sources():
+    specs = [
+        {"name": "compiled", "runnable": object()},
+        {"name": "remote", "url": "http://example/agent"},
+    ]
+    out = _harden_subagent_specs(specs, ["/skills/"])
+    assert out[0] is specs[0]
+    assert "skills" not in out[0]
+    assert out[1] is specs[1]
+    assert "skills" not in out[1]

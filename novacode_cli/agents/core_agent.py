@@ -512,7 +512,7 @@ def get_system_prompt(
     )
 
 
-def _harden_subagent_specs(specs: list) -> list:
+def _harden_subagent_specs(specs: list, skill_sources: list[str] | None = None) -> list:
     """Return resilient, unattended copies of the subagent specs.
 
     Returns a NEW list of NEW spec dicts — it must NOT mutate the inputs, because
@@ -537,6 +537,14 @@ def _harden_subagent_specs(specs: list) -> list:
       otherwise kill it (this is what broke /init's semantic-extraction
       subagents — the chunk fragment never got written). A fresh instance per
       build; skipped if the spec already carries a retry middleware.
+    - **Give skills + curation** — Nova's subagent specs declare no ``skills``,
+      so deepagents builds them with NO ``SkillsMiddleware`` (subagents had zero
+      skills). We set ``spec["skills"] = skill_sources`` (the same virtual
+      ``/skills/`` routes the main agent uses, resolved through the shared
+      backend) so deepagents loads the full set, then append a fresh
+      ``SkillCurationMiddleware`` — which runs after that loader — so each
+      subagent sees ONLY the user-enabled (curated) skills, just like the main
+      agent. Skipped if the spec already declares skills / carries curation.
     """
     from langchain.agents.middleware import ModelRetryMiddleware
     from novacode_cli.bootstrap import VisionCaptionMiddleware
@@ -568,6 +576,14 @@ def _harden_subagent_specs(specs: list) -> list:
         has_retry = any(type(m).__name__ == "ModelRetryMiddleware" for m in existing)
         has_vision = any(type(m).__name__ == "VisionCaptionMiddleware" for m in existing)
         has_security = any(type(m).__name__ == "SecurityMiddleware" for m in existing)
+        has_curation = any(type(m).__name__ == "SkillCurationMiddleware" for m in existing)
+
+        # Give the subagent the (full) skill sources so deepagents attaches a
+        # SkillsMiddleware on the shared backend — unless the spec already
+        # declares its own skills. SkillCurationMiddleware (appended below, after
+        # the loader) then clamps them to the user-enabled set.
+        if skill_sources and "skills" not in new_spec:
+            new_spec["skills"] = list(skill_sources)
 
         mw_to_add = []
         if not has_retry:
@@ -584,6 +600,13 @@ def _harden_subagent_specs(specs: list) -> list:
             mw_to_add.append(VisionCaptionMiddleware())
         if not has_security:
             mw_to_add.append(SecurityMiddleware())
+        # Only curate when the subagent actually has skills (either just granted
+        # above or pre-declared by the spec) — no point adding a no-op clamp.
+        if new_spec.get("skills") and not has_curation:
+            # Lives in spec["middleware"], which deepagents.graph appends AFTER
+            # the SkillsMiddleware loader — so it sees the loaded skills_metadata
+            # and clamps it. A fresh instance per subagent.
+            mw_to_add.append(SkillCurationMiddleware())
 
         new_spec["middleware"] = mw_to_add + existing
         out.append(new_spec)
@@ -1185,7 +1208,7 @@ This file stores your preferences and context that persist across sessions.
     # otherwise lack entirely) so a transient provider 5xx/429 no longer kills a
     # subagent mid-run — see _harden_subagent_specs. Returns fresh copies (never
     # mutates the cached specs, which would accumulate middleware across builds).
-    Nova_SubAgent = _harden_subagent_specs(Nova_SubAgent)
+    Nova_SubAgent = _harden_subagent_specs(Nova_SubAgent, skill_sources)
 
     # Make deepagents' built-in SummarizationMiddleware actually fire on OUR
     # context budget (see _seed_summarization_profile).
