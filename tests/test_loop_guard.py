@@ -1,0 +1,125 @@
+"""Tests for LoopGuardMiddleware — breaking stuck identical-repeat tool loops.
+
+Pins the reported bug: the agent fires the same grep with the same args,
+gets "no matches" every time, and never escapes. After ``threshold`` identical
+back-to-back calls the next one is short-circuited, while legitimate retries
+(different args, different result, intervening call) keep running.
+"""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+from langchain_core.messages import ToolMessage
+from langgraph.types import Command
+
+from novacode_cli.tracking.loop_guard import LoopGuardMiddleware
+
+
+def _request(name: str, args: dict, call_id: str = "c1") -> SimpleNamespace:
+    """Minimal ToolCallRequest stand-in (middleware only reads ``tool_call``)."""
+    return SimpleNamespace(tool_call={"name": name, "args": args, "id": call_id})
+
+
+def _msg(text: str, call_id: str = "c1") -> ToolMessage:
+    return ToolMessage(content=text, tool_call_id=call_id)
+
+
+def _run(
+    mw: LoopGuardMiddleware, name: str, args: dict, result_text: str
+) -> ToolMessage | Command:
+    """Drive one sync tool call through the guard, returning what it produced."""
+    return mw.wrap_tool_call(_request(name, args), lambda _r: _msg(result_text))
+
+
+# ── the core loop break ──────────────────────────────────────────────────────
+
+
+def test_blocks_after_threshold_identical_calls():
+    mw = LoopGuardMiddleware(threshold=3)
+    args = {"pattern": "morphological|knowledge"}
+    # First three identical calls execute normally.
+    for _ in range(3):
+        out = _run(mw, "grep", args, "no matches")
+        assert out.content == "no matches"
+    # The fourth is short-circuited.
+    blocked = _run(mw, "grep", args, "no matches")
+    assert blocked.status == "error"
+    assert "LOOP STOPPED" in blocked.content
+
+
+def test_blocked_call_does_not_execute_handler():
+    mw = LoopGuardMiddleware(threshold=2)
+    args = {"q": "x"}
+    for _ in range(2):
+        _run(mw, "grep", args, "no matches")
+
+    calls: list[int] = []
+
+    def handler(_r: object) -> ToolMessage:
+        calls.append(1)
+        return _msg("no matches")
+
+    out = mw.wrap_tool_call(_request("grep", args), handler)
+    assert out.status == "error"
+    assert calls == []  # handler never invoked
+
+
+# ── false-positive guards ────────────────────────────────────────────────────
+
+
+def test_different_args_reset_streak():
+    mw = LoopGuardMiddleware(threshold=3)
+    for _ in range(3):
+        _run(mw, "grep", {"q": "a"}, "no matches")
+    # Switching the query is real progress — must run, not block.
+    out = _run(mw, "grep", {"q": "b"}, "no matches")
+    assert out.content == "no matches"
+
+
+def test_changed_result_resets_streak():
+    mw = LoopGuardMiddleware(threshold=3)
+    args = {"q": "a"}
+    _run(mw, "grep", args, "no matches")
+    _run(mw, "grep", args, "no matches")
+    # Same call but now it finds something → streak resets, never blocks.
+    _run(mw, "grep", args, "found it!")
+    out = _run(mw, "grep", args, "found it!")
+    assert out.content == "found it!"
+
+
+def test_intervening_call_breaks_consecutive_streak():
+    mw = LoopGuardMiddleware(threshold=3)
+    args = {"q": "a"}
+    _run(mw, "grep", args, "no matches")
+    _run(mw, "grep", args, "no matches")
+    _run(mw, "read_file", {"path": "/x"}, "contents")  # breaks the streak
+    out = _run(mw, "grep", args, "no matches")  # streak restarts at 1
+    assert out.content == "no matches"
+
+
+def test_command_result_is_not_guarded():
+    mw = LoopGuardMiddleware(threshold=2)
+    args = {"q": "a"}
+    cmd = Command(update={"messages": []})
+    for _ in range(4):
+        out = mw.wrap_tool_call(_request("grep", args), lambda _r: cmd)
+        assert out is cmd  # never blocked — Command results can't anchor a loop
+
+
+# ── async path mirrors sync ──────────────────────────────────────────────────
+
+
+async def test_async_blocks_after_threshold():
+    mw = LoopGuardMiddleware(threshold=3)
+    args = {"q": "a"}
+
+    async def handler(_r: object) -> ToolMessage:
+        return _msg("no matches")
+
+    for _ in range(3):
+        out = await mw.awrap_tool_call(_request("grep", args), handler)
+        assert out.content == "no matches"
+    blocked = await mw.awrap_tool_call(_request("grep", args), handler)
+    assert blocked.status == "error"
+    assert "LOOP STOPPED" in blocked.content
