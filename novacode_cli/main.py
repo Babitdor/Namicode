@@ -1658,12 +1658,18 @@ async def _run_agent_session(
             sandbox_id=getattr(sandbox_backend, "id", None) if sandbox_backend else None,
         )
 
-        # Eagerly preload voice models if voice is active/enabled.
+        # Eagerly preload voice models at the boot banner whenever voice will be
+        # used — `enabled` (always-listening) OR `speak_responses` (Nova talks)
+        # OR push-to-talk. Gating on `enabled` alone meant PTT / speak-only users
+        # paid the (large) model load inline on first use instead of at startup.
         from novacode_cli.config.nova_config import NovaConfig
         from novacode_cli import audio
 
         cfg = NovaConfig().get_voice_config()
-        if cfg.get("enabled") is True and audio.is_voice_available():
+        _voice_wanted = bool(
+            cfg.get("enabled") or cfg.get("speak_responses") or cfg.get("mode") == "push_to_talk"
+        )
+        if _voice_wanted and audio.is_voice_available():
             boot_status("voice: preloading models (downloading if not present)…")
             try:
                 from novacode_cli.audio.pipeline import VoicePipeline

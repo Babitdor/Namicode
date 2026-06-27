@@ -6577,11 +6577,19 @@ class NovaApp(App):
             self._set_nova_indicator("✓ voice models ready", style="dim green", auto_clear=3.0)
 
     def _eager_voice_warmup(self) -> None:
-        """If voice is enabled in config, pre-download STT/TTS/VAD models."""
+        """Pre-load STT/TTS/VAD models at startup whenever voice will be used.
+
+        Mirrors main.py's boot-banner preload: `enabled` (always-listening),
+        `speak_responses` (Nova talks), or push-to-talk all use voice, so warm
+        the models now instead of paying the load inline on the first PTT/reply.
+        """
         from novacode_cli.config.nova_config import NovaConfig
 
         cfg = NovaConfig().get_voice_config()
-        if cfg.get("enabled") is True:
+        voice_wanted = bool(
+            cfg.get("enabled") or cfg.get("speak_responses") or cfg.get("mode") == "push_to_talk"
+        )
+        if voice_wanted:
             self._ensure_voice_pipeline()
 
     def _voice_unavailable_notice(self) -> None:
