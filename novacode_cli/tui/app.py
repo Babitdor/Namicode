@@ -6222,7 +6222,7 @@ class NovaApp(App):
             return [c for c in _TUI_SLASH_COMMANDS if c.startswith(v)]
         return []
 
-    def _at_candidates(self, fragment: str) -> list[str]:
+    def _at_candidates(self, fragment: str) -> list[str]:  # noqa: PLR0915 (budgeted BFS walk)
         """Build @agent + @file completions for an ``@`` fragment (no leading @)."""
         at_prefix = f"@{fragment}".lower()
         candidates: list[str] = []
@@ -6253,23 +6253,44 @@ class NovaApp(App):
                     }
                 )
 
-                def _walk(p: Path, prefix: str, cwd: Path, seen: set[str]) -> None:
-                    """Recursively match files starting with prefix, skipping noise dirs."""
-                    for child in p.iterdir():
-                        is_dir = child.is_dir()
-                        # Skip hidden dirs (don't descend into them)
-                        if is_dir and (child.name.startswith(".") or child.name in _SKIP_DIRS):
-                            continue
-                        if child.name.lower().startswith(prefix.lower()):
-                            rel = child.relative_to(cwd).as_posix()
-                            tag = f"@{rel}"
+                # Cap entries scanned so a rare/no-match prefix can't walk the
+                # whole repo. _update_palette runs this in a thread its exclusive
+                # worker can't actually interrupt, so an unbounded walk keeps
+                # churning (and contends the GIL) after every keystroke.
+                max_scan = 4000
+                scanned = 0
+
+                def _walk(start: Path, prefix: str, cwd: Path, seen: set[str]) -> None:
+                    """Match files starting with prefix, breadth-first under start.
+
+                    BFS (not recursion) so shallow files — the ones usually wanted
+                    — are matched first and the scan budget caps deep exploration;
+                    a DFS budget could be exhausted descending one huge subtree
+                    before ever reaching a root-level match.
+                    """
+                    nonlocal scanned
+                    from collections import deque
+
+                    queue = deque([start])
+                    while queue and scanned < max_scan and len(seen) < max_results:
+                        for child in queue.popleft().iterdir():
+                            if scanned >= max_scan or len(seen) >= max_results:
+                                break
+                            scanned += 1
+                            is_dir = child.is_dir()
+                            # Skip hidden / noise dirs (don't descend into them)
+                            if is_dir and (child.name.startswith(".") or child.name in _SKIP_DIRS):
+                                continue
+                            if child.name.lower().startswith(prefix.lower()):
+                                rel = child.relative_to(cwd).as_posix()
+                                tag = f"@{rel}"
+                                if is_dir:
+                                    tag += "/"
+                                if tag not in seen:
+                                    seen.add(tag)
+                                    candidates.append(tag)
                             if is_dir:
-                                tag += "/"
-                            if tag not in seen:
-                                seen.add(tag)
-                                candidates.append(tag)
-                        if is_dir and len(seen) < max_results:
-                            _walk(child, prefix, cwd, seen)
+                                queue.append(child)
 
                 seen: set[str] = set()
                 if "/" in prefix:
