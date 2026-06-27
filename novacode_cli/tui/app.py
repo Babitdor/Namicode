@@ -5846,13 +5846,7 @@ class NovaApp(App):
             skill_count = len(skills)
         except Exception:  # noqa: BLE001
             skill_count = 0
-        try:
-            from novacode_cli.config.config import settings
-
-            proj_files = settings.get_project_agent_md_paths()
-            file_count = len(proj_files)
-        except Exception:  # noqa: BLE001
-            file_count = 0
+        file_count = self._cached_agent_md_count()
 
         # Build the right-side info string
         right_parts: list[str] = []
@@ -10364,6 +10358,27 @@ class NovaApp(App):
         if self._skill_names_cache is None:
             self._skill_names_cache = self._collect_skill_names()
         return self._skill_names_cache
+
+    def _cached_agent_md_count(self) -> int:
+        """Project NOVA.md/CLAUDE.md count, stat'd at most ~once per second.
+
+        ``_refresh_status`` runs at 20fps while a turn is active. Calling
+        ``get_project_agent_md_paths()`` there re-stat'd four candidate paths
+        every frame (~80 disk stats/sec) — the dominant in-turn UI lag. These
+        files don't change mid-frame, so a 1s TTL cache is plenty.
+        """
+        now = time.monotonic()
+        if hasattr(self, "_md_count_cache") and now - self._md_count_ts < 1.0:
+            return self._md_count_cache
+        try:
+            from novacode_cli.config.config import settings
+
+            count = len(settings.get_project_agent_md_paths())
+        except Exception:  # noqa: BLE001
+            count = 0
+        self._md_count_cache = count
+        self._md_count_ts = now
+        return count
 
     def _get_agent_names(self) -> list[str]:
         if self._agent_names_cache is None:
