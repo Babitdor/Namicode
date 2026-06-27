@@ -32,8 +32,15 @@ class PocketSpeaker:
         hf_home = os.environ.get("HF_HOME") or os.path.expanduser(
             "~/.cache/huggingface"
         )
-        model_dir = Path(hf_home) / "hub" / "models--kyutai--pocket-tts"
-        return not model_dir.exists()
+        hub = Path(hf_home) / "hub"
+        # Match whatever kyutai/pocket-tts* repo this pocket_tts version pulls
+        # (the real cache dir is `models--kyutai--pocket-tts-without-voice-cloning`).
+        # The old fixed `models--kyutai--pocket-tts` never matched, so the
+        # "downloading voice…" hint showed on every speak despite a cached model.
+        try:
+            return not any(hub.glob("models--kyutai--pocket-tts*"))
+        except OSError:
+            return False
 
     def _ensure_voice(self) -> None:
         if self._model is None:
