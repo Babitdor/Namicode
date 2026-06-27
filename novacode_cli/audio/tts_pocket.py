@@ -135,5 +135,7 @@ class PocketSpeaker:
         silence = np.zeros(silence_len, dtype=pcm.dtype)
         pcm = np.concatenate([pcm, silence])
 
-        sd.play(pcm, self._samplerate)
+        # latency="high": larger output buffer so a GIL stall from a concurrent
+        # tool call can't underrun playback and stutter the voice (see tts.py).
+        sd.play(pcm, self._samplerate, latency="high")
         sd.wait()

@@ -121,5 +121,7 @@ class OrpheusSpeaker:
         silence = np.zeros(silence_len, dtype=pcm.dtype)
         pcm = np.concatenate([pcm, silence])
 
-        sd.play(pcm, _SAMPLE_RATE)
+        # latency="high": larger output buffer so a GIL stall from a concurrent
+        # tool call can't underrun playback and stutter the voice (see tts.py).
+        sd.play(pcm, _SAMPLE_RATE, latency="high")
         sd.wait()

@@ -117,5 +117,10 @@ class Speaker:
         silence_len = int(self._samplerate * 0.25)
         silence = np.zeros(silence_len, dtype=audio.dtype)
         audio = np.concatenate([audio, silence])
-        sd.play(audio, self._samplerate)
+        # latency="high" gives PortAudio a larger output buffer. sd.play feeds the
+        # device from a Python callback, so when a concurrent tool call hogs the
+        # GIL (grep walking a tree, model streaming, the 20fps TUI render) the
+        # callback can stall; a small default buffer then underruns and the voice
+        # stutters/glitches. The bigger buffer absorbs those stalls.
+        sd.play(audio, self._samplerate, latency="high")
         sd.wait()
