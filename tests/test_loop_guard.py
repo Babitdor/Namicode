@@ -1,9 +1,10 @@
 """Tests for LoopGuardMiddleware — breaking stuck identical-repeat tool loops.
 
 Pins the reported bug: the agent fires the same grep with the same args,
-gets "no matches" every time, and never escapes. After ``threshold`` identical
-back-to-back calls the next one is short-circuited, while legitimate retries
-(different args, different result, intervening call) keep running.
+gets "no matches" every time, and never escapes — including when it interleaves
+a think/read between the repeats. After ``threshold`` identical calls within the
+sliding window the next one is short-circuited, while legitimate retries
+(different args, changed result) keep running.
 """
 
 from __future__ import annotations
@@ -88,13 +89,45 @@ def test_changed_result_resets_streak():
     assert out.content == "found it!"
 
 
-def test_intervening_call_breaks_consecutive_streak():
+def test_intervening_call_does_not_reset_count():
     mw = LoopGuardMiddleware(threshold=3)
     args = {"q": "a"}
     _run(mw, "grep", args, "no matches")
     _run(mw, "grep", args, "no matches")
-    _run(mw, "read_file", {"path": "/x"}, "contents")  # breaks the streak
-    out = _run(mw, "grep", args, "no matches")  # streak restarts at 1
+    _run(mw, "read_file", {"path": "/x"}, "contents")  # interleaved, skipped
+    # Third identical grep is still allowed (only 2 repeats so far)…
+    out = _run(mw, "grep", args, "no matches")
+    assert out.content == "no matches"
+    # …but the fourth crosses the threshold despite the interleaved read.
+    blocked = _run(mw, "grep", args, "no matches")
+    assert blocked.status == "error"
+    assert "LOOP STOPPED" in blocked.content
+
+
+def test_blocks_loop_that_alternates_with_another_tool():
+    # The reported shape: grep → think → grep → think → grep …
+    mw = LoopGuardMiddleware(threshold=3)
+    args = {"pattern": "knowledge"}
+    for _ in range(3):
+        out = _run(mw, "grep", args, "no matches")
+        assert out.content == "no matches"
+        _run(mw, "think", {"thought": "still looking"}, "ok")  # interleaved
+    blocked = _run(mw, "grep", args, "no matches")
+    assert blocked.status == "error"
+    assert "LOOP STOPPED" in blocked.content
+
+
+def test_heavy_interleaving_ages_streak_out_of_window():
+    # With a small window, enough unrelated calls between repeats means it is no
+    # longer a tight loop — the old repeats age out and the call is allowed.
+    mw = LoopGuardMiddleware(threshold=3, window=4)
+    args = {"q": "a"}
+    _run(mw, "grep", args, "no matches")
+    _run(mw, "grep", args, "no matches")
+    # Fill the window past capacity with distinct other calls.
+    for i in range(4):
+        _run(mw, "read_file", {"path": f"/x{i}"}, "contents")
+    out = _run(mw, "grep", args, "no matches")  # earlier greps aged out
     assert out.content == "no matches"
 
 
