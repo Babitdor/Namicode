@@ -341,6 +341,13 @@ class MatrixRain(Static):
 _MAX_TRANSCRIPT_WIDGETS = 400
 _TRANSCRIPT_LOW_WATER = 320
 
+# Responsive breakpoints (terminal columns/rows). Below _NARROW_WIDTH the info
+# bar sheds its widest columns and the status line drops its right-side counts;
+# below the _MIN_* floor the layout can't fit and we surface a "too small" note.
+_NARROW_WIDTH = 90
+_MIN_WIDTH = 50
+_MIN_HEIGHT = 12
+
 # Tools whose result is a code change worth seeing in full: these keep their own
 # Collapsible with a colored diff body so the user can review what the agent
 # changed. Every other tool (reads, search, exec, MCP, …) condenses into the
@@ -4174,7 +4181,11 @@ class NovaApp(App):
     #transcript > .tool { color: $warning; padding: 0 2; margin: 1 0; background: $surface; }
     .toolbody { color: $text-muted; margin: 0; height: auto; }
     .terminal-log {
-        height: 5;
+        /* Scale with terminal height; floor at the old fixed 5 rows so small
+           windows are never worse, grow up to 16 on tall windows. */
+        height: 25vh;
+        min-height: 5;
+        max-height: 16;
         background: $boost;
         border: round $border;
         margin: 0 0;
@@ -4234,7 +4245,8 @@ class NovaApp(App):
     }
     #cmdpalette {
         width: 100%;
-        height: auto; max-height: 10;
+        /* Grow the completion list on taller terminals (was a fixed 10 rows). */
+        height: auto; max-height: 40vh;
         border: thick $accent; background: $panel;
         padding: 0 1;
         display: none; layer: overlay; dock: bottom;
@@ -4326,6 +4338,10 @@ class NovaApp(App):
     .info-value {
         height: 1;
     }
+    /* Narrow terminals: shed the widest info columns so the rest stay readable
+       instead of being squeezed to a few clipped characters. Toggled by
+       _apply_responsive_layout adding the `narrow` class to the screen. */
+    .narrow #col-workspace, .narrow #col-sandbox { display: none; }
     .session-header {
         height: auto;
         padding: 1 2;
@@ -4409,7 +4425,10 @@ class NovaApp(App):
     .btw-body { padding: 0 2; color: $text-muted; }
     .bgshell-card { margin: 1 0; border-left: thick $warning-muted; }
     .bgshell-card > .collapsible--title { color: $warning; background: $surface; }
-    .bgshell-log { height: 10; max-height: 20; border: none; background: $surface; }
+    .bgshell-log {
+        height: 30vh; min-height: 8; max-height: 22;
+        border: none; background: $surface;
+    }
     .bgagent-card { margin: 1 0; border-left: thick $success-muted; }
     .bgagent-card > .collapsible--title { color: $success; background: $surface; }
     .bgagent-done > .collapsible--title { color: $success; }
@@ -4544,6 +4563,9 @@ class NovaApp(App):
         self._skill_count_cache: int | None = None
         self._skill_count_ts: float = 0.0
         self._agent_names_cache: list[str] | None = None
+        # Responsive layout flags, driven by _apply_responsive_layout on resize.
+        self._narrow = False
+        self._tiny = False
         # Live status state (animated spinner + elapsed while a turn runs).
         self._activity = "ready"
         self._turn_active = False
@@ -4598,13 +4620,13 @@ class NovaApp(App):
                 )
             yield Static("", id="mode-badge")
             with Horizontal(id="info-bar"):
-                with Vertical(classes="info-col"):
+                with Vertical(id="col-workspace", classes="info-col"):
                     yield Static("workspace (/directory)", classes="info-label")
                     yield Static("", id="info-workspace", classes="info-value")
                 with Vertical(classes="info-col"):
                     yield Static("branch", classes="info-label")
                     yield Static("", id="info-branch", classes="info-value")
-                with Vertical(classes="info-col"):
+                with Vertical(id="col-sandbox", classes="info-col"):
                     yield Static("sandbox", classes="info-label")
                     yield Static("", id="info-sandbox", classes="info-value")
                 with Vertical(classes="info-col"):
@@ -5874,9 +5896,10 @@ class NovaApp(App):
             line.append(str(pending), style="bold yellow")
 
         # Right-align skill/file counts. Skills shows the *enabled* set so it
-        # reflects /skills toggles, not the full installed list.
-        skill_count = self._cached_enabled_skill_count()
-        file_count = self._cached_agent_md_count()
+        # reflects /skills toggles, not the full installed list. Dropped on
+        # narrow terminals where there's no room for them.
+        skill_count = 0 if self._narrow else self._cached_enabled_skill_count()
+        file_count = 0 if self._narrow else self._cached_agent_md_count()
 
         # Build the right-side info string
         right_parts: list[str] = []
@@ -9150,12 +9173,13 @@ class NovaApp(App):
             self._home_banner = None
 
     def on_resize(self, event: events.Resize) -> None:
-        """Reflow the home banner to the new terminal width.
+        """Reflow the home banner and apply responsive breakpoints on resize.
 
         The rain grid width and the ASCII-art size variant are chosen from the
         terminal width, so on resize we re-pick the art variant and re-grid the
         rain. Only acts while the banner is still on screen (home screen).
         """
+        self._apply_responsive_layout(event)
         rain = self._home_banner
         if not isinstance(rain, MatrixRain) or not rain.is_mounted:
             return
@@ -9167,6 +9191,39 @@ class NovaApp(App):
             rain.reflow(get_responsive_ascii(width=width), width)
         except Exception:  # noqa: BLE001
             pass
+
+    def _apply_responsive_layout(self, event: events.Resize) -> None:
+        """Toggle breakpoint classes from the terminal size.
+
+        - ``narrow`` (width < _NARROW_WIDTH): the screen sheds its widest info
+          columns (CSS) and the status line drops its right-side counts.
+        - ``tiny`` (below the _MIN_* floor): the layout can't fit; surface a
+          one-shot notice rather than render a broken, clipped screen.
+
+        Only repaints when a breakpoint actually flips, so a drag-resize that
+        stays in one band costs nothing extra.
+        """
+        from contextlib import suppress
+
+        width = event.size.width or 0
+        height = event.size.height or 0
+        narrow = width < _NARROW_WIDTH
+        tiny = width < _MIN_WIDTH or height < _MIN_HEIGHT
+        if narrow == self._narrow and tiny == self._tiny:
+            return
+        self._narrow = narrow
+        self._tiny = tiny
+        with suppress(Exception):
+            self.screen.set_class(narrow, "narrow")
+            self.screen.set_class(tiny, "tiny")
+        # Status line's right-side counts are baked into a Text (not a widget),
+        # so CSS can't hide them — rebuild the tail to add/drop them.
+        self._status_tail = None
+        self._refresh_status()
+        if tiny:
+            self._set_nova_indicator(
+                "⚠ terminal too small — enlarge the window", style="yellow", auto_clear=4.0
+            )
 
     async def _run_effort(self, text: str) -> None:
         """Handle /effort natively: set reasoning effort level."""
