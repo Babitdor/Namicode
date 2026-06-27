@@ -2611,6 +2611,11 @@ class SkillsScreen(ModalScreen[None]):
             self.query_one("#skills-hint", Static).update(Text(str(e), style="red"))
             return
         self._reload()
+        # Reflect the new enabled count in the main status bar at once — the tick
+        # loop doesn't refresh while idle, so push it here.
+        self.app._skill_count_cache = None
+        self.app._status_tail = None
+        self.app._refresh_status()
 
     def _update_preview(self, idx: int | None) -> None:
         preview = self.query_one("#skill-detail-preview", Static)
@@ -4529,12 +4534,15 @@ class NovaApp(App):
         self._btw_agent: Any = None  # lazy-init btw side-channel agent (web-search only)
         self._bg_job_count: int = 0  # monotonic counter for background shell jobs
         self._todo_widget: Static | None = None  # updated in place per turn
-        self._init_widget: Static | None = None  # live /init step tracker widget
-        self._init_steps: list[dict] = []
+        # _init_widget and _init_steps removed — /init progress is now _log-only
         # Live per-iteration Ralph cards, keyed by iteration number, so an
         # IterationFinished event can update the card mounted at its start.
         self._ralph_iter_cards: dict[int, Static] = {}
         self._skill_names_cache: list[str] | None = None
+        # Enabled-skill count shown in the status bar (total minus curation-
+        # disabled), cached briefly; invalidated to None on a /skills toggle.
+        self._skill_count_cache: int | None = None
+        self._skill_count_ts: float = 0.0
         self._agent_names_cache: list[str] | None = None
         # Live status state (animated spinner + elapsed while a turn runs).
         self._activity = "ready"
@@ -5865,12 +5873,9 @@ class NovaApp(App):
             line.append("   ⚡", style="bold yellow")
             line.append(str(pending), style="bold yellow")
 
-        # Right-align skill/file counts
-        try:
-            skills = self._get_skill_names()
-            skill_count = len(skills)
-        except Exception:  # noqa: BLE001
-            skill_count = 0
+        # Right-align skill/file counts. Skills shows the *enabled* set so it
+        # reflects /skills toggles, not the full installed list.
+        skill_count = self._cached_enabled_skill_count()
         file_count = self._cached_agent_md_count()
 
         # Build the right-side info string
@@ -10384,6 +10389,29 @@ class NovaApp(App):
         if self._skill_names_cache is None:
             self._skill_names_cache = self._collect_skill_names()
         return self._skill_names_cache
+
+    def _cached_enabled_skill_count(self) -> int:
+        """Number of *enabled* skills (installed minus curation-disabled).
+
+        This is what the status bar shows, so it must drop when skills are
+        deactivated via ``/skills``. Resolving the disabled set reads two small
+        prefs files, so the result is cached ~1s to keep the throttled status
+        tail cheap; ``action_toggle`` sets ``_skill_count_cache = None`` to make
+        a toggle reflect immediately.
+        """
+        now = time.monotonic()
+        if self._skill_count_cache is not None and now - self._skill_count_ts < 1.0:
+            return self._skill_count_cache
+        try:
+            from novacode_cli.skills.skills_prefs import effective_disabled
+
+            disabled = effective_disabled()
+            count = sum(1 for n in self._get_skill_names() if n not in disabled)
+        except Exception:  # noqa: BLE001
+            count = 0
+        self._skill_count_cache = count
+        self._skill_count_ts = now
+        return count
 
     def _cached_agent_md_count(self) -> int:
         """Project NOVA.md/CLAUDE.md count, stat'd at most ~once per second.
