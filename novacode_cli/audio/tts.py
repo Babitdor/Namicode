@@ -34,6 +34,7 @@ def _voice_url_path(voice: str) -> str:
 
 def _download(url: str, dest: Path) -> None:
     import os
+    import shutil
     import tempfile
 
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -42,8 +43,11 @@ def _download(url: str, dest: Path) -> None:
     tmp_fd, tmp_path_str = tempfile.mkstemp(dir=str(dest.parent), suffix=".tmp")
     tmp_path = Path(tmp_path_str)
     try:
-        with os.fdopen(tmp_fd, "wb") as out, urllib.request.urlopen(url) as resp:  # noqa: S310 — fixed HTTPS host
-            out.write(resp.read())
+        # timeout guards connect *and* each socket read, so a stalled network
+        # can't hang the warmup thread forever. copyfileobj streams in chunks
+        # instead of reading the whole model into memory at once.
+        with os.fdopen(tmp_fd, "wb") as out, urllib.request.urlopen(url, timeout=30) as resp:  # noqa: S310 — fixed HTTPS host
+            shutil.copyfileobj(resp, out)
         tmp_path.replace(dest)
     except Exception:
         tmp_path.unlink(missing_ok=True)
