@@ -5768,10 +5768,8 @@ class NovaApp(App):
     def _refresh_status(self) -> None:
         line = Text()
 
-        def _divider() -> None:
-            line.append("  │  ", style="#3b4261")
-
         # Activity segment — animated spinner + elapsed while live, else a ● dot.
+        # Rebuilt every frame (cheap); it is the only part that changes at 20fps.
         if self._turn_active:
             frame = self._SPINNER[self._spinner_frame % len(self._SPINNER)]
             elapsed = time.monotonic() - self._turn_start
@@ -5781,6 +5779,33 @@ class NovaApp(App):
         else:
             line.append("● ", style="#9ece6a")
             line.append(str(self._activity), style="#9ece6a")
+
+        # Heavy tail (ctx gauge, bridge, notifs, counts) changes slowly. Rebuild
+        # it at most ~4x/sec so the per-frame spinner update stays cheap; _tick
+        # drops the cache to None when a notif/bridge change must show at once.
+        now = time.monotonic()
+        ttl = 0.25  # rebuild the heavy tail at most ~4x/sec
+        last = getattr(self, "_status_tail_ts", 0.0)
+        if getattr(self, "_status_tail", None) is None or now - last > ttl:
+            self._status_tail = self._build_status_tail()
+            self._status_tail_ts = now
+        line.append_text(self._status_tail)
+
+        try:
+            self._w("#prompt-hint-bar", Static).update(line)
+        except NoMatches:
+            pass
+
+    def _build_status_tail(self) -> Text:
+        """Slow-changing status segments, cached on a short TTL by _refresh_status.
+
+        Split out so the 20fps spinner refresh doesn't rebuild the ctx gauge,
+        bridge scan, notification counts, and skill/file counts every frame.
+        """
+        line = Text()
+
+        def _divider() -> None:
+            line.append("  │  ", style="#3b4261")
 
         # Context segment — a filling gauge that recolors green→amber→red.
         if self.token_tracker is not None:
@@ -5864,10 +5889,7 @@ class NovaApp(App):
             # the CSS already handles this if we update the hint bar carefully.
             line.append(right_text, style="dim")
 
-        try:
-            self._w("#prompt-hint-bar", Static).update(line)
-        except NoMatches:
-            pass
+        return line
 
     def _unread_count(self) -> int:
         """Unread notification count (0 on any error)."""
@@ -5962,6 +5984,7 @@ class NovaApp(App):
 
     def _tick(self) -> None:
         refresh = False
+        tail_dirty = False
         if self._turn_active:
             self._spinner_frame += 1
             refresh = True
@@ -5970,6 +5993,7 @@ class NovaApp(App):
         if cur != self._last_notif_count:
             self._last_notif_count = cur
             refresh = True
+            tail_dirty = True
         # Remote bridge liveness — refresh when the active bridge count changes
         # (bridge connects, disconnects, or watchdog restarts it).
         try:
@@ -5990,11 +6014,13 @@ class NovaApp(App):
         if _bridge_count != getattr(self, "_last_bridge_count", -1):
             self._last_bridge_count = _bridge_count
             refresh = True
+            tail_dirty = True
+        # A notif/bridge change must show at once — drop the throttled tail cache
+        # so _refresh_status rebuilds it this frame instead of up to 0.25s later.
+        if tail_dirty:
+            self._status_tail = None
         if refresh:
             self._refresh_status()
-            # Also keep the quota column in the info bar current during turns.
-            if self._turn_active:
-                self._refresh_quota()
 
     # -- input ----------------------------------------------------------------
     def _update_mode_badge(self, input_value: str = "") -> None:
