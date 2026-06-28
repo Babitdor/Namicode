@@ -6233,16 +6233,26 @@ class NovaApp(App):
                 return [f"/file {c}" for c in matches]
             return []
         v = value.lower()
-        # /skill:<name> — invoke a skill
+        # Legacy /skill:<name> form — still works, kept for back-compat.
         if value.startswith("/skill:"):
             return [
                 f"/skill:{n}"
                 for n in self._get_skill_names()
                 if f"/skill:{n}".lower().startswith(v)
             ]
-        # /<command>
+        # /<command> or bare /<skill-name>. Skills are invocable directly as
+        # /<name> (resolved in _run_slash via _run_skill), so surface them here
+        # alongside the built-in commands; a skill sharing a command's name
+        # shouldn't appear twice.
         if value.startswith("/"):
-            return [c for c in _TUI_SLASH_COMMANDS if c.startswith(v)]
+            cmds = [c for c in _TUI_SLASH_COMMANDS if c.startswith(v)]
+            seen = set(cmds)
+            skill_cmds = [
+                f"/{n}"
+                for n in self._get_skill_names()
+                if f"/{n}".lower().startswith(v) and f"/{n}" not in seen
+            ]
+            return cmds + skill_cmds
         return []
 
     def _at_candidates(self, fragment: str) -> list[str]:  # noqa: PLR0915 (budgeted BFS walk)
@@ -8197,7 +8207,7 @@ class NovaApp(App):
         name = parts[0] if parts else ""
         args = parts[1] if len(parts) > 1 else None
         if not name:
-            self._log(Text("Usage: /skill:<name> [args]", style="yellow"))
+            self._log(Text("Usage: /<skill-name> [args]", style="yellow"))
             return True
 
         from novacode_cli.commands.skill_invoke import _try_skill_invocation
