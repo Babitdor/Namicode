@@ -57,8 +57,12 @@ _PROMPT_ISSUE_RE = re.compile(
 _SAFE_NAME_RE = re.compile(r"^[a-z0-9_]+\.jinja$")
 
 #: How many of the last N reviews must flag the same template to trigger a rewrite.
+#: 2-of-5 (not 3): the review prompt now flags a template on a single clear case
+#: rather than only a repeating pattern, so requiring 3 hits made the trigger
+#: practically unreachable (0 evolutions across 1300+ reviews). A staged
+#: candidate is still A/B-tested before promotion, so 2/5 isn't trigger-happy.
 _PERSIST_WINDOW = 5
-_PERSIST_HITS = 3
+_PERSIST_HITS = 2
 #: A/B promotion margin (candidate pass-rate must beat active by this) + the run
 #: count after which an inconclusive test is abandoned.
 _AB_MARGIN = 0.05
