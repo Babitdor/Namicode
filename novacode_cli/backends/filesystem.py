@@ -1,23 +1,33 @@
 """Optimized FilesystemBackend wrapping deepagents.backends.filesystem.
 
-Two improvements over the upstream :class:`FilesystemBackend`, both delivered as
-method overrides so the parent's ``grep()`` orchestration is reused unchanged:
+Improvements over the upstream :class:`FilesystemBackend`, all delivered as
+method overrides (the deepagents package is never modified — the filesystem
+tools call ``backend.read/edit/glob/grep``, so overriding those backend methods
+improves the tools transparently):
 
 1. **grep hang fix** — the upstream Python fallback walks the tree with
    ``rglob("*")``, which cannot skip large, uninteresting directories (``.venv``,
-   ``.git``, ``node_modules``). On a repo with a vendored virtualenv this walks
-   millions of files and blows past the timeout. We override ``_python_search``
-   to use ``os.walk`` with in-place ``dirnames`` pruning so those subtrees are
-   never descended into.
+   ``.git``, ``node_modules``). We override ``_python_search`` to use ``os.walk``
+   with in-place ``dirnames`` pruning so those subtrees are never descended into.
 
-2. **Regex support** — ``grep()`` gains an opt-in ``use_regex`` flag. The default
-   (``False``) preserves the exact literal-search behaviour, so this is fully
-   backward-compatible.
+2. **Regex support** — ``grep()`` gains an opt-in ``use_regex`` flag, fully
+   backward-compatible with the literal default.
 
-Because the parent ``grep()`` calls ``self._ripgrep_search(...)`` and
-``self._python_search(...)``, overriding those two methods is enough for the
-literal path to benefit automatically — ``grep()`` is only overridden to thread
-the new ``use_regex`` flag through.
+3. **Smart-case grep** — a lower-case pattern matches case-insensitively; a
+   pattern with any upper-case letter stays case-sensitive (ripgrep's default).
+
+4. **read encoding recovery** — ``read()`` falls back to ``utf-8-sig`` / cp1252 /
+   latin-1 when a file isn't utf-8, instead of returning a decode error.
+
+5. **edit failure hints** — a failed ``edit()`` gets an actionable hint (closest
+   line for a miss, replace_all/disambiguation tip for an ambiguous match).
+
+6. **glob prune + ordering** — ``glob()`` drops vendored-dir noise and returns
+   newest-first.
+
+Async tool calls (``aread``/``aedit``/``aglob``/``agrep``) delegate to these
+sync methods via ``asyncio.to_thread`` in the protocol base, so they are covered
+too without overriding the async variants.
 """
 
 from __future__ import annotations
@@ -34,7 +44,7 @@ from pathlib import Path
 import wcmatch.glob as wcglob
 from deepagents.backends.filesystem import FilesystemBackend
 from deepagents.backends.local_shell import LocalShellBackend
-from deepagents.backends.protocol import GrepResult
+from deepagents.backends.protocol import EditResult, GlobResult, GrepResult, ReadResult
 
 __all__ = ["OptimizedFilesystemBackend", "OptimizedLocalShellBackend"]
 
@@ -236,7 +246,11 @@ class OptimizedFilesystemBackend(FilesystemBackend):
         if rg_path is None:
             return None
 
-        cmd = [rg_path, "--json"]
+        # --smart-case: a lower-case pattern matches case-insensitively, but a
+        # pattern containing an upper-case letter stays case-sensitive. Matches
+        # ripgrep's CLI default and the Python fallback below, so literal grep is
+        # forgiving for the common lower-case query without losing precision.
+        cmd = [rg_path, "--json", "--smart-case"]
         if not use_regex:
             cmd.append("-F")  # fixed-string (literal) mode
         if include_glob:
@@ -336,7 +350,11 @@ class OptimizedFilesystemBackend(FilesystemBackend):
             was cut short by the timeout or aborted mid-iteration.
         """
         deadline = time.monotonic() + timeout
-        regex = re.compile(pattern)
+        # Smart-case to mirror the ripgrep path: case-insensitive unless the
+        # pattern carries an upper-case letter. `pattern` is already re.escape'd
+        # for literal searches, which never adds upper-case, so the check is safe.
+        smart_flags = re.IGNORECASE if pattern == pattern.lower() else 0
+        regex = re.compile(pattern, smart_flags)
         results: dict[str, list[tuple[int, str]]] = {}
         root = base_full if base_full.is_dir() else base_full.parent
 
@@ -398,6 +416,129 @@ class OptimizedFilesystemBackend(FilesystemBackend):
             return results, msg
 
         return results, None
+
+    # -- read: recover non-utf-8 files ---------------------------------------
+
+    def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
+        """Read a file, recovering from a utf-8 decode failure.
+
+        Upstream opens text files as utf-8 only, so a cp1252 / latin-1 / UTF-16
+        file returns a decode error and reads *nothing*. On that error we re-read
+        the bytes through a short encoding ladder (``latin-1`` always succeeds),
+        returning the same windowed ``ReadResult`` the tool expects.
+        """
+        result = super().read(file_path, offset, limit)
+        if result.error and "codec can't decode" in result.error:
+            recovered = self._read_fallback_encoding(file_path, offset, limit)
+            if recovered is not None:
+                return recovered
+        return result
+
+    def _read_fallback_encoding(
+        self, file_path: str, offset: int, limit: int
+    ) -> ReadResult | None:
+        """Re-read ``file_path`` trying non-utf-8 encodings; ``None`` if all fail."""
+        try:
+            raw = self._resolve_path(file_path).read_bytes()
+        except (OSError, RuntimeError, ValueError):
+            return None
+        for enc in ("utf-8-sig", "cp1252", "latin-1"):
+            try:
+                content = raw.decode(enc)
+            except (UnicodeDecodeError, LookupError):
+                continue
+            lines = content.splitlines(keepends=True)
+            if lines and offset >= len(lines):
+                return ReadResult(
+                    error=f"Line offset {offset} exceeds file length ({len(lines)} lines)"
+                )
+            end = min(offset + limit, len(lines))
+            windowed = "".join(lines[offset:end])
+            return ReadResult(file_data={"content": windowed, "encoding": "utf-8"})
+        return None
+
+    # -- edit: actionable failure feedback -----------------------------------
+
+    def edit(
+        self,
+        file_path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,  # noqa: FBT001, FBT002
+    ) -> EditResult:
+        """Edit a file, adding a recovery hint when the match fails.
+
+        The upstream error ("String not found" / "appears N times") tells the
+        model *that* it failed but not how to fix it. We append a hint — the
+        closest line for a miss, or a replace_all/disambiguation tip for an
+        ambiguous match — so the next attempt usually lands.
+        """
+        result = super().edit(file_path, old_string, new_string, replace_all)
+        if not result.error:
+            return result
+        hint = self._edit_failure_hint(file_path, old_string, result.error)
+        if hint:
+            return EditResult(error=f"{result.error}\n\n{hint}")
+        return result
+
+    def _edit_failure_hint(self, file_path: str, old_string: str, error: str) -> str | None:
+        """Build a one-line recovery hint for a failed edit (``None`` if none)."""
+        low = error.lower()
+        if "appears" in low and "times" in low:
+            return (
+                "Hint: pass replace_all=True to change every occurrence, or extend "
+                "old_string with surrounding lines so it matches exactly one place."
+            )
+        if "not found" not in low:
+            return None
+        try:
+            content = self._resolve_path(file_path).read_text(encoding="utf-8", errors="replace")
+        except (OSError, RuntimeError, ValueError):
+            return None
+        first = next((ln for ln in old_string.splitlines() if ln.strip()), "")
+        needle = re.sub(r"\s+", " ", first).strip()
+        if not needle:
+            return None
+        # Whitespace-insensitive locate: indentation / internal-spacing drift is
+        # the most common reason an otherwise-correct old_string doesn't match.
+        for i, line in enumerate(content.splitlines(), 1):
+            norm = re.sub(r"\s+", " ", line).strip()
+            if norm and needle in norm:
+                return (
+                    f"Hint: no exact match, but line {i} is close:\n  {i}: {line}\n"
+                    "old_string must match byte-for-byte (indentation, quotes, trailing "
+                    f"spaces). Re-read around line {i} and copy the exact text."
+                )
+        return None
+
+    # -- glob: prune noise + newest-first ------------------------------------
+
+    def glob(self, pattern: str, path: str | None = None) -> GlobResult:
+        """Glob, then drop vendored-dir noise and order newest-first.
+
+        Bare ``glob`` over a repo with a vendored ``.venv`` / ``node_modules``
+        returns thousands of irrelevant hits in arbitrary order. We filter out
+        the same :data:`_SKIP_DIRS` the grep fallback prunes and sort by mtime so
+        the files the user is likely working on come first.
+        """
+        result = super().glob(pattern, path)
+        if result.error or not result.matches:
+            return result
+        pruned = [m for m in result.matches if not self._under_skip_dir(m.get("path", ""))]
+        pruned.sort(key=lambda m: self._best_effort_mtime(m.get("path", "")), reverse=True)
+        return GlobResult(matches=pruned)
+
+    @staticmethod
+    def _under_skip_dir(path_str: str) -> bool:
+        """True if any path segment is a pruned vendored directory."""
+        return any(part in _SKIP_DIRS for part in Path(path_str.replace("\\", "/")).parts)
+
+    def _best_effort_mtime(self, path_str: str) -> float:
+        """Modification time of ``path_str`` (real/virtual), ``0.0`` if unstattable."""
+        try:
+            return self._resolve_path(path_str).stat().st_mtime
+        except (OSError, RuntimeError, ValueError):
+            return 0.0
 
 
 class OptimizedLocalShellBackend(LocalShellBackend, OptimizedFilesystemBackend):
