@@ -13,13 +13,17 @@ the same handler drives both the classic console REPL and the Textual TUI:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
+import re
+import shlex
 import subprocess
 import threading
 import uuid
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -92,6 +96,219 @@ def _read_ralph_progress() -> str:
     except Exception:
         pass
     return ""
+
+
+# =============================================================================
+# Smart-loop signals: checklist (completion), git fingerprint (stuck), verify
+# =============================================================================
+
+#: Structured completion signal. The agent maintains a markdown checklist here;
+#: the loop stops early once every item is checked (instead of grinding through
+#: all max_iterations). POSIX path so the model never sees a backslashed form.
+RALPH_CHECKLIST_PATH = ".nova/ralph/checklist.md"
+#: Opt-in verification command (one shell command). When present, the loop runs
+#: it after each iteration and won't declare completion until it passes.
+RALPH_VERIFY_PATH = ".nova/ralph/verify.txt"
+#: Consecutive zero-change iterations tolerated before the loop calls it stuck.
+_MAX_NO_CHANGE = 2
+#: Max characters of verification output fed back into the next prompt.
+_VERIFY_TAIL_CHARS = 1500
+
+_CHECKLIST_RE = re.compile(r"^\s*[-*]\s*\[([ xX])\]\s+(.+?)\s*$")
+
+
+@dataclass
+class _ChecklistState:
+    """Parsed Ralph checklist — the loop's structured completion signal."""
+
+    items: list[tuple[bool, str]] = field(default_factory=list)
+
+    @property
+    def total(self) -> int:
+        return len(self.items)
+
+    @property
+    def done(self) -> int:
+        return sum(1 for checked, _ in self.items if checked)
+
+    @property
+    def all_done(self) -> bool:
+        """True only when there is at least one item and all are checked."""
+        return self.total > 0 and self.done == self.total
+
+    @property
+    def summary(self) -> str:
+        return f"{self.done}/{self.total} items complete" if self.total else "no checklist yet"
+
+    def remaining(self) -> list[str]:
+        return [text for checked, text in self.items if not checked]
+
+
+def _read_checklist() -> _ChecklistState:
+    """Parse ``.nova/ralph/checklist.md`` (empty state if absent/unreadable)."""
+    p = Path(".nova") / "ralph" / "checklist.md"
+    items: list[tuple[bool, str]] = []
+    try:
+        if p.exists():
+            for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
+                m = _CHECKLIST_RE.match(line)
+                if m:
+                    items.append((m.group(1).lower() == "x", m.group(2).strip()))
+    except OSError:
+        pass
+    return _ChecklistState(items)
+
+
+def _git_change_signature(working_directory: str) -> str:
+    """Fingerprint the working tree, to detect a no-progress iteration.
+
+    Combines ``git status --porcelain`` (new/untracked files) with ``git diff
+    HEAD`` (edits to already-dirty tracked files, which the status line alone
+    would miss). Returns ``""`` on any git failure — the caller treats an empty
+    signature as "changed" so a git hiccup never false-positives as stuck.
+    """
+    chunks: list[str] = []
+    for args in (["status", "--porcelain"], ["diff", "HEAD"]):
+        try:
+            r = subprocess.run(  # noqa: S603, S607 — fixed git command
+                ["git", *args],
+                cwd=working_directory,
+                capture_output=True,
+                text=True,
+                timeout=8,
+                check=False,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            return ""
+        if r.returncode != 0:
+            return ""
+        chunks.append(r.stdout)
+    return hashlib.sha256("\x00".join(chunks).encode("utf-8", "replace")).hexdigest()
+
+
+def _read_verify_command(working_directory: str) -> str:
+    """The opt-in verification command from ``.nova/ralph/verify.txt`` ('' if none)."""
+    cfg = Path(working_directory) / ".nova" / "ralph" / "verify.txt"
+    try:
+        if cfg.exists():
+            return cfg.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        pass
+    return ""
+
+
+@dataclass
+class _VerifyResult:
+    """Outcome of the opt-in per-iteration verification command."""
+
+    passed: bool
+    summary: str
+
+
+def _run_verification(working_directory: str) -> _VerifyResult | None:
+    """Run the opt-in verification command, or ``None`` if not configured.
+
+    The command lives in ``.nova/ralph/verify.txt`` (one shell command). Opt-in
+    by design: auto-running a whole test suite every iteration would be slow and
+    surprising. Best-effort — a missing/blank file, an unparseable command, or a
+    launch failure returns ``None`` (verification simply doesn't gate the loop).
+    """
+    command = _read_verify_command(working_directory)
+    if not command:
+        return None
+    try:
+        argv = shlex.split(command, posix=os.name != "nt")
+    except ValueError:
+        argv = []
+    if not argv:
+        return None
+    try:
+        r = subprocess.run(  # noqa: S603 — user's own opt-in verify command, by design
+            argv,
+            cwd=working_directory,
+            capture_output=True,
+            text=True,
+            timeout=600,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+        return _VerifyResult(passed=False, summary=f"verification could not run: {e}")
+    tail = (r.stdout + r.stderr).strip()
+    if len(tail) > _VERIFY_TAIL_CHARS:
+        tail = "…\n" + tail[-_VERIFY_TAIL_CHARS:]
+    return _VerifyResult(passed=r.returncode == 0, summary=tail or f"exit code {r.returncode}")
+
+
+def _ralph_iteration_decision(
+    checklist: _ChecklistState,
+    no_change_streak: int,
+    verify: _VerifyResult | None,
+    max_no_change: int = _MAX_NO_CHANGE,
+) -> tuple[str, str]:
+    """Decide what to do after an iteration: ``continue`` / ``complete`` / ``stuck``.
+
+    Pure (no I/O) so the loop policy is unit-testable. Completion requires every
+    checklist item checked *and* verification passing (when configured). Stuck is
+    only declared when there's been no file change for ``max_no_change``
+    consecutive iterations and the work isn't actually finished.
+
+    Returns ``(decision, human_reason)``.
+    """
+    verify_ok = verify is None or verify.passed
+    if checklist.all_done and verify_ok:
+        reason = f"all {checklist.total} checklist items complete"
+        if verify is not None:
+            reason += " and verification passed"
+        return "complete", reason
+    if no_change_streak >= max_no_change and not checklist.all_done:
+        return "stuck", f"no file changes for {no_change_streak} consecutive iterations"
+    return "continue", ""
+
+
+def _read_checklist_md() -> str:
+    """Raw checklist markdown for display in the prompt ('' if absent)."""
+    p = Path(".nova") / "ralph" / "checklist.md"
+    try:
+        if p.exists():
+            return p.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        pass
+    return ""
+
+
+def _ralph_render_extras(
+    no_change_streak: int, last_verify: _VerifyResult | None
+) -> dict[str, Any]:
+    """Template kwargs that carry the smart-loop state into the next iteration."""
+    checklist = _read_checklist()
+    return {
+        "checklist_path": RALPH_CHECKLIST_PATH,
+        "verify_path": RALPH_VERIFY_PATH,
+        "checklist_md": _read_checklist_md(),
+        "checklist_summary": checklist.summary,
+        "verify_summary": last_verify.summary if last_verify else "",
+        "verify_passed": last_verify.passed if last_verify else False,
+        "no_change_streak": no_change_streak,
+    }
+
+
+def _ralph_evaluate(
+    working_directory: str, sig_before: str, no_change_streak: int
+) -> tuple[str, str, int, _VerifyResult | None]:
+    """Post-iteration evaluation shared by both loops.
+
+    Compares the working-tree fingerprint, runs verification, reads the
+    checklist, and returns ``(decision, reason, new_no_change_streak, verify)``.
+    An empty before/after signature (git unavailable) counts as "changed" so a
+    git failure never false-positives the stuck check.
+    """
+    sig_after = _git_change_signature(working_directory)
+    changed = (not sig_before) or (not sig_after) or (sig_after != sig_before)
+    streak = 0 if changed else no_change_streak + 1
+    verify = _run_verification(working_directory)
+    checklist = _read_checklist()
+    decision, reason = _ralph_iteration_decision(checklist, streak, verify)
+    return decision, reason, streak, verify
 
 
 # =============================================================================
@@ -486,6 +703,10 @@ async def _execute_all_ralph_iterations_background(
 
     _ensure_ralph_dir()
     iteration = start_iteration
+    # Smart-loop state, carried across iterations.
+    no_change_streak = 0
+    last_verify: _VerifyResult | None = None
+    sig_before = ""
 
     try:
         try:
@@ -530,6 +751,7 @@ async def _execute_all_ralph_iterations_background(
                     ),
                 )
 
+                sig_before = _git_change_signature(working_directory)
                 prompt = render_template(
                     "ralph_iteration.jinja",
                     iteration_display=iter_display,
@@ -537,6 +759,7 @@ async def _execute_all_ralph_iterations_background(
                     conversation_context=conversation_context,
                     progress_notes=_read_ralph_progress(),
                     progress_path=RALPH_PROGRESS_PATH,
+                    **_ralph_render_extras(no_change_streak, last_verify),
                 )
 
                 try:
@@ -584,6 +807,22 @@ async def _execute_all_ralph_iterations_background(
                     )
 
                 iteration += 1
+
+                decision, decision_reason, no_change_streak, last_verify = _ralph_evaluate(
+                    working_directory, sig_before, no_change_streak
+                )
+                if decision in ("complete", "stuck"):
+                    style = "green" if decision == "complete" else "yellow"
+                    label = "Task complete" if decision == "complete" else "Stopped — no progress"
+                    emit(f"[{style}]{label}.[/{style}] [dim]{decision_reason}[/dim]")
+                    _emit_event(
+                        on_event,
+                        rev.RalphFinished(
+                            completed=iteration - 1, failed=0, total=iteration - 1, reason=decision
+                        ),
+                        lambda: None,
+                    )
+                    break
         except asyncio.CancelledError:
             _save_ralph_checkpoint(
                 task=task,
@@ -879,6 +1118,10 @@ async def handle_ralph_command(
 
     _ensure_ralph_dir()
     iteration = start_iteration
+    # Smart-loop state, carried across iterations.
+    no_change_streak = 0
+    last_verify: _VerifyResult | None = None
+    sig_before = ""
 
     try:
         try:
@@ -945,6 +1188,7 @@ async def handle_ralph_command(
                 )
                 iter_start = datetime.now(UTC)
 
+                sig_before = _git_change_signature(working_directory)
                 prompt = render_template(
                     "ralph_iteration.jinja",
                     iteration_display=iter_display,
@@ -952,6 +1196,7 @@ async def handle_ralph_command(
                     conversation_context=conversation_context,
                     progress_notes=_read_ralph_progress(),
                     progress_path=RALPH_PROGRESS_PATH,
+                    **_ralph_render_extras(no_change_streak, last_verify),
                 )
 
                 # The agent run streams natively through execute_fn.
@@ -980,6 +1225,37 @@ async def handle_ralph_command(
                 )
 
                 iteration += 1
+
+                decision, decision_reason, no_change_streak, last_verify = _ralph_evaluate(
+                    working_directory, sig_before, no_change_streak
+                )
+                if decision in ("complete", "stuck"):
+                    done = iteration - 1
+
+                    def _finished_smart(
+                        done: int = done,
+                        decision: str = decision,
+                        reason: str = decision_reason,
+                    ) -> None:
+                        style = "green" if decision == "complete" else "yellow"
+                        label = (
+                            "Task complete"
+                            if decision == "complete"
+                            else "Ralph stopped — no progress"
+                        )
+                        emit("")
+                        emit(f"[{style}]{label}.[/{style}] [dim]{reason}[/dim]")
+                        emit(f"[dim]Completed {done} iteration(s).[/dim]")
+                        emit("")
+
+                    _emit_event(
+                        on_event,
+                        rev.RalphFinished(
+                            completed=done, failed=0, total=done, reason=decision
+                        ),
+                        _finished_smart,
+                    )
+                    return True
 
                 if stop_after_iteration:
                     done = iteration - 1
