@@ -237,6 +237,12 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
         pass
 
     stream_input: Any = {"messages": [{"role": "user", "content": message_content}]}
+    # Pair the active rubric (set via `/goal rubric <criteria>`) with the run so
+    # RubricMiddleware's grader holds the output to those criteria. Absent ⇒ the
+    # middleware is a no-op, so this adds nothing when no rubric is set.
+    _active_rubric = getattr(session_state, "active_rubric", None)
+    if _active_rubric:
+        stream_input["rubric"] = _active_rubric
     _current_stream_gen: Any = None
 
     from novacode_cli.tools.plan_mode_tools import _auto_approve_var

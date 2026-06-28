@@ -59,6 +59,25 @@ class GoalCommandResult:
     message: str
     goal: str | None = None
     kickoff: str | None = None
+    rubric: str | None = None
+
+
+def _handle_goal_rubric(session_state: Any, rest: str) -> GoalCommandResult:  # noqa: ANN401
+    """Set or clear the acceptance rubric (the `/goal rubric ...` subcommand)."""
+    if not rest or rest.lower() in _GOAL_CLEAR_WORDS:
+        session_state.active_rubric = None
+        return GoalCommandResult(
+            "rubric-clear",
+            "📋 Rubric cleared.",
+            goal=getattr(session_state, "active_goal", None),
+        )
+    session_state.active_rubric = rest
+    return GoalCommandResult(
+        "rubric-set",
+        f"📋 Acceptance rubric set — the grader will hold work to:\n{rest}",
+        goal=getattr(session_state, "active_goal", None),
+        rubric=rest,
+    )
 
 
 def handle_goal_command(session_state: Any, args: str) -> GoalCommandResult:  # noqa: ANN401
@@ -71,25 +90,39 @@ def handle_goal_command(session_state: Any, args: str) -> GoalCommandResult:  # 
     Returns:
         A :class:`GoalCommandResult` describing what happened.
     """
-    low = args.strip().lower()
+    stripped = args.strip()
+    low = stripped.lower()
+
+    # `/goal rubric <criteria>` — set the acceptance rubric the grader holds the
+    # work to (paired with the goal). `/goal rubric clear` drops just the rubric.
+    if low.startswith("rubric"):
+        return _handle_goal_rubric(session_state, stripped[len("rubric") :].strip())
 
     if low == "status":
         goal = getattr(session_state, "active_goal", None)
+        rubric = getattr(session_state, "active_rubric", None)
+        parts: list[str] = []
         if goal:
-            return GoalCommandResult("status", f"🎯 Active goal:\n{goal}", goal=goal)
+            parts.append(f"🎯 Active goal:\n{goal}")
+        if rubric:
+            parts.append(f"📋 Rubric:\n{rubric}")
+        if parts:
+            return GoalCommandResult("status", "\n\n".join(parts), goal=goal, rubric=rubric)
         return GoalCommandResult(
             "status",
-            "No active goal. Use /goal <description> to set one.",
+            "No active goal. Use /goal <description>, then /goal rubric <criteria>.",
         )
 
     if low in _GOAL_CLEAR_WORDS:
         session_state.active_goal = None
-        return GoalCommandResult("clear", "🎯 Goal cleared.")
+        session_state.active_rubric = None
+        return GoalCommandResult("clear", "🎯 Goal and rubric cleared.")
 
-    if not args.strip():
+    if not stripped:
         return GoalCommandResult(
             "usage",
-            "Usage: /goal <description>  ·  /goal status  ·  /goal clear",
+            "Usage: /goal <description>  ·  /goal rubric <criteria>  ·  "
+            "/goal status  ·  /goal clear",
         )
 
     goal = args.strip()

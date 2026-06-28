@@ -98,7 +98,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.pregel import Pregel
 from langgraph.store.base import BaseStore
-from deepagents import create_deep_agent
+from deepagents import RubricMiddleware, create_deep_agent
 from deepagents.backends import CompositeBackend
 from deepagents.backends.protocol import BackendProtocol, SandboxBackendProtocol
 from deepagents.backends.store import StoreBackend
@@ -1041,6 +1041,13 @@ This file stores your preferences and context that persist across sessions.
         # returning "no matches"), short-circuit the next identical call with a
         # nudge to change approach instead of letting it spin indefinitely.
         LoopGuardMiddleware(threshold=3),
+        # Rubric self-evaluation (deepagents). Dormant unless a `rubric` is passed
+        # on the invoke state — set via `/goal rubric <criteria>`. When present, a
+        # grader sub-agent scores the finished run against the criteria and, on a
+        # miss, injects per-criterion feedback and lets the agent revise (up to
+        # max_iterations). Uses Nova's own model so there's no provider/key
+        # assumption; default grader prompt. No rubric ⇒ zero added cost.
+        RubricMiddleware(model=model, max_iterations=3),
         # Context editing — clear older tool call outputs when token limits
         # are reached, preserving only the most recent results. This is a
         # lightweight, deterministic alternative to LLM-based compaction.
