@@ -12,6 +12,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from langchain_core.messages import ToolMessage
+from langgraph.graph import END
 from langgraph.types import Command
 
 from novacode_cli.tracking.loop_guard import LoopGuardMiddleware
@@ -138,6 +139,62 @@ def test_command_result_is_not_guarded():
     for _ in range(4):
         out = mw.wrap_tool_call(_request("grep", args), lambda _r: cmd)
         assert out is cmd  # never blocked — Command results can't anchor a loop
+
+
+# ── escalation + hard stop (the "LOOP STOPPED" wall fix) ─────────────────────
+
+
+def test_successive_blocks_escalate_with_changing_message():
+    # Each repeated block must return a *different* message so the model's
+    # context changes — that is what perturbs it out of the loop.
+    mw = LoopGuardMiddleware(threshold=3, escalate_after=3)
+    args = {"q": "a"}
+    for _ in range(3):
+        _run(mw, "grep", args, "no matches")
+
+    first = _run(mw, "grep", args, "no matches")
+    second = _run(mw, "grep", args, "no matches")
+    assert first.status == "error"
+    assert second.status == "error"
+    assert "LOOP STOPPED" in first.content
+    assert "LOOP STOPPED" in second.content
+    assert first.content != second.content  # escalated, not identical
+
+
+def test_hard_stops_turn_after_escalation_limit():
+    # After escalate_after escalating blocks, the guard ends the turn instead of
+    # emitting the wall forever.
+    mw = LoopGuardMiddleware(threshold=3, escalate_after=2)
+    args = {"q": "a"}
+    for _ in range(3):
+        _run(mw, "grep", args, "no matches")
+
+    out1 = _run(mw, "grep", args, "no matches")  # block #1
+    out2 = _run(mw, "grep", args, "no matches")  # block #2
+    out3 = _run(mw, "grep", args, "no matches")  # exceeds escalate_after -> halt
+    assert isinstance(out1, ToolMessage)
+    assert isinstance(out2, ToolMessage)
+    assert isinstance(out3, Command)
+    assert out3.goto == END
+    assert "LOOP HALTED" in out3.update["messages"][0].content
+
+
+def test_real_call_resets_block_escalation():
+    # A genuinely different call between blocks counts as progress and resets
+    # the escalation streak, so the model isn't punished for recovering.
+    mw = LoopGuardMiddleware(threshold=3, escalate_after=2)
+    args = {"q": "a"}
+    for _ in range(3):
+        _run(mw, "grep", args, "no matches")
+
+    _run(mw, "grep", args, "no matches")  # block #1
+    # Model breaks out with a different, successful call.
+    out = _run(mw, "read_file", {"path": "/x"}, "contents")
+    assert out.content == "contents"
+    # Streak reset: a later block of the same sig starts at #1 again (not halted).
+    blocked = _run(mw, "grep", args, "no matches")
+    assert isinstance(blocked, ToolMessage)
+    assert "LOOP STOPPED" in blocked.content
 
 
 # ── async path mirrors sync ──────────────────────────────────────────────────
