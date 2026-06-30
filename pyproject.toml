@@ -155,6 +155,10 @@ ignore-var-parameters = true
 "novacode_cli/cli.py" = [
     "T201",    # Allow print statements in CLI
 ]
+"novacode_cli/headless/*" = [
+    "ANN001",  # agent/session_state/backend are untyped framework objects (matches ui/execution.py)
+    "ANN401",  # event/obj are deliberately Any for event-stream dispatch (matches ui_events.py)
+]
 "novacode_cli/tools.py" = [
     "PLR0912", # Too many branches - @tool decorated functions can't be easily refactored
     "PLR0915", # Too many statements - @tool decorated functions can't be easily refactored
