@@ -18,7 +18,6 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Button, Footer, Input, OptionList, Select, Static
 from textual.widgets.option_list import Option
 
-from novacode_cli.tui.animations import animate_entrance
 
 
 class SessionPickerApp(App[str | None]):

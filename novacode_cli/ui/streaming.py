@@ -8,7 +8,6 @@ This module contains:
 
 from pathlib import Path
 
-from novacode_cli.config.config import COLORS
 
 # Tool icons for display - Beautiful and visually distinct
 TOOL_ICONS: dict[str, str] = {

@@ -1,10 +1,12 @@
 """Middleware for loading agent-specific long-term memory into the system prompt."""
 
-import contextlib
-import os
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, TypedDict, cast
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from langchain_core.messages import SystemMessage
 
 try:
     from typing import NotRequired

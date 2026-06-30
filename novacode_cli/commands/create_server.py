@@ -25,10 +25,7 @@ import os
 import re
 import socket
 import threading
-import uuid
-from datetime import UTC, datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from pathlib import Path
 from typing import Any
 
 from novacode_cli.config.config import Settings

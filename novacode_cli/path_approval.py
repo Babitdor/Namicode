@@ -1,5 +1,6 @@
 """Path approval system for controlling access to directories."""
 
+import asyncio
 import json
 import os
 import warnings
@@ -218,12 +219,10 @@ class PathApprovalManager:
         console.print("  [red]n[/red] - No, deny access")
         console.print()
 
+        loop = asyncio.get_event_loop()
         while True:
             try:
-                from prompt_toolkit import PromptSession
-
-                session = PromptSession()
-                choice = await session.prompt_async("Your choice (y/o/n): ")
+                choice = await loop.run_in_executor(None, lambda: input("Your choice (y/o/n): "))
                 choice = choice.strip().lower()
 
                 if choice in ["y", "yes"]:

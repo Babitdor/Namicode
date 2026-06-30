@@ -3,17 +3,15 @@ write a NOVA.md file that tells an AI coding agent everything it needs to work
 effectively here.
 
 Project root: {{ project_root }}
-Output file: {{ Nova_md_path }}
+Output file: {{ nova_md_path }}
 
-> **Note**: This template is used when the `graphify` package is not installed.
-> For richer output (NOVA.md + AGENTS.md + project graph + HTML visualization),
-> install with: `pip install novacode-cli[graphify]`
+
 
 ---
 
 ## How to think about this task
 
-NOVA.md is read by the agent at the start of every session. Write it **for Claude,
+NOVA.md is read by the agent at the start of every session. Write it **for the agent,
 not for humans**. Every sentence should answer: "what does the agent need to know
 to avoid mistakes and work efficiently?"
 
@@ -28,7 +26,7 @@ to avoid mistakes and work efficiently?"
 
 ### Phase 1: Check for Existing NOVA.md
 
-If `{{ Nova_md_path }}` already exists, read it first.
+If `{{ nova_md_path }}` already exists, read it first.
 Update it with new findings rather than overwriting good content.
 
 ---
@@ -152,4 +150,4 @@ Wait for both to complete, reconcile any conflicts, then write a single unified 
 
 ---
 
-Now explore the project at `{{ project_root }}` and write the NOVA.md to `{{ Nova_md_path }}`.
+Now explore the project at `{{ project_root }}` and write the NOVA.md to `{{ nova_md_path }}`.

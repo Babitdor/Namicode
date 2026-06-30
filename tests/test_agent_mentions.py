@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from novacode_cli.agents.default_subagents.subagents import retrieve_core_subagents
-from novacode_cli.input import parse_agent_mentions, parse_agent_mentions_multi
+from novacode_cli.input_utils import parse_agent_mentions, parse_agent_mentions_multi
 
 _CORE = [s["name"] for s in retrieve_core_subagents()]
 _A, _B = _CORE[0], _CORE[1]

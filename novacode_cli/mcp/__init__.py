@@ -9,6 +9,11 @@ Only load what you need when you need it.
 
 # Lazy imports to reduce context footprint
 # These are only loaded when actually needed
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from novacode_cli.mcp.middleware import MCPMiddleware
+
 __all__ = [
     "MCPConfig",
     "MCPServerConfig",

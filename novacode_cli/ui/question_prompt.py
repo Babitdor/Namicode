@@ -5,14 +5,15 @@ This module provides UI components for:
 2. Rendering open-ended questions with text input
 3. Handling user responses and returning to the agent
 
-Uses similar patterns to prompt_for_tool_approval in execution.py.
+Uses simple input() calls (no prompt_toolkit dependency).
 """
 
-import sys
+from __future__ import annotations
+
+import sys  # noqa: F401 — patched by tests (question_prompt.sys) for stdin control
+
 from typing import TypedDict
 
-from prompt_toolkit import PromptSession
-from prompt_toolkit.formatted_text import HTML
 from rich import box
 from rich.markup import escape
 from rich.panel import Panel
@@ -30,422 +31,121 @@ class QuestionResponse(TypedDict):
 def prompt_for_structured_question(
     question: str,
     options: list[str],
-    context: str | None = None,
 ) -> QuestionResponse:
-    """Prompt user with a multiple choice question.
-
-    Uses arrow key navigation similar to tool approval menu.
+    """Display a structured multiple-choice question and get the user's answer.
 
     Args:
-        question: The question text.
-        options: List of options to choose from.
-        context: Optional context about why asking.
+        question: The question text
+        options: List of answer options
 
     Returns:
-        QuestionResponse with selected answer and index.
+        QuestionResponse with the user's answer
     """
-    # Build question panel with beautiful styling
-    body_lines = [
-        "",  # Top padding
-        f"  [bold]{escape(question)}[/bold]",  # Question with proper spacing
-    ]
-    if context:
-        body_lines.append("")  # Spacing
-        body_lines.append(f"  [dim]{escape(context)}[/dim]")  # Context with dim styling
-    body_lines.append("")  # Bottom padding
-
-    # Get terminal width and calculate responsive panel width
-    terminal_width = console.width
-    # Use 80% of terminal width, minimum 50, maximum 140
-    panel_width = max(50, min(140, int(terminal_width * 0.8)))
-
-    # Create beautiful title with decorative elements
-    title_text = "[bold cyan]◆[/bold cyan] [bold]Agent Question[/bold] [bold cyan]◆[/bold cyan]"
-
     console.print()
-    console.print(
-        Panel(
-            "\n".join(body_lines),
-            title=title_text,
-            border_style="cyan",
-            box=box.DOUBLE,
-            padding=(0, 2),
-            width=panel_width,
-            expand=False,
-        )
-    )
+    console.print(Panel(
+        f"[bold]{escape(question)}[/bold]",
+        border_style="cyan",
+        box=box.ROUNDED,
+    ))
     console.print()
 
-    selected = 0
+    for i, option in enumerate(options, 1):
+        console.print(f"  [bold cyan]{i}.[/bold cyan] {escape(option)}")
 
-    try:
-        # Import termios/tty only when needed (Unix-only modules)
-        import termios
-        import tty
+    console.print()
+    console.print("[dim]Enter the number of your choice, or type your answer:[/dim]")
 
-        fd = sys.stdin.fileno()
-        old_settings = termios.tcgetattr(fd)
-
+    while True:
         try:
-            tty.setraw(fd)
-            sys.stdout.write("\033[?25l")  # Hide cursor
-            sys.stdout.flush()
+            choice = input("> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n[yellow]Question skipped.[/yellow]")
+            return QuestionResponse(answer="", selected_index=None)
 
-            first_render = True
+        if not choice:
+            continue
 
-            while True:
-                if not first_render:
-                    # Move cursor back to start of menu
-                    sys.stdout.write(f"\033[{len(options)}A\r")
-
-                first_render = False
-
-                # Render options
-                for i, option in enumerate(options):
-                    sys.stdout.write("\r\033[K")  # Clear line
-
-                    if i == selected:
-                        sys.stdout.write(f"\033[1;36m\u25cf {option}\033[0m\n")
-                    else:
-                        sys.stdout.write(f"\033[2m\u25cb {option}\033[0m\n")
-
-                sys.stdout.flush()
-
-                # Read key
-                char = sys.stdin.read(1)
-
-                if char == "\x1b":  # ESC sequence (arrow keys)
-                    next1 = sys.stdin.read(1)
-                    next2 = sys.stdin.read(1)
-                    if next1 == "[":
-                        if next2 == "B":  # Down arrow
-                            selected = (selected + 1) % len(options)
-                        elif next2 == "A":  # Up arrow
-                            selected = (selected - 1) % len(options)
-                elif char in {"\r", "\n"}:  # Enter
-                    sys.stdout.write("\r\n")
-                    break
-                elif char.isdigit():
-                    idx = int(char) - 1
-                    if 0 <= idx < len(options):
-                        selected = idx
-                        sys.stdout.write("\r\n")
-                        break
-                elif char == "\x03":  # Ctrl+C
-                    sys.stdout.write("\r\n")
-                    raise KeyboardInterrupt
-
-        finally:
-            sys.stdout.write("\033[?25h")  # Show cursor
-            sys.stdout.flush()
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-
-    except (ImportError, AttributeError, Exception):
-        # Fallback for non-Unix systems (Windows)
-        console.print("Options:")
-        for i, option in enumerate(options, 1):
-            console.print(f"  {i}. {option}")
-
-        choice = input(f"\nEnter number (1-{len(options)}): ").strip()
-        try:
-            selected = int(choice) - 1
-            if not 0 <= selected < len(options):
-                selected = 0
-        except ValueError:
-            selected = 0
-
-    console.print(f"[cyan]Selected: {options[selected]}[/cyan]")
-    console.print()
-
-    return QuestionResponse(
-        answer=options[selected],
-        selected_index=selected,
-    )
-
-
-async def prompt_for_open_question(
-    question: str,
-    context: str | None = None,
-) -> QuestionResponse:
-    """Prompt user with an open-ended question.
-
-    Uses prompt_toolkit for text input.
-
-    Args:
-        question: The question text.
-        context: Optional context about why asking.
-
-    Returns:
-        QuestionResponse with user's free-form answer.
-    """
-    # Build question panel with beautiful styling
-    body_lines = [
-        "",  # Top padding
-        f"  [bold]{escape(question)}[/bold]",  # Question with proper spacing
-    ]
-    if context:
-        body_lines.append("")  # Spacing
-        body_lines.append(f"  [dim]{escape(context)}[/dim]")  # Context with dim styling
-    body_lines.append("")  # Bottom padding
-
-    # Get terminal width and calculate responsive panel width
-    terminal_width = console.width
-    # Use 80% of terminal width, minimum 50, maximum 140
-    panel_width = max(50, min(140, int(terminal_width * 0.8)))
-
-    # Create beautiful title with decorative elements
-    title_text = "[bold cyan]◆[/bold cyan] [bold]Agent Question[/bold] [bold cyan]◆[/bold cyan]"
-
-    console.print()
-    console.print(
-        Panel(
-            "\n".join(body_lines),
-            title=title_text,
-            border_style="cyan",
-            box=box.DOUBLE,
-            padding=(0, 2),
-            width=panel_width,
-            expand=False,
-        )
-    )
-
-    console.print("[dim]Enter your response:[/dim]")
-    console.print()
-
-    session: PromptSession[str] = PromptSession()
-
-    try:
-        answer = await session.prompt_async(
-            HTML('<style fg="#00bfff">> </style>'),
-            multiline=False,
-        )
-    except KeyboardInterrupt:
-        answer = ""
-
-    console.print()
-
-    return QuestionResponse(
-        answer=answer.strip(),
-        selected_index=None,
-    )
-
-
-async def handle_agent_question(
-    question_request: dict,
-) -> QuestionResponse:
-    """Handle an agent question based on its type.
-
-    Routes to appropriate prompt function based on question_type.
-
-    Args:
-        question_request: The question request from the agent.
-
-    Returns:
-        QuestionResponse with user's answer.
-    """
-    question = question_request.get("question", "")
-    question_type = question_request.get("question_type", "open_ended")
-    options = question_request.get("options", [])
-    context = question_request.get("context")
-
-    if question_type == "structured" and options:
-        return prompt_for_structured_question(question, options, context)
-    return await prompt_for_open_question(question, context)
-
-
-class PlanApprovalResult(TypedDict):
-    """Result of plan approval prompt."""
-
-    approved: bool
-    action: str  # "proceed_auto", "proceed_manual", "refine"
-    feedback: str  # User feedback text for reject/edit actions
-
-
-def prompt_for_plan_approval(
-    todos: list[dict] | None = None,
-    plan_summary: str | None = None,
-) -> PlanApprovalResult:
-    """Prompt user to approve the plan before proceeding.
-
-    Similar to Claude Code's plan approval flow.
-
-    Args:
-        todos: List of todo items from the agent's plan.
-        plan_summary: Optional summary text for the plan.
-
-    Returns:
-        PlanApprovalResult with approval status and action taken.
-    """
-    # Build plan display
-    body_lines = []
-
-    if plan_summary:
-        body_lines.append(f"[bold]{escape(plan_summary)}[/bold]\n")
-
-    if todos:
-        body_lines.append("[bold cyan]Plan Steps:[/bold cyan]\n")
-        for i, todo in enumerate(todos, 1):
-            content = todo.get("content", "Unknown task")
-            status = todo.get("status", "pending")
-
-            # Status indicator
-            if status == "completed":
-                indicator = "[green]✓[/green]"
-            elif status == "in_progress":
-                indicator = "[yellow]●[/yellow]"
-            else:
-                indicator = "[dim]○[/dim]"
-
-            body_lines.append(f"  {indicator} {i}. {escape(content)}")
-    else:
-        body_lines.append("[dim]Plan written to file — review it above before choosing.[/dim]")
-
-    body_lines.append("\n[dim]Would you like to proceed with this plan?[/dim]")
-
-    console.print()
-    console.print(
-        Panel(
-            "\n".join(body_lines),
-            title="[bold cyan]📋 Plan Approval[/bold cyan]",
-            border_style="cyan",
-            box=box.ROUNDED,
-            padding=(1, 2),
-        )
-    )
-    console.print()
-
-    # Colors per option index: green (auto), blue (manual), cyan (refine)
-    option_colors = ["\033[1;32m", "\033[1;34m", "\033[1;36m"]
-
-    options = [
-        "Auto-approve edits: run the plan, auto-approve each edit (a)",
-        "Manual edits: run the plan, approve each edit (m)",
-        "Refine: keep planning — describe the changes you want (r)",
-    ]
-
-    selected = 0
-
-    try:
-        # Import termios/tty only when needed (Unix-only modules)
-        import termios
-        import tty
-
-        fd = sys.stdin.fileno()
-        old_settings = termios.tcgetattr(fd)
-
-        try:
-            tty.setraw(fd)
-            sys.stdout.write("\033[?25l")  # Hide cursor
-            sys.stdout.flush()
-
-            first_render = True
-
-            while True:
-                if not first_render:
-                    # Move cursor back to start of menu
-                    sys.stdout.write(f"\033[{len(options)}A\r")
-
-                first_render = False
-
-                # Render options
-                for i, option in enumerate(options):
-                    sys.stdout.write("\r\033[K")  # Clear line
-
-                    if i == selected:
-                        sys.stdout.write(f"{option_colors[i]}\u25cf {option}\033[0m\n")
-                    else:
-                        sys.stdout.write(f"\033[2m\u25cb {option}\033[0m\n")
-
-                sys.stdout.flush()
-
-                # Read key
-                char = sys.stdin.read(1)
-
-                if char == "\x1b":  # ESC sequence (arrow keys)
-                    next1 = sys.stdin.read(1)
-                    next2 = sys.stdin.read(1)
-                    if next1 == "[":
-                        if next2 == "B":  # Down arrow
-                            selected = (selected + 1) % len(options)
-                        elif next2 == "A":  # Up arrow
-                            selected = (selected - 1) % len(options)
-                elif char in {"\r", "\n"}:  # Enter
-                    sys.stdout.write("\r\n")
-                    break
-                elif char in {"a", "A"}:  # Quick key for auto-approve edits
-                    selected = 0
-                    sys.stdout.write("\r\n")
-                    break
-                elif char in {"m", "M"}:  # Quick key for manual edits
-                    selected = 1
-                    sys.stdout.write("\r\n")
-                    break
-                elif char in {"r", "R"}:  # Quick key for refine
-                    selected = 2
-                    sys.stdout.write("\r\n")
-                    break
-                elif char.isdigit():
-                    idx = int(char) - 1
-                    if 0 <= idx < len(options):
-                        selected = idx
-                        sys.stdout.write("\r\n")
-                        break
-                elif char == "\x03":  # Ctrl+C
-                    sys.stdout.write("\r\n")
-                    raise KeyboardInterrupt
-
-        finally:
-            sys.stdout.write("\033[?25h")  # Show cursor
-            sys.stdout.flush()
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-
-    except (ImportError, AttributeError, Exception):
-        # Fallback for non-Unix systems (Windows)
-        console.print("[bold]Options:[/bold]")
-        console.print(
-            "  [green]1. Auto-approve edits: run the plan, auto-approve each edit (a)[/green]"
-        )
-        console.print("  [blue]2. Manual edits: run the plan, approve each edit (m)[/blue]")
-        console.print("  [cyan]3. Refine: keep planning — describe the changes you want (r)[/cyan]")
-
-        choice = input("\nEnter choice (1-3 or a/m/r): ").strip().lower()
-        if choice in {"1", "a", "auto"}:
-            selected = 0
-        elif choice in {"2", "m", "manual"}:
-            selected = 1
-        elif choice in {"3", "r", "refine"}:
-            selected = 2
+        # Check if it's a number
+        if choice.isdigit():
+            idx = int(choice) - 1
+            if 0 <= idx < len(options):
+                return QuestionResponse(answer=options[idx], selected_index=idx)
+            console.print(f"[yellow]Please enter a number between 1 and {len(options)}.[/yellow]")
         else:
-            selected = 2  # Default to refine on invalid input
+            # Free text answer
+            return QuestionResponse(answer=choice, selected_index=None)
 
-    # Collect feedback text when refining (the changes to apply to the plan)
-    feedback = ""
-    if selected == 2:
+
+def prompt_for_plan_approval(todos: list | None = None) -> dict:
+    """Prompt the user for plan approval with three options.
+
+    Returns:
+        Dict with keys: approved (bool), action (str), feedback (str | None)
+    """
+    console.print()
+    console.print("[bold]Plan Approval[/bold]")
+    console.print()
+    console.print("  [green]a[/green] - Approve and auto-execute")
+    console.print("  [yellow]m[/yellow] - Approve and execute manually")
+    console.print("  [cyan]r[/cyan] - Request changes (refine)")
+    console.print()
+
+    while True:
         try:
-            console.print()
-            feedback = input("Describe the changes you want (optional, Enter to skip): ").strip()
+            choice = input("Your choice (a/m/r): ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n[yellow]Plan rejected.[/yellow]")
+            return {"approved": False, "action": "refine", "feedback": ""}
+
+        if choice in ("a", "auto"):
+            console.print("[green]Plan approved (auto-execute).[/green]")
+            return {"approved": True, "action": "proceed_auto", "feedback": None}
+        if choice in ("m", "manual"):
+            console.print("[green]Plan approved (manual execution).[/green]")
+            return {"approved": True, "action": "proceed_manual", "feedback": None}
+        if choice in ("r", "refine"):
+            try:
+                feedback = input("Describe the changes needed: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                feedback = ""
+            console.print("[cyan]Plan sent back for refinement.[/cyan]")
+            return {"approved": False, "action": "refine", "feedback": feedback}
+
+        # Unknown input: default to refine (safe fallback)
+        try:
+            feedback = input("Describe the changes needed: ").strip()
         except (EOFError, KeyboardInterrupt):
             feedback = ""
+        console.print("[cyan]Plan sent back for refinement.[/cyan]")
+        return {"approved": False, "action": "refine", "feedback": feedback}
 
-    # Map selection to result
-    if selected == 0:
-        console.print("[green]Plan approved — running with edits auto-approved[/green]")
+
+def handle_agent_question(
+    question: str,
+    options: list[str] | None = None,
+) -> dict:
+    """Handle an agent question and return the response.
+
+    Args:
+        question: The question text
+        options: Optional list of answer options
+
+    Returns:
+        Response dict with answer and selected_index
+    """
+    if options:
+        response = prompt_for_structured_question(question, options)
+        return {
+            "answer": response["answer"],
+            "selected_index": response["selected_index"],
+        }
+    else:
         console.print()
-        return PlanApprovalResult(approved=True, action="proceed_auto", feedback="")
-    if selected == 1:
-        console.print("[blue]Plan approved — you'll approve each edit[/blue]")
+        console.print(f"[bold]Question:[/bold] {question}")
         console.print()
-        return PlanApprovalResult(approved=True, action="proceed_manual", feedback="")
-    console.print("[cyan]Refining — staying in plan mode[/cyan]")
-    console.print()
-    return PlanApprovalResult(approved=False, action="refine", feedback=feedback)
-
-
-__all__ = [
-    "PlanApprovalResult",
-    "QuestionResponse",
-    "handle_agent_question",
-    "prompt_for_open_question",
-    "prompt_for_plan_approval",
-    "prompt_for_structured_question",
-]
+        try:
+            answer = input("Your answer: ").strip()
+            return {"answer": answer, "selected_index": None}
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n[yellow]Question skipped.[/yellow]")
+            return {"answer": "", "selected_index": None}

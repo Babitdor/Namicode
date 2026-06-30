@@ -7,7 +7,6 @@ without requiring slash commands.
 
 from __future__ import annotations
 
-from pathlib import Path
 
 from langchain.tools import tool
 

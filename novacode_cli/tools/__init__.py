@@ -31,9 +31,6 @@ from novacode_cli.tools.store_memory_tools import (
 # Package information tools
 from novacode_cli.tools.package_tools import package_info
 
-# Project graph query tool
-from novacode_cli.tools.graph_tools import query_project_graph
-
 # Code search tools (Semble-powered, optional — gracefully degrades)
 try:
     from novacode_cli.tools.code_search_tools import (
@@ -85,8 +82,6 @@ __all__ = [
     "fetch_url",
     # Package information tools
     "package_info",
-    # Project graph query tool
-    "query_project_graph",
     "read_memory",
     # Structured durable memory (LangGraph store)
     "remember",

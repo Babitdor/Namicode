@@ -10,7 +10,6 @@ cleanly when ``sounddevice`` isn't installed.
 
 from __future__ import annotations
 
-import ctypes
 import logging
 import queue
 from typing import TYPE_CHECKING, Any

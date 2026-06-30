@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any
 
 from rich.text import Text
 from textual import on, events
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal
 from textual.widgets import Button, Input, RichLog, Static
 from textual.widget import Widget
 
@@ -81,7 +80,7 @@ class EmbeddedTerminal(Widget):
         super().__init__(**kwargs)
         self.initial_cmd = initial_cmd
         self.current_process: asyncio.subprocess.Process | None = None
-        self.cwd = settings.project_root or Path.cwd()
+        self.cwd = settings.get_workspace_root()
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="term-header"):
@@ -100,7 +99,7 @@ class EmbeddedTerminal(Widget):
             asyncio.create_task(self.run_initial_cmd())
 
     def update_prompts(self) -> None:
-        proj_root = settings.project_root or Path.cwd()
+        proj_root = settings.get_workspace_root()
         
         # Resolve relative to project root
         try:

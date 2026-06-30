@@ -9,10 +9,10 @@ This module handles:
 import time
 from typing import TYPE_CHECKING
 
-from novacode_cli.config.config import COLORS, console, get_agent_color
+from novacode_cli.config.config import console
 
 if TYPE_CHECKING:
-    from novacode_cli.ui.streaming import TOOL_CATEGORIES, TOOL_CATEGORY_ICONS
+    pass
 
 
 # Type aliases for clarity

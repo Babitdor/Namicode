@@ -22,6 +22,90 @@ from deepagents.backends.sandbox import BaseSandbox
 
 from novacode_cli.config.config import console
 
+
+def parse_ports(ports_str: str | None) -> dict[int, int] | None:
+    """Parse port forwarding argument.
+
+    Args:
+        ports_str: Port string in format 'PORT' or 'HOST_PORT:CONTAINER_PORT'.
+                   Multiple ports separated by comma.
+                   Example: '8080,3000:3000,5432:5432'
+
+    Returns:
+        Dictionary mapping container ports to host ports, or None if no ports.
+        Example: {8080: 8080, 3000: 3000, 5432: 5432}
+    """
+    if not ports_str:
+        return None
+
+    ports = {}
+    for port_spec in ports_str.split(","):
+        port_spec = port_spec.strip()
+        if ":" in port_spec:
+            # Format: HOST_PORT:CONTAINER_PORT
+            host_port_str, container_port_str = port_spec.split(":", 1)
+            host_port = int(host_port_str)
+            container_port = int(container_port_str)
+        else:
+            # Format: PORT (same for both host and container)
+            port = int(port_spec)
+            host_port = port
+            container_port = port
+        ports[container_port] = host_port
+
+    return ports if ports else None
+
+
+def resolve_sandbox_type(
+    sandbox_arg: str | None,
+    no_sandbox: bool,  # noqa: FBT001
+    platform: str | None = None,
+) -> tuple[str, bool]:
+    """Resolve the effective sandbox mode and whether the user chose it explicitly.
+
+    The default depends on platform. Linux/macOS get Pattern A (``"os"`` — host
+    files + an OS-confined shell). Windows has no lightweight OS sandbox primitive,
+    so the default is plain host execution (``"none"``) gated by the
+    dangerous-command blocklist + HITL approval — the same baseline Claude Code /
+    Cursor use on Windows. Docker stays available there as an explicit opt-in
+    (``--sandbox docker``); it is Windows-only and rejected elsewhere (Linux/macOS
+    should use the ``"os"`` default or ``--no-sandbox``).
+
+    Args:
+        sandbox_arg: The ``--sandbox`` value, or None when unset.
+        no_sandbox: Whether ``--no-sandbox`` was passed.
+        platform: ``sys.platform`` override (for tests). Defaults to the host.
+
+    Returns:
+        ``(sandbox_type, explicit)`` — ``explicit`` is True when the user chose
+        the mode (so a creation failure should not silently fall back).
+
+    Raises:
+        ValueError: On invalid combinations (caller maps these to a user error).
+    """
+    is_windows = (platform or sys.platform) == "win32"
+
+    if no_sandbox:
+        if sandbox_arg and sandbox_arg != "none":
+            msg = "--no-sandbox conflicts with --sandbox."
+            raise ValueError(msg)
+        return "none", True
+
+    if sandbox_arg is not None:
+        if sandbox_arg == "docker" and not is_windows:
+            msg = (
+                "--sandbox docker is Windows-only. On Linux/macOS, Nova confines the "
+                "shell with an OS sandbox by default (--sandbox os). Use --no-sandbox "
+                "for unconfined local execution."
+            )
+            raise ValueError(msg)
+        return sandbox_arg, True
+
+    # Implicit default: host execution + approvals on Windows (no lightweight OS
+    # sandbox primitive — Docker is opt-in via --sandbox docker); Pattern A
+    # (OS-confined shell) on Linux/macOS.
+    return ("none" if is_windows else "os"), False
+
 # Only these env vars are allowed in setup script template substitution.
 # Prevents accidental leakage of API keys and secrets.
 _ALLOWED_SETUP_VARS = {"HOME", "USER", "PATH", "SHELL", "LANG", "LC_ALL", "TERM"}
@@ -1204,7 +1288,6 @@ class InMemorySandbox(BaseSandbox):
         command locally and captures output. Falls back to a canned response
         when there is no shell.
         """
-        import shlex
         import subprocess  # noqa: S404
 
         try:

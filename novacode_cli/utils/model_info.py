@@ -3,7 +3,7 @@
 import os
 import subprocess
 import json
-from typing import Optional, Tuple, List
+from typing import Tuple, List
 
 
 def get_ollama_models() -> List[str]:

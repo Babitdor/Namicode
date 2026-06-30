@@ -7,7 +7,6 @@ prompt that enforces the clarify → investigate → write plan → exit_plan_mo
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from deepagents.backends import CompositeBackend
@@ -139,8 +138,8 @@ def create_plan_agent_with_config(
         except ImportError:
             pass
 
-    # Determine workspace root for path containment
-    workspace_root = settings.project_root or Path.cwd()
+    # Determine workspace root for path containment (resolves to subdirectory if applicable)
+    workspace_root = settings.get_workspace_root()
 
     # Skills directory - global (shared across all agents at ~/.nova/skills/)
     skills_dir = settings.ensure_user_skills_dir()

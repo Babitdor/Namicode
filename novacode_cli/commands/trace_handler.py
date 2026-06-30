@@ -1,7 +1,6 @@
 """Handler for the /trace command for LangSmith tracing management."""
 
 import os
-from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 

@@ -157,7 +157,6 @@ def _show_plugin_detail(
     pkg_name: str, spec: dict, enabled: bool
 ) -> None:
     """Print detailed information about a single plugin."""
-    from rich.table import Table
 
     status = "Enabled" if enabled else "Disabled"
     console.print()
@@ -203,7 +202,6 @@ def _show_plugin_detail(
 
 def register_commands(registry):
     """Register /plugin and /plugins."""
-    from novacode_cli.commands import CommandContext
 
     async def _plugins_handler(ctx: CommandContext) -> str | bool:
         return await handle_plugins_command(ctx)

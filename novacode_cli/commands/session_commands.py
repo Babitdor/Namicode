@@ -1,10 +1,7 @@
 """Handlers for session-related commands: /sessions, /save, /compact."""
 
-import uuid
 from pathlib import Path
 from prompt_toolkit import PromptSession
-from rich.console import Console
-from rich.text import Text
 
 from novacode_cli.commands import CommandContext
 from novacode_cli.commands.menu_helper import MenuOption, run_interactive_menu

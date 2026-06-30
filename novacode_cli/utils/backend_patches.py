@@ -108,11 +108,9 @@ def apply_filesystem_host_path_patch() -> None:
 
     def _current_workspace_root() -> str | None:
         try:
-            from pathlib import Path
-
             from novacode_cli.config.config import settings
 
-            return str(settings.project_root or Path.cwd())
+            return str(settings.get_workspace_root())
         except Exception:  # noqa: BLE001
             return None
 

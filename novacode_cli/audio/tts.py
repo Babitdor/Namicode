@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import urllib.request
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from novacode_cli.config.config import HOME_DIR
 

@@ -8,7 +8,6 @@ from __future__ import annotations
 import time
 from typing import Any
 
-import requests
 
 from novacode_cli.tools._shared import (
     _BROWSER_USER_AGENTS,

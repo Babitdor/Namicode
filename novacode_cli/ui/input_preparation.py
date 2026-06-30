@@ -1,15 +1,17 @@
 """Input preparation and message content building.
 
 This module handles:
-- Parsing file mentions from user input
-- Building multimodal content with images
+- Building agent config for task execution
+- Getting agent display names
 - Preparing messages for the agent
+
+Shared between the TUI and headless mode.
 """
 
-import asyncio
+from __future__ import annotations
 
-from novacode_cli.errors.handlers import ErrorHandler
-from novacode_cli.input import ImageTracker, parse_file_mentions
+
+from novacode_cli.input_utils import ImageTracker, parse_file_mentions
 
 
 async def prepare_input_content(
@@ -28,95 +30,72 @@ async def prepare_input_content(
             @ symbols which should not be interpreted as file references.
 
     Returns:
-        Either a string or a multimodal content list
+        Prepared content as string or list of content blocks
     """
-    error_handler = ErrorHandler()
-
     if skip_file_mentions:
-        prompt_text = user_input
-        mentioned_files = []
+        cleaned_input = user_input
     else:
-        prompt_text, mentioned_files = parse_file_mentions(user_input)
+        # Parse @file mentions
+        cleaned_input, mentioned_files = parse_file_mentions(user_input)
 
-    if mentioned_files:
-        context_parts = [prompt_text, "\n\n## Referenced Files\n"]
-        for file_path in mentioned_files:
-            try:
-                content = await asyncio.to_thread(file_path.read_text)
-                if len(content) > 50000:
-                    content = content[:50000] + "\n... (file truncated)"
-                context_parts.append(
-                    f"\n### {file_path.name}\nPath: `{file_path}`\n```\n{content}\n```"
-                )
-            except Exception as e:
-                recovery = await error_handler.handle(
-                    e,
-                    context={"file_name": str(file_path), "file_path": str(file_path)},
-                )
-                error_msg = f"\n### {file_path.name}\n[{recovery.message}]"
-                if recovery.suggestion:
-                    error_msg += f"\n{recovery.suggestion}"
-                context_parts.append(error_msg)
-        final_input = "\n".join(context_parts)
-    else:
-        final_input = prompt_text
-
-    images_to_send = []
     if image_tracker:
-        images_to_send = image_tracker.get_images()
+        try:
+            images = image_tracker.get_images()
+        except Exception:  # noqa: BLE001
+            images = []
+        if images:
+            try:
+                from novacode_cli.bootstrap.vision_router import caption_images
 
-    if images_to_send:
-        # Caption pasted images to TEXT here, at ingestion, so the main
-        # (text-only) model never receives image blocks. The vision model
-        # transcribes once; only its text enters the conversation. Degrades to a
-        # placeholder string if vision is unavailable — never blocks the turn.
-        from novacode_cli.bootstrap.vision_router import caption_images
+                captions = await caption_images(images)
+                if captions:
+                    return f"{cleaned_input}\n\n[Attached image: {captions}]"
+            except Exception:  # noqa: BLE001
+                pass
+            # Fallback: include image content blocks
+            content: list = []
+            content.append({"type": "text", "text": cleaned_input})
+            for img in images:
+                if hasattr(img, 'to_content_block'):
+                    content.append(img.to_content_block())
+                elif hasattr(img, 'to_message_content'):
+                    content.append(img.to_message_content())
+            return content
 
-        urls = [img.to_message_content()["image_url"]["url"] for img in images_to_send]
-        caption = await caption_images(urls, task_hint=final_input)
-        label = "Pasted image" if len(urls) == 1 else f"{len(urls)} pasted images"
-        return f"{final_input}\n\n[{label}: {caption}]"
-
-    return final_input
-
-
-def get_agent_display_name(assistant_id: str | None) -> str:
-    """Get the display name for an agent.
-
-    Args:
-        assistant_id: The assistant ID
-
-    Returns:
-        Human-readable display name
-    """
-    if not assistant_id:
-        return "Agent"
-    if assistant_id == "nova-agent":
-        return "Nova"
-    if assistant_id == "ralph":
-        return "Ralph"
-    return assistant_id.capitalize()
+    return cleaned_input
 
 
 def build_agent_config(
     thread_id: str,
-    assistant_id: str | None,
+    model: str | None = None,
+    **kwargs: object,
 ) -> dict:
-    """Build the agent configuration dict.
+    """Build the standard agent configuration dict.
 
     Args:
-        thread_id: The thread ID for this conversation
-        assistant_id: Optional assistant ID
+        thread_id: The conversation thread ID
+        model: Optional model name override
+        **kwargs: Additional config keys
 
     Returns:
         Configuration dict for the agent
     """
-    return {
-        "configurable": {"thread_id": thread_id},
-        "metadata": {
-            "thread_id": thread_id,
-            **({"assistant_id": assistant_id} if assistant_id else {}),
-        },
-        "run_name": assistant_id or "nova-agent",
-        "tags": ["Nova", assistant_id] if assistant_id else ["Nova"],
-    }
+    config: dict = {"configurable": {"thread_id": thread_id}}
+    if model:
+        config["configurable"]["model"] = model
+    config.update(kwargs)
+    return config
+
+
+def get_agent_display_name(agent_name: str | None) -> str:
+    """Get a human-readable display name for an agent.
+
+    Args:
+        agent_name: The agent's identifier name
+
+    Returns:
+        Display name string
+    """
+    if not agent_name:
+        return "Nova"
+    return agent_name.replace("-", " ").title()

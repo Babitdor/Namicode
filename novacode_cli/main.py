@@ -60,9 +60,7 @@ import argparse
 import asyncio
 import io
 import logging
-import signal
 import sys
-import time
 from pathlib import Path
 
 # Fix Windows console encoding to handle Unicode characters
@@ -100,7 +98,6 @@ try:
     _SQLITE_CHECKPOINTER_AVAILABLE = True
 except ImportError:
     _SQLITE_CHECKPOINTER_AVAILABLE = False
-from deepagents.backends.sandbox import BaseSandbox
 
 # Apply safety patches for backends that don't handle all content block types
 # (e.g., Ollama crashes on "file" type blocks from PDF reads)
@@ -123,49 +120,31 @@ from novacode_cli.agents.core_agent import (
     list_agents,
     reset_agent,
 )
-from novacode_cli.cli_session import (
-    AUTO_SAVE_INTERVAL_SECONDS,
-    AUTO_SAVE_MESSAGE_THRESHOLD,
-    AutoSaveManager,
-    GracefulShutdown,
-    SeenMessageIds,
-    display_auto_approve_status,
-    display_memory_status,
-    display_model_info,
-    display_sandbox_info,
-    display_splash_screen,
-    display_tavily_warning,
-    display_tips,
-    display_working_directory,
-)
 from novacode_cli.commands.commands import (
-    execute_bash_command,
     execute_skills_command,
-    handle_command,
 )
 from novacode_cli.config.config import (
     COLORS,
     HOME_DIR,
-    NOVA_CODE_ASCII,
     boot_status,
     console,
+    format_version_banner,
     settings,
-    get_responsive_ascii,
 )
 from novacode_cli.config.model_create import create_model
-from novacode_cli.input import (
-    ImageTracker,
-    PasteTracker,
-    create_prompt_session,
-    resolve_paste_placeholders,
-)
+from novacode_cli.hooks import HookEvent, dispatch_hook_fire_and_forget
+from novacode_cli.ui.ui_elements import show_help
 from novacode_cli.tracking.tracing import auto_configure as _auto_configure_tracing
+
+# Module logger for background services (cron scheduler, remote processor).
+_proc_logger = logging.getLogger("novacode_cli.remote")
 
 # Initialize LangSmith tracing from environment variables (no-op when not configured)
 _auto_configure_tracing()
 from novacode_cli.integrations.sandbox_factory import (
     create_sandbox,
-    get_default_working_dir,
+    parse_ports,
+    resolve_sandbox_type,
 )
 from novacode_cli.mcp.commands import execute_mcp_command, setup_mcp_parser
 from novacode_cli.migrate import check_migration_status, migrate_agents
@@ -184,7 +163,6 @@ from novacode_cli.tools import (
     linkedin_jobs,
     list_memories,
     package_info,
-    query_project_graph,
     read_memory,
     recall,
     reddit_posts,
@@ -204,14 +182,10 @@ from novacode_cli.tools.plan_mode_tools import (
     enter_plan_mode,
     exit_plan_mode,
 )
-from novacode_cli.ui.execution import execute_task
-
 # Vixie desktop pet integration
 from novacode_cli.vixie.server import start_vixie_server, stop_vixie_server
 
 from novacode_cli.process_manager import ProcessManager
-from novacode_cli.ui.ui_elements import TokenTracker, show_help
-from novacode_cli.hooks import dispatch_hook_fire_and_forget, HookEvent
 
 
 def check_cli_dependencies() -> None:
@@ -238,11 +212,6 @@ def check_cli_dependencies() -> None:
     except ImportError:
         missing.append("tavily-python")
 
-    try:
-        import prompt_toolkit
-    except ImportError:
-        missing.append("prompt-toolkit")
-
     if missing:
         print("\n❌ Missing required CLI dependencies!")
         print("\nThe following packages are required to use the deepagents CLI:")
@@ -251,31 +220,6 @@ def check_cli_dependencies() -> None:
         print("\nPlease install them with:")
         print("  uv add 'deepagents[cli]'")
         sys.exit(1)
-
-
-def format_version_banner(version: str) -> str:
-    """Return a styled version banner for ``nova --version``."""
-    return f"""
-⣿⣿⣿⣿⣟⠊⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠙⢿⣿
-⣿⣿⣿⡏⠁⠀⠀⠀⠀⠀⠀⢀⣰⣶⣶⡄⠀⠀⠀⠀⠀⠀⢀⠀⠀⠈⢻
-⣿⣿⣿⠁⠄⠀⠀⠀⠀⠀⣤⣾⣿⣿⣿⣿⡂⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠽
-⣿⣿⡏⣸⠀⠀⠀⠀⢀⣼⣿⣿⣿⣿⣿⣿⣿⡆⠀⠀⠈⠀⠀⠀⠀⠀⠀⠰
-⣿⣿⡇⠁⠀⠀⠀⣤⣍⣙⣿⣿⣏⣠⠄⠲⠲⠦⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢻
-⣿⣿⠁⠀⠀⠀⠀⠀⢤⠙⣿⣿⣿⣇⣀⡐⢂⣠⡄⠠⠀⠀⠀⠀⠀⠀⡀⢠⢸
-⣿⣿⠀⠀⠐⠀⣶⣷⣷⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⠀⠀⠐⠈⠀⠀⠀⠉⠘⣼
-⣿⣿⠀⠈⠀⠀⣿⣿⣿⡿⣿⠿⢿⣿⣿⣿⣿⣿⣿⣧⡀⠀⢄⠲⠀⠀⠀⣱
-⣿⣿⡆⠀⠀⠀⠈⣿⣿⣷⣶⣼⣾⣿⣿⣿⣿⣿⣿⣿⣷⠂⠀⠀⠂⢀⢲
-⣿⣿⣿⡆⠀⠀⠀⠙⣿⠋⠠⠄⢀⠉⣹⣿⣿⣿⣿⣿⣿⠀⠀⠀⠀⠀⣿
-⣿⣿⣿⣿⣦⠀⠀⠀⠘⣿⣤⣤⣶⣿⣿⣿⣿⣿⠟⣛⡽⠀⠀⠀⠠⣸
-⣿⣿⣿⣿⣿⣷⡀⠀⠀⠈⠻⣿⣿⣿⠿⠛⠋⠐⠚⠛⠃   ⣰⣿
-
-███╗   ██╗ ██████╗  ██╗   ██╗  █████╗
-████╗  ██║ ██╔═══██╗ ██║   ██║ ██╔══██╗
-██╔██╗ ██║ ██║   ██║ ██║   ██║ ███████║
-██║╚██╗██║ ██║   ██║ ╚██╗ ██╔╝ ██╔══██║
-██║ ╚████║ ╚██████╔╝  ╚████╔╝  ██║  ██║
-╚═╝  ╚═══╝  ╚═════╝    ╚═══╝   ╚═╝  ╚═╝ ~ v{version}
-"""
 
 
 def parse_args():
@@ -479,17 +423,6 @@ def parse_args():
         help="Disable the startup splash screen",
     )
     parser.add_argument(
-        "--tui",
-        action="store_true",
-        dest="legacy_ui",
-        help="Use the classic Rich-based REPL instead of the default TUI (deprecated, use --legacy-ui)",
-    )
-    parser.add_argument(
-        "--legacy-ui",
-        action="store_true",
-        help="Use the classic Rich-based REPL instead of the default TUI",
-    )
-    parser.add_argument(
         "--continue",
         "-c",
         dest="continue_session",
@@ -504,6 +437,39 @@ def parse_args():
         action="store_true",
         help="Interactively select and resume a session",
     )
+    # Headless (non-interactive) mode: run one prompt to completion and exit.
+    parser.add_argument(
+        "--print",
+        "-p",
+        dest="print_prompt",
+        nargs="?",
+        const=True,
+        default=None,
+        help="Run a single prompt non-interactively and exit. Pass the prompt as "
+        "the value (nova -p \"...\"), or omit it to read the prompt from stdin "
+        "(echo \"...\" | nova -p).",
+    )
+    parser.add_argument(
+        "--output-format",
+        choices=["text", "json", "stream-json"],
+        default="text",
+        help="Headless output format: 'text' (final answer only), 'json' (a single "
+        "result object), or 'stream-json' (newline-delimited JSON events). "
+        "Only used with --print.",
+    )
+    parser.add_argument(
+        "--max-turns",
+        type=int,
+        default=None,
+        help="Headless only: cap the number of agent turns (model steps). The run "
+        "stops with a max-turns error if exceeded.",
+    )
+    parser.add_argument(
+        "--deny-tools",
+        action="store_true",
+        help="Headless only: auto-reject tool approvals (fail-closed) instead of "
+        "auto-approving. The agent runs read-only and reports what it could not do.",
+    )
     parser.add_argument(
         "--version",
         action="version",
@@ -513,898 +479,6 @@ def parse_args():
     parser.add_argument("-h", "--help", action="help", help="Show this help message and exit")
 
     return parser.parse_args()
-
-
-def parse_ports(ports_str: str | None) -> dict[int, int] | None:
-    """Parse port forwarding argument.
-
-    Args:
-        ports_str: Port string in format 'PORT' or 'HOST_PORT:CONTAINER_PORT'.
-                   Multiple ports separated by comma.
-                   Example: '8080,3000:3000,5432:5432'
-
-    Returns:
-        Dictionary mapping container ports to host ports, or None if no ports.
-        Example: {8080: 8080, 3000: 3000, 5432: 5432}
-    """
-    if not ports_str:
-        return None
-
-    ports = {}
-    for port_spec in ports_str.split(","):
-        port_spec = port_spec.strip()
-        if ":" in port_spec:
-            # Format: HOST_PORT:CONTAINER_PORT
-            host_port_str, container_port_str = port_spec.split(":", 1)
-            host_port = int(host_port_str)
-            container_port = int(container_port_str)
-        else:
-            # Format: PORT (same for both host and container)
-            port = int(port_spec)
-            host_port = port
-            container_port = port
-        ports[container_port] = host_port
-
-    return ports if ports else None
-
-
-def resolve_sandbox_type(
-    sandbox_arg: str | None,
-    no_sandbox: bool,  # noqa: FBT001
-    platform: str | None = None,
-) -> tuple[str, bool]:
-    """Resolve the effective sandbox mode and whether the user chose it explicitly.
-
-    The default depends on platform. Linux/macOS get Pattern A (``"os"`` — host
-    files + an OS-confined shell). Windows has no lightweight OS sandbox primitive,
-    so the default is plain host execution (``"none"``) gated by the
-    dangerous-command blocklist + HITL approval — the same baseline Claude Code /
-    Cursor use on Windows. Docker stays available there as an explicit opt-in
-    (``--sandbox docker``); it is Windows-only and rejected elsewhere (Linux/macOS
-    should use the ``"os"`` default or ``--no-sandbox``).
-
-    Args:
-        sandbox_arg: The ``--sandbox`` value, or None when unset.
-        no_sandbox: Whether ``--no-sandbox`` was passed.
-        platform: ``sys.platform`` override (for tests). Defaults to the host.
-
-    Returns:
-        ``(sandbox_type, explicit)`` — ``explicit`` is True when the user chose
-        the mode (so a creation failure should not silently fall back).
-
-    Raises:
-        ValueError: On invalid combinations (caller maps these to a user error).
-    """
-    is_windows = (platform or sys.platform) == "win32"
-
-    if no_sandbox:
-        if sandbox_arg and sandbox_arg != "none":
-            msg = "--no-sandbox conflicts with --sandbox."
-            raise ValueError(msg)
-        return "none", True
-
-    if sandbox_arg is not None:
-        if sandbox_arg == "docker" and not is_windows:
-            msg = (
-                "--sandbox docker is Windows-only. On Linux/macOS, Nova confines the "
-                "shell with an OS sandbox by default (--sandbox os). Use --no-sandbox "
-                "for unconfined local execution."
-            )
-            raise ValueError(msg)
-        return sandbox_arg, True
-
-    # Implicit default: host execution + approvals on Windows (no lightweight OS
-    # sandbox primitive — Docker is opt-in via --sandbox docker); Pattern A
-    # (OS-confined shell) on Linux/macOS.
-    return ("none" if is_windows else "os"), False
-
-
-async def simple_cli(
-    agent,
-    assistant_id: str | None,
-    session_state,
-    baseline_tokens: int = 0,
-    backend=None,
-    sandbox_type: str | None = None,
-    setup_script_path: str | None = None,
-    no_splash: bool = False,
-    model_name: str | None = None,
-    session_manager=None,
-    store: BaseStore | None = None,
-    checkpointer: InMemorySaver | None = None,
-    restored_session_data: tuple | None = None,
-) -> None:
-    """Main CLI loop.
-
-    Args:
-        agent: The LangGraph agent
-        assistant_id: Agent identifier for memory storage
-        session_state: Session state with auto-approve settings
-        baseline_tokens: Baseline token count for tracking
-        backend: Backend for file operations (CompositeBackend)
-        sandbox_type: Type of sandbox being used (e.g., "modal", "runloop", "daytona", "docker", "langsmith").
-        model_name: Name of the model being used for context window calculation.
-                     If None, running in local mode.
-        setup_script_path: Path to setup script that was run (if any)
-        no_splash: If True, skip displaying the startup splash screen
-        session_manager: SessionManager for session persistence
-        restored_session_data: Tuple of (session_data, warnings, nova_md_loaded) for continuation
-    """
-    console.clear()
-
-    # Fire session.start hook
-    dispatch_hook_fire_and_forget(
-        HookEvent.SESSION_START,
-        {
-            "session_id": session_state.session_id,
-            "thread_id": session_state.thread_id,
-            "assistant_id": assistant_id,
-            "model": model_name,
-            "sandbox": sandbox_type,
-            "continued": bool(restored_session_data),
-        },
-    )
-
-    # Check path approval before proceeding
-    if not await check_path_approval():
-        console.print()
-        console.print(
-            "[red]Cannot start nova without path approval.[/red]",
-            style=COLORS["dim"],
-        )
-        console.print("[dim]Path approval is required to ensure safe file system access.[/dim]")
-        console.print()
-        sys.exit(1)
-
-    # Display splash screen and model info
-    display_splash_screen(console, no_splash)
-    if not no_splash:
-        display_model_info(console)
-
-    # Extract sandbox ID from backend if using sandbox mode
-    sandbox_id: str | None = None
-    sandbox_meta: dict | None = None
-    if backend:
-        from deepagents.backends.composite import CompositeBackend
-
-        # Check if it's a CompositeBackend with a real sandbox as the default
-        # backend. LocalShellBackend implements SandboxBackendProtocol but is not
-        # a remote sandbox, so we require a BaseSandbox subclass.
-        if isinstance(backend, CompositeBackend):
-            if isinstance(backend.default, BaseSandbox):
-                sandbox_id = backend.default.id
-                sandbox_meta = getattr(backend.default, "_nova_meta", None)
-        elif isinstance(backend, BaseSandbox):
-            sandbox_id = backend.id
-            sandbox_meta = getattr(backend, "_nova_meta", None)
-
-    # Display sandbox info persistently (survives console.clear())
-    display_sandbox_info(
-        console, sandbox_type, sandbox_id, setup_script_path, meta=sandbox_meta
-    )
-
-    # Display Tavily warning if API key not configured
-    display_tavily_warning(console)
-
-    console.print()
-
-    # Display working directory
-    display_working_directory(console, sandbox_type)
-
-    # Show memory status (agent.md / NOVA.md loaded)
-    display_memory_status(console, assistant_id)
-
-    console.print()
-
-    # Display restored session info if continuing
-    if restored_session_data:
-        from novacode_cli.ui.session_display import display_restored_session
-
-        session_data, warnings, Nova_md_loaded = restored_session_data
-        display_restored_session(
-            session_data=session_data,
-            warnings=warnings,
-            Nova_md_loaded=Nova_md_loaded,
-        )
-        # Fire session.continue hook
-        dispatch_hook_fire_and_forget(
-            HookEvent.SESSION_CONTINUE,
-            {
-                "session_id": session_state.session_id,
-                "thread_id": session_state.thread_id,
-            },
-        )
-
-    # Display auto-approve status if enabled
-    display_auto_approve_status(console, session_state.auto_approve)
-
-    # Display keyboard shortcuts and tips
-    display_tips(console)
-
-    console.print()
-
-    # Create prompt session and token tracker
-    token_tracker = TokenTracker()
-    image_tracker = ImageTracker()
-    paste_tracker = PasteTracker()
-    session = create_prompt_session(assistant_id, session_state, image_tracker, paste_tracker)
-    token_tracker.set_baseline(baseline_tokens)
-    if model_name:
-        token_tracker.set_model(model_name)
-    # Store token_tracker on session_state so the toolbar can access it
-    session_state.token_tracker = token_tracker
-    # Store image_tracker on session_state for remote message processor access
-    session_state._image_tracker = image_tracker
-    # Store paste_tracker on session_state for remote access
-    session_state._paste_tracker = paste_tracker
-
-    # Helper to save session (used by both cleanup and auto-save)
-    async def _save_session(*, silent: bool = False) -> bool:
-        """Save current session state.
-
-        Args:
-            silent: If True, don't print success message
-
-        Returns:
-            True if saved successfully, False otherwise
-        """
-        if not session_manager or not assistant_id:
-            return False
-
-        try:
-            from novacode_cli.session.session_summarization import (
-                should_trigger_summarization,
-                summarize_messages_to_memory,
-            )
-            from novacode_cli.tracking.workspace_anchoring import scan_workspace
-
-            config = {"configurable": {"thread_id": session_state.thread_id}}
-            state = await agent.aget_state(config)
-            messages = state.values.get("messages", [])
-            # Get todos from agent state if available
-            todos = state.values.get("todos") or session_state.todos
-
-            if messages:
-                # Scan current workspace state
-                workspace_state = (
-                    scan_workspace(settings.project_root) if settings.project_root else None
-                )
-
-                # Extract current task from session state (if available)
-                # For now, we'll use a simple heuristic - could be enhanced later
-                current_task = getattr(session_state, "current_task", None)
-
-                # Determine task status from state
-                task_status = getattr(session_state, "task_status", "active")
-
-                # Get context usage percentage for summarization threshold
-                context_breakdown = token_tracker.get_breakdown()
-                context_usage_percentage = context_breakdown.usage_percentage
-
-                # Check if we should trigger summarization (only at 80%+ context usage)
-                memory_content = None
-                if should_trigger_summarization(
-                    context_usage_percentage=context_usage_percentage,
-                    task_status=task_status,
-                ):
-                    if not silent:
-                        console.print("[dim]Generating session memory summary...[/dim]")
-                    try:
-                        # Get model for summarization
-                        from novacode_cli.config.model_create import create_model
-
-                        summary_model = create_model()
-                        # Run the synchronous LLM call in a thread executor so it
-                        # doesn't block the event loop and stall exit.
-                        memory_content = await asyncio.to_thread(
-                            summarize_messages_to_memory,
-                            messages=messages,
-                            model=summary_model,
-                            current_task=current_task,
-                        )
-                    except Exception as e:
-                        console.print(
-                            f"[yellow]Warning: Could not generate memory summary: {type(e).__name__}: {e}[/yellow]"
-                        )
-
-                session_dir = session_manager.save_session(
-                    session_id=session_state.session_id,
-                    thread_id=session_state.thread_id,
-                    messages=messages,
-                    assistant_id=assistant_id,
-                    todos=todos,
-                    model_name=model_name,
-                    project_root=settings.project_root,
-                    workspace_state=workspace_state,
-                    current_task=current_task,
-                    task_status=task_status,
-                    memory=memory_content,
-                    sandbox_id=sandbox_id,
-                    sandbox_type=sandbox_type,
-                )
-                if not silent:
-                    console.print(f"[dim]Session saved to {session_dir}[/dim]")
-                # Fire session.save hook
-                dispatch_hook_fire_and_forget(
-                    HookEvent.SESSION_SAVE,
-                    {
-                        "session_id": session_state.session_id,
-                        "thread_id": session_state.thread_id,
-                        "session_dir": str(session_dir),
-                        "message_count": len(messages),
-                    },
-                )
-                return True
-        except Exception as e:
-            error_msg = f"[red]Error saving session: {type(e).__name__}: {e}[/red]"
-            console.print(error_msg)  # Always show save errors regardless of silent flag
-        return False
-
-    # Helper to clean up and save session on exit
-    async def _cleanup_and_save_session() -> None:
-        """Clean up managed processes and save session state when user exits.
-
-        All cleanup steps that don't depend on each other run CONCURRENTLY
-        with a shared 20s deadline, followed by compaction + save (sequential)
-        with a 60s deadline.  This prevents any single hanging operation from
-        blocking exit indefinitely.
-        """
-        # Fire session.end hook (fire-and-forget, doesn't await)
-        dispatch_hook_fire_and_forget(
-            HookEvent.SESSION_END,
-            {
-                "session_id": session_state.session_id,
-                "thread_id": session_state.thread_id,
-                "assistant_id": assistant_id,
-            },
-        )
-
-        # ═══════════════════════════════════════════════════════════════
-        # Parallel cleanup — independent tasks run concurrently so the
-        # slowest (not the sum) determines the wall-clock time.
-        # Each sub-step also carries its own per-step timeout.
-        # ═══════════════════════════════════════════════════════════════
-
-        async def _stop_vixie():
-            try:
-                await asyncio.wait_for(stop_vixie_server(), timeout=5.0)
-            except Exception as e:
-                console.print(f"[dim]Could not stop Vixie server: {e}[/dim]")
-
-        async def _stop_processes():
-            try:
-                manager = ProcessManager.get_instance()
-                stopped_count = await asyncio.wait_for(manager.stop_all(), timeout=15.0)
-                if stopped_count > 0:
-                    console.print(f"[dim]Stopped {stopped_count} managed process(es).[/dim]")
-            except Exception as e:
-                console.print(f"[dim]Could not stop processes: {e}[/dim]")
-
-        async def _stop_remote_bridges():
-            try:
-                bridge_mgr = getattr(session_state, "_remote_bridge_manager", None)
-                if bridge_mgr:
-                    await asyncio.wait_for(bridge_mgr.stop_all(), timeout=5.0)
-            except Exception as e:
-                console.print(f"[dim]Could not stop remote bridges: {e}[/dim]")
-
-        async def _stop_trello():
-            try:
-                trello_server = getattr(session_state, "trello_server", None)
-                if trello_server and trello_server.is_running:
-                    trello_server.stop()
-                    session_state.trello_server = None
-            except Exception as e:
-                console.print(f"[dim]Could not stop Trello server: {e}[/dim]")
-
-        async def _cancel_remote_processor():
-            """Cancel remote message processor with brief await."""
-            try:
-                _rpt = getattr(session_state, "_remote_processor_task", None)
-                if _rpt and not _rpt.done():
-                    _rpt.cancel()
-                    # Give it a brief moment to finish cleanup, but
-                    # don't block exit if it's slow to respond.
-                    try:
-                        await asyncio.wait_for(_rpt, timeout=2.0)
-                    except (asyncio.CancelledError, asyncio.TimeoutError):
-                        pass
-            except Exception:
-                pass
-
-        async def _stop_event_sources():
-            """Stop the cron scheduler and webhook server (Enhancements 3 / 5)."""
-            for attr in ("_cron_scheduler", "_webhook_server"):
-                try:
-                    src = getattr(session_state, attr, None)
-                    if src is not None:
-                        await asyncio.wait_for(src.stop(), timeout=3.0)
-                except Exception:
-                    pass
-
-        # Run all cleanup concurrently with a shared 20s deadline.
-        # Individual steps have their own per-step timeouts as well.
-        try:
-            await asyncio.wait_for(
-                asyncio.gather(
-                    _stop_vixie(),
-                    _stop_processes(),
-                    _stop_remote_bridges(),
-                    _stop_trello(),
-                    _cancel_remote_processor(),
-                    _stop_event_sources(),
-                ),
-                timeout=20.0,
-            )
-        except (asyncio.TimeoutError, Exception):
-            console.print("[dim]Some cleanup tasks timed out, continuing exit...[/dim]")
-
-        # ═══════════════════════════════════════════════════════════════
-        # Sequential post-cleanup: compaction check + save.
-        # Protected by a 60s deadline so LLM calls can't hang exit.
-        # ═══════════════════════════════════════════════════════════════
-        try:
-            await asyncio.wait_for(
-                _maybe_compact_on_exit(),
-                timeout=30.0,
-            )
-        except asyncio.TimeoutError:
-            console.print("[dim]Compaction timed out, skipping...[/dim]")
-
-        try:
-            await asyncio.wait_for(
-                _save_session(silent=False),
-                timeout=30.0,
-            )
-        except asyncio.TimeoutError:
-            console.print("[dim]Session save timed out; exiting anyway.[/dim]")
-
-    async def _maybe_compact_on_exit() -> None:
-        """Check context usage and perform compaction if needed on exit.
-
-        This analyzes the conversation and automatically compacts if:
-        - Context usage is above critical threshold (90%)
-        - Context usage is above warning threshold (75%) with many messages
-        - Conversation has 100+ messages
-        """
-        from novacode_cli.compaction import compact_conversation
-        from novacode_cli.config.model_create import create_model
-        from novacode_cli.context import ContextManager
-
-        try:
-            # Get current conversation state
-            config = {"configurable": {"thread_id": session_state.thread_id}}
-            state = await agent.aget_state(config)
-            messages = state.values.get("messages", [])
-
-            if not messages:
-                return
-
-            # Get baseline tokens from token tracker (correct attribute name)
-            baseline_tokens = getattr(token_tracker, "baseline_context", 0)
-
-            # If the API has already told us the real token count this session,
-            # use that directly — it's more accurate than the char/4 estimate
-            # from build_context_breakdown(). Bypass re-estimation entirely.
-            if token_tracker and getattr(token_tracker, "has_api_data", False):
-                api_tokens = token_tracker.current_context
-                window = token_tracker.context_window_size
-                usage_pct = (api_tokens / window * 100) if window else 0.0
-                tokens_avail = max(0, window - api_tokens)
-                total_messages = len(messages)
-
-                from novacode_cli.context import (
-                    CONTEXT_CRITICAL_THRESHOLD,
-                    CONTEXT_WARNING_THRESHOLD,
-                    CompactionRecommendation,
-                )
-
-                human_ai_tool = sum(
-                    1
-                    for m in messages
-                    if not hasattr(m, "type") or getattr(m, "type", "") != "system"
-                )
-                should_compact = (
-                    usage_pct >= CONTEXT_CRITICAL_THRESHOLD * 100
-                    or (usage_pct >= CONTEXT_WARNING_THRESHOLD * 100 and total_messages >= 20)
-                    or (usage_pct >= 50 and total_messages >= 50)
-                    or total_messages >= 100
-                )
-                recommendation = CompactionRecommendation(
-                    should_compact=should_compact,
-                    reason=f"Context at {usage_pct:.1f}% ({api_tokens:,} tokens)",
-                    usage_percentage=usage_pct,
-                    tokens_used=api_tokens,
-                    tokens_available=tokens_avail,
-                    messages_count=total_messages,
-                )
-            else:
-                # No API data yet — fall back to char/4 estimation from messages
-                recommendation = ContextManager(model_name).recommend_compaction(
-                    messages,
-                    baseline_tokens=baseline_tokens,
-                )
-
-            if not recommendation.should_compact:
-                # No compaction needed - just show brief status
-                console.print(
-                    f"[dim]Context: {recommendation.usage_percentage:.1f}% used "
-                    f"({recommendation.tokens_used:,} / {recommendation.tokens_used + recommendation.tokens_available:,} tokens)[/dim]"
-                )
-                return
-
-            # Show compaction recommendation
-            console.print()
-            console.print("[bold yellow]Context Optimization[/bold yellow]")
-            console.print(f"[dim]{recommendation.reason}[/dim]")
-            console.print(
-                f"[dim]Messages: {recommendation.messages_count} | "
-                f"Tokens: {recommendation.tokens_used:,} ({recommendation.usage_percentage:.1f}%)[/dim]"
-            )
-
-            if recommendation.estimated_tokens_saved > 0:
-                console.print(
-                    f"[dim]Estimated savings: ~{recommendation.estimated_tokens_saved:,} tokens[/dim]"
-                )
-
-            # Perform compaction with a per-step timeout so the LLM
-            # summarization call can't stall exit indefinitely.
-            model = create_model()
-            with console.status("[bold]Compacting conversation...[/bold]", spinner="dots"):
-                result = await asyncio.wait_for(
-                    compact_conversation(
-                        agent=agent,
-                        model=model,
-                        thread_id=session_state.thread_id,
-                    ),
-                    timeout=25.0,
-                )
-
-            if result.success:
-                console.print("[green]✓[/green] ", end="")
-                console.print("[green]Conversation optimized for next session[/green]")
-                console.print(
-                    f"[dim]Messages: {result.messages_before} → {result.messages_after} | "
-                    f"Tokens saved: ~{result.tokens_saved:,}[/dim]"
-                )
-                # Reset token tracker after compaction
-                token_tracker.reset()
-            else:
-                console.print(f"[yellow]Compaction skipped: {result.error}[/yellow]")
-
-        except Exception as e:
-            # Don't fail exit if compaction fails - just log and continue
-            console.print(f"[dim]Could not check context: {e}[/dim]")
-
-    # Helper for auto-save check using AutoSaveManager
-    auto_save_manager = AutoSaveManager()
-
-    async def _maybe_auto_save() -> None:
-        """Check if auto-save should run and save if needed."""
-        if auto_save_manager.should_save():
-            if await _save_session(silent=True):
-                auto_save_manager.reset_messages()
-
-    # Signal handler for graceful termination using flag-based approach
-    # This allows session saving when the terminal is closed or process is terminated
-    graceful_shutdown = GracefulShutdown()
-    graceful_shutdown.install_handlers()
-
-    # Bounded collection for message IDs — prevents unbounded memory growth
-    _seen_message_ids = SeenMessageIds()
-    # Store on session_state for remote message processor access
-    session_state._seen_message_ids = _seen_message_ids
-
-    # Cancellable task tracking: lets Ctrl+C cancel a running execute_task
-    # by injecting CancelledError rather than relying on KeyboardInterrupt
-    # propagation (which is unreliable on Windows asyncio).
-    _exec_task: asyncio.Task | None = None
-    _event_loop = asyncio.get_event_loop()
-
-    def _cancel_exec_task(signum=None, frame=None) -> None:
-        nonlocal _exec_task
-        if _exec_task is not None and not _exec_task.done():
-            _event_loop.call_soon_threadsafe(_exec_task.cancel)
-        else:
-            # No agent task running — raise so the prompt can handle it
-            raise KeyboardInterrupt
-
-    # Register SIGINT handler so Ctrl+C reliably cancels the agent task.
-    # prompt_toolkit saves/restores this when prompt_async() is active,
-    # so the double-Ctrl+C-to-exit behavior during prompts is unaffected.
-    _prev_sigint: object = None
-    try:
-        _prev_sigint = signal.signal(signal.SIGINT, _cancel_exec_task)
-    except (ValueError, OSError):
-        pass  # May fail in non-main threads or restricted environments
-
-    while True:
-        try:
-            user_input = await session.prompt_async()
-            if session_state.exit_hint_handle:
-                session_state.exit_hint_handle.cancel()
-                session_state.exit_hint_handle = None
-            session_state.exit_hint_until = None
-            user_input = user_input.strip()
-            # Resolve any paste placeholders to full text
-            user_input = resolve_paste_placeholders(user_input, paste_tracker)
-        except EOFError:
-            await _cleanup_and_save_session()
-            break
-        except KeyboardInterrupt:
-            # Double-Ctrl+C during prompt exits.  Single Ctrl+C
-            # during prompt is handled by prompt_toolkit's own binding
-            # (shows hint, second press exits).
-            await _cleanup_and_save_session()
-            console.print("\nGoodbye!", style=COLORS["primary"])
-            break
-
-        # Fire user.message hook
-        if user_input:
-            dispatch_hook_fire_and_forget(
-                HookEvent.USER_MESSAGE,
-                {
-                    "session_id": session_state.session_id,
-                    "thread_id": session_state.thread_id,
-                    "message": user_input[:500],  # truncate for safety
-                },
-            )
-
-        # Wrap the rest of the loop body so that KeyboardInterrupt
-        # during execute_task or between task/prompt doesn't crash the
-        # CLI — it just returns to the prompt.
-        try:
-            if not user_input:
-                continue
-
-            # /critique shortcut → delegate to the built-in critique-agent subagent
-            # via the main agent's `task` tool (not the custom @agent path)
-            if user_input.startswith("/critique"):
-                critique_args = user_input[len("/critique") :].strip()
-                user_input = (
-                    f"Use the critique-agent subagent (via the task tool) to: "
-                    f"{critique_args or 'Review recent changes for correctness, safety, and regressions'}"
-                )
-
-            # Check for slash commands first
-            if user_input.startswith("/"):
-                result = await handle_command(
-                    user_input,
-                    agent,
-                    token_tracker,
-                    session_state,
-                    assistant_id,  # type: ignore
-                    session_manager=session_manager,
-                    model_name=model_name,
-                    image_tracker=image_tracker,
-                    sandbox_id=sandbox_id,
-                    sandbox_type=sandbox_type,
-                )
-                if result == "exit":
-                    await _cleanup_and_save_session()
-                    console.print("\nGoodbye!", style=COLORS["primary"])
-                    break
-                if result:
-                    # If result is a string, it's a prompt for the agent to process
-                    # Skill invocations return prompts with @ symbols that
-                    # should NOT be parsed as file mentions (e.g., @e1, @e2
-                    # in agent-browser SKILL.md)
-                    if isinstance(result, str):
-                        # Process the prompt through the active agent
-                        active_agent = agent
-                        active_backend = backend
-                        if (
-                            session_state.plan_mode_enabled
-                            and hasattr(session_state, "plan_agent")
-                            and session_state.plan_agent is not None
-                        ):
-                            active_agent = session_state.plan_agent
-                            active_backend = session_state.plan_backend
-
-                        _exec_task = asyncio.create_task(
-                            execute_task(
-                                result,
-                                active_agent,
-                                assistant_id,
-                                session_state,
-                                token_tracker,
-                                backend=active_backend,
-                                is_subagent=False,
-                                image_tracker=image_tracker,
-                                seen_message_ids=_seen_message_ids,  # type: ignore
-                                skip_file_mentions=True,
-                            )
-                        )
-                        try:
-                            await _exec_task
-                        except asyncio.CancelledError:
-                            pass
-                        finally:
-                            _exec_task = None
-                    # Command was handled, continue to next input
-                    continue
-
-            # Check for bash commands (!)
-            if user_input.startswith("!"):
-                execute_bash_command(user_input)
-                continue
-
-            # Handle regular quit keywords
-            if user_input.lower() in ["quit", "exit", "q"]:
-                await _cleanup_and_save_session()
-                console.print("\nGoodbye!", style=COLORS["primary"])
-                break
-
-            # Check for @agent mentions — route through main agent's task tool
-            from novacode_cli.input import parse_agent_mentions
-
-            agent_name, query = parse_agent_mentions(user_input, settings)
-            if agent_name:
-                console.print(f"\n> @{agent_name} {query}", style=COLORS["user"])
-                # The named agent is already registered in SubAgentMiddleware (via
-                # build_named_subagents → create_agent_with_config). Route the request
-                # through the main agent so it dispatches via the task tool.
-                task_input = f"Call the '{agent_name}' subagent to do the following:\n\n{query}"
-                _exec_task = asyncio.create_task(
-                    execute_task(
-                        task_input,
-                        agent,
-                        assistant_id,
-                        session_state,
-                        token_tracker,
-                        backend=backend,
-                        is_subagent=False,
-                        image_tracker=image_tracker,
-                        seen_message_ids=_seen_message_ids,  # type: ignore
-                    )
-                )
-                try:
-                    await _exec_task
-                except asyncio.CancelledError:
-                    pass
-                finally:
-                    _exec_task = None
-
-            else:
-                # Use plan agent if in plan mode, otherwise use main agent
-                active_agent = agent
-                active_backend = backend
-                if (
-                    session_state.plan_mode_enabled
-                    and hasattr(session_state, "plan_agent")
-                    and session_state.plan_agent is not None
-                ):
-                    active_agent = session_state.plan_agent
-                    active_backend = session_state.plan_backend
-
-                _exec_task = asyncio.create_task(
-                    execute_task(
-                        user_input,
-                        active_agent,
-                        assistant_id,
-                        session_state,
-                        token_tracker,
-                        backend=active_backend,
-                        is_subagent=False,
-                        image_tracker=image_tracker,
-                        seen_message_ids=_seen_message_ids,  # type: ignore
-                    )
-                )
-                try:
-                    await _exec_task
-                except asyncio.CancelledError:
-                    pass  # execute_task's CancelledError handler ran cleanup
-                finally:
-                    _exec_task = None
-
-                # After plan approval, inject approved plan into Nova agent
-                approved_plan = session_state.consume_approved_plan()
-                if approved_plan:
-                    # Inject plan content as a message to Nova agent
-                    plan_prompt = (
-                        "The user has approved the following plan. "
-                        "Execute it step by step, marking each step as complete as you go:\n\n"
-                        f"{approved_plan}"
-                    )
-                    _exec_task = asyncio.create_task(
-                        execute_task(
-                            plan_prompt,
-                            agent,  # Use main Nova agent, not plan agent
-                            assistant_id,
-                            session_state,
-                            token_tracker,
-                            backend=backend,
-                            is_subagent=False,
-                            image_tracker=image_tracker,
-                            seen_message_ids=_seen_message_ids,  # type: ignore
-                        )
-                    )
-                    try:
-                        await _exec_task
-                    except asyncio.CancelledError:
-                        pass
-                    finally:
-                        _exec_task = None
-
-            # Proactive context warning after each turn
-            breakdown = token_tracker.get_breakdown()
-            if breakdown:
-                pct = breakdown.usage_percentage
-                if breakdown.is_critical:
-                    console.print(
-                        f"[bold red]⚠ Context critical: {pct:.0f}% used![/bold red] "
-                        f"[red]Use /compact now or risk errors.[/red]"
-                    )
-                    console.print(f"[dim red]  Use /context to see detailed breakdown.[/dim red]")
-                    dispatch_hook_fire_and_forget(
-                        HookEvent.CONTEXT_WARNING,
-                        {
-                            "level": "critical",
-                            "usage_percentage": pct,
-                            "session_id": session_state.session_id,
-                        },
-                    )
-                elif breakdown.is_warning:
-                    console.print(
-                        f"[yellow]⚠ Context usage high: {pct:.0f}%[/yellow] "
-                        f"[dim]Consider /compact soon.[/dim]"
-                    )
-                    console.print(f"[dim]  Use /context to see detailed breakdown.[/dim]")
-                    dispatch_hook_fire_and_forget(
-                        HookEvent.CONTEXT_WARNING,
-                        {
-                            "level": "warning",
-                            "usage_percentage": pct,
-                            "session_id": session_state.session_id,
-                        },
-                    )
-
-            # Track message for auto-save and check if we should save
-            auto_save_manager.increment_messages()
-            await _maybe_auto_save()
-
-        except KeyboardInterrupt:
-            # KeyboardInterrupt during execute_task or between turns:
-            # don't exit — just return to the prompt so the user can continue.
-            # This prevents accidental CLI exits when Ctrl+C lands between
-            # the task finishing and the next prompt appearing.
-            _exec_task = None
-            console.print("[yellow]Interrupted[/yellow]")
-            console.print("[dim]Press Ctrl+C twice during input to exit.[/dim]")
-            console.print()
-        except SystemExit as _exit_code:
-            # sys.exit(2) from _run_agent_session means rate-limit / API error
-            # that should NOT crash the CLI — return to the prompt instead.
-            if _exit_code.code == 2:
-                _exec_task = None
-                # Rate-limit/API messages were already printed by the handler above
-                console.print("[dim]Press Enter to continue or type 'exit' to quit.[/dim]")
-                console.print()
-                continue
-            # sys.exit(1) = fatal error — let it propagate
-            raise
-        except Exception as _api_err:
-            # Catch rate-limit / API errors that bubble up from execute_task
-            # without going through sys.exit — show a friendly message and
-            # return to the prompt instead of crashing the CLI.
-            _exec_task = None
-            if _is_rate_limit_error(_api_err):
-                console.print()
-                console.print("[bold yellow]Warning: Rate Limit Reached[/bold yellow]")
-                console.print("The model provider is rate-limiting requests.")
-                console.print(
-                    "[dim]Wait a moment and try again, or check your API usage/plan limits.[/dim]"
-                )
-                console.print()
-                continue
-            if _is_api_error(_api_err):
-                console.print()
-                console.print(f"[bold red]API Error[/bold red]: {str(_api_err)[:300]}")
-                console.print("[dim]The request failed. Try again or use a different model.[/dim]")
-                console.print()
-                continue
-            # Unknown error — re-raise for the top-level crash handler
-            raise
 
 
 def _is_rate_limit_error(e: Exception) -> bool:
@@ -1589,7 +663,7 @@ async def _run_agent_session(
         think,
         speak,
         skill_manage,
-        query_project_graph,
+        
         # Web search (always available, no API key needed)
         duckduckgo_search,
         docs_search,
@@ -1666,8 +740,14 @@ async def _run_agent_session(
         from novacode_cli import audio
 
         cfg = NovaConfig().get_voice_config()
+        # No audio in headless mode — never preload the (large) voice models.
         _voice_wanted = bool(
-            cfg.get("enabled") or cfg.get("speak_responses") or cfg.get("mode") == "push_to_talk"
+            not getattr(session_state, "headless", False)
+            and (
+                cfg.get("enabled")
+                or cfg.get("speak_responses")
+                or cfg.get("mode") == "push_to_talk"
+            )
         )
         if _voice_wanted and audio.is_voice_available():
             boot_status("voice: preloading models (downloading if not present)…")
@@ -1724,99 +804,30 @@ async def _run_agent_session(
 
     session_state._remote_bridge_manager.set_status_callback(_remote_status_callback)
 
-    # Start remote message processor as a background task
-    # This watches the _remote_message_queue and processes Discord/Telegram messages
-    _remote_processor_task = None
-    _proc_logger = logging.getLogger("novacode_cli.remote")
-    try:
-        from novacode_cli.remote.processor import remote_message_processor
-        from novacode_cli.ui.execution import execute_task
-
-        async def _remote_processor_wrapper(
-            _queue=session_state._remote_message_queue,
-            _agent=agent,
-            _assistant_id=assistant_id,
-            _session_state=session_state,
-        ):
-            """Wrap the processor to catch and log startup/fatal errors."""
-            # Immediate diagnostic — this MUST appear if the task ever runs
-            _proc_logger.info("Remote processor wrapper started")
-            try:
-                await remote_message_processor(
-                    queue=_queue,
-                    agent=_agent,
-                    assistant_id=_assistant_id,
-                    session_state=_session_state,
-                    console=_session_state._console,
-                    token_tracker=_session_state.token_tracker,
-                    backend=_session_state._composite_backend,
-                    image_tracker=_session_state._image_tracker,
-                    seen_message_ids=_session_state._seen_message_ids,
-                    execute_fn=execute_task,
-                )
-            except asyncio.CancelledError:
-                _proc_logger.info("Remote message processor cancelled")
-            except Exception as e:
-                _proc_logger.error(f"Remote message processor crashed: {e}", exc_info=True)
-                _session_state._console.print(
-                    f"\n  [red]\u274c Remote message processor crashed: {e}[/red]\n"
-                )
-
-        # Add a done-callback to surface any crashes
-        def _on_processor_done(task: asyncio.Task) -> None:
-            try:
-                exc = task.exception()
-            except asyncio.CancelledError:
-                return
-            if exc:
-                console.print(f"\n  [red]\u274c Remote processor task died: {exc}[/red]\n")
-
-        # In TUI mode the Textual app runs its own remote consumer that renders
-        # remote prompts through the event stream; skip the legacy console
-        # processor so the queue isn't double-consumed and the TUI isn't
-        # overwritten by console.print output.
-        if not getattr(session_state, "use_tui", False):
-            _remote_processor_task = asyncio.create_task(
-                _remote_processor_wrapper(),
-                name="remote-message-processor",
-            )
-            _remote_processor_task.add_done_callback(_on_processor_done)
-            # Store on session_state to prevent garbage collection
-            session_state._remote_processor_task = _remote_processor_task
-    except Exception as _remote_proc_exc:
-        import logging as _logging
-
-        _logging.getLogger("novacode_cli.remote").error(
-            f"Failed to start remote message processor: {_remote_proc_exc}",
-            exc_info=True,
-        )
-        console.print(
-            f"  [red]\u274c Failed to start remote message processor: {_remote_proc_exc}[/red]"
-        )
-
     # Resume any persisted cron jobs (Enhancement 3). The scheduler is a queue
     # *producer*, so it works in both CLI and TUI mode (both consume the same
     # queue). Start, keep only if jobs exist \u2014 users who never use /cron pay
-    # nothing for an idle ticker.
-    try:
-        from novacode_cli.memory.store import get_durable_store as _get_store
-        from novacode_cli.remote.scheduler import CronScheduler
+    # nothing for an idle ticker. Skipped in headless (one-shot, no consumer).
+    if not getattr(session_state, "headless", False):
+        try:
+            from novacode_cli.memory.store import get_durable_store as _get_store
+            from novacode_cli.remote.scheduler import CronScheduler
 
-        _cron_sched = CronScheduler(
-            session_state._remote_message_queue, store=_get_store()
-        )
-        await _cron_sched.start()
-        if _cron_sched.list_jobs():
-            session_state._cron_scheduler = _cron_sched
-            _proc_logger.info(
-                "Cron scheduler resumed %d job(s)", len(_cron_sched.list_jobs())
+            _cron_sched = CronScheduler(
+                session_state._remote_message_queue, store=_get_store()
             )
-        else:
-            await _cron_sched.stop()
-    except Exception as _cron_exc:
-        logging.getLogger("novacode_cli.remote").error(
-            f"Failed to resume cron scheduler: {_cron_exc}", exc_info=True
-        )
+            await _cron_sched.start()
+            if _cron_sched.list_jobs():
+                session_state._cron_scheduler = _cron_sched
+                _proc_logger.info(
+                    "Cron scheduler resumed %d job(s)", len(_cron_sched.list_jobs())
+                )
+            else:
+                await _cron_sched.stop()
+        except Exception as _cron_exc:
+            logging.getLogger("novacode_cli.remote").error(
+                f"Failed to resume cron scheduler: {_cron_exc}", exc_info=True
+            )
 
     # Inject initial messages if continuing a session
     if initial_messages:
@@ -1842,13 +853,11 @@ async def _run_agent_session(
     # Extract model name for context window calculation
     model_name = getattr(model, "model_name", None) or getattr(model, "model", "unknown")
 
-    # Experimental Textual TUI (Phase 1). Opt-in via --tui; the classic REPL
-    # The TUI shares the same agent/backend/session
-    # but renders via novacode_cli.tui consuming run_agent_stream. Use --legacy-ui
-    # to switch back to the classic Rich-based REPL.
-    if getattr(session_state, "use_tui", False):
-        from novacode_cli.input import ImageTracker
-        from novacode_cli.tui import run_tui
+    # Headless (non-interactive) mode: run the single prompt through the shared
+    # event stream, format machine-readable output, auto-save, and exit. Shares
+    # the same agent/backend/session as the TUI and REPL.
+    if getattr(session_state, "headless", False):
+        from novacode_cli.headless import run_headless
         from novacode_cli.ui.ui_elements import TokenTracker
 
         token_tracker = TokenTracker()
@@ -1856,70 +865,71 @@ async def _run_agent_session(
         if model_name:
             token_tracker.set_model(model_name)
         session_state.token_tracker = token_tracker
-        # Prior conversation turns to replay into the transcript on resume.
-        _restored_msgs = None
-        if restored_session_data:
-            try:
-                _restored_msgs = getattr(restored_session_data[0], "messages", None)
-            except Exception:  # noqa: BLE001
-                _restored_msgs = None
-        # Extract sandbox_id from backend for TUI's session save
-        _tui_sandbox_id: str | None = None
-        _tui_sandbox_meta: dict | None = None
-        if sandbox_backend:
-            _tui_sandbox_id = getattr(sandbox_backend, "id", None)
-            _tui_sandbox_meta = getattr(sandbox_backend, "_nova_meta", None)
-
         try:
-            await run_tui(
+            exit_code = await run_headless(
                 agent=agent,
                 assistant_id=assistant_id,
                 session_state=session_state,
                 backend=composite_backend,
-                token_tracker=token_tracker,
-                image_tracker=ImageTracker(),
                 model_name=model_name,
                 session_manager=session_manager,
-                restored_messages=_restored_msgs,
-                sandbox_id=_tui_sandbox_id,
-                sandbox_type=sandbox_type,
-                sandbox_meta=_tui_sandbox_meta,
             )
         finally:
-            # Always tear down background services so quitting can't crash on
-            # dangling tasks / servers after the TUI exits.
             await _shutdown_background_services(session_state)
+        session_state.headless_exit_code = exit_code
         return
 
+    # Textual TUI — the only interactive UI.
+    from novacode_cli.input_utils import ImageTracker
+    from novacode_cli.tui import run_tui
+    from novacode_cli.ui.ui_elements import TokenTracker
+
+    token_tracker = TokenTracker()
+    token_tracker.set_baseline(baseline_tokens)
+    if model_name:
+        token_tracker.set_model(model_name)
+    session_state.token_tracker = token_tracker
+    # Prior conversation turns to replay into the transcript on resume.
+    _restored_msgs = None
+    if restored_session_data:
+        try:
+            _restored_msgs = getattr(restored_session_data[0], "messages", None)
+        except Exception:  # noqa: BLE001
+            _restored_msgs = None
+    # Extract sandbox_id from backend for TUI's session save
+    _tui_sandbox_id: str | None = None
+    _tui_sandbox_meta: dict | None = None
+    if sandbox_backend:
+        _tui_sandbox_id = getattr(sandbox_backend, "id", None)
+        _tui_sandbox_meta = getattr(sandbox_backend, "_nova_meta", None)
+
     try:
-        await simple_cli(
-            agent,
-            assistant_id,
-            session_state,
-            baseline_tokens,
+        await run_tui(
+            agent=agent,
+            assistant_id=assistant_id,
+            session_state=session_state,
             backend=composite_backend,
-            sandbox_type=sandbox_type,
-            setup_script_path=setup_script_path,
-            no_splash=session_state.no_splash,
+            token_tracker=token_tracker,
+            image_tracker=ImageTracker(),
             model_name=model_name,
             session_manager=session_manager,
-            store=store,
-            checkpointer=checkpointer,
-            restored_session_data=restored_session_data,
+            restored_messages=_restored_msgs,
+            sandbox_id=_tui_sandbox_id,
+            sandbox_type=sandbox_type,
+            sandbox_meta=_tui_sandbox_meta,
         )
     except Exception as _crash_exc:
         # Failsafe: session crashed unexpectedly — save whatever we have before dying
         if session_manager and session_state.session_id and session_state.thread_id:
             try:
                 console.print("\n[bold yellow]⚠ Unexpected crash — saving session...[/bold yellow]")
-                # Pull the latest messages straight from the LangGraph checkpointer
                 _crash_messages: list = []
                 try:
                     _config = {"configurable": {"thread_id": session_state.thread_id}}
                     _snap = await agent.aget_state(_config)  # type: ignore
                     _crash_messages = list(_snap.values.get("messages", []))
                 except Exception:
-                    pass  # checkpointer may also be broken; save what we can
+                    pass
 
                 _crash_model = (
                     getattr(model, "model_name", None)
@@ -1940,7 +950,11 @@ async def _run_agent_session(
                 console.print(f"[dim]Session saved → {_crash_dir}[/dim]")
             except Exception as _save_err:
                 console.print(f"[dim]Failsafe save failed: {_save_err}[/dim]")
-        raise  # re-raise so the traceback still propagates to main()
+        raise
+    finally:
+        # Always tear down background services so quitting can't crash on
+        # dangling tasks / servers after the TUI exits.
+        await _shutdown_background_services(session_state)
 
 
 def _cleanup_old_checkpoints(checkpoints_dir: Path, max_age_days: int = 30) -> None:
@@ -1995,7 +1009,15 @@ async def main(
     # Check path approval before creating any resources (model, sandbox, store,
     # checkpointer, Vixie server, etc.). If the user denies access, nothing
     # expensive has been allocated — no cleanup needed.
-    if not await check_path_approval():
+    #
+    # Headless mode cannot prompt: auto-approve the cwd non-interactively (the
+    # user explicitly invoked `nova -p` here) so the run isn't blocked on input.
+    if getattr(session_state, "headless", False):
+        manager = PathApprovalManager()
+        cwd = Path.cwd()
+        if not manager.is_path_approved(cwd):
+            manager.approve_path(cwd, recursive=True)
+    elif not await check_path_approval():
         console.print()
         console.print(
             "[red]Cannot start nova without path approval.[/red]",
@@ -2013,8 +1035,10 @@ async def main(
     load_secrets_into_env()
 
     # Initialize Vixie WebSocket server for desktop pet integration (non-blocking)
-    # Server runs in background; if port is in use, it gracefully skips
-    await start_vixie_server()
+    # Server runs in background; if port is in use, it gracefully skips.
+    # Skipped in headless mode — it's an interactive desktop-pet feature.
+    if not getattr(session_state, "headless", False):
+        await start_vixie_server()
 
     from novacode_cli.session.session_persistence import SessionManager
     from novacode_cli.session.session_restore import restore_session
@@ -2625,21 +1649,60 @@ def _execute_secrets_command(args) -> None:
 
 
 def _run_onboarding() -> bool:
-    """Run first-run/reset onboarding, preferring the native Textual screen.
+    """Run first-run/reset onboarding via the native Textual screen."""
+    from novacode_cli.tui.pickers import run_onboarding_tui
 
-    Falls back to the legacy prompt_toolkit wizard when Textual isn't usable
-    (e.g. not an interactive terminal).
+    return run_onboarding_tui()
+
+
+def _resolve_headless_prompt(print_arg) -> str:
+    """Resolve the headless prompt from the --print value or stdin.
+
+    ``print_arg`` is the argparse value: a string (``-p "..."``) or ``True``
+    (bare ``-p``, read from stdin). Exits with a clear error if no prompt can
+    be obtained (e.g. bare ``-p`` on an interactive terminal with no pipe).
     """
-    from novacode_cli.onboarding import OnboardingWizard
+    if isinstance(print_arg, str):
+        prompt = print_arg.strip()
+        if prompt:
+            return prompt
 
+    # Bare -p (or empty value): read the prompt from stdin when piped.
+    if not sys.stdin.isatty():
+        prompt = sys.stdin.read().strip()
+        if prompt:
+            return prompt
+
+    print(
+        "Error: --print requires a prompt. Pass it as an argument "
+        '(nova -p "your prompt") or pipe it via stdin (echo "..." | nova -p).',
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+
+def _setup_headless_io() -> int | None:
+    """Prepare stdout/stderr for a headless run; return a result fd.
+
+    Two things must hold in headless mode:
+
+    1. stdout must carry *only* the machine-readable result. All boot / status /
+       diagnostic output uses the module-global Rich ``console``, so point it at
+       stderr (already UTF-8 wrapped at import on Windows).
+    2. The result must survive side effects of agent build — notably stdio MCP
+       servers (e.g. Serena) that close the Python-level ``sys.stdout`` object on
+       shutdown. So duplicate fd 1 *now* (before any MCP runs) and write results
+       to that independent descriptor via ``os.write``; closing ``sys.stdout``
+       (the Python object) does not close this dup'd fd.
+
+    Returns the dup'd fd, or ``None`` if it can't be duplicated (the runner then
+    falls back to ``sys.stdout``).
+    """
+    console.file = sys.stderr
     try:
-        if sys.stdin.isatty() and sys.stdout.isatty():
-            from novacode_cli.tui.pickers import run_onboarding_tui
-
-            return run_onboarding_tui()
-    except Exception:  # noqa: BLE001 — fall back to the legacy wizard
-        pass
-    return bool(OnboardingWizard().run())
+        return os.dup(sys.stdout.fileno())
+    except (OSError, ValueError, io.UnsupportedOperation):
+        return None
 
 
 def cli_main() -> None:
@@ -2655,9 +1718,23 @@ def cli_main() -> None:
     try:
         args = parse_args()
 
+        # Headless (non-interactive) mode: resolve the prompt now and route all
+        # Rich console output to stderr so stdout carries only the result.
+        headless_prompt: str | None = None
+        headless_out_fd: int | None = None
+        if getattr(args, "print_prompt", None) is not None:
+            headless_prompt = _resolve_headless_prompt(args.print_prompt)
+            headless_out_fd = _setup_headless_io()
+
         # First-run detection (skip for init and doctor commands)
         if args.command not in ["init", "doctor", "help"]:
             if not settings.get_onboarding_status():
+                if headless_prompt is not None:
+                    print(
+                        "Error: Nova is not configured. Run 'nova init' first.",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
                 console.print()
                 console.print("[yellow]→ First run detected[/yellow]")
                 console.print()
@@ -2713,9 +1790,23 @@ def cli_main() -> None:
             sys.exit(run_doctor())
         else:
             # Create session state from args
-            session_state = SessionState(auto_approve=args.auto_approve, no_splash=args.no_splash)
-            # Textual TUI is the default UI. Use --legacy-ui to opt out.
-            session_state.use_tui = not bool(args.legacy_ui)
+            session_state = SessionState(
+                auto_approve=args.auto_approve,
+                no_splash=args.no_splash or headless_prompt is not None,
+            )
+            # TUI is the only interactive UI. Headless mode uses its own path.
+            session_state.use_tui = headless_prompt is None
+            session_state.headless = headless_prompt is not None
+            if headless_prompt is not None:
+                session_state.headless_prompt = headless_prompt
+                session_state.headless_output_format = args.output_format
+                session_state.headless_max_turns = args.max_turns
+                session_state.headless_deny_tools = args.deny_tools
+                session_state.headless_out_fd = headless_out_fd
+                # No human to approve tools — auto-approve unless --deny-tools.
+                # Sandbox / dangerous-command guardrails still apply.
+                if not args.deny_tools:
+                    session_state.auto_approve = True
 
             # Ensure the project wiki vault exists from session start, so the user
             # can point Obsidian at .nova/wiki/ without first running a wiki
@@ -2774,9 +1865,17 @@ def cli_main() -> None:
             # thread (sqlite/aiosqlite worker, docker SDK pool, etc.) can't hang
             # /quit during interpreter shutdown. Error paths use sys.exit() and
             # propagate before reaching here, so exit codes are preserved.
-            sys.stdout.flush()
-            sys.stderr.flush()
-            os._exit(0)
+            #
+            # Flushes are best-effort: a stdio MCP server (e.g. Serena) may have
+            # already closed sys.stdout during a headless run, so a closed-stream
+            # error here must not stop os._exit() from running (which would let
+            # non-daemon threads hang the process).
+            for _std in (sys.stdout, sys.stderr):
+                try:
+                    _std.flush()
+                except (ValueError, OSError):
+                    pass
+            os._exit(getattr(session_state, "headless_exit_code", 0))
     except KeyboardInterrupt:
         # Clean exit on Ctrl+C - suppress ugly traceback
         console.print("\n\n[yellow]Interrupted[/yellow]")

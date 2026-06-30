@@ -20,7 +20,6 @@ The list is cleared after each drain by ``iterate_agent_events`` in
 
 from __future__ import annotations
 
-from typing import Any
 
 _MAX_EVENT_LOG = 200  # Cap to prevent unbounded growth if drain stalls
 

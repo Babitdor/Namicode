@@ -9,6 +9,7 @@ These commands are registered with the CLI via main.py:
 
 import argparse
 import sys
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -268,10 +269,6 @@ def _install(url: str, name: str | None = None, skip_install: bool = False) -> N
         name: Optional custom name for the server
         skip_install: Skip the npm/uv add step (just configure)
     """
-    import re
-    import shutil
-    import subprocess
-    from pathlib import Path
 
     from novacode_cli.mcp.presets import get_preset
 
@@ -433,8 +430,6 @@ def _install_git_repo(url: str, name: str, skip_install: bool) -> None:
         skip_install: Skip the install step
     """
     import shutil
-    import subprocess
-    import urllib.request
 
     console.print(f"   URL: {url}", style=COLORS["dim"])
     console.print()
@@ -597,7 +592,6 @@ def _install_local_path(path: str, name: str) -> None:
         path: Local directory path
         name: Server name
     """
-    import subprocess
 
     # Resolve to absolute path
     abs_path = str(Path(path).resolve())
@@ -663,7 +657,6 @@ def _install_preset(preset_id: str, preset: dict[str, Any], skip_install: bool) 
         preset: Preset configuration
         skip_install: Skip package installation
     """
-    import shutil
     from prompt_toolkit import PromptSession
 
     console.print(f"   Package: {preset.get('package', 'N/A')}", style=COLORS["dim"])

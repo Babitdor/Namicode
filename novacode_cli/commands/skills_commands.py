@@ -1,6 +1,5 @@
 """Handlers for /skills command - skill management."""
 
-from pathlib import Path
 from prompt_toolkit import PromptSession
 
 from novacode_cli.commands import CommandContext

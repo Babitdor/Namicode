@@ -11,7 +11,6 @@ post-review skill creation/refinement (both injected).
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from pathlib import Path

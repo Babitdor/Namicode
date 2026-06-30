@@ -130,7 +130,6 @@ def write_memory(
         >>> write_memory("# Project Notes\n\n- Use Python 3.11+", memory_type="project")
         {'success': True, 'path': '/project-memory/NOVA.md', 'message': '...'}
     """
-    from novacode_cli.config.config import MAIN_AGENT_ID, settings
 
     # Resolve memory path (both real and virtual).
     try:
@@ -225,7 +224,6 @@ def read_memory(
         >>> read_memory(memory_type="user")
         {'success': True, 'content': '# Preferences\n\n...', 'path': '/memories/agent.md'}
     """
-    from novacode_cli.config.config import MAIN_AGENT_ID, settings
 
     # Resolve memory path (both real and virtual).
     try:

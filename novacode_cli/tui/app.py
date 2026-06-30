@@ -17,6 +17,7 @@ from ``on_mount`` handlers via Python's ``animate()`` API.
 """
 
 from __future__ import annotations
+from novacode_cli.prompts import render_template
 
 import asyncio
 import random
@@ -50,7 +51,6 @@ from textual.widgets.option_list import Option
 from novacode_cli.tui.animations import (
     animate_entrance,
     animate_modal_screen,
-    shimmer_bar,
 )
 
 
@@ -440,7 +440,7 @@ _TUI_SLASH_COMMANDS = [
 from novacode_cli import ui_events as ev
 from novacode_cli.agent_stream import run_agent_stream
 from novacode_cli.config.config import console as _rich_console
-from novacode_cli.input import (
+from novacode_cli.input_utils import (
     PASTE_MIN_CHARS,
     PASTE_MIN_NEWLINES,
     PasteTracker,
@@ -2290,7 +2290,6 @@ class AgentsScreen(ModalScreen[None]):
             color = result["color"]
 
             from novacode_cli.config.config import settings
-            from pathlib import Path
 
             if scope == "project":
                 agents_dir = settings.ensure_project_agents_dir()
@@ -4116,29 +4115,22 @@ class PromptInput(Input):
 class TuiInitRenderer:
     """Adapter implementing ``InitRenderer`` for the Textual TUI path.
 
-    Wires the pipeline's emit events into ``NovaApp._init_on_event`` (the
-    native step-tracker widget), renders the final result, and streams the
-    fallback exploration prompt through the TUI.
+    The exploration prompt streams through the TUI's native chat.
     """
 
     def __init__(self, app: NovaApp) -> None:
         self._app = app
 
     def emit(self, event) -> None:
-        """Forward a pipeline event to the TUI's step-tracker."""
-        self._app._init_on_event(event)
+        """Pipeline progress event — no-op."""
+        pass
 
-    def result(self, result, flags) -> None:
-        """Finalise the step tracker and log the outcome."""
-        self._app._init_finish()
+    def result(self, result) -> None:
+        """Log the final pipeline outcome."""
         if not result.ok and result.message:
             self._app._log(Text(result.message, style="yellow"))
 
-    def graphify_unavailable(self) -> None:
-        """Log a notice that graphify is not installed."""
-        self._app._log(Text("graphify not installed — using fallback exploration", style="yellow"))
-
-    async def run_fallback(
+    async def run_exploration(
         self,
         project_root: Path,
         nova_md_path: Path,
@@ -4153,7 +4145,7 @@ class TuiInitRenderer:
         prompt = render_template(
             "init_exploration.jinja",
             project_root=str(project_root),
-            Nova_md_path=str(nova_md_path),
+            nova_md_path=str(nova_md_path),
         )
         prev = session_state.auto_approve
         session_state.auto_approve = True
@@ -4201,10 +4193,6 @@ class NovaApp(App):
     #transcript > .todos {
         border-left: thick $secondary; padding: 0 2;
         margin: 1 0; background: $surface;
-    }
-    #transcript > .initlog {
-        height: auto; border-left: thick $accent;
-        padding: 0 2; margin: 1 0; background: $surface;
     }
     #transcript > .logline {
         height: auto; padding: 0 2;
@@ -4840,7 +4828,6 @@ class NovaApp(App):
                 self._stream_msg,
                 self._reason_msg,
                 self._todo_widget,
-                self._init_widget,
                 self._tool_group,
                 *(t[0] for t in self._tool_components.values()),
                 *(s[0] for s in self._subagent_widgets.values()),
@@ -5001,70 +4988,7 @@ class NovaApp(App):
         self._prune_transcript()
         self._scroll_end()
 
-    _INIT_STEP_GLYPH = {
-        "done": ("✓", "green"),
-        "active": ("▶", "yellow"),
-        "pending": ("☐", "dim"),
-        "fail": ("✗", "red"),
-    }
-
-    def _init_render_steps(self) -> None:
-        if self._init_widget is None:
-            return
-        t = Text()
-        t.append("NOVA.md initialization\n", style="bold")
-        for st in self._init_steps:
-            glyph, color = self._INIT_STEP_GLYPH[st["status"]]
-            t.append(f"  {glyph} {st['label']}", style=color)
-            if st["detail"]:
-                t.append(f"  — {st['detail']}", style="dim")
-            t.append("\n")
-        self._init_widget.update(t)
-        self._scroll_end()
-
-    def _init_finish(self) -> None:
-        """Mark any remaining steps done (called when the pipeline returns)."""
-        for st in self._init_steps:
-            if st["status"] in ("active", "pending"):
-                st["status"] = "done"
-        self._init_render_steps()
-
-    def _init_on_event(self, event: Any) -> None:
-        """Drive the native step tracker from a structured pipeline event.
-
-        The /init pipeline (``_run_graphify_pipeline``) reports progress through
-        UI-agnostic :mod:`novacode_cli.init.events`; this keeps the concise
-        pre-set step labels and treats the events as authoritative. Called on the
-        app thread from the pipeline coroutine, so it may mutate widgets directly.
-        """
-        if self._init_widget is None:
-            return
-        from novacode_cli.init import events as ev
-
-        if isinstance(event, ev.StepStarted):
-            for i, st in enumerate(self._init_steps):
-                if i < event.index - 1:
-                    if st["status"] != "fail":
-                        st["status"] = "done"
-                elif i == event.index - 1:
-                    st["status"] = "active"
-                    st["detail"] = ""
-            self._init_render_steps()
-        elif isinstance(event, ev.StepDetail):
-            active = next((s for s in self._init_steps if s["status"] == "active"), None)
-            if active is not None:
-                active["detail"] = event.text[:80]
-                self._init_render_steps()
-        elif isinstance(event, ev.Notice):
-            if event.level == "error":
-                active = next((s for s in self._init_steps if s["status"] == "active"), None)
-                if active is not None:
-                    active["status"] = "fail"
-                    active["detail"] = event.text[:80]
-                    self._init_render_steps()
-                self._log(Text(event.text, style="red"))
-            elif event.level == "warn":
-                self._log(Text(event.text, style="yellow"))
+    # _init step-tracker widget removed — /init progress is now shown via _log only.
 
     async def _add_message(self, label: Text, role_class: str, body: Any) -> ChatMessage:
         msg = ChatMessage(label, role_class)
@@ -5107,7 +5031,6 @@ class NovaApp(App):
     def _render_startup_info(self) -> None:
         """Render a compact native session-info panel (replaces the legacy
         pre-TUI Rich panels, which never appeared in TUI mode)."""
-        from pathlib import Path
         from rich.text import Text
 
         try:
@@ -5180,7 +5103,7 @@ class NovaApp(App):
 
             # cwd
             t.append("  cwd     : ", style="dim")
-            t.append(f"{Path.cwd()}\n", style="white")
+            t.append(f"{settings.get_workspace_root()}\n", style="white")
 
             # memory
             try:
@@ -5540,7 +5463,6 @@ class NovaApp(App):
         else:
             body.update(Text(out, style="red" if is_error else ""))
         # Animate border to settled state
-        from textual.color import Color as TColor
 
         final_color = "#f7768e" if is_error else "#73daca"  # error / success
         try:
@@ -5945,9 +5867,9 @@ class NovaApp(App):
         the UI. Safe to call repeatedly — used at mount and on a refresh timer, so
         a model switch, branch change, or sandbox change shows up live.
         """
-        from pathlib import Path
+        from novacode_cli.config.config import settings
 
-        self._set_info("#info-workspace", Text(str(Path.cwd()), style="bold"))
+        self._set_info("#info-workspace", Text(str(settings.get_workspace_root()), style="bold"))
 
         sandbox_type = getattr(self.session_state, "_sandbox_type", None)
         if sandbox_type:
@@ -5971,7 +5893,7 @@ class NovaApp(App):
     def _refresh_branch_worker(self) -> None:
         """Read the current git branch off the event loop and update the info bar."""
         import subprocess
-        from pathlib import Path
+        from novacode_cli.config.config import settings
 
         branch = "—"
         try:
@@ -5980,7 +5902,7 @@ class NovaApp(App):
                 capture_output=True,
                 text=True,
                 timeout=3,
-                cwd=str(Path.cwd()),
+                cwd=str(settings.get_workspace_root()),
             )
             if result.returncode == 0:
                 branch = result.stdout.strip() or "—"
@@ -6268,7 +6190,8 @@ class NovaApp(App):
             prefix = fragment
             max_results = 50
             try:
-                cwd = Path.cwd()
+                from novacode_cli.config.config import settings
+                cwd = settings.get_workspace_root()
                 # Skip common non-source directories to keep rglob fast
                 _SKIP_DIRS = frozenset(
                     {
@@ -6833,7 +6756,6 @@ class NovaApp(App):
         if self.session_manager is None:
             return
         try:
-            from pathlib import Path
 
             config = {"configurable": {"thread_id": self.session_state.thread_id}}
             # Bound the checkpointer read so a slow/contended DB can't hang /quit.
@@ -6841,6 +6763,7 @@ class NovaApp(App):
             messages = state.values.get("messages", [])
             if not messages:
                 return
+            from novacode_cli.config.config import settings
             todos = state.values.get("todos") or getattr(self.session_state, "todos", None)
             # save_session does several synchronous file writes — run it off the
             # event loop so /save, /clear, and quit don't freeze the UI.
@@ -6852,7 +6775,7 @@ class NovaApp(App):
                 assistant_id=self.assistant_id,
                 todos=todos,
                 model_name=self.model_name,
-                project_root=Path.cwd(),
+                project_root=settings.get_workspace_root(),
                 sandbox_id=self._sandbox_id,
                 sandbox_type=self._sandbox_type,
                 cleared=cleared,
@@ -7710,10 +7633,8 @@ class NovaApp(App):
         if not cmd:
             return
 
-        import os
         import sys
         import subprocess
-        from pathlib import Path
         from novacode_cli.config.config import settings
 
         # Log the command in the transcript
@@ -7724,7 +7645,7 @@ class NovaApp(App):
 
         try:
             with self.suspend():
-                cwd = settings.project_root or Path.cwd()
+                cwd = settings.get_workspace_root()
                 if sys.stdin.isatty():
                     print(f"\n--- Executing command in {cwd.name} ---")
                     print(f"> {cmd}\n")
@@ -7743,7 +7664,7 @@ class NovaApp(App):
                         pass
         except SuspendNotSupported:
             # Fallback for non-interactive/headless test environments where suspend is not supported
-            cwd = settings.project_root or Path.cwd()
+            cwd = settings.get_workspace_root()
             try:
                 res = subprocess.run(
                     cmd, shell=True, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
@@ -7774,7 +7695,7 @@ class NovaApp(App):
         from novacode_cli.config.config import settings
         from novacode_cli.process_manager import ProcessInfo, ProcessManager, ProcessStatus
 
-        cwd = settings.project_root or Path.cwd()
+        cwd = settings.get_workspace_root()
         short = cmd if len(cmd) <= 50 else cmd[:47] + "…"
 
         # Build the card up-front so output starts streaming immediately.
@@ -8453,12 +8374,7 @@ class NovaApp(App):
         )
 
     async def _run_init(self, text: str) -> None:
-        """Generate NOVA.md: delegates orchestration to :class:`InitOrchestrator`.
-
-        TUI-specific setup (step tracker widget, agent-building, quiet console,
-        turn status) stays here; the pipeline dispatch and fallback routing
-        live in the orchestrator.
-        """
+        """Generate NOVA.md: delegates orchestration to :class:`InitOrchestrator`."""
         from pathlib import Path
 
         from novacode_cli.commands.init_handler import InitFlags, InitOrchestrator
@@ -8469,90 +8385,34 @@ class NovaApp(App):
         if not project_root:
             self._log(Text("/init requires a project with a .git directory.", style="yellow"))
             return
-        nova_dir = Path(project_root) / ".nova"
-        nova_md_path = nova_dir / "NOVA.md"
+        nova_md_path = Path(project_root) / ".nova" / "NOVA.md"
         self._log(Text(f"🔍 Initializing NOVA.md for {Path(project_root).name}…", style="bold"))
-
-        # ── TUI-native step tracker setup (renderer concern) ──────────
-        self._init_steps = [
-            {"label": name, "status": "pending", "detail": ""}
-            for name in (
-                "Detect files",
-                "Extract entities",
-                "Build & cluster graph",
-                "Analyze structure",
-                "Generate docs",
-            )
-        ]
-        self._init_widget = Static("", classes="initlog")
-        await self._mount(self._init_widget)
-        # Shimmer effect during init
-        shimmer_bar(self._init_widget)
-        self._init_render_steps()
-
-        # Quiet sink for graphify's internal Rich output (detection/extraction
-        # panels, tree-sitter Progress). We surface the real stats as native
-        # step detail via the pipeline's emit events instead.
-        import io as _io
-
-        from rich.console import Console as _Console
-
-        quiet_console = _Console(
-            file=_io.StringIO(),
-            force_terminal=False,
-            force_interactive=False,
-            width=100,
-        )
 
         self._turn_active = True
         self._turn_start = time.monotonic()
-        self._set_status("indexing codebase…")
+        self._set_status("exploring codebase…")
         _prev_auto = self.session_state.auto_approve
         self.session_state.auto_approve = True
-
-        # Build a dedicated no-HITL agent for /init subagents.
-        init_agent = init_backend = None
-        try:
-            init_agent, init_backend = self._build_init_agent()
-        except Exception as ex:  # noqa: BLE001
-            self._log(Text(f"(/init: using shared agent — {ex})", style="dim"))
-        self._init_agent = init_agent
-        self._init_backend = init_backend
 
         try:
             renderer = TuiInitRenderer(self)
             orchestrator = InitOrchestrator(
                 project_root=Path(project_root),
-                nova_dir=nova_dir,
                 nova_md_path=nova_md_path,
-                agents_md_path=nova_dir / "AGENTS.md",
                 flags=InitFlags(cmd_args),
                 renderer=renderer,
-                agent=init_agent or self.agent,
+                agent=self.agent,
                 session_state=self.session_state,
                 assistant_id=self.assistant_id,
                 token_tracker=self.token_tracker,
-                session_id=getattr(self.session_state, "session_id", ""),
-                progress_console=quiet_console,
-                execute_fn=self._tui_quiet_execute_fn,
-                use_process_pool=True,
             )
             await orchestrator.run()
         except Exception as ex:  # noqa: BLE001
             self._log(Text(f"/init failed: {ex}", style="red"))
         finally:
-            self._init_agent = None
-            self._init_backend = None
             self.session_state.auto_approve = _prev_auto
             self._turn_active = False
             self._set_status("ready")
-            if self._init_widget is not None:
-                try:
-                    await self._init_widget.remove()
-                except Exception:  # noqa: BLE001
-                    pass
-            self._init_widget = None
-            self._init_steps = []
 
         if nova_md_path.exists():
             self._log(Text(f"✓ NOVA.md ready → {nova_md_path}", style="green"))
@@ -9722,11 +9582,10 @@ class NovaApp(App):
             )
             return
 
-        from pathlib import Path
 
         from novacode_cli.config.config import settings as _settings
 
-        workspace = _settings.project_root or Path.cwd()
+        workspace = _settings.get_workspace_root()
         self._turn_active = True
         self._turn_start = time.monotonic()
         self._set_status("re-indexing…")
@@ -9839,7 +9698,6 @@ class NovaApp(App):
     async def _run_tests(self, text: str) -> None:
         """Native /tests: detect framework (or use args) and stream results."""
         import threading
-        from pathlib import Path
 
         from novacode_cli.server_runner.test_runner import (
             detect_test_framework,
@@ -9849,7 +9707,8 @@ class NovaApp(App):
 
         parts = text.split(maxsplit=1)
         cmd_args = parts[1].strip() if len(parts) > 1 else ""
-        working_dir = str(Path.cwd())
+        from novacode_cli.config.config import settings
+        working_dir = str(settings.get_workspace_root())
         if not cmd_args:
             framework = detect_test_framework(working_dir)
             command = get_default_test_command(framework)
@@ -10184,9 +10043,9 @@ class NovaApp(App):
     def _ralph_on_event(self, event: Any) -> None:
         """Drive native Ralph widgets from a structured handler event (app thread).
 
-        Mirrors :meth:`_init_on_event`: the UI-agnostic handler reports run
-        milestones through :mod:`novacode_cli.commands.ralph_events`, and this
-        turns each into a native card instead of a flat log line.
+        The UI-agnostic handler reports run milestones through
+        :mod:`novacode_cli.commands.ralph_events`, and this turns each into a
+        native card instead of a flat log line.
         """
         from novacode_cli.commands import ralph_events as rev
 

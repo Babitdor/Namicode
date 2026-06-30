@@ -14,7 +14,7 @@ from __future__ import annotations
 import webbrowser
 from typing import Any
 
-from novacode_cli.config.config import COLORS, console
+from novacode_cli.config.config import console
 
 
 async def handle_create_command(

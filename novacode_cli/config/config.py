@@ -342,6 +342,32 @@ TOOL_ICONS = {
 # Agent configuration
 config = {"recursion_limit": 1000}
 
+
+def format_version_banner(version: str) -> str:
+    """Return a styled version banner for ``nova --version``."""
+    return f"""
+⣿⣿⣿⣿⣟⠊⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠙⢿⣿
+⣿⣿⣿⡏⠁⠀⠀⠀⠀⠀⠀⢀⣰⣶⣶⡄⠀⠀⠀⠀⠀⠀⢀⠀⠀⠈⢻
+⣿⣿⣿⠁⠄⠀⠀⠀⠀⠀⣤⣾⣿⣿⣿⣿⡂⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠽
+⣿⣿⡏⣸⠀⠀⠀⠀⢀⣼⣿⣿⣿⣿⣿⣿⣿⡆⠀⠀⠈⠀⠀⠀⠀⠀⠀⠰
+⣿⣿⡇⠁⠀⠀⠀⣤⣍⣙⣿⣿⣏⣠⠄⠲⠲⠦⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢻
+⣿⣿⠁⠀⠀⠀⠀⠀⢤⠙⣿⣿⣿⣇⣀⡐⢂⣠⡄⠠⠀⠀⠀⠀⠀⠀⡀⢠⢸
+⣿⣿⠀⠀⠐⠀⣶⣷⣷⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⠀⠀⠐⠈⠀⠀⠀⠉⠘⣼
+⣿⣿⠀⠈⠀⠀⣿⣿⣿⡿⣿⠿⢿⣿⣿⣿⣿⣿⣿⣧⡀⠀⢄⠲⠀⠀⠀⣱
+⣿⣿⡆⠀⠀⠀⠈⣿⣿⣷⣶⣼⣾⣿⣿⣿⣿⣿⣿⣿⣷⠂⠀⠀⠂⢀⢲
+⣿⣿⣿⡆⠀⠀⠀⠙⣿⠋⠠⠄⢀⠉⣹⣿⣿⣿⣿⣿⣿⠀⠀⠀⠀⠀⣿
+⣿⣿⣿⣿⣦⠀⠀⠀⠘⣿⣤⣤⣶⣿⣿⣿⣿⣿⠟⣛⡽⠀⠀⠀⠠⣸
+⣿⣿⣿⣿⣿⣷⡀⠀⠀⠈⠻⣿⣿⣿⠿⠛⠋⠐⠚⠛⠃   ⣰⣿
+
+███╗   ██╗ ██████╗  ██╗   ██╗  █████╗
+████╗  ██║ ██╔═══██╗ ██║   ██║ ██╔══██╗
+██╔██╗ ██║ ██║   ██║ ██║   ██║ ███████║
+██║╚██╗██║ ██║   ██║ ╚██╗ ██╔╝ ██╔══██║
+██║ ╚████║ ╚██████╔╝  ╚████╔╝  ██║  ██║
+╚═╝  ╚═══╝  ╚═════╝    ╚═══╝   ╚═╝  ╚═╝ ~ v{version}
+"""
+
+
 # Rich console instance
 # Force UTF-8 encoding on Windows to support Unicode characters in ASCII art
 if sys.platform == "win32":
@@ -877,6 +903,20 @@ class Settings:
     def has_project(self) -> bool:
         """Check if currently in a git project."""
         return self.project_root is not None
+
+    def get_workspace_root(self) -> Path:
+        """Get the active workspace root.
+
+        If project_root is set and the current working directory is a subdirectory
+        of project_root, returns Path.cwd(). Otherwise, returns project_root or Path.cwd().
+        """
+        if self.project_root:
+            try:
+                Path.cwd().relative_to(self.project_root)
+                return Path.cwd()
+            except ValueError:
+                return self.project_root
+        return Path.cwd()
 
     @property
     def has_graph(self) -> bool:

@@ -8,9 +8,7 @@ sessions for resumption.
 from datetime import datetime
 from pathlib import Path
 
-from rich.table import Table
-
-from novacode_cli.config.config import COLORS, console
+from novacode_cli.config.config import console
 from novacode_cli.session.session_persistence import (
     SessionData,
     SessionManager,
@@ -254,7 +252,6 @@ async def select_session_interactive(
     Returns:
         Selected session_id string, or None if cancelled/no sessions.
     """
-    from prompt_toolkit import PromptSession
 
     if session_manager is None:
         session_manager = SessionManager()
@@ -277,8 +274,8 @@ async def select_session_interactive(
         console.print()
         return None
 
-    # Prefer the native Textual picker; fall back to the prompt_toolkit table
-    # below if Textual isn't available or we're not on an interactive terminal.
+    # Use the native Textual picker. If it fails (e.g. not an interactive
+    # terminal), return None — the --resume flag is interactive-only.
     try:
         import sys as _sys
 
@@ -286,84 +283,8 @@ async def select_session_interactive(
             from novacode_cli.tui.pickers import pick_session_tui
 
             return await pick_session_tui(sessions)
-    except Exception:  # noqa: BLE001 — fall back to the legacy picker on any error
+    except Exception:  # noqa: BLE001
         pass
 
-    # Build Rich table
-    table = Table(
-        title="Resume Session",
-        title_style=COLORS["primary"],
-        show_header=True,
-        header_style="bold",
-        border_style=COLORS["dim"],
-        show_lines=False,
-        pad_edge=False,
-        expand=False,
-    )
-
-    table.add_column("#", style=COLORS["dim"], width=3, justify="right")
-    table.add_column("ID", style=COLORS["primary"], width=8)
-    table.add_column("Project", style="white", width=20)
-    table.add_column("Model", style=COLORS["dim"], width=16)
-    table.add_column("Msgs", style=COLORS["dim"], width=5, justify="right")
-    table.add_column("Age", style=COLORS["dim"], width=14)
-    table.add_column("Task", style="white", width=30)
-    table.add_column("Status", width=14)
-
-    for i, meta in enumerate(sessions, 1):
-        age = format_session_age(meta.last_active)
-        project = Path(meta.project_root).name if meta.project_root else "(no project)"
-        model = meta.model_name or "unknown"
-        task = _truncate(meta.current_task, 50) or "—"
-        status = _format_task_status(meta.task_status)
-
-        table.add_row(
-            str(i),
-            meta.session_id[:8],
-            project,
-            model,
-            str(meta.message_count),
-            age,
-            task,
-            status,
-        )
-
-    console.print()
-    console.print(table)
-    console.print()
-
-    # Prompt for selection
-    ps = PromptSession()
-
-    while True:
-        try:
-            choice = (await ps.prompt_async("Select session (1-{}, or q to cancel): ".format(len(sessions)))).strip()
-        except (EOFError, KeyboardInterrupt):
-            console.print("\n[yellow]Cancelled.[/yellow]")
-            return None
-
-        if not choice or choice.lower() == "q":
-            console.print("[yellow]Cancelled.[/yellow]")
-            return None
-
-        try:
-            idx = int(choice) - 1
-        except ValueError:
-            console.print("[yellow]Please enter a number or 'q' to cancel.[/yellow]")
-            continue
-
-        if 0 <= idx < len(sessions):
-            selected = sessions[idx]
-            console.print()
-            console.print(
-                f"[green]Resuming session {selected.session_id[:8]}...[/green]",
-            )
-            console.print(
-                f"[dim]Project: {selected.project_root or 'unknown'}[/dim]",
-            )
-            console.print()
-            return selected.session_id
-
-        console.print(
-            f"[yellow]Please enter a number between 1 and {len(sessions)}.[/yellow]"
-        )
+    console.print("[yellow]No interactive terminal available for session picker.[/yellow]")
+    return None

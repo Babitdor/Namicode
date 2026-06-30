@@ -1,3 +1,4 @@
+from novacode_cli.remote.config import save_remote_config
 """Command handlers for slash commands and bash execution.
 
 This module provides the main handle_command function that routes
@@ -13,7 +14,6 @@ import sys
 import uuid
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from pathlib import Path
 
 from novacode_cli.commands import (
     CommandContext,
@@ -336,7 +336,7 @@ async def handle_command(
                 console.print()
             else:
                 _reset_index()
-                workspace = _settings.project_root or Path.cwd()
+                workspace = _settings.get_workspace_root()
                 with console.status(
                     f"[bold {COLORS['primary']}]Re-indexing codebase...[/]",
                     spinner="dots",
@@ -401,13 +401,15 @@ def execute_bash_command(command: str) -> bool:
         console.print()
         console.print(f"[dim]$ {cmd}[/dim]")
 
+        from novacode_cli.config.config import settings
+
         result = subprocess.run(
             cmd,
             check=False,
             shell=True,
             capture_output=True,
             timeout=30,
-            cwd=Path.cwd(),
+            cwd=settings.get_workspace_root(),
         )
 
         stdout = (result.stdout or b"").decode("utf-8", errors="replace")
@@ -877,10 +879,10 @@ async def _handle_remote_command(cmd_args: str | None, session_state, console) -
 
             # Auto-create a per-session channel if not specified
             if not chat_id:
-                from pathlib import Path
+                from novacode_cli.config.config import settings
 
                 project_slug = re.sub(
-                    r"[^a-z0-9-]", "-", Path.cwd().name.lower().replace(" ", "-")
+                    r"[^a-z0-9-]", "-", settings.get_workspace_root().name.lower().replace(" ", "-")
                 ).strip("-") or "nova"
                 # Short session suffix so each Nova session gets its own channel.
                 session_suffix = (getattr(session_state, "session_id", "") or "")[:8]
@@ -981,13 +983,13 @@ async def _handle_remote_command(cmd_args: str | None, session_state, console) -
             # Telegram: try to create a per-session forum topic so each session
             # gets its own thread inside a forum supergroup.
             if platform_str == "telegram":
-                from pathlib import Path as _Path
+                from novacode_cli.config.config import settings
 
                 _entry = manager._bridges.get(bridge_id, {})
                 _tg_bridge = _entry.get("bridge")
                 if _tg_bridge is not None:
                     _project_slug = re.sub(
-                        r"[^a-z0-9-]", "-", _Path.cwd().name.lower().replace(" ", "-")
+                        r"[^a-z0-9-]", "-", settings.get_workspace_root().name.lower().replace(" ", "-")
                     ).strip("-") or "nova"
                     _session_suffix = (getattr(session_state, "session_id", "") or "")[:8]
                     _topic_name = f"Nova: {_project_slug} ({_session_suffix})"

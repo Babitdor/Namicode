@@ -1,8 +1,6 @@
 import os
-import sys
 
 from langchain_core.language_models import BaseChatModel
-from rich.console import Console
 
 from novacode_cli.config.config import console, settings
 

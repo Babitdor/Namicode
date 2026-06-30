@@ -45,7 +45,6 @@ from novacode_cli.ui.streaming import (
 )
 from novacode_cli.ui.subagent_tracking import (
     SubagentTracker,
-    format_duration,
     get_status_icon,
 )
 from novacode_cli.ui.ui_elements import (

@@ -13,10 +13,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from rich import box
-from rich.console import Console
 from rich.panel import Panel
 
-from novacode_cli.config.config import COLORS, console, settings
+from novacode_cli.config.config import console, settings
 
 if TYPE_CHECKING:
     from novacode_cli.session import SessionState  # type: ignore

@@ -1915,50 +1915,6 @@ def test_tui_native_todos():
     asyncio.run(_drive_native_todos())
 
 
-async def _drive_init_live_stream():
-    """The /init pipeline drives a NATIVE step tracker via structured events
-    (StepStarted/StepDetail → _init_on_event), not captured console text."""
-    from textual.widgets import Static
-
-    from novacode_cli.init import events as iev
-    from novacode_cli.tui.app import NovaApp, NovaStatusBar
-    from novacode_cli.ui.ui_elements import TokenTracker
-
-    app = NovaApp(
-        agent=_FakeAgent(),
-        assistant_id="nova-agent",
-        session_state=_SS(),
-        backend=None,
-        token_tracker=TokenTracker(),
-        image_tracker=None,
-        model_name="m",
-    )
-    async with app.run_test() as pilot:
-        app._init_steps = [
-            {"label": n, "status": "pending", "detail": ""}
-            for n in (
-                "Detect files",
-                "Extract entities",
-                "Build & cluster graph",
-                "Analyze structure",
-                "Generate docs",
-            )
-        ]
-        app._init_widget = Static("", classes="initlog")
-        await app.query_one("#transcript").mount(app._init_widget)
-        app._init_render_steps()
-        app._init_on_event(iev.StepStarted(1, 5, "Detecting project files"))
-        app._init_on_event(iev.StepDetail("34 files · 1,000 words"))
-        app._init_on_event(iev.StepStarted(3, 5, "Building knowledge graph"))
-        app._init_finish()
-        await pilot.pause()
-        rendered = str(app._init_widget.render())
-        # native tracker keeps the concise pre-set labels; the emitted detail and
-        # completion glyphs are shown (no verbatim "Step N/5" parsing).
-        assert "Detect files" in rendered, rendered
-        assert "34 files" in rendered and "✓" in rendered, rendered
-
-
 async def _drive_native_diff_body():
     """An edit_file FileOp renders a NATIVE colored diff in its dedicated panel."""
     import novacode_cli.ui_events as ev
@@ -2100,11 +2056,6 @@ async def _drive_trace_log_plan_native():
         )
         assert "isn't available" not in txt, txt
 
-
-def test_tui_init_live_stream():
-    if not _HAS_TEXTUAL:
-        return
-    asyncio.run(_drive_init_live_stream())
 
 
 async def _drive_steer_save_native():

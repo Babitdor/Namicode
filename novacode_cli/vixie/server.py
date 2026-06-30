@@ -25,19 +25,14 @@ Dependencies:
 import asyncio
 import json
 import logging
-import os
-import signal
-import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from pathlib import Path
 from typing import Any
 
 import websockets
 from websockets.server import WebSocketServerProtocol
 
-from novacode_cli.config.config import settings
 
 # Configure logging
 logger = logging.getLogger(__name__)

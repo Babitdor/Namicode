@@ -734,12 +734,14 @@ def create_agent_with_config(
     for i, _p in enumerate(project_skills_dirs):
         skill_sources.append(f"/project-skills-{i}/")
 
-    # Determine workspace root for path containment
-    workspace_root = settings.project_root or Path.cwd()
+    # Determine workspace root for path containment (resolves to subdirectory if applicable)
+    workspace_root = settings.get_workspace_root()
 
     # Build list of allowed directories for filesystem access
     # This includes the workspace root plus user directories like skills, memory, etc.
     allowed_prefixes = [str(workspace_root)]
+    if settings.project_root and settings.project_root != workspace_root:
+        allowed_prefixes.append(str(settings.project_root))
 
     # Add user skills directory (~/.nova/skills/)
     if skills_dir:
@@ -954,7 +956,6 @@ This file stores your preferences and context that persist across sessions.
     from novacode_cli.errors import is_retryable_model_error
     from novacode_cli.bootstrap import (
         BootstrapMiddleware,
-        GraphContextMiddleware,
         VisionCaptionMiddleware,
     )
     from novacode_cli.bootstrap.steering import SteeringMiddleware
@@ -1022,7 +1023,6 @@ This file stores your preferences and context that persist across sessions.
         # cleaned args flow to every downstream middleware and the tool itself.
         SecurityMiddleware(),
         BootstrapMiddleware(workspace_root=str(workspace_root)),
-        GraphContextMiddleware(workspace_root=str(workspace_root)),
         # Connect to the session's shared steering list so /steer AND live
         # mid-run steering (TUI) reach the model — the middleware reads this
         # list on every model call, so appends made while the agent is working

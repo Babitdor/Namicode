@@ -138,7 +138,6 @@ def _find_notification(
     session_state: "SessionState", nid: str
 ) -> object | None:
     """Return the Notification with the given id, or None."""
-    from novacode_cli.states.Session import Notification
 
     for n in session_state.notifications:
         if n.id == nid:
