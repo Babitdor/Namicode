@@ -27,7 +27,7 @@ async def handle_plugins_command(ctx: CommandContext) -> bool:
         MenuOption("Disable a plugin", _action_disable_plugin),
         MenuOption("Show plugin details", _action_show_details),
     ]
-    return await run_interactive_menu("Nova Plugin Management", options, ctx)
+    return await run_interactive_menu("Nova Middleware Management", options, ctx)
 
 
 async def _action_list_plugins(
@@ -201,10 +201,13 @@ def _show_plugin_detail(
 
 
 def register_commands(registry):
-    """Register /plugin and /plugins."""
+    """Register /middleware (manages pip entry-point middleware/tool plugins).
 
-    async def _plugins_handler(ctx: CommandContext) -> str | bool:
+    Formerly /plugins; that name now belongs to the Claude-compatible plugin
+    installer (plugin_install_handler).
+    """
+
+    async def _middleware_handler(ctx: CommandContext) -> str | bool:
         return await handle_plugins_command(ctx)
 
-    registry.register("plugin", _plugins_handler)
-    registry.register("plugins", _plugins_handler)
+    registry.register("middleware", _middleware_handler)

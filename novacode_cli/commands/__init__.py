@@ -148,6 +148,7 @@ def build_command_registry() -> CommandRegistry:
     from novacode_cli.commands.trello_handler import register_commands as _r17
     from novacode_cli.commands.wiki_commands import register_commands as _r22
     from novacode_cli.commands.effort_handler import register_commands as _r24
+    from novacode_cli.commands.plugin_install_handler import register_commands as _r25
 
     for _r in (
         _r1,
@@ -174,10 +175,38 @@ def build_command_registry() -> CommandRegistry:
         _r22,
         _r23,
         _r24,
+        _r25,
     ):
         _r(registry)
 
     # Plugin-contributed commands last, so built-ins always win on collision.
     _register_plugin_commands(registry)
+    _register_claude_plugin_commands(registry)
 
     return registry
+
+
+def _register_claude_plugin_commands(registry: CommandRegistry) -> None:
+    """Register ``commands/*.md`` from installed Claude-compatible plugins.
+
+    Each becomes ``/<name>``; invoking it feeds the markdown body (with
+    ``$ARGUMENTS`` substituted) to the agent as a prompt. Built-ins win on a
+    name collision.
+    """
+    try:
+        from novacode_cli.plugins.claude_plugins import plugin_commands
+    except Exception:  # noqa: BLE001 — plugins are optional
+        return
+
+    for cname, _desc, body in plugin_commands():
+        if registry.get(cname) is not None:
+            continue
+
+        def _make(b: str) -> CommandHandler:
+            async def _handler(ctx: CommandContext) -> str:
+                args = (ctx.cmd_args or "").strip()
+                return b.replace("$ARGUMENTS", args).replace("{{args}}", args)
+
+            return _handler
+
+        registry.register(cname, _make(body))

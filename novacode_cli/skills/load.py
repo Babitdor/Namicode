@@ -45,6 +45,7 @@ def list_skills(
     user_skills_dir: Path | None = None,
     project_skills_dir: Path | None = None,
     claude_skills_dir: Path | None = None,
+    plugin_skills_dirs: list[Path] | None = None,
 ) -> list[SkillMetadata]:
     """List skills from user, project, and/or global Claude directories.
 
@@ -91,6 +92,23 @@ def list_skills(
         )
         for skill in claude_skills:
             skill["source"] = "claude"  # type: ignore[typeddict-unknown-key]
+            all_skills[skill["name"]] = skill
+
+    # Load installed-plugin skills (~/.nova/plugins/<name>/skills). Set an explicit
+    # on-disk ``path`` so the invoker's path-first read/dir resolution works without
+    # threading plugin dirs through every helper.
+    for plugin_dir in plugin_skills_dirs or []:
+        if not (plugin_dir and plugin_dir.exists()):
+            continue
+        plugin_backend = FilesystemBackend(root_dir=str(plugin_dir), virtual_mode=True)
+        for skill in list_skills_from_backend(backend=plugin_backend, source_path="."):
+            skill["source"] = "plugin"  # type: ignore[typeddict-unknown-key]
+            # The backend's ``path`` is virtual (rooted at plugin_dir, e.g.
+            # "/foo/SKILL.md") and uses the real directory name — which can differ
+            # from the frontmatter name. Map it to an absolute on-disk path so the
+            # invoker's path-first resolution works.
+            vpath = str(skill.get("path", "") or "").lstrip("/\\")
+            skill["path"] = str(plugin_dir / vpath) if vpath else str(plugin_dir / skill["name"])  # type: ignore[typeddict-unknown-key]
             all_skills[skill["name"]] = skill
 
     # Load project skills last (override/augment)

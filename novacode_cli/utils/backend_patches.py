@@ -12,6 +12,7 @@ the tool-result layer).  This module is a safety net for any file blocks that
 escape that layer (e.g. from restored sessions or third-party tools).
 """
 
+import functools
 import logging
 from typing import Any
 
@@ -114,12 +115,35 @@ def apply_filesystem_host_path_patch() -> None:
         except Exception:  # noqa: BLE001
             return None
 
+    @functools.cache
+    def _mount_roots() -> tuple[tuple[str, str], ...]:
+        """Extra ``(host_root, virtual_prefix)`` mounts served outside the project.
+
+        Mirrors the skill routes wired in ``core_agent.py`` so the agent can pass
+        a skill's host path (``~/.nova/skills/x/SKILL.md``) instead of its virtual
+        path (``/skills/x/SKILL.md``) and still have it resolve. Cached — the dirs
+        are fixed for the session.
+        """
+        from novacode_cli.config.config import settings
+
+        pairs: list[tuple[str, str]] = []
+        for getter, prefix in (
+            (settings.ensure_user_skills_dir, "/skills/"),
+            (settings.get_global_claude_skills_dir, "/claude-skills/"),
+        ):
+            try:
+                d = getter()
+                if d:
+                    pairs.append((str(d), prefix))
+            except Exception:  # noqa: BLE001
+                pass
+        return tuple(pairs)
+
     def _patched_validate_path(path: Any, *, allowed_prefixes: Any = None) -> str:
         try:
             if isinstance(path, str):
                 root = _current_workspace_root()
-                if root:
-                    path = host_path_to_virtual(path, root)
+                path = host_path_to_virtual(path, root or "", list(_mount_roots()))
         except Exception:  # noqa: BLE001
             pass  # Never let normalization break validation; fall through.
         return _original(path, allowed_prefixes=allowed_prefixes)

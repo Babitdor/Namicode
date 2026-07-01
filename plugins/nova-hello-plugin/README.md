@@ -36,8 +36,6 @@ session**.
 - The tool, middleware, and subagent are wired in when the agent graph is built,
   so they take effect after the **restart**.
 
-(Legacy REPL: `nova --legacy-ui`, then `/plugins`.)
-
 ## Try it
 
 ```

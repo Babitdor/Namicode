@@ -234,7 +234,6 @@ mypy novacode_cli/
 | `--sandbox-snapshot-id` | `None` | Snapshot ID to boot from (LangSmith only) |
 | `--ports` | `None` | Port forwarding for Docker sandbox (format: `PORT` or `HOST:CONTAINER`, comma-separated) |
 | `--no-splash` | off | Disable the startup splash screen |
-| `--tui` / `--legacy-ui` | off | Use classic Rich REPL instead of Textual TUI |
 | `--continue` / `-c` | off | Continue last session (optionally specify session ID) |
 | `--resume` / `-r` | off | Interactively select and resume a session |
 | `--version` | — | Show version number and exit |

@@ -734,6 +734,13 @@ def create_agent_with_config(
     for i, _p in enumerate(project_skills_dirs):
         skill_sources.append(f"/project-skills-{i}/")
 
+    # Skills from installed Claude-compatible plugins (~/.nova/plugins/*/skills).
+    from novacode_cli.plugins.claude_plugins import plugin_skill_dirs
+
+    _plugin_skills = plugin_skill_dirs()
+    for pname, _d in _plugin_skills:
+        skill_sources.append(f"/plugin-skills-{pname}/")
+
     # Determine workspace root for path containment (resolves to subdirectory if applicable)
     workspace_root = settings.get_workspace_root()
 
@@ -888,6 +895,14 @@ This file stores your preferences and context that persist across sessions.
             virtual_mode=True,
         )
         _routes[f"/project-skills-{i}/"] = _proj_backend
+
+    # Installed-plugin skills routes (mirrors project skills; _plugin_skills
+    # gathered above so sources and routes stay in lockstep).
+    for pname, plugin_skills_dir in _plugin_skills:
+        _routes[f"/plugin-skills-{pname}/"] = FilesystemBackend(
+            root_dir=str(plugin_skills_dir),
+            virtual_mode=True,
+        )
 
     # Add /memories/ route for agent directory (~/.nova/<agent>/).
     # Per deepagents docs, /memories/ is the canonical route for persistent
@@ -1178,6 +1193,12 @@ This file stores your preferences and context that persist across sessions.
 
     if not any(isinstance(s, dict) and s.get("name") == "general-purpose" for s in Nova_SubAgent):
         Nova_SubAgent.append({**GENERAL_PURPOSE_SUBAGENT, "tools": tools})  # type: ignore
+
+    # Subagents from installed Claude-compatible plugins (agents/*.md).
+    from novacode_cli.plugins.claude_plugins import plugin_agent_specs
+
+    _existing = {s.get("name") for s in Nova_SubAgent if isinstance(s, dict)}
+    Nova_SubAgent.extend(s for s in plugin_agent_specs() if s["name"] not in _existing)
 
     # Load async subagents (run on remote LangGraph servers in background)
     async_subagents = retrieve_async_subagents()

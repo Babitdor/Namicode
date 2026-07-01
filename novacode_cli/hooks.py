@@ -99,6 +99,15 @@ def _sanitize_env_for_hook(env: dict[str, str]) -> dict[str, str]:
     return env
 
 
+def reload_hooks() -> None:
+    """Drop the cached hook config so the next dispatch re-reads ~/.nova/hooks.json.
+
+    Used by /reload-plugins to pick up hooks a plugin merged in this session.
+    """
+    global _hooks_config  # noqa: PLW0603
+    _hooks_config = None
+
+
 def _load_hooks() -> list[dict[str, Any]]:
     """Load and cache hook definitions from the config file.
 

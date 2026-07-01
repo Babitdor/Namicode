@@ -395,6 +395,8 @@ _TUI_SLASH_COMMANDS = [
     "/save",
     "/copy",
     "/plugins",
+    "/middleware",
+    "/reload-plugins",
     "/steer",
     "/notifications",
     "/cron",
@@ -1836,7 +1838,7 @@ class PluginsScreen(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="modal-box"):
-            yield Static(Text("Plugins", style="bold"), id="modal-title")
+            yield Static(Text("Middleware", style="bold"), id="modal-title")
             yield OptionList(id="plugins")
             yield Static("", id="plugins-hint")
             with Horizontal(id="modal-buttons"):
@@ -1940,6 +1942,161 @@ class PluginsScreen(ModalScreen[None]):
             disable_plugin(name)
         else:
             enable_plugin(name)
+        self._reload()
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
+class ClaudePluginsScreen(ModalScreen[None]):
+    """Native ``/plugins`` viewer: installed Claude-compatible plugins.
+
+    Lists plugins under ``~/.nova/plugins`` (installed directly or via a
+    marketplace) with a scrollable per-plugin component breakdown — readable even
+    when a plugin ships 200+ skills. ``r`` / Remove uninstalls the highlighted
+    plugin; install/search stay on the ``/plugins`` command.
+    """
+
+    BINDINGS = [
+        ("escape", "close", "Close"),
+        ("r", "remove", "Remove"),
+    ]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._plugins: list[dict] = []
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="modal-box"):
+            yield Static(Text("Plugins", style="bold"), id="modal-title")
+            yield OptionList(id="cplugins-list")
+            yield Static(Text("Components:", style="bold yellow"), id="cplugin-detail-header")
+            yield Static("", id="cplugin-detail", classes="preview-box")
+            yield Static("", id="cplugins-hint")
+            with Horizontal(id="modal-buttons"):
+                yield Button("Remove", id="remove", variant="error")
+                yield Button("Close", id="close")
+
+    def on_mount(self) -> None:
+        animate_modal_screen(self)
+        self._reload()
+
+    @staticmethod
+    def _counts(comps: dict) -> str:
+        parts = []
+        for key, label in (
+            ("skills", "skills"),
+            ("commands", "cmds"),
+            ("agents", "agents"),
+            ("mcp", "mcp"),
+            ("hooks", "hooks"),
+        ):
+            n = len(comps.get(key, []) or [])
+            if n:
+                parts.append(f"{n} {label}")
+        return " · ".join(parts)
+
+    def _reload(self) -> None:
+        from novacode_cli.plugins import claude_plugins as cp
+
+        try:
+            self._plugins = cp.list_plugins()
+        except Exception:  # noqa: BLE001
+            self._plugins = []
+
+        ol = self.query_one("#cplugins-list", OptionList)
+        keep = ol.highlighted
+        ol.clear_options()
+        hint = self.query_one("#cplugins-hint", Static)
+
+        if not self._plugins:
+            self.query_one("#cplugin-detail", Static).update(
+                Text("No plugins installed.", style="dim")
+            )
+            hint.update(
+                Text(
+                    "Install with  /plugins install <owner/repo | plugin@marketplace>",
+                    style="dim",
+                )
+            )
+            return
+
+        for p in self._plugins:
+            comps = cp.plugin_components(p["name"])
+            row = Text()
+            row.append("● ", style="green" if p.get("enabled", True) else "dim")
+            row.append(str(p["name"]), style="bold")
+            counts = self._counts(comps)
+            if counts:
+                row.append(f"   {counts}", style="dim")
+            ol.add_option(Option(row))
+
+        if keep is not None and 0 <= keep < len(self._plugins):
+            ol.highlighted = keep
+        else:
+            ol.highlighted = 0
+        ol.focus()
+        self._update_detail(ol.highlighted)
+        hint.update(
+            Text(
+                f"{len(self._plugins)} plugin(s) · r removes the highlighted one · "
+                "/reload-plugins applies changes this session",
+                style="dim",
+            )
+        )
+
+    def _update_detail(self, idx: int | None) -> None:
+        from novacode_cli.plugins import claude_plugins as cp
+
+        detail = self.query_one("#cplugin-detail", Static)
+        if idx is None or not (0 <= idx < len(self._plugins)):
+            detail.update(Text(""))
+            return
+        p = self._plugins[idx]
+        comps = cp.plugin_components(p["name"])
+        t = Text()
+        t.append(str(p["name"]), style="bold #7aa2f7")
+        t.append(f"\n{p.get('source', '')}", style="dim")
+        t.append(f"\n{p.get('path', '')}", style="dim")
+        for key, label in (
+            ("skills", "Skills"),
+            ("commands", "Commands"),
+            ("agents", "Agents"),
+            ("mcp", "MCP servers"),
+            ("hooks", "Hooks"),
+        ):
+            items = comps.get(key, []) or []
+            if not items:
+                continue
+            t.append(f"\n\n{label} ({len(items)})", style="bold cyan")
+            t.append("\n" + ", ".join(str(i) for i in items))
+        detail.update(t)
+
+    def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        if event.option_list.id == "cplugins-list":
+            self._update_detail(event.option_index)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "close":
+            self.dismiss(None)
+        elif event.button.id == "remove":
+            self.action_remove()
+
+    def action_remove(self) -> None:
+        ol = self.query_one("#cplugins-list", OptionList)
+        idx = ol.highlighted
+        if idx is None or not (0 <= idx < len(self._plugins)):
+            return
+        name = self._plugins[idx]["name"]
+        from novacode_cli.plugins import claude_plugins as cp
+
+        try:
+            cp.remove(name)
+        except Exception as e:  # noqa: BLE001
+            self.query_one("#cplugins-hint", Static).update(
+                Text(f"Remove failed: {e}", style="red")
+            )
+            return
         self._reload()
 
     def action_close(self) -> None:
@@ -2652,6 +2809,13 @@ class SkillsScreen(ModalScreen[None]):
         try:
             for d in settings.get_project_skills_dirs():
                 search_dirs.append((Path(d), "project"))
+        except Exception:
+            pass
+        try:
+            from novacode_cli.plugins.claude_plugins import plugin_skill_dirs
+
+            for _pname, pd in plugin_skill_dirs():
+                search_dirs.append((Path(pd), "plugin"))
         except Exception:
             pass
 
@@ -4365,7 +4529,7 @@ class NovaApp(App):
     #modal-title { margin-bottom: 1; padding: 0 0; }
     #modal-body { padding: 0 0; }
     /* Long lists scroll inside the box instead of overflowing the screen. */
-    #sessions, #pick-list, #infolist, #mcp-configured, #mcp-presets, #plugins, #agents-list, #skills-list, #servers-list, #hooks-list, #wiki-pages-list, #wiki-inbox-list {
+    #sessions, #pick-list, #infolist, #mcp-configured, #mcp-presets, #plugins, #cplugins-list, #agents-list, #skills-list, #servers-list, #hooks-list, #wiki-pages-list, #wiki-inbox-list {
         height: auto; max-height: 40%;
         padding: 0 2;
     }
@@ -7999,11 +8163,15 @@ class NovaApp(App):
             await self._run_goal(text)
         elif cmd == "btw":
             await self._run_btw(text)
-        elif cmd in ("plugins", "plugin"):
+        elif cmd == "middleware":
             await self.push_screen_wait(PluginsScreen())
             # Reload plugin commands so newly-enabled command plugins work this
             # session (middleware/subagents still need a restart, as noted).
             self._load_plugin_commands()
+        elif cmd == "plugins":
+            await self._run_plugins(text)
+        elif cmd in ("reload-plugins", "reload_plugins"):
+            await self._run_reload_plugins()
         elif cmd == "voice":
             self._run_voice(text)
         elif cmd in _PASSTHROUGH_SLASH:
@@ -8018,11 +8186,112 @@ class NovaApp(App):
         else:
             self._log(
                 Text(
-                    f"/{cmd} isn't available in --tui yet. "
-                    "Use --legacy-ui for the full command set.",
+                    f"/{cmd} isn't a recognized command. Type /help to list commands.",
                     style="yellow",
                 )
             )
+
+    async def _run_plugins(self, text: str) -> None:
+        """Native ``/plugins`` — Claude-compatible plugin installer + marketplaces.
+
+        Mirrors the console handler but logs via ``self._log``. Reuses the shared
+        install/marketplace logic in ``plugins.claude_plugins`` / ``.marketplaces``.
+        """
+        import re as _re
+
+        from novacode_cli.plugins import claude_plugins as cp
+        from novacode_cli.plugins import marketplaces as mp
+
+        def log(msg: str, style: str = "") -> None:
+            self._log(Text(msg, style=style) if style else Text(msg))
+
+        def fmt(comps: dict) -> str:
+            parts = [f"{k}: {', '.join(v)}" for k in ("skills", "commands", "agents", "mcp", "hooks") if (v := comps.get(k))]
+            return "  " + " | ".join(parts) if parts else "  (no components)"
+
+        parts = text.split(maxsplit=2)
+        sub = parts[1] if len(parts) > 1 else "list"
+        arg = parts[2].strip() if len(parts) > 2 else ""
+        try:
+            if sub == "install":
+                if not arg:
+                    log("Usage: /plugins install <owner/repo | git-url | dir | plugin@marketplace>", "yellow")
+                    return
+                name = mp.install_plugin(arg) if _re.fullmatch(r"[\w.-]+@[\w.-]+", arg) else cp.install(arg)
+                log(f"✓ Installed {name}", "green")
+                log(fmt(cp.plugin_components(name)), "cyan")
+                log("Restart Nova to activate.", "dim")
+            elif sub == "remove":
+                log(f"✓ Removed {arg}" if cp.remove(arg) else f"No plugin named '{arg}'",
+                    "green" if arg else "yellow")
+            elif sub == "search":
+                hits = mp.list_marketplace_plugins()
+                if arg:
+                    q = arg.lower()
+                    hits = [p for p in hits if q in p["name"].lower() or q in p["description"].lower()]
+                if not hits:
+                    log("No matching plugins. Add a marketplace: /plugins marketplace add <owner/repo>", "dim")
+                else:
+                    log("Available plugins:", "bold")
+                    for p in hits:
+                        log(f"  • {p['name']}@{p['marketplace']}  {p['description']}")
+            elif sub == "marketplace":
+                msub, _, marg = arg.partition(" ")
+                marg = marg.strip()
+                if msub == "add":
+                    name = mp.add(marg)
+                    log(f"✓ Added marketplace {name} ({len(mp.list_marketplace_plugins())} plugins — /plugins search)", "green")
+                elif msub == "remove":
+                    log(f"✓ Removed marketplace {marg}" if mp.remove_marketplace(marg) else f"No marketplace '{marg}'",
+                        "green" if marg else "yellow")
+                else:
+                    mkts = mp.list_marketplaces()
+                    log("Marketplaces:" if mkts else "No marketplaces. /plugins marketplace add <owner/repo>",
+                        "bold" if mkts else "dim")
+                    for m in mkts:
+                        log(f"  • {m['name']}  {m['source']}")
+            else:  # list — open the native plugins viewer instead of a text dump
+                await self.push_screen_wait(ClaudePluginsScreen())
+        except (ValueError, RuntimeError) as e:
+            log(f"Failed: {e}", "red")
+
+    async def _run_reload_plugins(self) -> None:
+        """``/reload-plugins`` — rebuild the agent to pick up plugins added/changed
+        this session (skills, subagents, MCP), reload hooks, and refresh autocomplete.
+
+        Reuses the agent-rebuild path (``reload_mcp_servers``): a fresh
+        ``create_agent_with_config`` re-scans plugin skills/agents/MCP.
+        """
+        self._set_status("thinking")
+        try:
+            # The agent-rebuild path prints build/skill/MCP chatter to the global
+            # Rich console, which bypasses Textual and corrupts the TUI screen.
+            # Capture it (like the other TUI handlers) — our own summary is logged
+            # below via self._log.
+            with _rich_console.capture():
+                new_agent, new_backend = await self.session_state.reload_mcp_servers()
+            self.agent = new_agent
+            self.backend = new_backend
+        except Exception as e:  # noqa: BLE001
+            self._log(Text(f"Reload failed: {e}", style="red"))
+            self._set_status("ready")
+            return
+
+        from novacode_cli import hooks as _hooks
+        from novacode_cli.plugins import claude_plugins as cp
+
+        _hooks.reload_hooks()  # plugin hooks re-read on next dispatch
+        self._skill_names_cache = None  # refresh skill autocomplete
+        self._load_plugin_commands()  # entry-point + Claude plugin commands
+
+        n = len(cp.list_plugins())
+        self._log(
+            Text(
+                f"✓ Reloaded {n} plugin(s) — skills, subagents, MCP, hooks, commands refreshed.",
+                style="green",
+            )
+        )
+        self._set_status("ready")
 
     def _load_plugin_commands(self) -> None:
         """Discover slash commands from enabled plugins and register them.
@@ -8041,12 +8310,34 @@ class NovaApp(App):
             self._plugin_commands = {
                 name: c["handler"] for name, c in cmds.items() if c.get("handler")
             }
-            for name in self._plugin_commands:
-                slash = f"/{name}"
-                if slash not in _TUI_SLASH_COMMANDS:
-                    _TUI_SLASH_COMMANDS.append(slash)
         except Exception:  # noqa: BLE001 — a bad plugin must not break startup
             self._plugin_commands = {}
+
+        # Claude-compatible plugin commands (commands/*.md|*.toml). Invoking one
+        # streams its body — with $ARGUMENTS / {{args}} substituted — to the agent
+        # as a prompt (mirrors the console's _register_claude_plugin_commands).
+        # Entry-point handlers above win on a name collision (setdefault).
+        try:
+            from novacode_cli.plugins.claude_plugins import plugin_commands
+
+            def _make_claude_handler(body: str):
+                async def _handler(args: str) -> str:
+                    a = (args or "").strip()
+                    prompt = body.replace("$ARGUMENTS", a).replace("{{args}}", a)
+                    await self._stream_prompt(prompt)
+                    return ""
+
+                return _handler
+
+            for cname, _desc, body in plugin_commands():
+                self._plugin_commands.setdefault(cname, _make_claude_handler(body))
+        except Exception:  # noqa: BLE001 — a bad plugin must not break startup
+            pass
+
+        for name in self._plugin_commands:
+            slash = f"/{name}"
+            if slash not in _TUI_SLASH_COMMANDS:
+                _TUI_SLASH_COMMANDS.append(slash)
 
     async def _run_plugin_command(self, text: str) -> bool:
         """Dispatch a plugin-contributed slash command. Returns True if handled.
@@ -10323,6 +10614,12 @@ class NovaApp(App):
             pass
         try:
             dirs.extend(settings.get_project_skills_dirs())
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from novacode_cli.plugins.claude_plugins import plugin_skill_dirs
+
+            dirs.extend(d for _, d in plugin_skill_dirs())
         except Exception:  # noqa: BLE001
             pass
 

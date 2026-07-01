@@ -43,6 +43,9 @@ except ImportError:
     find_related_code = None  # type: ignore[assignment]
     _semble_avail = lambda: False  # type: ignore[assignment]
 
+# Oracle (multi-model fusion)
+from novacode_cli.tools.oracle_tool import oracle
+
 # Reflection tools
 from novacode_cli.tools.reflection_tools import think
 
@@ -89,6 +92,7 @@ __all__ = [
     "list_memories",
     "forget",
     # Reflection tools
+    "oracle",
     "think",
     # Speak tool
     "speak",

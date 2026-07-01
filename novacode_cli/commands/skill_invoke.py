@@ -77,10 +77,18 @@ async def _try_skill_invocation(
     project_skills_dir = settings.get_project_skills_dir() if in_project else None
     claude_skills_dir = Settings.get_global_claude_skills_dir()
 
+    # Skills shipped by installed Claude-compatible plugins carry an explicit
+    # on-disk ``path``, so _read_skill_content/_find_skill_dir resolve them
+    # (path-first) without extra params.
+    from novacode_cli.plugins.claude_plugins import plugin_skill_dirs
+
+    plugin_skills_dirs = [d for _, d in plugin_skill_dirs()]
+
     skills = list_skills(
         user_skills_dir=user_skills_dir,
         claude_skills_dir=claude_skills_dir if claude_skills_dir.exists() else None,
         project_skills_dir=project_skills_dir,
+        plugin_skills_dirs=plugin_skills_dirs,
     )
 
     if not skills:

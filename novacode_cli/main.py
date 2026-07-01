@@ -166,6 +166,7 @@ from novacode_cli.tools import (
     read_memory,
     recall,
     reddit_posts,
+    oracle,
     remember,
     skill_manage,
     speak,
@@ -662,6 +663,7 @@ async def _run_agent_session(
         package_info,
         think,
         speak,
+        oracle,
         skill_manage,
         
         # Web search (always available, no API key needed)
