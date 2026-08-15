@@ -134,6 +134,15 @@ def _create_server_agent() -> tuple[Any, Any, dict[str, Any]]:
     )
     tools.extend([list_trash, restore_file])
 
+    # Artifact tools (parity with the TUI agent).
+    from novacode_cli.tools.artifact_tools import (
+        create_artifact,
+        list_artifacts,
+        update_artifact,
+    )
+
+    tools.extend([create_artifact, update_artifact, list_artifacts])
+
     # ── Create agent ─────────────────────────────────────────────────
     from novacode_cli.agents.core_agent import create_agent_with_config
 

@@ -169,6 +169,60 @@ _SKIP_DIRS = frozenset(
 class OptimizedFilesystemBackend(FilesystemBackend):
     """FilesystemBackend with a non-hanging grep fallback and regex support."""
 
+    def _to_virtual_path(self, path: str | Path) -> str:
+        """Map a real path to its virtual form, following symlinks/junctions.
+
+        The parent does ``path.resolve().relative_to(self.cwd)``. When a child is
+        a symlink or Windows junction whose *target* lives outside the root, that
+        raises ``ValueError`` and the entry is silently dropped from ``ls``/glob —
+        so a skill installed as ``~/.claude/skills/<name>`` junctioned to
+        ``~/.agents/skills/<name>`` never gets discovered (``/<name>`` command
+        "isn't a recognized command"). Claude Code follows these links; Nova must
+        too.
+
+        Fix: if the strict resolve escapes the root, fall back to the child's
+        *lexical* position — resolve the PARENT (normal chain) and re-attach the
+        child's own name. A genuine escape (the parent itself is outside root)
+        still raises, preserving the containment guard.
+        """
+        p = Path(path)
+        try:
+            return super()._to_virtual_path(p)
+        except ValueError:
+            # relative_to raises if the parent is also outside the root → genuine
+            # escape, let it propagate (excluded, as before).
+            rel = p.parent.resolve().relative_to(self.cwd)
+            return "/" + (rel / p.name).as_posix()
+
+    def _resolve_path(self, key: str) -> Path:
+        """Resolve an inbound path, following symlinks/junctions rooted in-tree.
+
+        The parent rejects any path whose *resolved* target escapes the root. That
+        also rejects a legitimate junction placed inside the root — e.g. a skill
+        installed as ``~/.claude/skills/<name>`` that points to
+        ``~/.agents/skills/<name>`` — so ``read``/``glob``/``download_files`` fail
+        for it and ``/<name>`` "isn't a recognized command".
+
+        Virtual paths already forbid ``..`` and ``~`` (below), so a virtual path
+        can never climb out of the root *lexically*; the resolved target can only
+        escape by following a symlink/junction that physically lives inside the
+        root — which is the intended skill-install layout, and what Claude Code
+        itself follows. So we keep the parent's traversal guard and the symlink-
+        loop guard, and drop only the resolved-target containment rejection.
+        Non-virtual mode is unchanged.
+        """
+        if not self.virtual_mode:
+            return super()._resolve_path(key)
+        from deepagents.backends.filesystem import _raise_if_symlink_loop
+
+        vpath = key if key.startswith("/") else "/" + key
+        if ".." in vpath or vpath.startswith("~"):
+            msg = "Path traversal not allowed"
+            raise ValueError(msg)
+        full = (self.cwd / vpath.lstrip("/")).resolve()
+        _raise_if_symlink_loop(full)
+        return full
+
     def grep(
         self,
         pattern: str,

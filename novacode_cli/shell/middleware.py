@@ -357,6 +357,7 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         make_coro: Callable[[], Awaitable[ToolMessage]],
         *,
         timeout: float,
+        detach_future: Any = None,
     ) -> ToolMessage:
         """Run a coroutine to completion from this (synchronous) tool body.
 
@@ -365,7 +366,37 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         loop; otherwise run it directly. ``make_coro`` is a thunk so the coroutine
         is created exactly once, on whichever path is taken. Exceptions (including
         the worker's ``TimeoutError``) propagate to the caller.
+
+        ``detach_future`` (a ``concurrent.futures.Future``) supports Ctrl+B
+        backgrounding: when the coroutine sets it, we return that "backgrounded"
+        result to the agent *immediately* while leaving the worker thread running
+        so it keeps draining the process to completion. Only used on the in-loop
+        (TUI) path — the direct path has no separate thread to keep alive.
         """
+        import concurrent.futures
+
+        # Detach-capable commands run on the shared background loop so a Ctrl+B
+        # detach can return to the agent while the coroutine keeps draining the
+        # process here. We just wait on it from this (worker) thread.
+        if detach_future is not None:
+            from novacode_cli.shell.jobs import get_background_loop
+
+            main = asyncio.run_coroutine_threadsafe(make_coro(), get_background_loop())
+            done, _ = concurrent.futures.wait(
+                {main, detach_future},
+                timeout=timeout,
+                return_when=concurrent.futures.FIRST_COMPLETED,
+            )
+            if detach_future in done:
+                # Backgrounded: hand the "job started" message to the agent now;
+                # `main` keeps running on the background loop to completion.
+                return detach_future.result()
+            if main in done:
+                return main.result()
+            # Timed out waiting. The coroutine has its own self._timeout guard
+            # and terminates the subprocess on its own; surface a TimeoutError.
+            raise TimeoutError
+
         try:
             asyncio.get_running_loop()
             in_loop = True
@@ -373,8 +404,6 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
             in_loop = False
 
         if in_loop:
-            import concurrent.futures
-
             # Don't use `with ThreadPoolExecutor()` — its __exit__ calls
             # shutdown(wait=True), which blocks until the submitted thread
             # finishes even when result() already raised TimeoutError. That
@@ -383,13 +412,8 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
             try:
                 return executor.submit(asyncio.run, make_coro()).result(timeout=timeout)
             except concurrent.futures.TimeoutError:
-                # Re-raise as the built-in TimeoutError so the caller's handler
-                # matches. The inner coroutine has its own self._timeout guard
-                # and will terminate the subprocess and exit on its own.
                 raise TimeoutError from None
             finally:
-                # Return immediately; don't wait for the thread. It will exit
-                # once the inner asyncio timeout fires (~self._timeout seconds).
                 executor.shutdown(wait=False)
         return asyncio.run(make_coro())
 
@@ -630,10 +654,16 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
             A ToolMessage with the command output or an error message.
         """
         command = self._preprocess_command(command)
+        import concurrent.futures
+
+        detach_future: concurrent.futures.Future = concurrent.futures.Future()
         try:
             return self._run_async(
-                lambda: self._async_local_shell(command, tool_call_id=tool_call_id, prog=prog),
+                lambda: self._async_local_shell(
+                    command, tool_call_id=tool_call_id, prog=prog, detach_future=detach_future
+                ),
                 timeout=self._timeout + 15,
+                detach_future=detach_future,
             )
         except TimeoutError:
             return ToolMessage(
@@ -685,6 +715,7 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         tool_call_id: str | None,
         prompt_window: float = 5.0,
         prog: list[str] | None = None,
+        detach_future: Any = None,
     ) -> ToolMessage:
         """Stream a local command to completion (up to ``self._timeout``).
 
@@ -708,16 +739,51 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
             stderr=asyncio.subprocess.STDOUT,
         )
 
+        # Publish a control handle so the TUI can reach this subprocess (it runs
+        # in a detached thread+loop that Textual task-cancellation can't touch).
+        # Esc sets ``kill`` → we terminate promptly instead of freezing for the
+        # full timeout. Cleared in ``finally``.
+        from novacode_cli.shell import jobs as _jobs
+
+        _ctl = _jobs.set_current(command)
+
         out_parts: list[str] = []
         tail = ""  # rolling last-4KB window, for prompt detection only
         last_prompt = ""
         start = time.time()
         status = "success"
         note = ""
+        detached = False
+        _job = None
 
         try:
             while True:
-                if time.time() - start > self._timeout:
+                if _ctl.kill.is_set():
+                    proc.kill()
+                    status = "error"
+                    note = "\n\n[Command killed by user (Esc).]"
+                    break
+                if not detached and _ctl.detach.is_set():
+                    # Ctrl+B: hand this command to a background job and return a
+                    # "backgrounded" result to the agent NOW. We keep looping to
+                    # drain the process to completion (no timeout for a bg job).
+                    detached = True
+                    _job = _jobs.get_registry().add(command, self._tool_name)
+                    if detach_future is not None and not detach_future.done():
+                        detach_future.set_result(
+                            ToolMessage(
+                                content=(
+                                    f"[backgrounded: job {_job.id}] `{command}` is still running. "
+                                    f"Continue with other work — you'll be notified when it finishes. "
+                                    f"Call wait_for_job({_job.id}) to get its output, or "
+                                    f"list_jobs() to see all jobs."
+                                ),
+                                tool_call_id=tool_call_id,
+                                name=self._tool_name,
+                                status="success",
+                            )
+                        )
+                if not detached and time.time() - start > self._timeout:
                     proc.kill()
                     status = "error"
                     note = f"\n\n[Command exceeded {self._timeout:.0f}s and was terminated.]"
@@ -728,7 +794,8 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
                     # No output right now. Within the prompt window, check whether the
                     # process is blocked waiting on an interactive prompt.
                     if (
-                        tail
+                        not detached
+                        and tail
                         and tail != last_prompt
                         and (time.time() - start) <= prompt_window
                         and proc.returncode is None
@@ -757,13 +824,16 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
                 text = chunk.decode("utf-8", errors="replace")
                 out_parts.append(text)
                 tail = (tail + text)[-4096:]
-                if tool_call_id:
+                # Once detached the tool widget is gone (the agent moved on), so
+                # stop streaming to it — the output is delivered via the job.
+                if tool_call_id and not detached:
                     from novacode_cli.events import emit_tool_output
                     emit_tool_output(tool_call_id, text)
         except asyncio.CancelledError:
             proc.kill()
             raise
         finally:
+            _jobs.clear_current(_ctl)
             if proc.returncode is None:
                 try:
                     await asyncio.wait_for(proc.wait(), timeout=2.0)
@@ -785,6 +855,12 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         if status == "success" and rc not in (0, None):
             status = "error"
             output = f"{output}\n\nExit code: {rc}"
+
+        if detached and _job is not None:
+            # The agent already got the "backgrounded" message; deliver the final
+            # output to the job (fires the TUI notify/note callback). The return
+            # value below is discarded by _run_async on the detach path.
+            _jobs.get_registry().complete(_job.id, output + note, rc)
 
         return ToolMessage(
             content=output + note,
@@ -837,12 +913,20 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
                 status="error",
             )
 
+        import concurrent.futures
+
+        detach_future: concurrent.futures.Future = concurrent.futures.Future()
         try:
             return self._run_async(
                 lambda: self._async_local_shell(
-                    command, tool_call_id=tool_call_id, prompt_window=self._timeout, prog=prog
+                    command,
+                    tool_call_id=tool_call_id,
+                    prompt_window=self._timeout,
+                    prog=prog,
+                    detach_future=detach_future,
                 ),
                 timeout=self._timeout + 15,
+                detach_future=detach_future,
             )
         except TimeoutError:
             return ToolMessage(

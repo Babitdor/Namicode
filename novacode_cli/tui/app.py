@@ -158,6 +158,7 @@ TUI_COMMANDS: dict[str, SlashCommand] = {
     "model": SlashCommand("_run_model", "switch provider / model", wants_text=False),
     "sessions": SlashCommand("_run_sessions", "list / delete saved sessions", wants_text=False),
     "resume": SlashCommand("_run_resume", "resume a saved session for this path (/resume <id>)"),
+    "artifacts": SlashCommand("_run_artifacts", "open the artifacts list", wants_text=False),
     "mcp": SlashCommand("_run_mcp", "view / remove MCP servers", wants_text=False),
     "skills": SlashCommand("_run_skills", "list skills", wants_text=False),
     "agents": SlashCommand("_run_agents", "list subagents", wants_text=False),
@@ -667,6 +668,9 @@ class NovaApp(App):
         self._ollama_offload_checked = False
         self._btw_agent: Any = None  # lazy-init btw side-channel agent (web-search only)
         self._bg_job_count: int = 0  # monotonic counter for background shell jobs
+        # Notes for detached (Ctrl+B) shell jobs that finished; prepended to the
+        # agent's next turn so it learns of completions without an interrupt.
+        self._pending_job_notes: list[str] = []
         self._todo_widget: Static | None = None  # updated in place per turn
         # _init_widget and _init_steps removed — /init progress is now _log-only
         # Live per-iteration Ralph cards, keyed by iteration number, so an
@@ -750,6 +754,11 @@ class NovaApp(App):
                 with Vertical(classes="info-col"):
                     yield Static("quota", classes="info-label")
                     yield Static("", id="info-quota", classes="info-value")
+                # Persistent artifacts component — fixed in the footer, click (or
+                # /artifacts) to open the list. Updates live via a registry observer.
+                with Vertical(id="col-artifacts", classes="info-col"):
+                    yield Static("artifacts", classes="info-label")
+                    yield Static("", id="info-artifacts", classes="info-value")
 
     def _apply_saved_theme(self) -> None:
         """Register Nova's palette and apply the persisted theme (or default)."""
@@ -801,6 +810,21 @@ class NovaApp(App):
         self._update_mode_badge()
         self._refresh_hint_bar()
         self._refresh_info_bar()
+        # Background shell/execute jobs (Ctrl+B) notify here when they finish.
+        try:
+            from novacode_cli.shell.jobs import get_registry
+
+            get_registry().set_completion_callback(self._on_bg_job_complete_threadsafe)
+        except Exception:  # noqa: BLE001
+            pass
+        # Persistent artifacts component: observe the registry + show initial count.
+        try:
+            from novacode_cli.artifacts.registry import get_registry as _get_art_registry
+
+            _get_art_registry().add_observer(self._on_artifact_event_threadsafe)
+        except Exception:  # noqa: BLE001
+            pass
+        self._refresh_artifacts_component()
         # Keep the info bar live: model / branch / sandbox / quota can change
         # outside any single command (e.g. the agent runs `git checkout`), so
         # refresh on a slow timer (branch git runs off-thread, so it's cheap).
@@ -2577,6 +2601,17 @@ class NovaApp(App):
         )
 
     def action_cancel_turn(self) -> None:
+        # Kill any in-flight foreground shell/execute subprocess FIRST. It runs in
+        # a detached thread+loop that worker cancellation can't reach, so without
+        # this a hung command keeps running (and freezes/crashes the UI) until its
+        # internal timeout. The middleware's read loop polls this and terminates.
+        try:
+            from novacode_cli.shell.jobs import request_kill
+
+            if request_kill():
+                self._set_status("killing command…")
+        except Exception:  # noqa: BLE001
+            pass
         self.workers.cancel_all()
         self._set_status("cancelling…")
 
@@ -2824,7 +2859,27 @@ class NovaApp(App):
             return
         raw = prompt_widget.value.strip()
         if not raw:
-            self._log(Text("ctrl+b: type a prompt or !command first", style="dim"))
+            # Empty input while a shell/execute command is running → detach THAT
+            # command to the background. The agent gets a "job started" result and
+            # moves on; you're notified (and can wait_for_job) when it finishes.
+            from novacode_cli.shell.jobs import request_detach
+
+            if request_detach():
+                self._set_status("backgrounding command…")
+                self._log(
+                    Text(
+                        "⏳ Command sent to the background — you'll be notified when it finishes.",
+                        style="cyan",
+                    )
+                )
+                return
+            self._log(
+                Text(
+                    "ctrl+b: type a prompt or !command to background it — "
+                    "or press while a command is running to send that command to the background.",
+                    style="dim",
+                )
+            )
             return
         prompt_widget.value = ""
         self._update_mode_badge()
@@ -2838,6 +2893,119 @@ class NovaApp(App):
             self._bg_shell_worker(cmd, job_id)
         else:
             self._bg_agent_worker(raw, job_id)
+
+    def _on_bg_job_complete_threadsafe(self, job: Any) -> None:
+        """Job registry callback — fires on the background loop thread. Marshal to
+        the UI thread (Textual widgets aren't thread-safe)."""
+        try:
+            self.call_from_thread(self._on_bg_job_complete, job)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _on_bg_job_complete(self, job: Any) -> None:
+        """A detached (Ctrl+B) shell/execute job finished. Notify + log + queue a
+        note so the agent picks up the result on its next turn (full output stays
+        available via the wait_for_job / list_jobs tools)."""
+        ok = job.exit_code in (0, None)
+        self._log(
+            Text(
+                f"{'✓' if ok else '✗'} Background job {job.id} finished "
+                f"(exit {job.exit_code}) — {job.command[:70]}",
+                style="green" if ok else "yellow",
+            )
+        )
+        try:
+            self.session_state.add_notification(
+                level="info",
+                title=f"Background job {job.id} finished",
+                message=f"exit {job.exit_code}: {job.command[:120]}",
+                source="shell",
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        self._pending_job_notes.append(
+            f"Background job {job.id} finished (exit {job.exit_code}). "
+            f"Command: {job.command}. "
+            f"Call wait_for_job({job.id}) or list_jobs() to see its full output."
+        )
+
+    # ── Artifacts (persistent component) ─────────────────────────────────
+    def _refresh_artifacts_component(self) -> None:
+        """Update the fixed ``◈ Artifacts (N)`` footer component."""
+        try:
+            from novacode_cli.artifacts.registry import get_registry
+
+            n = get_registry().count()
+        except Exception:  # noqa: BLE001
+            n = 0
+        if n:
+            t = Text("◈ ", style="#7aa2f7")
+            t.append(f"Artifacts ({n})", style="bold #7aa2f7")
+        else:
+            t = Text("◈ Artifacts", style="dim")
+        self._set_info("#info-artifacts", t)
+
+    def _on_artifact_event_threadsafe(self, event: str, art: Any) -> None:
+        """Registry observer — fires on whichever thread created/updated the
+        artifact (tools run in worker threads). Marshal to the UI thread."""
+        import threading
+
+        if getattr(self, "_thread_id", None) == threading.get_ident():
+            self._on_artifact_event(event, art)
+            return
+        try:
+            self.call_from_thread(self._on_artifact_event, event, art)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _on_artifact_event(self, event: str, art: Any) -> None:
+        if event == "created":
+            self._log(Text(f"◈ Artifact created: {art.title}", style="#7aa2f7"))
+        self._refresh_artifacts_component()
+
+    @work
+    async def _open_artifacts_list(self) -> None:
+        """Show the artifact list; open the chosen one in the browser."""
+        from novacode_cli.artifacts.registry import get_registry
+        from novacode_cli.artifacts.server import artifact_url
+
+        arts = get_registry().list()
+        if not arts:
+            self._log(
+                Text(
+                    "No artifacts yet — ask me to create one, e.g. "
+                    "\"create an artifact showing the changes you made\".",
+                    style="dim",
+                )
+            )
+            return
+        options = [
+            f"◈ {a.title}  ·  [{a.type}] v{a.version} · {a.status}" for a in arts
+        ]
+        idx = await self.push_screen_wait(
+            PickScreen("Artifacts — open in browser", options, hint="↑/↓ · Enter open · Esc cancel")
+        )
+        if 0 <= idx < len(arts):
+            import webbrowser
+
+            url = artifact_url(arts[idx].id)
+            try:
+                webbrowser.open(url)
+            except Exception:  # noqa: BLE001
+                pass
+            self._log(Text(f"◈ Opening {arts[idx].title} → {url}", style="#7aa2f7"))
+
+    def on_click(self, event: Any) -> None:
+        """Open the artifacts list when the persistent footer component is clicked."""
+        try:
+            w = getattr(event, "widget", None)
+            while w is not None:
+                if getattr(w, "id", None) == "col-artifacts":
+                    self._open_artifacts_list()
+                    return
+                w = getattr(w, "parent", None)
+        except Exception:  # noqa: BLE001
+            pass
 
     async def action_copy_or_quit(self) -> None:
         """ctrl+c: copy the active text selection to the clipboard, else quit.
@@ -2969,7 +3137,14 @@ class NovaApp(App):
 
         # Plain prompt — send it to the agent as a single turn.
         await self._add_message(Text("You", style="bold cyan"), "user", Text(text))
-        await self._stream_prompt(text)
+        # Surface any background jobs that finished since the last turn (the user
+        # sees the clean prompt; the agent sees the note prepended).
+        agent_text = text
+        if self._pending_job_notes:
+            notes = "\n".join(f"- {n}" for n in self._pending_job_notes)
+            self._pending_job_notes = []
+            agent_text = f"[Background jobs finished since your last turn]\n{notes}\n\n{text}"
+        await self._stream_prompt(agent_text)
         # If a plan was approved during this turn, hand off to the main agent.
         await self._maybe_run_approved_plan()
 
@@ -4663,6 +4838,10 @@ class NovaApp(App):
                 style="green",
             )
         )
+
+    async def _run_artifacts(self) -> None:
+        """Open the artifacts list (same as clicking the ◈ Artifacts component)."""
+        self._open_artifacts_list()
 
     async def _run_mcp(self) -> None:
         """Open the MCP servers screen (view + remove)."""
@@ -7205,8 +7384,17 @@ class NovaApp(App):
                     if not getattr(self.session_state, "auto_approve", False):
                         self._plan_scoped_auto_approve = True
                     self.session_state.auto_approve = True
-                # Store the plan for hand-off; _maybe_run_approved_plan executes it.
-                if content:
+                # Store the plan for hand-off ONLY when a separate plan agent
+                # (/plan) produced it. That agent never executes — agent_loop
+                # breaks the turn on approval — so _maybe_run_approved_plan runs
+                # the plan on the main agent.
+                #
+                # For main-agent self-planning (plan_agent is None), the agent
+                # RESUMES in-context after approval and executes the plan inline.
+                # Stashing it here would make _maybe_run_approved_plan fire a
+                # SECOND time — clearing the session and re-executing finished
+                # work. This mirrors agent_loop's `using_separate_plan_agent` gate.
+                if content and getattr(self.session_state, "plan_agent", None) is not None:
                     try:
                         self.session_state.set_approved_plan(content)
                     except Exception:  # noqa: BLE001

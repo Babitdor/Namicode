@@ -107,3 +107,41 @@ def test_grep_uppercase_stays_case_sensitive(
     (tmp_path / "s.txt").write_text("Hello WORLD\nhello there\n", encoding="utf-8")
     result = backend.grep("Hello", path="s.txt")  # has upper-case -> exact case
     assert len(result.matches or []) == 1
+
+
+# -- in-root symlink/junction: discover + read, but still block escapes --------
+def test_in_root_symlinked_dir_is_discoverable_and_readable(tmp_path: Path) -> None:
+    """A directory symlink/junction placed inside the root (whose target lives
+    outside root) must be listed and readable — this is how skills install on
+    Windows (~/.claude/skills/<name> -> ~/.agents/skills/<name>). The stock
+    backend drops it because the resolved target escapes root.
+    """
+    root = tmp_path / "root"
+    root.mkdir()
+    external = tmp_path / "external" / "old-coder"
+    external.mkdir(parents=True)
+    (external / "SKILL.md").write_text("---\nname: old-coder\n---\nhi\n", encoding="utf-8")
+
+    link = root / "old-coder"
+    try:
+        os.symlink(external, link, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation not permitted on this platform/run")
+
+    backend = OptimizedFilesystemBackend(str(root), virtual_mode=True)
+
+    entries = backend.ls(".").entries or []
+    names = {str(e.get("path", "")).strip("/").split("/")[-1] for e in entries}
+    assert "old-coder" in names
+
+    resp = backend.download_files(["/old-coder/SKILL.md"])[0]
+    assert resp.error is None
+    assert b"name: old-coder" in (resp.content or b"")
+
+
+def test_resolve_path_still_blocks_traversal(tmp_path: Path) -> None:
+    """The relaxation must not open a `..`/absolute traversal hole."""
+    backend = OptimizedFilesystemBackend(str(tmp_path), virtual_mode=True)
+    for bad in ("/../secrets", "/a/../../b"):
+        with pytest.raises(ValueError):
+            backend._resolve_path(bad)

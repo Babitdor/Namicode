@@ -707,6 +707,21 @@ async def _run_agent_session(
     )
     tools.extend([list_trash, restore_file])
 
+    # Background-job tools: inspect / collect output from commands detached with
+    # Ctrl+B (or auto-backgrounded).
+    from novacode_cli.tools.job_tools import list_jobs, wait_for_job
+
+    tools.extend([list_jobs, wait_for_job])
+
+    # Artifact tools: turn session outputs into live, shareable web pages.
+    from novacode_cli.tools.artifact_tools import (
+        create_artifact,
+        list_artifacts,
+        update_artifact,
+    )
+
+    tools.extend([create_artifact, update_artifact, list_artifacts])
+
     # Heavy initialization with live animated boot status.
     # The BootAnimation context wraps all boot_status() calls from agent
     # creation, MCP discovery, session restore, and token calculation.
