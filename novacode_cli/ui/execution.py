@@ -23,7 +23,7 @@ from novacode_cli.core.agent_loop import (
 )
 from novacode_cli.file_ops import get_session_file_op_tracker
 from novacode_cli.input_utils import ImageTracker
-from novacode_cli.ui.input_preparation import (
+from novacode_cli.core.input_preparation import (
     build_agent_config,
     get_agent_display_name,
 )

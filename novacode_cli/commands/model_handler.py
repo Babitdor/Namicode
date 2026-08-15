@@ -86,17 +86,14 @@ async def _action_switch_provider(
                 provider_id, preset = all_providers[provider_idx]
 
                 if preset["requires_api_key"]:
-                    from novacode_cli.onboarding import SecretManager
-
-                    secret_manager = SecretManager()
-                    api_key_name = preset["api_key_var"].lower()
-
-                    # Check if API key exists in keyring or environment
-                    api_key = secret_manager.get_secret(
-                        api_key_name
-                    ) or os.environ.get(preset["api_key_var"])
+                    # Existing key from keychain/env (exported to env if found)
+                    api_key = model_manager.resolve_api_key(provider_id)
 
                     if not api_key:
+                        from novacode_cli.onboarding import SecretManager
+
+                        secret_manager = SecretManager()
+                        api_key_name = preset["api_key_var"].lower()
                         # Prompt user to provide API key
                         console.print()
                         console.print(
@@ -262,17 +259,17 @@ async def _action_view_details(
         )
         console.print()
 
-        for provider_id, preset in MODEL_PRESETS.items():
-            if preset["name"] == provider_name:
-                console.print(f"[bold]Description:[/bold] {preset['description']}")
-                console.print()
-                console.print("[bold]Available models:[/bold]")
-                for model in preset["models"]:
-                    current_marker = " (current)" if model == model_name else ""
-                    console.print(
-                        f"  • {model}{current_marker}", style=COLORS["dim"]
-                    )
-                break
+        current_id = model_manager.get_current_provider_id()
+        preset = MODEL_PRESETS.get(current_id) if current_id else None
+        if preset:
+            console.print(f"[bold]Description:[/bold] {preset['description']}")
+            console.print()
+            console.print("[bold]Available models:[/bold]")
+            for model in preset["models"]:
+                current_marker = " (current)" if model == model_name else ""
+                console.print(
+                    f"  • {model}{current_marker}", style=COLORS["dim"]
+                )
     else:
         console.print("[yellow]No provider currently active[/yellow]")
     console.print()

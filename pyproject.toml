@@ -47,7 +47,6 @@ dependencies = [
     "modal>=0.65.0",
     "markdownify>=0.13.0",
     "runloop-api-client>=0.69.0",
-    "transformers>=4.57.3",
     "mcp>=1.0.0",
     "docker>=7.0.0",
     "keyring>=24.0.0",
@@ -64,7 +63,8 @@ dependencies = [
     "semble>=0.1.8",
     "discord.py>=2.3.0",
     "python-telegram-bot>=21.0.0",
-    ]
+    "langchain-quickjs>=0.2.0",
+]
 
 [project.optional-dependencies]
 voice = [
@@ -90,6 +90,10 @@ voice-parakeet = [
 # first use. Select with /voice settings tts pocket.
 voice-pocket = [
     "pocket-tts>=0.1.0",
+]
+server = [
+    "fastapi>=0.115.0",
+    "uvicorn>=0.34.0",
 ]
 
 [project.urls]

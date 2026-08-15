@@ -32,18 +32,18 @@ from pydantic import TypeAdapter, ValidationError
 
 from novacode_cli.config.config import COLORS, get_agent_color
 from novacode_cli.file_ops import get_session_file_op_tracker
-from novacode_cli.ui.input_preparation import (
+from novacode_cli.core.input_preparation import (
     build_agent_config,
     get_agent_display_name,
     prepare_input_content,
 )
-from novacode_cli.ui.streaming import (
+from novacode_cli.core.streaming import (
     TOOL_CATEGORIES,
     TOOL_ICONS,
     format_condensed_activity,
     is_internal_context_text,
 )
-from novacode_cli.ui.subagent_tracking import (
+from novacode_cli.core.subagent_tracking import (
     SubagentTracker,
     get_status_icon,
 )

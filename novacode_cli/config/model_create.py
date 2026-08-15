@@ -4,22 +4,32 @@ from langchain_core.language_models import BaseChatModel
 
 from novacode_cli.config.config import console, settings
 
+# Env var that must be set before a provider is usable. Ollama needs no key.
+PROVIDER_KEY_ENV: dict[str, str] = {
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "google": "GOOGLE_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+}
 
-def create_model_from_config(provider: str, model_name: str) -> BaseChatModel | None:
-    """Create a model instance from a provider and model name (no fallback).
 
-    Unlike :func:`create_model`, this function only tries the exact provider/model
-    requested and returns ``None`` if the required API key is missing — it never
-    falls back to another provider.  This is used for vision captioning (gemma).
+def build_chat_model(provider: str, model_name: str) -> BaseChatModel:
+    """THE model constructor — every ChatX(...) in Nova is built here.
+
+    One deep module for provider construction: reasoning-effort / thinking
+    budgets, retries, Ollama num_ctx + content-block patch, OpenRouter base
+    URL. Key-presence *policy* stays with the callers (return None / warn and
+    fall back / raise) — this function only constructs.
 
     Args:
-        provider: One of ``"ollama"``, ``"openai"``, ``"anthropic"``, ``"google"``, ``"openrouter"``.
-        model_name: The model name/identifier.
+        provider: "ollama" | "openai" | "anthropic" | "google" | "openrouter".
+        model_name: The model identifier for that provider.
 
-    Returns:
-        A ``BaseChatModel`` instance, or ``None`` if the provider cannot be used.
+    Raises:
+        ValueError: Unknown provider.
     """
     from novacode_cli.config.nova_config import NovaConfig
+
     nova_config = NovaConfig()
     effort = nova_config.get("reasoning_effort")
 
@@ -27,13 +37,13 @@ def create_model_from_config(provider: str, model_name: str) -> BaseChatModel | 
         from langchain_ollama import ChatOllama
 
         from novacode_cli.context._dynamic import get_ollama_num_ctx
+        from novacode_cli.utils.backend_patches import apply_ollama_content_block_patch
+
+        apply_ollama_content_block_patch()
 
         ollama_kwargs = {}
         if effort:
-            if effort == "off":
-                ollama_kwargs["reasoning"] = False
-            else:
-                ollama_kwargs["reasoning"] = effort
+            ollama_kwargs["reasoning"] = False if effort == "off" else effort
 
         return ChatOllama(
             model=model_name,
@@ -44,24 +54,28 @@ def create_model_from_config(provider: str, model_name: str) -> BaseChatModel | 
             **ollama_kwargs,
         )
 
-    if provider == "openai":
-        if not os.environ.get("OPENAI_API_KEY"):
-            return None
+    if provider in ("openai", "openrouter"):
         from langchain_openai import ChatOpenAI
 
-        openai_kwargs = {}
+        openai_kwargs: dict = {}
         if effort and effort != "off" and ("o1" in model_name or "o3" in model_name):
             openai_kwargs["reasoning_effort"] = effort
+        if provider == "openrouter":
+            # OpenRouter is OpenAI-compatible: same client, custom base URL + key.
+            from novacode_cli.config.model_manager import OPENROUTER_BASE_URL
+
+            openai_kwargs["base_url"] = OPENROUTER_BASE_URL
+            openai_kwargs["api_key"] = os.environ.get("OPENROUTER_API_KEY")
 
         return ChatOpenAI(model=model_name, max_retries=5, **openai_kwargs)
 
     if provider == "anthropic":
-        if not os.environ.get("ANTHROPIC_API_KEY"):
-            return None
         from langchain_anthropic import ChatAnthropic
 
-        thinking_kwargs = {}
-        thinking_budget = nova_config.get("thinking_budget", 0)
+        thinking_kwargs: dict = {}
+        thinking_budget = nova_config.get("thinking_budget", 0) or int(
+            os.environ.get("Nova_THINKING_BUDGET", "0")
+        )
         if not thinking_budget and effort and effort != "off":
             budget_map = {"low": 2048, "medium": 4096, "high": 16384}
             thinking_budget = budget_map.get(effort, 4096)
@@ -80,11 +94,9 @@ def create_model_from_config(provider: str, model_name: str) -> BaseChatModel | 
         )
 
     if provider == "google":
-        if not os.environ.get("GOOGLE_API_KEY"):
-            return None
         from langchain_google_genai import ChatGoogleGenerativeAI
 
-        google_kwargs = {}
+        google_kwargs: dict = {}
         if effort and effort != "off":
             if "gemini-2.5" in model_name or "gemini-2.0" in model_name:
                 budget_map = {"low": 2048, "medium": 8192, "high": 32768}
@@ -101,26 +113,30 @@ def create_model_from_config(provider: str, model_name: str) -> BaseChatModel | 
             **google_kwargs,
         )
 
-    if provider == "openrouter":
-        if not os.environ.get("OPENROUTER_API_KEY"):
-            return None
-        from langchain_openai import ChatOpenAI
+    raise ValueError(f"Unknown provider: {provider}")
 
-        from novacode_cli.config.model_manager import OPENROUTER_BASE_URL
 
-        openai_kwargs = {}
-        if effort and effort != "off" and ("o1" in model_name or "o3" in model_name):
-            openai_kwargs["reasoning_effort"] = effort
+def create_model_from_config(provider: str, model_name: str) -> BaseChatModel | None:
+    """Create a model instance from a provider and model name (no fallback).
 
-        return ChatOpenAI(
-            model=model_name,
-            base_url=OPENROUTER_BASE_URL,
-            api_key=os.environ.get("OPENROUTER_API_KEY"),  # type: ignore[arg-type]
-            max_retries=5,
-            **openai_kwargs,
-        )
+    Unlike :func:`create_model`, this function only tries the exact provider/model
+    requested and returns ``None`` if the required API key is missing — it never
+    falls back to another provider.  This is used for vision captioning (gemma).
 
-    return None
+    Args:
+        provider: One of ``"ollama"``, ``"openai"``, ``"anthropic"``, ``"google"``, ``"openrouter"``.
+        model_name: The model name/identifier.
+
+    Returns:
+        A ``BaseChatModel`` instance, or ``None`` if the provider cannot be used.
+    """
+    key_var = PROVIDER_KEY_ENV.get(provider)
+    if key_var and not os.environ.get(key_var):
+        return None
+    try:
+        return build_chat_model(provider, model_name)
+    except ValueError:
+        return None  # unknown provider
 
 
 def create_model() -> BaseChatModel:
@@ -140,236 +156,47 @@ def create_model() -> BaseChatModel:
     nova_config = NovaConfig()
     saved_model_config = nova_config.get_model_config()
 
-    # If we have a saved config, use it directly (bypasses .env settings)
+    # If we have a saved config, use it directly (bypasses .env settings).
+    # Missing key for the saved provider → warn and fall through to the
+    # env-priority chain below (same as the pre-consolidation behavior).
     if saved_model_config:
         provider = saved_model_config["provider"]
         model_name = saved_model_config["model"]
+        key_var = PROVIDER_KEY_ENV.get(provider)
+        if key_var and not os.environ.get(key_var):
+            console.print(f"[yellow]Warning: {key_var} not set, falling back to Ollama[/yellow]")
+        else:
+            return build_chat_model(provider, model_name)
 
-        # console.print(f"[dim]Using saved configuration: {provider}/{model_name}[/dim]")
-
-        # Create model directly based on saved config
-        if provider == "ollama":
-            from langchain_ollama import ChatOllama
-
-            from novacode_cli.context._dynamic import get_ollama_num_ctx
-
-            ollama_kwargs = {}
-            effort = nova_config.get("reasoning_effort")
-            if effort:
-                if effort == "off":
-                    ollama_kwargs["reasoning"] = False
-                else:
-                    ollama_kwargs["reasoning"] = effort
-
-            return ChatOllama(
-                model=model_name,
-                temperature=0,
-                disable_streaming=True,
-                keep_alive=600,
-                num_ctx=get_ollama_num_ctx(),
-                **ollama_kwargs,
-            )
-
-        if provider == "openai":
-            from langchain_openai import ChatOpenAI
-
-            # Verify API key is available
-            if not os.environ.get("OPENAI_API_KEY"):
-                console.print(
-                    "[yellow]Warning: OPENAI_API_KEY not set, falling back to Ollama[/yellow]"
-                )
-            else:
-                openai_kwargs = {}
-                effort = nova_config.get("reasoning_effort")
-                if effort and effort != "off" and ("o1" in model_name or "o3" in model_name):
-                    openai_kwargs["reasoning_effort"] = effort
-                return ChatOpenAI(model=model_name, max_retries=5, **openai_kwargs)
-
-        elif provider == "anthropic":
-            from langchain_anthropic import ChatAnthropic
-
-            # Verify API key is available
-            if not os.environ.get("ANTHROPIC_API_KEY"):
-                console.print(
-                    "[yellow]Warning: ANTHROPIC_API_KEY not set, falling back to Ollama[/yellow]"
-                )
-            else:
-                # Extended thinking support (Anthropic only)
-                thinking_budget = nova_config.get("thinking_budget", 0)
-                effort = nova_config.get("reasoning_effort")
-                if not thinking_budget and effort and effort != "off":
-                    budget_map = {"low": 2048, "medium": 4096, "high": 16384}
-                    thinking_budget = budget_map.get(effort, 4096)
-
-                thinking_kwargs: dict = {}
-                if thinking_budget and thinking_budget > 0:
-                    thinking_kwargs["thinking"] = {
-                        "type": "enabled",
-                        "budget_tokens": int(thinking_budget),
-                    }
-
-                return ChatAnthropic(
-                    model_name=model_name,
-                    max_tokens=20_000,  # type: ignore[arg-type]
-                    max_retries=5,
-                    **thinking_kwargs,
-                )
-
-        elif provider == "google":
-            from langchain_google_genai import ChatGoogleGenerativeAI
-
-            # Verify API key is available
-            if not os.environ.get("GOOGLE_API_KEY"):
-                console.print(
-                    "[yellow]Warning: GOOGLE_API_KEY not set, falling back to Ollama[/yellow]"
-                )
-            else:
-                google_kwargs = {}
-                effort = nova_config.get("reasoning_effort")
-                if effort and effort != "off":
-                    if "gemini-2.5" in model_name or "gemini-2.0" in model_name:
-                        budget_map = {"low": 2048, "medium": 8192, "high": 32768}
-                        google_kwargs["thinking_budget"] = budget_map.get(effort, 8192)
-                    else:
-                        google_kwargs["thinking_level"] = effort
-                    google_kwargs["include_thoughts"] = True
-
-                return ChatGoogleGenerativeAI(
-                    model=model_name,
-                    temperature=0,
-                    max_tokens=None,
-                    max_retries=5,
-                    **google_kwargs,
-                )
-
-        elif provider == "openrouter":
-            from langchain_openai import ChatOpenAI
-
-            from novacode_cli.config.model_manager import OPENROUTER_BASE_URL
-
-            # Verify API key is available
-            if not os.environ.get("OPENROUTER_API_KEY"):
-                console.print(
-                    "[yellow]Warning: OPENROUTER_API_KEY not set, falling back to Ollama[/yellow]"
-                )
-            else:
-                # OpenRouter is OpenAI-compatible: ChatOpenAI + custom base URL/key.
-                openai_kwargs = {}
-                effort = nova_config.get("reasoning_effort")
-                if effort and effort != "off" and ("o1" in model_name or "o3" in model_name):
-                    openai_kwargs["reasoning_effort"] = effort
-                return ChatOpenAI(
-                    model=model_name,
-                    base_url=OPENROUTER_BASE_URL,
-                    api_key=os.environ.get("OPENROUTER_API_KEY"),  # type: ignore[arg-type]
-                    max_retries=5,
-                    **openai_kwargs,
-                )
-
-    # No saved config - fall back to environment variables and .env file
-    # Check available API keys in order of priority
-    effort = nova_config.get("reasoning_effort")
-
-    if settings.has_openai:
-        from langchain_openai import ChatOpenAI
-
-        model_name = os.environ.get("OPENAI_MODEL", "gpt-5-mini")
-        console.print(f"[dim]Using OpenAI model: {model_name}[/dim]")
-        openai_kwargs = {}
-        if effort and effort != "off" and ("o1" in model_name or "o3" in model_name):
-            openai_kwargs["reasoning_effort"] = effort
-        return ChatOpenAI(
-            model=model_name,
-            max_retries=5,
-            **openai_kwargs,
-        )
-    if settings.has_anthropic:
-        from langchain_anthropic import ChatAnthropic
-
-        model_name = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-5-20250929")
-        console.print(f"[dim]Using Anthropic model: {model_name}[/dim]")
-
-        # Extended thinking support (Anthropic only)
-        thinking_kwargs: dict = {}
-        thinking_budget = int(os.environ.get("Nova_THINKING_BUDGET", "0"))
-        if not thinking_budget and effort and effort != "off":
-            budget_map = {"low": 2048, "medium": 4096, "high": 16384}
-            thinking_budget = budget_map.get(effort, 4096)
-
-        if thinking_budget > 0:
-            thinking_kwargs["thinking"] = {
-                "type": "enabled",
-                "budget_tokens": thinking_budget,
-            }
-
-        return ChatAnthropic(
-            model_name=model_name,
-            max_tokens=20_000,  # type: ignore[arg-type]
-            max_retries=5,
-            **thinking_kwargs,
-        )
-    if settings.has_google:
-        from langchain_google_genai import ChatGoogleGenerativeAI
-
-        model_name = os.environ.get("GOOGLE_MODEL", "gemini-3-pro-preview")
-        console.print(f"[dim]Using Google Gemini model: {model_name}[/dim]")
-        google_kwargs = {}
-        if effort and effort != "off":
-            if "gemini-2.5" in model_name or "gemini-2.0" in model_name:
-                budget_map = {"low": 2048, "medium": 8192, "high": 32768}
-                google_kwargs["thinking_budget"] = budget_map.get(effort, 8192)
-            else:
-                google_kwargs["thinking_level"] = effort
-            google_kwargs["include_thoughts"] = True
-        return ChatGoogleGenerativeAI(
-            model=model_name,
-            temperature=0,
-            max_tokens=None,
-            max_retries=5,
-            **google_kwargs,
-        )
-    if settings.has_openrouter:
-        from langchain_openai import ChatOpenAI
-
-        from novacode_cli.config.model_manager import OPENROUTER_BASE_URL
-
-        model_name = os.environ.get("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet")
-        console.print(f"[dim]Using OpenRouter model: {model_name}[/dim]")
-        openai_kwargs = {}
-        if effort and effort != "off" and ("o1" in model_name or "o3" in model_name):
-            openai_kwargs["reasoning_effort"] = effort
-        return ChatOpenAI(
-            model=model_name,
-            base_url=OPENROUTER_BASE_URL,
-            api_key=os.environ.get("OPENROUTER_API_KEY"),  # type: ignore[arg-type]
-            max_retries=5,
-            **openai_kwargs,
-        )
+    # No usable saved config — pick the first provider with a key configured.
+    _ENV_PRIORITY = [
+        (settings.has_openai, "openai", "OPENAI_MODEL", "gpt-5-mini", "OpenAI"),
+        (
+            settings.has_anthropic,
+            "anthropic",
+            "ANTHROPIC_MODEL",
+            "claude-sonnet-4-5-20250929",
+            "Anthropic",
+        ),
+        (settings.has_google, "google", "GOOGLE_MODEL", "gemini-3-pro-preview", "Google Gemini"),
+        (
+            settings.has_openrouter,
+            "openrouter",
+            "OPENROUTER_MODEL",
+            "anthropic/claude-3.5-sonnet",
+            "OpenRouter",
+        ),
+    ]
+    for available, provider, model_env, default_model, label in _ENV_PRIORITY:
+        if available:
+            model_name = os.environ.get(model_env, default_model)
+            console.print(f"[dim]Using {label} model: {model_name}[/dim]")
+            return build_chat_model(provider, model_name)
 
     # Default to Ollama if no API keys are configured
-    from langchain_ollama import ChatOllama
-
     model_name = os.environ.get("OLLAMA_MODEL", "qwen3-coder:480b-cloud")
     console.print(f"[dim]No API keys configured. Defaulting to Ollama model: {model_name}[/dim]")
-
-    from novacode_cli.context._dynamic import get_ollama_num_ctx
-
-    ollama_kwargs = {}
-    effort = nova_config.get("reasoning_effort")
-    if effort:
-        if effort == "off":
-            ollama_kwargs["reasoning"] = False
-        else:
-            ollama_kwargs["reasoning"] = effort
-
-    return ChatOllama(
-        model=model_name,
-        temperature=0,
-        disable_streaming=True,
-        keep_alive=600,
-        num_ctx=get_ollama_num_ctx(),
-        **ollama_kwargs,
-    )
+    return build_chat_model("ollama", model_name)
 
 
 # =============================================================================

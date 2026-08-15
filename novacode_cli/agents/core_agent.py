@@ -92,6 +92,39 @@ for _mod_name in (
         pass
 # ────────────────────────────────────────────────────────────────────────────
 
+# ── Patch deepagents create_sub_agent to skip the wasted double compile ─────
+# SubAgentMiddleware.__init__ compiles every subagent spec into a full graph,
+# then create_deep_agent assigns `private_state_keys`, whose setter rebuilds
+# the task tool and compiles every spec AGAIN — the first pass is thrown away
+# entirely. With ~100 subagents (core + named + plugin agents) that wasted
+# pass costs ~5s of agent-build time. Caching the compiled runnable ON the
+# spec dict is safe: create_sub_agent(spec, state_schema) is deterministic,
+# the two passes use the same spec dicts and state_schema, and Nova re-hardens
+# specs into FRESH dicts on every agent build (see _harden_subagent_specs),
+# so the cache never leaks a graph across builds. Dynamic response_format
+# recompiles bypass the cache.
+import deepagents.middleware.subagents as _dsub
+
+_original_create_sub_agent = _dsub.create_sub_agent
+_SUBAGENT_RUNNABLE_CACHE_KEY = "__nova_compiled_runnable__"
+
+
+def _cached_create_sub_agent(spec, *, state_schema=None, response_format=None):  # noqa: ANN001, ANN202
+    if response_format is not None:
+        return _original_create_sub_agent(
+            spec, state_schema=state_schema, response_format=response_format
+        )
+    cached = spec.get(_SUBAGENT_RUNNABLE_CACHE_KEY)
+    if cached is not None and cached[0] is state_schema:
+        return cached[1]
+    runnable = _original_create_sub_agent(spec, state_schema=state_schema)
+    spec[_SUBAGENT_RUNNABLE_CACHE_KEY] = (state_schema, runnable)
+    return runnable
+
+
+_dsub.create_sub_agent = _cached_create_sub_agent
+# ────────────────────────────────────────────────────────────────────────────
+
 from langchain.tools import BaseTool
 from langchain_core.language_models import BaseChatModel
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -550,6 +583,7 @@ def _harden_subagent_specs(specs: list, skill_sources: list[str] | None = None) 
     from novacode_cli.bootstrap import VisionCaptionMiddleware
     from novacode_cli.errors import is_retryable_model_error
     from novacode_cli.security.middleware import SecurityMiddleware
+    from novacode_cli.tracking.loop_guard import LoopGuardMiddleware
 
     # Tools that raise a HITL ``interrupt()`` directly in their body (not via
     # ``interrupt_on``). Clearing ``interrupt_on`` below doesn't neutralise these,
@@ -577,6 +611,7 @@ def _harden_subagent_specs(specs: list, skill_sources: list[str] | None = None) 
         has_vision = any(type(m).__name__ == "VisionCaptionMiddleware" for m in existing)
         has_security = any(type(m).__name__ == "SecurityMiddleware" for m in existing)
         has_curation = any(type(m).__name__ == "SkillCurationMiddleware" for m in existing)
+        has_loopguard = any(type(m).__name__ == "LoopGuardMiddleware" for m in existing)
 
         # Give the subagent the (full) skill sources so deepagents attaches a
         # SkillsMiddleware on the shared backend — unless the spec already
@@ -600,6 +635,12 @@ def _harden_subagent_specs(specs: list, skill_sources: list[str] | None = None) 
             mw_to_add.append(VisionCaptionMiddleware())
         if not has_security:
             mw_to_add.append(SecurityMiddleware())
+        # Break identical-repeat tool loops inside subagents too. Only the MAIN
+        # agent had a LoopGuard, so a stuck subagent (e.g. re-reading the same
+        # SKILL.md forever) looped unguarded until its recursion limit. Fresh
+        # instance per spec — the guard keeps per-instance history state.
+        if not has_loopguard:
+            mw_to_add.append(LoopGuardMiddleware(threshold=3))
         # Only curate when the subagent actually has skills (either just granted
         # above or pre-declared by the spec) — no point adding a no-op clamp.
         if new_spec.get("skills") and not has_curation:
@@ -642,80 +683,14 @@ def _seed_summarization_profile(model: object, model_name: str) -> None:
         )
 
 
-def create_agent_with_config(
-    model: str | BaseChatModel,
-    assistant_id: str,
-    tools: list[BaseTool],
-    *,
-    sandbox: SandboxBackendProtocol | None = None,
-    sandbox_type: str | None = None,
-    system_prompt: str | None = None,
-    auto_approve: bool = False,
-    store: BaseStore | None = None,
-    checkpointer: BaseCheckpointSaver | None = None,
-    is_continuation: bool = False,
-    steering_instructions: list | None = None,
-    exec_sandbox: bool = False,
-) -> tuple[Pregel, CompositeBackend]:
-    """Create and configure an agent with the specified model and tools.
-
-    Args:
-        model: LLM model to use
-        assistant_id: Agent identifier for memory storage
-        tools: Additional tools to provide to agent
-        sandbox: Optional sandbox backend for remote execution (e.g., ModalBackend).
-                 If None, uses local filesystem + shell.
-        sandbox_type: Type of sandbox provider ("modal", "runloop", "daytona")
-        exec_sandbox: When True (Pattern A, local mode), confine locally-executed
-                 shell commands to the workspace via an OS kernel sandbox
-                 (bwrap/sandbox-exec). No effect when a sandbox backend is used.
-        store: Optional durable store (BaseStore). If None, the caller is
-               expected to pass the shared store from get_shared_store() so
-               subagents can also access it.
-        is_continuation: If True, skip project memory paths (NOVA.md/CLAUDE.md)
-               from AgentMemoryMiddleware since they're already in the continuation prompt.
+def _build_skill_sources() -> tuple[list[str], Path, Path, list[Path], list[tuple[str, Path]]]:
+    """Assemble the skill source prefixes and the directories backing them.
 
     Returns:
-        2-tuple of (graph, backend)
+        5-tuple of (skill_sources, skills_dir, claude_skills_dir,
+        project_skills_dirs, plugin_skills).
     """
-    # Lazy import for tracing (speeds up startup)
-    from novacode_cli.tracking.tracing import is_tracing_enabled, get_tracing_config
-
-    tracing_enabled = False
-    skill_sources = []
-    Nova_SubAgent: list[SubAgent] = []
-
-    if is_tracing_enabled():
-        tracing_enabled = True
-        tracing_config = get_tracing_config()
-        # console.print(
-        #     f"[dim]LangSmith tracing enabled: {tracing_config.project_name}[/dim]"
-        # )
-    else:
-        # Try to auto-configure from environment
-        from novacode_cli.tracking.tracing import auto_configure
-
-        config_result = auto_configure()
-        if config_result.is_configured():
-            tracing_enabled = True
-            # console.print(
-            #     f"[dim]LangSmith tracing enabled: {config_result.project_name}[/dim]"
-            # )
-
-    # Wrap model for OpenAI tracing if enabled and model is a ChatOpenAI instance
-    wrapped_model = model
-    if tracing_enabled and hasattr(model, "_model"):  # Check if it's a LangChain model
-        try:
-            from langchain_openai import ChatOpenAI
-
-            if isinstance(model, ChatOpenAI):
-                from novacode_cli.tracking.tracing import (
-                    wrap_openai_client as _wrap_openai,
-                )
-
-                wrapped_model = _wrap_openai(model)
-        except ImportError:
-            pass
+    skill_sources: list[str] = []
 
     # Skills directory - global (shared across all agents at ~/.nova/skills/)
     skills_dir = settings.ensure_user_skills_dir()
@@ -737,77 +712,33 @@ def create_agent_with_config(
     # Skills from installed Claude-compatible plugins (~/.nova/plugins/*/skills).
     from novacode_cli.plugins.claude_plugins import plugin_skill_dirs
 
-    _plugin_skills = plugin_skill_dirs()
-    for pname, _d in _plugin_skills:
+    plugin_skills = plugin_skill_dirs()
+    for pname, _d in plugin_skills:
         skill_sources.append(f"/plugin-skills-{pname}/")
 
-    # Determine workspace root for path containment (resolves to subdirectory if applicable)
-    workspace_root = settings.get_workspace_root()
+    return skill_sources, skills_dir, claude_skills_dir, project_skills_dirs, plugin_skills
 
-    # Build list of allowed directories for filesystem access
-    # This includes the workspace root plus user directories like skills, memory, etc.
-    allowed_prefixes = [str(workspace_root)]
-    if settings.project_root and settings.project_root != workspace_root:
-        allowed_prefixes.append(str(settings.project_root))
 
-    # Add user skills directory (~/.nova/skills/)
-    if skills_dir:
-        allowed_prefixes.append(str(skills_dir))
+def _build_composite_backend(
+    *,
+    sandbox: SandboxBackendProtocol | None,
+    sandbox_type: str | None,
+    workspace_root: Path,
+    skills_dir: Path,
+    claude_skills_dir: Path,
+    project_skills_dirs: list[Path],
+    plugin_skills: list[tuple[str, Path]],
+    agent_dir: Path | None,
+    store: BaseStore | None,
+    assistant_id: str,
+    session_id: str | None = None,
+) -> tuple[CompositeBackend, BackendProtocol]:
+    """Pick the default backend (local vs remote sandbox) and build the
+    CompositeBackend with all virtual-path routes.
 
-    # Add global Claude Code skills directory (~/.claude/skills/)
-    if claude_skills_dir.exists():
-        allowed_prefixes.append(str(claude_skills_dir))
-
-    # Add project skills directories
-    for skills_path in project_skills_dirs:
-        allowed_prefixes.append(str(skills_path))
-
-    # Add user agent directory (~/.nova/<agent>/) for memory files
-    agent_dir = settings.get_agent_dir(assistant_id)
-    if agent_dir:
-        allowed_prefixes.append(str(agent_dir))
-        # Auto-create simple memory structure on first use so the agent has
-        # a memory file to read/write without needing the
-        # create_memory_structure tool (which is no longer registered in the
-        # default toolset).
-        _agent_md = agent_dir / "agent.md"
-        if not _agent_md.exists():
-            agent_dir.mkdir(parents=True, exist_ok=True)
-            _agent_md.write_text(
-                """# Agent Memory
-
-This file stores your preferences and context that persist across sessions.
-
-## Communication Style
-- [Your preferred communication style]
-
-## Coding Preferences
-- [Your coding preferences]
-
-## Project Context
-- [Project-specific notes]
-
-## Workflows
-- [Common workflows you use]
-""",
-                encoding="utf-8",
-            )
-
-        # Ensure the semantic-tier scaffolding (memories/ dir) exists, and
-        # one-time-migrate any legacy USER.md/MEMORY.md into the injected
-        # surface (agent.md + memories/). migrate_legacy_tiers renames consumed
-        # files to *.migrated.bak, so a second run is a no-op.
-        try:
-            from novacode_cli.hermes.memory_tiers import (
-                ensure_memory_tiers,
-                migrate_legacy_tiers,
-            )
-
-            ensure_memory_tiers(agent_dir)
-            migrate_legacy_tiers(agent_dir)
-        except Exception:  # noqa: BLE001
-            console.print("[dim]⚠ Failed to ensure Nova memory tiers[/dim]")
-
+    Returns:
+        2-tuple of (composite_backend, default_backend).
+    """
     # CONDITIONAL SETUP: Local vs Remote Sandbox
     if sandbox is None:
         # ========== LOCAL MODE ==========
@@ -896,9 +827,9 @@ This file stores your preferences and context that persist across sessions.
         )
         _routes[f"/project-skills-{i}/"] = _proj_backend
 
-    # Installed-plugin skills routes (mirrors project skills; _plugin_skills
-    # gathered above so sources and routes stay in lockstep).
-    for pname, plugin_skills_dir in _plugin_skills:
+    # Installed-plugin skills routes (mirrors project skills; plugin_skills
+    # gathered in _build_skill_sources so sources and routes stay in lockstep).
+    for pname, plugin_skills_dir in plugin_skills:
         _routes[f"/plugin-skills-{pname}/"] = FilesystemBackend(
             root_dir=str(plugin_skills_dir),
             virtual_mode=True,
@@ -961,11 +892,61 @@ This file stores your preferences and context that persist across sessions.
     )
     _routes["/project-memory/"] = _project_memory_backend
 
+    # Add /large_tool_results/ route → global per-session folder.
+    # deepagents' FilesystemMiddleware offloads oversized tool results to
+    # /large_tool_results/<tool_call_id>. Without this route those writes fall
+    # through to the workspace-rooted default backend and litter the *project*
+    # directory. Route them to ~/.nova/sessions/<session_id>/large_tool_results/
+    # so offloaded results live with the rest of the session's state, not the repo.
+    _large_results_dir = (
+        Path.home() / ".nova" / "sessions" / (session_id or "default") / "large_tool_results"
+    )
+    _large_results_dir.mkdir(parents=True, exist_ok=True)
+    _routes["/large_tool_results/"] = FilesystemBackend(
+        root_dir=str(_large_results_dir),
+        virtual_mode=True,
+    )
+
+    # Same treatment for /conversation_history/ — the summarization middleware
+    # offloads evicted conversation history there, and without a route it too
+    # leaks into the project directory.
+    _conv_history_dir = (
+        Path.home() / ".nova" / "sessions" / (session_id or "default") / "conversation_history"
+    )
+    _conv_history_dir.mkdir(parents=True, exist_ok=True)
+    _routes["/conversation_history/"] = FilesystemBackend(
+        root_dir=str(_conv_history_dir),
+        virtual_mode=True,
+    )
+
     composite_backend = CompositeBackend(
         default=_default_backend,
         routes=_routes,
     )
 
+    return composite_backend, _default_backend
+
+
+def _build_middleware_stack(
+    *,
+    model: str | BaseChatModel,
+    assistant_id: str,
+    store: BaseStore | None,
+    skills_dir: Path,
+    agent_dir: Path | None,
+    workspace_root: Path,
+    steering_instructions: list | None,
+    composite_backend: CompositeBackend,
+    sandbox: SandboxBackendProtocol | None,
+    sandbox_type: str | None,
+    exec_sandbox: bool,  # noqa: FBT001
+) -> list:
+    """Build the core agent middleware stack.
+
+    The ORDER of this list is load-bearing — see the inline comments on each
+    entry. Callers may append/insert further middleware (plugins, MCP, skills)
+    around this base stack.
+    """
     # Lazy imports for middleware (speeds up startup)
     from langchain.agents.middleware import ModelRetryMiddleware
     from novacode_cli.errors import is_retryable_model_error
@@ -985,22 +966,12 @@ This file stores your preferences and context that persist across sessions.
         ContextEditingMiddleware,
     )
 
-    # Check whether MCP servers are configured before instantiating the middleware.
-    # MCPMiddleware calls list_servers() (a JSON file read) on every model turn, so
-    # skipping it entirely when there are no servers saves ~4 file reads per call.
-    _has_mcp = False
-    try:
-        from novacode_cli.mcp.config import MCPConfig as _MCPConfig
+    import warnings as _warnings
 
-        _has_mcp = bool(_MCPConfig().load())
-    except Exception:
-        pass
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("ignore")  # beta-API warning would print every boot
+        _rubric_middleware = RubricMiddleware(model=model, max_iterations=3)
 
-    _model_name = (
-        model
-        if isinstance(model, str)
-        else getattr(model, "model_name", getattr(model, "model", "unknown"))
-    )
     agent_middleware = [
         # Retry transient model failures (rate limits / 429, timeouts, network
         # blips) with exponential backoff before surfacing an error to the user.
@@ -1062,7 +1033,7 @@ This file stores your preferences and context that persist across sessions.
         # miss, injects per-criterion feedback and lets the agent revise (up to
         # max_iterations). Uses Nova's own model so there's no provider/key
         # assumption; default grader prompt. No rubric ⇒ zero added cost.
-        RubricMiddleware(model=model, max_iterations=3),
+        _rubric_middleware,
         # Context editing — clear older tool call outputs when token limits
         # are reached, preserving only the most recent results. This is a
         # lightweight, deterministic alternative to LLM-based compaction.
@@ -1104,6 +1075,291 @@ This file stores your preferences and context that persist across sessions.
             backend=composite_backend,  # Route through CompositeBackend for /memories/ etc.
         ),
     ]
+
+    return agent_middleware
+
+
+def _build_subagent_roster(
+    *,
+    assistant_id: str,
+    tools: list[BaseTool],
+    plugin_specs: list,
+    skill_sources: list[str],
+) -> list:
+    """Assemble the final subagent roster for ``create_deep_agent``.
+
+    Core + named + plugin + general-purpose subagents, hardened via
+    :func:`_harden_subagent_specs`, then the async subagents (which own their
+    own config and are left untouched).
+    """
+    Nova_SubAgent: list[SubAgent] = []
+
+    # Load pre-defined default and user defined subagents
+    Nova_SubAgent.extend(retrieve_core_subagents(tools=tools))  # type: ignore
+    Nova_SubAgent.extend(build_named_subagents(assistant_id=assistant_id, tools=tools))  # type: ignore
+
+    # Plugin subagents — delegate agents contributed by enabled plugins. Added
+    # after the built-ins so they go through the same _harden_subagent_specs pass
+    # below (retry + no nested HITL) and can be dispatched via the `task` tool.
+    if plugin_specs:
+        try:
+            from novacode_cli.plugins.loader import merge_plugin_subagents
+
+            merge_plugin_subagents(Nova_SubAgent, plugin_specs)  # type: ignore
+        except Exception:  # noqa: BLE001
+            __import__("logging").getLogger("nova.plugins").exception(
+                "Failed to merge plugin subagents"
+            )
+
+    # Own the general-purpose subagent instead of letting create_deep_agent
+    # auto-inject it. The auto-injected one inherits the main `interrupt_on` and
+    # gets NO retry middleware, so it (a) can crash the turn on a nested HITL
+    # interrupt and (b) dies on a transient provider 5xx. /init delegates its
+    # semantic-extraction chunks to general-purpose, so this is exactly the
+    # subagent that was failing. Providing our own spec (the documented override)
+    # routes it through _harden_subagent_specs below — retry + no nested HITL —
+    # while deepagents still builds its base middleware stack. The stock
+    # GENERAL_PURPOSE_SUBAGENT system prompt is used (we forgo the harness-profile
+    # prompt overlay, which is an acceptable trade for resilience).
+    from deepagents.middleware.subagents import GENERAL_PURPOSE_SUBAGENT
+
+    if not any(isinstance(s, dict) and s.get("name") == "general-purpose" for s in Nova_SubAgent):
+        Nova_SubAgent.append({**GENERAL_PURPOSE_SUBAGENT, "tools": tools})  # type: ignore
+
+    # Subagents from installed Claude-compatible plugins (agents/*.md).
+    from novacode_cli.plugins.claude_plugins import plugin_agent_specs
+
+    _existing = {s.get("name") for s in Nova_SubAgent if isinstance(s, dict)}
+    Nova_SubAgent.extend(s for s in plugin_agent_specs() if s["name"] not in _existing)
+
+    # Load async subagents (run on remote LangGraph servers in background)
+    async_subagents = retrieve_async_subagents()
+
+    # Subagents run UNATTENDED — the main agent is the sole HITL boundary.
+    #
+    # Why: create_deep_agent propagates the main `interrupt_on` to every
+    # declarative subagent (deepagents.graph). But a subagent is invoked via
+    # `subagent.ainvoke()` inside the `task` tool, so a HITL interrupt raised
+    # INSIDE a subagent surfaces as a GraphInterrupt EXCEPTION bubbling out of
+    # the parent agent's stream — it never appears as a top-level
+    # `__interrupt__` event, so the approve/auto-approve path in run_agent_stream
+    # never sees it and the whole turn crashes (this is what broke /init's
+    # semantic-extraction and NOVA.md-authoring subagents, and would break any
+    # /research subagent that writes a file). Nested HITL is unresolvable in this
+    # architecture, so we explicitly clear `interrupt_on` on each declarative
+    # subagent. The main agent still gates its own destructive tools; subagents
+    # it dispatches do not independently prompt. Compiled/remote subagents own
+    # their own approval config and are left untouched.
+    #
+    # The same pass also gives each subagent a ModelRetryMiddleware (which they
+    # otherwise lack entirely) so a transient provider 5xx/429 no longer kills a
+    # subagent mid-run — see _harden_subagent_specs. Returns fresh copies (never
+    # mutates the cached specs, which would accumulate middleware across builds).
+    Nova_SubAgent = _harden_subagent_specs(Nova_SubAgent, skill_sources)
+
+    return Nova_SubAgent + async_subagents
+
+
+def create_agent_with_config(
+    model: str | BaseChatModel,
+    assistant_id: str,
+    tools: list[BaseTool],
+    *,
+    sandbox: SandboxBackendProtocol | None = None,
+    sandbox_type: str | None = None,
+    system_prompt: str | None = None,
+    auto_approve: bool = False,
+    store: BaseStore | None = None,
+    checkpointer: BaseCheckpointSaver | None = None,
+    is_continuation: bool = False,
+    steering_instructions: list | None = None,
+    exec_sandbox: bool = False,
+    session_id: str | None = None,
+) -> tuple[Pregel, CompositeBackend]:
+    """Create and configure an agent with the specified model and tools.
+
+    Args:
+        model: LLM model to use
+        assistant_id: Agent identifier for memory storage
+        tools: Additional tools to provide to agent
+        sandbox: Optional sandbox backend for remote execution (e.g., ModalBackend).
+                 If None, uses local filesystem + shell.
+        sandbox_type: Type of sandbox provider ("modal", "runloop", "daytona")
+        exec_sandbox: When True (Pattern A, local mode), confine locally-executed
+                 shell commands to the workspace via an OS kernel sandbox
+                 (bwrap/sandbox-exec). No effect when a sandbox backend is used.
+        store: Optional durable store (BaseStore). If None, the caller is
+               expected to pass the shared store from get_shared_store() so
+               subagents can also access it.
+        is_continuation: If True, skip project memory paths (NOVA.md/CLAUDE.md)
+               from AgentMemoryMiddleware since they're already in the continuation prompt.
+
+    Returns:
+        2-tuple of (graph, backend)
+    """
+    # Lazy import for tracing (speeds up startup)
+    from novacode_cli.tracking.tracing import is_tracing_enabled, get_tracing_config
+
+    tracing_enabled = False
+
+    if is_tracing_enabled():
+        tracing_enabled = True
+        tracing_config = get_tracing_config()
+        # console.print(
+        #     f"[dim]LangSmith tracing enabled: {tracing_config.project_name}[/dim]"
+        # )
+    else:
+        # Try to auto-configure from environment
+        from novacode_cli.tracking.tracing import auto_configure
+
+        config_result = auto_configure()
+        if config_result.is_configured():
+            tracing_enabled = True
+            # console.print(
+            #     f"[dim]LangSmith tracing enabled: {config_result.project_name}[/dim]"
+            # )
+
+    # Wrap model for OpenAI tracing if enabled and model is a ChatOpenAI instance
+    wrapped_model = model
+    if tracing_enabled and hasattr(model, "_model"):  # Check if it's a LangChain model
+        try:
+            from langchain_openai import ChatOpenAI
+
+            if isinstance(model, ChatOpenAI):
+                from novacode_cli.tracking.tracing import (
+                    wrap_openai_client as _wrap_openai,
+                )
+
+                wrapped_model = _wrap_openai(model)
+        except ImportError:
+            pass
+
+    # Skill sources + the directories backing them (global ~/.nova/skills/,
+    # ~/.claude/skills/, project-level, and installed-plugin skills).
+    (
+        skill_sources,
+        skills_dir,
+        claude_skills_dir,
+        project_skills_dirs,
+        _plugin_skills,
+    ) = _build_skill_sources()
+
+    # Determine workspace root for path containment (resolves to subdirectory if applicable)
+    workspace_root = settings.get_workspace_root()
+
+    # Build list of allowed directories for filesystem access
+    # This includes the workspace root plus user directories like skills, memory, etc.
+    allowed_prefixes = [str(workspace_root)]
+    if settings.project_root and settings.project_root != workspace_root:
+        allowed_prefixes.append(str(settings.project_root))
+
+    # Add user skills directory (~/.nova/skills/)
+    if skills_dir:
+        allowed_prefixes.append(str(skills_dir))
+
+    # Add global Claude Code skills directory (~/.claude/skills/)
+    if claude_skills_dir.exists():
+        allowed_prefixes.append(str(claude_skills_dir))
+
+    # Add project skills directories
+    for skills_path in project_skills_dirs:
+        allowed_prefixes.append(str(skills_path))
+
+    # Add user agent directory (~/.nova/<agent>/) for memory files
+    agent_dir = settings.get_agent_dir(assistant_id)
+    if agent_dir:
+        allowed_prefixes.append(str(agent_dir))
+        # Auto-create simple memory structure on first use so the agent has
+        # a memory file to read/write without needing the
+        # create_memory_structure tool (which is no longer registered in the
+        # default toolset).
+        _agent_md = agent_dir / "agent.md"
+        if not _agent_md.exists():
+            agent_dir.mkdir(parents=True, exist_ok=True)
+            _agent_md.write_text(
+                """# Agent Memory
+
+This file stores your preferences and context that persist across sessions.
+
+## Communication Style
+- [Your preferred communication style]
+
+## Coding Preferences
+- [Your coding preferences]
+
+## Project Context
+- [Project-specific notes]
+
+## Workflows
+- [Common workflows you use]
+""",
+                encoding="utf-8",
+            )
+
+        # Ensure the semantic-tier scaffolding (memories/ dir) exists, and
+        # one-time-migrate any legacy USER.md/MEMORY.md into the injected
+        # surface (agent.md + memories/). migrate_legacy_tiers renames consumed
+        # files to *.migrated.bak, so a second run is a no-op.
+        try:
+            from novacode_cli.hermes.memory_tiers import (
+                ensure_memory_tiers,
+                migrate_legacy_tiers,
+            )
+
+            ensure_memory_tiers(agent_dir)
+            migrate_legacy_tiers(agent_dir)
+        except Exception:  # noqa: BLE001
+            console.print("[dim]⚠ Failed to ensure Nova memory tiers[/dim]")
+
+    # Default backend (local shell vs remote sandbox) + CompositeBackend with
+    # all virtual-path routes (/skills/, /memories/, /store/, /.nova/plans/, …).
+    composite_backend, _default_backend = _build_composite_backend(
+        sandbox=sandbox,
+        sandbox_type=sandbox_type,
+        workspace_root=workspace_root,
+        skills_dir=skills_dir,
+        claude_skills_dir=claude_skills_dir,
+        project_skills_dirs=project_skills_dirs,
+        plugin_skills=_plugin_skills,
+        agent_dir=agent_dir,
+        store=store,
+        assistant_id=assistant_id,
+        session_id=session_id,
+    )
+
+    # Check whether MCP servers are configured before instantiating the middleware.
+    # MCPMiddleware calls list_servers() (a JSON file read) on every model turn, so
+    # skipping it entirely when there are no servers saves ~4 file reads per call.
+    _has_mcp = False
+    try:
+        from novacode_cli.mcp.config import MCPConfig as _MCPConfig
+
+        _has_mcp = bool(_MCPConfig().load())
+    except Exception:
+        pass
+
+    _model_name = (
+        model
+        if isinstance(model, str)
+        else getattr(model, "model_name", getattr(model, "model", "unknown"))
+    )
+
+    # Core middleware stack (retry → vision → learning → security → bootstrap →
+    # steering → file tracker → loop guard → rubric → context editing → shell →
+    # agent memory). Ordering is load-bearing — see _build_middleware_stack.
+    agent_middleware = _build_middleware_stack(
+        model=model,
+        assistant_id=assistant_id,
+        store=store,
+        skills_dir=skills_dir,
+        agent_dir=agent_dir,
+        workspace_root=workspace_root,
+        steering_instructions=steering_instructions,
+        composite_backend=composite_backend,
+        sandbox=sandbox,
+        sandbox_type=sandbox_type,
+        exec_sandbox=exec_sandbox,
+    )
 
     # Plugin middleware injection — discover and inject user-enabled plugins
     # from installed pip packages that register "nova.plugins" entry points.
@@ -1162,46 +1418,14 @@ This file stores your preferences and context that persist across sessions.
     # stack) — do NOT add another here or agent creation fails with
     # "duplicate middleware instances".
 
-    # Load pre-defined default and user defined subagents
-    Nova_SubAgent.extend(retrieve_core_subagents(tools=tools))  # type: ignore
-    Nova_SubAgent.extend(build_named_subagents(assistant_id=assistant_id, tools=tools))  # type: ignore
-
-    # Plugin subagents — delegate agents contributed by enabled plugins. Added
-    # after the built-ins so they go through the same _harden_subagent_specs pass
-    # below (retry + no nested HITL) and can be dispatched via the `task` tool.
-    if _plugin_specs:
-        try:
-            from novacode_cli.plugins.loader import merge_plugin_subagents
-
-            merge_plugin_subagents(Nova_SubAgent, _plugin_specs)  # type: ignore
-        except Exception:  # noqa: BLE001
-            __import__("logging").getLogger("nova.plugins").exception(
-                "Failed to merge plugin subagents"
-            )
-
-    # Own the general-purpose subagent instead of letting create_deep_agent
-    # auto-inject it. The auto-injected one inherits the main `interrupt_on` and
-    # gets NO retry middleware, so it (a) can crash the turn on a nested HITL
-    # interrupt and (b) dies on a transient provider 5xx. /init delegates its
-    # semantic-extraction chunks to general-purpose, so this is exactly the
-    # subagent that was failing. Providing our own spec (the documented override)
-    # routes it through _harden_subagent_specs below — retry + no nested HITL —
-    # while deepagents still builds its base middleware stack. The stock
-    # GENERAL_PURPOSE_SUBAGENT system prompt is used (we forgo the harness-profile
-    # prompt overlay, which is an acceptable trade for resilience).
-    from deepagents.middleware.subagents import GENERAL_PURPOSE_SUBAGENT
-
-    if not any(isinstance(s, dict) and s.get("name") == "general-purpose" for s in Nova_SubAgent):
-        Nova_SubAgent.append({**GENERAL_PURPOSE_SUBAGENT, "tools": tools})  # type: ignore
-
-    # Subagents from installed Claude-compatible plugins (agents/*.md).
-    from novacode_cli.plugins.claude_plugins import plugin_agent_specs
-
-    _existing = {s.get("name") for s in Nova_SubAgent if isinstance(s, dict)}
-    Nova_SubAgent.extend(s for s in plugin_agent_specs() if s["name"] not in _existing)
-
-    # Load async subagents (run on remote LangGraph servers in background)
-    async_subagents = retrieve_async_subagents()
+    # Final subagent roster: core + named + plugin + general-purpose + async,
+    # hardened for unattended dispatch — see _build_subagent_roster.
+    subagents = _build_subagent_roster(
+        assistant_id=assistant_id,
+        tools=tools,
+        plugin_specs=_plugin_specs,
+        skill_sources=skill_sources,
+    )
 
     # Get the system prompt (sandbox-aware and with skills)
     if system_prompt is None:
@@ -1215,28 +1439,6 @@ This file stores your preferences and context that persist across sessions.
     else:
         # Full HITL for destructive operations
         interrupt_on = get_interrupt_configs()
-
-    # Subagents run UNATTENDED — the main agent is the sole HITL boundary.
-    #
-    # Why: create_deep_agent propagates the main `interrupt_on` to every
-    # declarative subagent (deepagents.graph). But a subagent is invoked via
-    # `subagent.ainvoke()` inside the `task` tool, so a HITL interrupt raised
-    # INSIDE a subagent surfaces as a GraphInterrupt EXCEPTION bubbling out of
-    # the parent agent's stream — it never appears as a top-level
-    # `__interrupt__` event, so the approve/auto-approve path in run_agent_stream
-    # never sees it and the whole turn crashes (this is what broke /init's
-    # semantic-extraction and NOVA.md-authoring subagents, and would break any
-    # /research subagent that writes a file). Nested HITL is unresolvable in this
-    # architecture, so we explicitly clear `interrupt_on` on each declarative
-    # subagent. The main agent still gates its own destructive tools; subagents
-    # it dispatches do not independently prompt. Compiled/remote subagents own
-    # their own approval config and are left untouched.
-    #
-    # The same pass also gives each subagent a ModelRetryMiddleware (which they
-    # otherwise lack entirely) so a transient provider 5xx/429 no longer kills a
-    # subagent mid-run — see _harden_subagent_specs. Returns fresh copies (never
-    # mutates the cached specs, which would accumulate middleware across builds).
-    Nova_SubAgent = _harden_subagent_specs(Nova_SubAgent, skill_sources)
 
     # Make deepagents' built-in SummarizationMiddleware actually fire on OUR
     # context budget (see _seed_summarization_profile).
@@ -1268,6 +1470,26 @@ This file stores your preferences and context that persist across sessions.
     # from the system-prompt list and the agent's reach). See /skills toggles.
     agent_middleware.append(SkillCurationMiddleware())
 
+    # Dynamic subagents — a QuickJS `eval` tool whose scripts can dispatch
+    # subagents via a top-level `task()` host function (fan-out, verify, loop
+    # patterns; triggered by "workflow" prompts). It bridges into the same
+    # `task` tool deepagents registers, so dispatches reuse the hardened
+    # subagent specs above. Host `task()` awaits pause the JS timeout clock,
+    # so long subagent runs don't trip the 5s eval budget. Import-guarded so
+    # installs that predate the langchain-quickjs dependency still boot.
+    # ponytail: PTC off (tools.* not exposed to scripts); enable with an
+    # allowlist if scripts need glob/grep discovery.
+    try:
+        import warnings
+
+        from langchain_quickjs import CodeInterpreterMiddleware
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # beta-API warning would print every boot
+            agent_middleware.append(CodeInterpreterMiddleware())
+    except ImportError:
+        pass
+
     agent = create_deep_agent(
         name=assistant_id,
         model=wrapped_model,
@@ -1279,7 +1501,7 @@ This file stores your preferences and context that persist across sessions.
         middleware=agent_middleware,
         store=store,
         interrupt_on=interrupt_on,  # type: ignore
-        subagents=Nova_SubAgent + async_subagents,  # type: ignore
+        subagents=subagents,  # type: ignore
     ).with_config(
         config  # type: ignore
     )

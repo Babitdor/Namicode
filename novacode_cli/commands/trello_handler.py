@@ -47,7 +47,7 @@ async def _capture_task_result(
     Best-effort — any failure just yields no result.
     """
     try:
-        from novacode_cli.ui.input_preparation import build_agent_config
+        from novacode_cli.core.input_preparation import build_agent_config
 
         config = build_agent_config(session_state.thread_id, assistant_id)
         state = await agent.aget_state(config)

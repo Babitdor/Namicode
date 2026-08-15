@@ -121,6 +121,37 @@ def enter_plan_mode(reason: str = "") -> str:
 # ---------------------------------------------------------------------------
 
 
+def _persist_approved_plan(plan: str) -> str | None:
+    """Save an approved plan to ``.nova/plans/`` named after its title.
+
+    ``# Refactor auth flow`` → ``plan-refactor-auth-flow.md``. Falls back to a
+    timestamp name when the plan has no heading; appends a timestamp on
+    collision. Returns the saved path (workspace-relative) or None on failure.
+    """
+    import re
+    from datetime import datetime
+    from pathlib import Path
+
+    try:
+        from novacode_cli.config.config import settings
+
+        root = Path(settings.get_workspace_root())
+    except Exception:  # noqa: BLE001
+        root = Path.cwd()
+    plans_dir = root / ".nova" / "plans"
+    plans_dir.mkdir(parents=True, exist_ok=True)
+
+    m = re.search(r"^#+\s+(.+)$", plan, re.MULTILINE)
+    slug = re.sub(r"[^a-z0-9]+", "-", (m.group(1) if m else "").lower()).strip("-")[:50]
+    stamp = f"{datetime.now():%Y%m%d-%H%M%S}"
+    name = f"plan-{slug}.md" if slug else f"plan-{stamp}.md"
+    path = plans_dir / name
+    if path.exists():
+        path = plans_dir / f"plan-{slug}-{stamp}.md"
+    path.write_text(plan, encoding="utf-8")
+    return str(path.relative_to(root)) if path.is_relative_to(root) else str(path)
+
+
 @tool
 def exit_plan_mode(plan: str = "") -> str:
     """Present your completed plan for user approval and exit plan mode.
@@ -128,6 +159,8 @@ def exit_plan_mode(plan: str = "") -> str:
     Pass your full implementation plan as Markdown in ``plan`` — it is shown to
     the user inline for review (Claude Code plan-mode style), so you do not need
     to write it to a file first. Execution pauses while the user reviews.
+    On approval the plan is automatically saved to ``.nova/plans/`` named
+    after the plan's title.
 
     Args:
         plan: The implementation plan as Markdown to present for approval.
@@ -148,7 +181,14 @@ def exit_plan_mode(plan: str = "") -> str:
 
     if isinstance(response, dict):
         if response.get("approved"):
-            return "Plan approved. Proceed with implementation."
+            saved = None
+            if plan.strip():
+                try:
+                    saved = _persist_approved_plan(plan)
+                except Exception:  # noqa: BLE001 - persistence must never fail approval
+                    saved = None
+            suffix = f" (Plan saved to {saved})" if saved else ""
+            return f"Plan approved. Proceed with implementation.{suffix}"
         action = response.get("action", "refine")
         feedback = response.get("feedback", "")
         feedback_suffix = f"\n\nUser feedback: {feedback}" if feedback else ""

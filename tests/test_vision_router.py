@@ -322,7 +322,7 @@ class TestVisionCaptionModelHook:
 
 class TestPasteIngestionCaptioning:
     async def test_pasted_image_becomes_text(self, monkeypatch: pytest.MonkeyPatch):
-        import novacode_cli.ui.input_preparation as ip
+        import novacode_cli.core.input_preparation as ip
 
         monkeypatch.setattr(vr, "caption_images", AsyncMock(return_value="a bar chart of sales"))
 

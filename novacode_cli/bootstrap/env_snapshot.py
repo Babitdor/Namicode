@@ -150,9 +150,36 @@ class BootstrapMiddleware(AgentMiddleware):
         else:
             self._enabled = enabled
 
+        # Prewarm: the snapshot spawns PowerShell + ~8 sequential version
+        # probes (~4s on Windows). Running it lazily on the first turn blocked
+        # the event loop for that long. Kick it off in a daemon thread NOW
+        # (agent build time) — it finishes while the user types their first
+        # message, so before_agent just collects the result.
+        self._snapshot_future: object | None = None
+        if self._enabled:
+            import concurrent.futures
+
+            self._executor = concurrent.futures.ThreadPoolExecutor(
+                max_workers=1, thread_name_prefix="env-snapshot"
+            )
+            self._snapshot_future = self._executor.submit(
+                _run_snapshot, workspace_root, timeout
+            )
+            self._executor.shutdown(wait=False)  # thread finishes; no new work
+
     # ------------------------------------------------------------------
     # Capture
     # ------------------------------------------------------------------
+
+    def _collect_snapshot(self) -> str:
+        """Get the prewarmed snapshot, waiting if it's still running."""
+        fut = self._snapshot_future
+        if fut is None:  # prewarm never started (disabled at init, enabled later)
+            return _run_snapshot(self._workspace_root, self._timeout)
+        try:
+            return fut.result(timeout=self._timeout)  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001 - timeout/crash → same fallback text as before
+            return "(snapshot timed out)"
 
     def before_agent(  # type: ignore[override]
         self,
@@ -160,11 +187,10 @@ class BootstrapMiddleware(AgentMiddleware):
         runtime: Runtime,
         config: RunnableConfig,
     ) -> _BootstrapStateUpdate | None:
-        """Run the snapshot command on the very first turn and store in state."""
+        """Collect the prewarmed snapshot on the very first turn, store in state."""
         if not self._enabled or "env_snapshot" in state:
             return None
-        snapshot = _run_snapshot(self._workspace_root, self._timeout)
-        return _BootstrapStateUpdate(env_snapshot=snapshot)
+        return _BootstrapStateUpdate(env_snapshot=self._collect_snapshot())
 
     async def abefore_agent(  # type: ignore[override]
         self,
@@ -172,8 +198,14 @@ class BootstrapMiddleware(AgentMiddleware):
         runtime: Runtime,
         config: RunnableConfig,
     ) -> _BootstrapStateUpdate | None:
-        """Async version — runs snapshot synchronously (it's a short subprocess)."""
-        return self.before_agent(state, runtime, config)
+        """Async version — collects off-thread so a still-running snapshot
+        never blocks the event loop."""
+        if not self._enabled or "env_snapshot" in state:
+            return None
+        import asyncio
+
+        snapshot = await asyncio.to_thread(self._collect_snapshot)
+        return _BootstrapStateUpdate(env_snapshot=snapshot)
 
     # ------------------------------------------------------------------
     # Injection

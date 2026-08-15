@@ -97,6 +97,7 @@ class AgentRuntimeState:
             checkpointer=self._checkpointer,
             is_continuation=True,  # Mark as continuation to preserve state
             steering_instructions=steering_instructions or [],
+            session_id=session_id or getattr(self, "session_id", None),
         )
 
         # Update stored references
@@ -159,6 +160,7 @@ class AgentRuntimeState:
             checkpointer=self._checkpointer,
             is_continuation=True,  # Mark as continuation to preserve state
             steering_instructions=steering_instructions or [],
+            session_id=getattr(self, "session_id", None),
         )
 
         # Update stored references

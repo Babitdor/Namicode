@@ -19,8 +19,8 @@ The CLI loop handles:
 Key Functions:
 - parse_args(): Parse command-line arguments
 - cli_main(): Main entry point for the CLI
-- run_cli_session(): Execute the interactive CLI loop
-- handle_command(): Handle special CLI commands (e.g., /help, /tokens)
+- main(): Async entry point that sets up the agent and session
+- _run_agent_session(): Execute the interactive CLI loop
 """
 
 # Suppress transformer warnings before any imports that might trigger them
@@ -47,6 +47,15 @@ warnings.filterwarnings(
     "ignore",
     message="Using fallback GPT-2 tokenizer for token counting",
 )
+# Instant boot feedback — printed BEFORE the heavy imports below (langchain,
+# deepagents, anthropic ≈ several seconds cold) so the terminal isn't blank
+# while Python loads. stderr + isatty keeps piped/scripted output clean.
+import sys as _sys
+
+if _sys.stderr.isatty():
+    _sys.stderr.write("\x1b[2m· nova: loading…\x1b[0m\n")
+    _sys.stderr.flush()
+
 # Suppress deepagents files_update deprecation warning (handled internally by deepagents)
 from langchain_core._api.deprecation import LangChainDeprecationWarning
 
@@ -90,7 +99,6 @@ root_logger.addHandler(file_handler)
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.store.base import BaseStore
-from novacode_cli.doctor import run_doctor
 
 try:
     from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver as _AsyncSqliteSaver  # type: ignore
@@ -99,15 +107,14 @@ try:
 except ImportError:
     _SQLITE_CHECKPOINTER_AVAILABLE = False
 
-# Apply safety patches for backends that don't handle all content block types
-# (e.g., Ollama crashes on "file" type blocks from PDF reads)
+# Apply safety patches for backends that don't handle all content block types.
+# The Ollama content-block patch is NOT applied here: it would import
+# langchain_ollama (~1s) for every user. It's applied at ChatOllama
+# construction time in model_create.py / model_manager.py instead.
 from novacode_cli.utils.backend_patches import (
     apply_filesystem_host_path_patch,
-    apply_ollama_content_block_patch,
     apply_write_file_dict_content_patch,
 )
-
-apply_ollama_content_block_patch()
 # Let the agent pass real host paths inside the project to file tools without
 # tripping deepagents' "Windows absolute paths are not supported" rejection.
 apply_filesystem_host_path_patch()
@@ -719,6 +726,7 @@ async def _run_agent_session(
             is_continuation=bool(initial_messages),
             steering_instructions=session_state.steering_instructions,
             exec_sandbox=exec_sandbox,
+            session_id=session_state.session_id or session_state.thread_id,
         )
 
         # Set agent context in session state for dynamic model switching
@@ -1789,6 +1797,8 @@ def cli_main() -> None:
         elif args.command == "secrets":
             _execute_secrets_command(args)
         elif args.command == "doctor":
+            from novacode_cli.doctor import run_doctor  # lazy: ~1s import, niche command
+
             sys.exit(run_doctor())
         else:
             # Create session state from args

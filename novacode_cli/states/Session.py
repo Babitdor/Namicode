@@ -92,8 +92,34 @@ class SessionState:
         from novacode_cli.bootstrap.steering import SteeringInstruction
         self.steering_instructions: list[SteeringInstruction] = []
 
-        # Dynamic fields (browser_use_tasks, current_task, etc.) stored here
+        # Dynamic fields (plugin/external only) stored here
         self._dynamic: dict[str, Any] = {}
+
+        # -- declared fields formerly invented dynamically by other modules ----
+        # (each comment names the module(s) that read/write the field)
+        self.use_tui: bool = True  # main.py
+        self.headless: bool = False  # main.py, headless/runner.py
+        self.headless_prompt: str | None = None  # main.py, headless/runner.py
+        self.headless_output_format: str = "text"  # main.py, headless/runner.py
+        self.headless_max_turns: int | None = None  # main.py, headless/runner.py
+        self.headless_deny_tools: bool = False  # main.py, headless/runner.py
+        self.headless_out_fd: int | None = None  # main.py, headless/runner.py
+        self.headless_exit_code: int = 0  # main.py, headless/runner.py
+        self.workspace_root: str | None = None  # commands/log_commands.py, tui/app.py
+        self.verify_enabled: bool = False  # ui/execution.py
+        self.active_goal: str | None = None  # commands/side_commands.py, core/agent_loop.py, tui/app.py
+        self.active_rubric: str | None = None  # commands/side_commands.py, core/agent_loop.py
+        self.browser_use_tasks: dict = {}  # commands/browser_use_handler.py
+        self.create_server: Any = None  # commands/create_handler.py, tui/app.py
+        self._cron_scheduler: Any = None  # commands/cron_handler.py, main.py
+        self._webhook_server: Any = None  # commands/webhook_handler.py
+        self._ralph_stop_requested: bool = False  # commands/ralph_handler.py, tui/app.py
+        self._ralph_checkpoint_requested: bool = False  # commands/ralph_handler.py, tui/app.py
+        self._background_threads: list = []  # commands/ralph_handler.py
+        self._voice_pipeline: Any = None  # main.py, tui/app.py
+        self._remote_tool_notify: Any = None  # remote/processor.py, ui/execution.py
+        self._remote_todo_notify: Any = None  # remote/processor.py, ui/execution.py
+        self._remote_processor_task: Any = None  # main.py (shutdown)
 
         # Pending approval Futures keyed by action_id.
         # When the agent loop yields an InterruptRequest, the Future is stored
@@ -400,10 +426,29 @@ class SessionState:
     # ══════════════════════════════════════════════════════════════════════
     # Dynamic-field fallback
     # ══════════════════════════════════════════════════════════════════════
-    # Callers dynamically assign fields like browser_use_tasks,
-    # _background_threads, _remote_processor_task, _paste_tracker,
-    # pending_plan_mode_sync, current_task, task_status, workspace_root,
-    # use_tui, _remote_tool_notify.
+    # Every field used by Nova's own code is declared in __init__ (and listed
+    # in _CONCRETE_FIELDS below); _dynamic only serves genuinely external /
+    # plugin-assigned fields.
+
+    # Names set in __init__ as plain instance attributes. __setattr__ must
+    # route these through object.__setattr__ so they stay concrete instead of
+    # falling into _dynamic.
+    _CONCRETE_FIELDS = frozenset({
+        "thread_id", "session_id", "is_continued", "todos",
+        "steering_instructions",
+        "_ui_settings", "_agent_runtime", "_remote_bridge", "_bg_tasks", "_ntf",
+        "_wiki", "_dynamic", "_pending_approvals",
+        # formerly-dynamic fields declared in __init__
+        "use_tui", "headless", "headless_prompt", "headless_output_format",
+        "headless_max_turns", "headless_deny_tools", "headless_out_fd",
+        "headless_exit_code",
+        "workspace_root", "verify_enabled", "active_goal", "active_rubric",
+        "browser_use_tasks", "create_server",
+        "_cron_scheduler", "_webhook_server",
+        "_ralph_stop_requested", "_ralph_checkpoint_requested",
+        "_background_threads", "_voice_pipeline",
+        "_remote_tool_notify", "_remote_todo_notify", "_remote_processor_task",
+    })
 
     def __getattr__(self, name: str) -> Any:
         # First, check if the name is a private agent field on the runtime slice
@@ -421,12 +466,7 @@ class SessionState:
 
     def __setattr__(self, name: str, value: Any) -> None:
         # Bypass for known instance attributes (set normally)
-        if name in {
-            "thread_id", "session_id", "is_continued", "todos",
-            "steering_instructions",
-            "_ui_settings", "_agent_runtime", "_remote_bridge", "_bg_tasks", "_ntf",
-            "_dynamic",
-        }:
+        if name in self._CONCRETE_FIELDS:
             object.__setattr__(self, name, value)
             return
         # Private agent fields go to the agent runtime slice
@@ -449,6 +489,7 @@ class SessionState:
             "_console",
             "background_ralph_tasks", "trello_server",
             "notifications",
+            "wiki_root", "wiki_enabled", "wiki_page_count", "wiki_last_ingest",
         }:
             object.__setattr__(self, name, value)
             return

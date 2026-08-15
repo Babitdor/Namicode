@@ -34,6 +34,8 @@ def test_declarative_specs_get_retry_vision_security_first_and_no_interrupts():
 
 
 def test_existing_subagent_middleware_is_preserved_after_hardening():
+    from novacode_cli.tracking.loop_guard import LoopGuardMiddleware
+
     sentinel = object()
     specs = [{"name": "x", "system_prompt": "p", "middleware": [sentinel]}]
     out = _harden_subagent_specs(specs)
@@ -41,7 +43,8 @@ def test_existing_subagent_middleware_is_preserved_after_hardening():
     assert isinstance(mw[0], ModelRetryMiddleware)
     assert isinstance(mw[1], VisionCaptionMiddleware)
     assert isinstance(mw[2], SecurityMiddleware)
-    assert mw[3] is sentinel
+    assert isinstance(mw[3], LoopGuardMiddleware)
+    assert mw[4] is sentinel
 
 
 def test_fresh_middleware_instances_per_spec_not_shared():

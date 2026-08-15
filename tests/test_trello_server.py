@@ -158,7 +158,7 @@ def test_content_text_variants():
 
 
 async def test_capture_result_reads_last_ai_message(monkeypatch: pytest.MonkeyPatch):
-    import novacode_cli.ui.input_preparation as ip
+    import novacode_cli.core.input_preparation as ip
 
     monkeypatch.setattr(ip, "build_agent_config", lambda *_a, **_k: {})
     agent = _FakeAgent([SimpleNamespace(type="human", content="do x"), _ai("done x")])
@@ -167,7 +167,7 @@ async def test_capture_result_reads_last_ai_message(monkeypatch: pytest.MonkeyPa
 
 
 async def test_capture_result_swallows_errors(monkeypatch: pytest.MonkeyPatch):
-    import novacode_cli.ui.input_preparation as ip
+    import novacode_cli.core.input_preparation as ip
 
     monkeypatch.setattr(ip, "build_agent_config", lambda *_a, **_k: {})
     agent = _FakeAgent([], boom=True)
@@ -179,7 +179,7 @@ async def test_capture_result_swallows_errors(monkeypatch: pytest.MonkeyPatch):
 
 
 async def test_watch_loop_processes_and_captures(monkeypatch: pytest.MonkeyPatch):
-    import novacode_cli.ui.input_preparation as ip
+    import novacode_cli.core.input_preparation as ip
 
     monkeypatch.setattr(ip, "build_agent_config", lambda *_a, **_k: {})
     server = TrelloServer()
@@ -213,7 +213,7 @@ async def test_watch_loop_processes_and_captures(monkeypatch: pytest.MonkeyPatch
 
 
 async def test_watch_loop_records_failure(monkeypatch: pytest.MonkeyPatch):
-    import novacode_cli.ui.input_preparation as ip
+    import novacode_cli.core.input_preparation as ip
 
     monkeypatch.setattr(ip, "build_agent_config", lambda *_a, **_k: {})
     server = TrelloServer()
@@ -243,7 +243,7 @@ async def test_watch_loop_records_failure(monkeypatch: pytest.MonkeyPatch):
 
 
 async def test_watch_loop_respects_auto_advance(monkeypatch: pytest.MonkeyPatch):
-    import novacode_cli.ui.input_preparation as ip
+    import novacode_cli.core.input_preparation as ip
 
     monkeypatch.setattr(ip, "build_agent_config", lambda *_a, **_k: {})
     server = TrelloServer()

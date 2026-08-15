@@ -203,6 +203,40 @@ class ModelManager:
         model = os.environ.get("OLLAMA_MODEL", "qwen3-coder:480b-cloud")
         return ("Ollama", model)
 
+    def get_current_provider_id(self) -> str | None:
+        """Preset key (e.g. 'openai') for the currently active provider.
+
+        Reverse-maps the display name from get_current_provider(); the id is
+        what set_provider and the UI pickers speak.
+        """
+        current = self.get_current_provider()
+        if not current:
+            return None
+        for provider_id, preset in MODEL_PRESETS.items():
+            if preset["name"] == current[0]:
+                return provider_id
+        return None
+
+    def resolve_api_key(self, provider: str) -> str | None:
+        """Existing API key for a provider, from the OS keychain or environment.
+
+        Exports the key into os.environ when found so model construction can
+        read it. Key Policy: what to do when this returns None (prompt, warn,
+        or fail) belongs to the caller, never here.
+        """
+        preset = MODEL_PRESETS.get(provider)
+        api_key_var = preset.get("api_key_var") if preset else None
+        if not api_key_var:
+            return None
+        from novacode_cli.onboarding import SecretManager
+
+        key = SecretManager().get_secret(api_key_var.lower()) or os.environ.get(
+            api_key_var
+        )
+        if key:
+            os.environ[api_key_var] = key
+        return key
+
     def create_model_for_provider(
         self, provider: ProviderType, model_name: str | None = None
     ) -> BaseChatModel:
@@ -232,53 +266,12 @@ class ModelManager:
             if not os.environ.get(api_key_var):
                 raise ValueError(f"{preset['name']} requires {api_key_var} environment variable")
 
-        # Create the appropriate model
-        if provider == "openai":
-            from langchain_openai import ChatOpenAI
+        # Construction lives in ONE place (build_chat_model). This path used to
+        # keep its own drifted copies — mid-session model switches silently
+        # lost reasoning_effort / max_retries / thinking budgets vs. boot.
+        from novacode_cli.config.model_create import build_chat_model
 
-            return ChatOpenAI(model=model_name)  # type: ignore
-
-        if provider == "anthropic":
-            from langchain_anthropic import ChatAnthropic
-
-            return ChatAnthropic(
-                model_name=model_name,
-                max_tokens=20_000,  # type: ignore[arg-type]
-            )
-
-        if provider == "ollama":
-            from langchain_ollama import ChatOllama
-
-            from novacode_cli.context._dynamic import get_ollama_num_ctx
-
-            return ChatOllama(
-                model=model_name,  # type: ignore
-                temperature=0,
-                disable_streaming=True,
-                keep_alive=600,
-                num_ctx=get_ollama_num_ctx(),
-            )
-
-        if provider == "google":
-            from langchain_google_genai import ChatGoogleGenerativeAI
-
-            return ChatGoogleGenerativeAI(
-                model=model_name,
-                temperature=0,
-                max_tokens=None,
-            )
-
-        if provider == "openrouter":
-            from langchain_openai import ChatOpenAI
-
-            # OpenRouter is OpenAI-compatible: same client, custom base URL + key.
-            return ChatOpenAI(
-                model=model_name,  # type: ignore
-                base_url=preset.get("base_url", OPENROUTER_BASE_URL),
-                api_key=os.environ.get("OPENROUTER_API_KEY"),  # type: ignore[arg-type]
-            )
-
-        raise ValueError(f"Provider {provider} not implemented")
+        return build_chat_model(provider, model_name)  # type: ignore[arg-type]
 
     def set_provider(self, provider: ProviderType, model_name: str | None = None) -> None:
         """Set the current provider and model.

@@ -23,7 +23,7 @@ from novacode_cli.core.agent_loop import (
 )
 from novacode_cli.headless.output import HeadlessOutput
 from novacode_cli.ui.hitl_approval import evaluate_tool_actions
-from novacode_cli.ui.input_preparation import build_agent_config
+from novacode_cli.core.input_preparation import build_agent_config
 
 EXIT_OK = 0
 EXIT_ERROR = 1

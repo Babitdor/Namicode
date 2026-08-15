@@ -20,6 +20,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.pregel import Pregel
 
 from novacode_cli.agents.plan_agent.plan_mode_middleware import PlanModeMiddleware
+from novacode_cli.tracking.loop_guard import LoopGuardMiddleware
 
 # Use Nova's optimized backend (non-hanging grep + ripgrep discovery + regex).
 from novacode_cli.backends import OptimizedFilesystemBackend as FilesystemBackend
@@ -280,6 +281,10 @@ def create_plan_agent_with_config(
                 initial_delay=1.0,
             ),
             PlanModeMiddleware(workspace_root=workspace_root),
+            # Break identical-repeat tool loops (same tool + args + result).
+            # The main agent has this guard; plan mode lacked it, so a stuck
+            # model could re-read the same file indefinitely while planning.
+            LoopGuardMiddleware(threshold=3),
             # Keep the SHARED session list reference even when empty — using
             # `or []` would swap in a fresh list and break live steering, since
             # the list is usually empty at plan-agent creation time.

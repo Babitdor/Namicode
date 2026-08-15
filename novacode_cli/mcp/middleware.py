@@ -9,10 +9,16 @@ persistent connections for stateful MCP servers.
 
 import asyncio
 import contextlib
+import hashlib
+import json
 import logging
+import threading
+import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict
+
+from mcp.types import Tool as MCPTool
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
@@ -96,6 +102,54 @@ def _wrap_tool_error_handling(tool: BaseTool) -> BaseTool:
             pass
 
     return tool
+
+
+# ── MCP tool-schema disk cache ───────────────────────────────────────────────
+# Discovering tools live means cold-spawning every stdio server (npx/uvx) just
+# to list its tools — ~5-11s of agent-build time on every boot. Tool schemas
+# almost never change, and the converted tools open a FRESH session per call
+# anyway (stateless pattern), so a tool rebuilt from a cached schema behaves
+# identically at call time. Boot therefore serves schemas from this cache and
+# refreshes it in a background thread, so drift is at most one boot stale.
+# Entries are keyed by server name and invalidated by a connection-config hash.
+_SCHEMA_CACHE_PATH = Path.home() / ".nova" / "mcp_tools_cache.json"
+
+# Only refresh entries older than this. Refreshing on every boot would spawn
+# every cached stdio server in the background each session — wasted CPU/RAM
+# and their startup logs would spew mid-session. Daily is plenty for schemas.
+_SCHEMA_REFRESH_TTL_SECONDS = 24 * 3600.0
+
+
+def _connection_fingerprint(connection: dict[str, Any]) -> str:
+    """Hash of a server's connection config — cache invalidation key."""
+    return hashlib.sha256(
+        json.dumps(connection, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+
+
+def _load_schema_cache() -> dict[str, Any]:
+    try:
+        return json.loads(_SCHEMA_CACHE_PATH.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 - missing/corrupt cache just means live discovery
+        return {}
+
+
+def _save_schema_cache(entries: dict[str, Any]) -> None:
+    try:
+        _SCHEMA_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _SCHEMA_CACHE_PATH.write_text(json.dumps(entries), encoding="utf-8")
+    except Exception:  # noqa: BLE001 - cache write failure must never break discovery
+        logger.debug("Could not write MCP schema cache", exc_info=True)
+
+
+async def _fetch_raw_tools(connection: dict[str, Any]) -> list[MCPTool]:
+    """Connect to one server and list its raw MCP tool schemas."""
+    from langchain_mcp_adapters.sessions import create_session
+    from langchain_mcp_adapters.tools import _list_all_tools
+
+    async with create_session(connection) as session:  # type: ignore[arg-type]
+        await session.initialize()
+        return await _list_all_tools(session)
 
 
 class MCPState(AgentState):
@@ -199,20 +253,73 @@ class MCPMiddleware(AgentMiddleware):
             # ``self.tools`` empty so MCP tools never register.
             future.result(timeout=90)
 
-    async def _discover_tools_async(self) -> None:
-        """Async implementation of tool discovery using MultiServerMCPClient.
+    def _convert_raw_tools(
+        self,
+        server_name: str,
+        connection: dict[str, Any],
+        raw_tools: list[MCPTool],
+    ) -> list[BaseTool]:
+        """Convert raw MCP tool schemas to wrapped LangChain tools + metadata.
 
-        Uses the recommended stateless pattern from langchain-mcp-adapters:
-        - Creates fresh sessions for each tool invocation
-        - Uses load_mcp_tools with server_name for proper attribution
-        - Handles errors gracefully with proper logging
-
-        Discovery is parallelised across servers with a concurrency cap
-        (``asyncio.Semaphore``) so that N servers are discovered concurrently
-        instead of sequentially.
+        No connection is made here — the converted tools open a fresh session
+        per invocation from ``connection`` (stateless pattern). Tool names are
+        prefixed with the server name (e.g. ``serena_read_file``) so MCP tools
+        never collide with the agent's built-in tools.
         """
-        from langchain_mcp_adapters.tools import load_mcp_tools
+        from langchain_mcp_adapters.tools import convert_mcp_tool_to_langchain_tool
 
+        server_tools = [
+            # Make tool failures non-fatal: an MCP/anyio error (e.g. a
+            # playwright ERR_CONNECTION_REFUSED) can surface as a
+            # BaseExceptionGroup that escapes LangGraph's ToolNode error
+            # handling and aborts the whole turn. Wrapping each tool so it
+            # returns the error as a string lets the model recover instead.
+            _wrap_tool_error_handling(
+                convert_mcp_tool_to_langchain_tool(
+                    None,  # Stateless - creates fresh session per invocation
+                    raw,
+                    connection=connection,  # type: ignore[arg-type]
+                    server_name=server_name,
+                    tool_name_prefix=True,
+                )
+            )
+            for raw in raw_tools
+        ]
+
+        # Build metadata cache with correct server attribution
+        for tool in server_tools:
+            input_schema = {}
+            if hasattr(tool, "args_schema") and tool.args_schema:
+                try:
+                    schema: Any = tool.args_schema
+                    if hasattr(schema, "model_json_schema"):
+                        schema = schema.model_json_schema()
+                    if isinstance(schema, dict):
+                        input_schema = schema.get("properties", {})
+                except Exception:
+                    pass
+
+            self._tools_cache.append(
+                {
+                    "name": tool.name,
+                    "description": tool.description or "",
+                    "server": server_name,
+                    "input_schema": input_schema,
+                }
+            )
+
+        return server_tools
+
+    async def _discover_tools_async(self) -> None:
+        """Async implementation of tool discovery.
+
+        Servers whose tool schemas are in the disk cache (and whose connection
+        config hasn't changed) are rebuilt WITHOUT connecting — this removes
+        several seconds of stdio-server cold starts from every boot. Only
+        cache misses do live discovery, parallelised with a concurrency cap.
+        Cached servers are re-discovered in a background thread afterwards so
+        the cache is at most one boot stale.
+        """
         from novacode_cli.mcp.client import build_mcp_config_dict
 
         servers = self.mcp_config.list_servers()
@@ -232,89 +339,138 @@ class MCPMiddleware(AgentMiddleware):
         # Reset the metadata cache so a re-run cannot accumulate duplicates.
         self._tools_cache = []
 
-        # Cap concurrent discovery to avoid overwhelming the host
-        _discovery_semaphore = asyncio.Semaphore(3)
-
-        async def _discover_one(
-            server_name: str, connection: dict[str, Any]
-        ) -> list[BaseTool]:
-            """Discover tools for a single MCP server."""
-            async with _discovery_semaphore:
+        # Split servers into schema-cache hits (rebuilt instantly, no network)
+        # and misses (live discovery).
+        schema_cache = _load_schema_cache()
+        cached_raw: dict[str, list[MCPTool]] = {}
+        to_discover: dict[str, dict[str, Any]] = {}
+        for name, conn in config_dict.items():
+            entry = schema_cache.get(name)
+            if entry and entry.get("fingerprint") == _connection_fingerprint(conn):
                 try:
-                    server_tools = await load_mcp_tools(
-                        session=None,  # Stateless - creates fresh session per invocation
-                        connection=connection,
-                        server_name=server_name,
-                        # Prefix tool names with the server name (e.g.
-                        # ``serena_read_file``) so MCP tools never collide with
-                        # the agent's built-in tools. Without this, servers like
-                        # serena expose a bare ``read_file`` (which takes
-                        # ``relative_path``) that shadows the built-in
-                        # ``read_file`` (which takes ``file_path``), causing
-                        # "Field required: relative_path" validation errors.
-                        tool_name_prefix=True,
-                    )
+                    cached_raw[name] = [MCPTool.model_validate(t) for t in entry["tools"]]
+                    continue
+                except Exception:  # noqa: BLE001 - malformed entry → live discovery
+                    pass
+            to_discover[name] = conn
 
-                    if server_tools:
-                        # Make tool failures non-fatal: an MCP/anyio error (e.g.
-                        # a playwright ERR_CONNECTION_REFUSED) can surface as a
-                        # BaseExceptionGroup that escapes LangGraph's ToolNode
-                        # error handling and aborts the whole turn. Wrapping each
-                        # tool so it returns the error as a string lets the model
-                        # see the failure and recover instead.
-                        server_tools = [
-                            _wrap_tool_error_handling(t) for t in server_tools
-                        ]
-                        # Build metadata cache with correct server attribution
-                        for tool in server_tools:
-                            input_schema = {}
-                            if hasattr(tool, "args_schema") and tool.args_schema:
-                                try:
-                                    schema = tool.args_schema.model_json_schema()  # type: ignore
-                                    input_schema = schema.get("properties", {})
-                                except Exception:
-                                    pass
-
-                            self._tools_cache.append(
-                                {
-                                    "name": tool.name,
-                                    "description": tool.description or "",
-                                    "server": server_name,
-                                    "input_schema": input_schema,
-                                }
-                            )
-
-                    return server_tools
-
-                except Exception as e:
-                    # Log the error but continue with other servers
-                    error_msg = str(e)
-                    if "TaskGroup" in error_msg or "unhandled errors" in error_msg:
-                        error_msg = "Connection timeout or initialization error"
-                    console.print(
-                        f"[yellow]Warning: Failed to connect to "
-                        f"MCP server '{server_name}': {error_msg}[/yellow]"
-                    )
-                    return []
-
-        # Discover all servers in parallel with concurrency cap
-        tasks = [
-            _discover_one(name, conn)
-            for name, conn in config_dict.items()
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        # Flatten results — each _discover_one returns a list or an exception
         all_tools: list[BaseTool] = []
-        for r in results:
-            if isinstance(r, list):
-                all_tools.extend(r)
+        for name, raw in cached_raw.items():
+            all_tools.extend(self._convert_raw_tools(name, config_dict[name], raw))
+
+        if to_discover:
+            # Cap concurrent discovery to avoid overwhelming the host
+            _discovery_semaphore = asyncio.Semaphore(3)
+
+            async def _discover_one(
+                server_name: str, connection: dict[str, Any]
+            ) -> tuple[str, list[MCPTool] | None]:
+                """Fetch raw tool schemas for a single MCP server."""
+                async with _discovery_semaphore:
+                    try:
+                        return server_name, await _fetch_raw_tools(connection)
+                    except Exception as e:
+                        # Log the error but continue with other servers
+                        error_msg = str(e)
+                        if "TaskGroup" in error_msg or "unhandled errors" in error_msg:
+                            error_msg = "Connection timeout or initialization error"
+                        console.print(
+                            f"[yellow]Warning: Failed to connect to "
+                            f"MCP server '{server_name}': {error_msg}[/yellow]"
+                        )
+                        return server_name, None
+
+            results = await asyncio.gather(
+                *(_discover_one(name, conn) for name, conn in to_discover.items()),
+                return_exceptions=True,
+            )
+
+            for r in results:
+                if isinstance(r, BaseException):
+                    continue
+                server_name, raw = r
+                if raw is None:
+                    continue
+                all_tools.extend(
+                    self._convert_raw_tools(server_name, to_discover[server_name], raw)
+                )
+                schema_cache[server_name] = {
+                    "fingerprint": _connection_fingerprint(to_discover[server_name]),
+                    "tools": [t.model_dump(mode="json") for t in raw],
+                    "ts": time.time(),
+                }
+            _save_schema_cache(schema_cache)
 
         # Store all tools for the agent
         self.tools = all_tools  # type: ignore
 
         # Mark discovery as complete to avoid re-discovering on every message
         self._tools_discovered = True
+
+        # Refresh stale cached schemas in the background (disk cache only —
+        # the tools registered above stay as built for this session). TTL-
+        # gated so most boots spawn nothing.
+        stale = {
+            name: config_dict[name]
+            for name in cached_raw
+            if time.time() - schema_cache.get(name, {}).get("ts", 0)
+            > _SCHEMA_REFRESH_TTL_SECONDS
+        }
+        if stale:
+            # Stamp ts NOW (optimistically), before the refresh runs. The
+            # refresh is a daemon thread — a short-lived process exits before
+            # it finishes, the stamp never lands, and every subsequent process
+            # re-triggers the refresh (re-spawning stdio servers, incl. slow
+            # uvx git builds) in a stampede. Worst case of stamping first:
+            # a failed refresh leaves schemas stale for one more TTL. Fine.
+            for name in stale:
+                if name in schema_cache:
+                    schema_cache[name]["ts"] = time.time()
+            _save_schema_cache(schema_cache)
+            threading.Thread(
+                target=self._refresh_schema_cache,
+                args=(stale,),
+                daemon=True,
+                name="mcp-schema-refresh",
+            ).start()
+
+    def _refresh_schema_cache(self, servers: dict[str, dict[str, Any]]) -> None:
+        """Re-discover the given servers and rewrite their cache entries.
+
+        Runs in a daemon thread with its own event loop. Failures are silent
+        (debug log) — the existing cache entry simply stays until a refresh
+        succeeds or the connection config changes.
+        """
+
+        async def _refresh() -> dict[str, Any]:
+            sem = asyncio.Semaphore(3)
+
+            async def _one(name: str, conn: dict[str, Any]) -> tuple[str, Any]:
+                async with sem:
+                    try:
+                        raw = await _fetch_raw_tools(conn)
+                    except Exception:  # noqa: BLE001
+                        logger.debug("MCP schema refresh failed for %s", name, exc_info=True)
+                        return name, None
+                    return name, {
+                        "fingerprint": _connection_fingerprint(conn),
+                        "tools": [t.model_dump(mode="json") for t in raw],
+                        "ts": time.time(),
+                    }
+
+            results = await asyncio.gather(*(_one(n, c) for n, c in servers.items()))
+            return {name: entry for name, entry in results if entry is not None}
+
+        try:
+            fresh_entries = asyncio.run(_refresh())
+            if fresh_entries:
+                # Single read-modify-write at the end to avoid clobbering
+                # entries written by the boot path.
+                cache = _load_schema_cache()
+                cache.update(fresh_entries)
+                _save_schema_cache(cache)
+        except Exception:  # noqa: BLE001 - background refresh must never crash anything
+            logger.debug("MCP schema refresh crashed", exc_info=True)
 
     async def abefore_agent(
         self,

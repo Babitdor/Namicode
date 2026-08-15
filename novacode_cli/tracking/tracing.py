@@ -42,9 +42,11 @@ Usage:
 import os
 from collections.abc import Callable
 from functools import wraps
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from langchain_openai import ChatOpenAI
+if TYPE_CHECKING:
+    # Type-only: importing langchain_openai eagerly costs ~1.5s at startup.
+    from langchain_openai import ChatOpenAI
 
 # LangSmith imports with graceful fallback
 _TRACING_AVAILABLE = False
@@ -187,7 +189,7 @@ def get_client() -> Client | None:  # type: ignore
     return _tracing_config._client
 
 
-def wrap_openai_client(model: ChatOpenAI) -> ChatOpenAI:
+def wrap_openai_client(model: "ChatOpenAI") -> "ChatOpenAI":
     """Wrap an OpenAI/LangChain client for automatic tracing.
 
     This wrapper ensures all LLM calls made through the client are
