@@ -68,6 +68,7 @@ from novacode_cli.tui.screens import (
     AgentCreateModal,
     AgentsScreen,
     ApprovalModal,
+    BackgroundTasksScreen,
     ClaudePluginsScreen,
     ConfirmModal,
     HookCreateModal,
@@ -159,6 +160,7 @@ TUI_COMMANDS: dict[str, SlashCommand] = {
     "sessions": SlashCommand("_run_sessions", "list / delete saved sessions", wants_text=False),
     "resume": SlashCommand("_run_resume", "resume a saved session for this path (/resume <id>)"),
     "artifacts": SlashCommand("_run_artifacts", "open the artifacts list", wants_text=False),
+    "tasks": SlashCommand("_run_tasks", "open the background tasks panel", wants_text=False),
     "mcp": SlashCommand("_run_mcp", "view / remove MCP servers", wants_text=False),
     "skills": SlashCommand("_run_skills", "list skills", wants_text=False),
     "agents": SlashCommand("_run_agents", "list subagents", wants_text=False),
@@ -442,6 +444,14 @@ class NovaApp(App):
         padding: 0 1;
         background: $background;
     }
+    #tasks-bar {
+        display: none;
+        height: 1;
+        padding: 0 1;
+        background: $background;
+        color: $accent;
+    }
+    #tasks-bar.active { display: block; }
     .info-col {
         height: 2;
         padding: 0 1;
@@ -671,6 +681,9 @@ class NovaApp(App):
         # Notes for detached (Ctrl+B) shell jobs that finished; prepended to the
         # agent's next turn so it learns of completions without an interrupt.
         self._pending_job_notes: list[str] = []
+        # 1s timer that ticks the ⚙ tasks-bar runtime; only runs while tasks are
+        # active (see _refresh_tasks_bar) so it never interferes when idle.
+        self._tasks_timer: Any = None
         self._todo_widget: Static | None = None  # updated in place per turn
         # _init_widget and _init_steps removed — /init progress is now _log-only
         # Live per-iteration Ralph cards, keyed by iteration number, so an
@@ -688,6 +701,9 @@ class NovaApp(App):
         # Live status state (animated spinner + elapsed while a turn runs).
         self._activity = "ready"
         self._turn_active = False
+        # Set while a Ctrl+B detach cancels the turn, so the CancelledError path
+        # shows a "moved to background" note instead of "Cancelled."
+        self._detach_cancelling = False
         self._turn_start = 0.0
         self._spinner_frame = 0
         # Input mode pulse animation (plan / bash) — see _set_input_pulse.
@@ -738,6 +754,9 @@ class NovaApp(App):
                     on_large_paste=self._on_large_paste,
                 )
             yield Static("", id="mode-badge")
+            # Persistent background-tasks indicator (hidden until a task runs).
+            # Click it (or Ctrl+B with nothing running) to open the tasks panel.
+            yield Static("", id="tasks-bar")
             with Horizontal(id="info-bar"):
                 with Vertical(id="col-workspace", classes="info-col"):
                     yield Static("workspace (/directory)", classes="info-label")
@@ -810,13 +829,16 @@ class NovaApp(App):
         self._update_mode_badge()
         self._refresh_hint_bar()
         self._refresh_info_bar()
-        # Background shell/execute jobs (Ctrl+B) notify here when they finish.
+        # Background tasks (Ctrl+B): observe the registry so the persistent
+        # indicator + notifications update reactively; tick once a second so the
+        # runtime clock advances while tasks run.
         try:
             from novacode_cli.shell.jobs import get_registry
 
-            get_registry().set_completion_callback(self._on_bg_job_complete_threadsafe)
+            get_registry().add_observer(self._on_task_event_threadsafe)
         except Exception:  # noqa: BLE001
             pass
+        self._refresh_tasks_bar()
         # Persistent artifacts component: observe the registry + show initial count.
         try:
             from novacode_cli.artifacts.registry import get_registry as _get_art_registry
@@ -2859,27 +2881,24 @@ class NovaApp(App):
             return
         raw = prompt_widget.value.strip()
         if not raw:
-            # Empty input while a shell/execute command is running → detach THAT
-            # command to the background. The agent gets a "job started" result and
-            # moves on; you're notified (and can wait_for_job) when it finishes.
+            # Context-sensitive Ctrl+B with an empty prompt:
+            #  • a command is running  → detach IT to the background (the
+            #    registry "started" event logs the task id + updates the ⚙ bar).
+            #  • nothing running       → open the Background Tasks panel.
             from novacode_cli.shell.jobs import request_detach
 
             if request_detach():
+                # End the agent's turn so it goes IDLE and the user can chat
+                # again immediately (spec: "Main TUI immediately becomes
+                # available"). The command keeps running on the background loop —
+                # which is a plain daemon thread, NOT a Textual worker, so
+                # cancelling the turn group leaves it untouched. The turn's
+                # CancelledError handler resets _turn_active via its finally.
+                self._detach_cancelling = True
                 self._set_status("backgrounding command…")
-                self._log(
-                    Text(
-                        "⏳ Command sent to the background — you'll be notified when it finishes.",
-                        style="cyan",
-                    )
-                )
+                self.workers.cancel_group(self, "turn")
                 return
-            self._log(
-                Text(
-                    "ctrl+b: type a prompt or !command to background it — "
-                    "or press while a command is running to send that command to the background.",
-                    style="dim",
-                )
-            )
+            self._open_tasks_panel()
             return
         prompt_widget.value = ""
         self._update_mode_badge()
@@ -2894,40 +2913,173 @@ class NovaApp(App):
         else:
             self._bg_agent_worker(raw, job_id)
 
-    def _on_bg_job_complete_threadsafe(self, job: Any) -> None:
-        """Job registry callback — fires on the background loop thread. Marshal to
-        the UI thread (Textual widgets aren't thread-safe)."""
+    # ── Background tasks (persistent indicator + panel) ──────────────────
+    def _refresh_tasks_bar(self) -> None:
+        """Rebuild the ``⚙`` indicator: what's running + runtime + count. Runs on
+        the 1s timer (live clock) and on every registry event."""
         try:
-            self.call_from_thread(self._on_bg_job_complete, job)
+            from novacode_cli.shell.jobs import fmt_runtime, get_registry
+
+            active = get_registry().active()
+        except Exception:  # noqa: BLE001
+            active = []
+        try:
+            bar = self._w("#tasks-bar", Static)
+        except NoMatches:
+            return
+        if not active:
+            bar.remove_class("active")
+            bar.update("")
+            # No active tasks → stop the runtime ticker so it never interferes
+            # with the rest of the UI when idle.
+            if self._tasks_timer is not None:
+                try:
+                    self._tasks_timer.stop()
+                except Exception:  # noqa: BLE001
+                    pass
+                self._tasks_timer = None
+            return
+        # Active tasks → ensure the 1s runtime ticker is running.
+        if self._tasks_timer is None:
+            try:
+                self._tasks_timer = self.set_interval(1.0, self._refresh_tasks_bar)
+            except Exception:  # noqa: BLE001
+                self._tasks_timer = None
+        t = Text()
+        if len(active) == 1:
+            job = active[0]
+            t.append("⚙ Background  ", style="bold #7aa2f7")
+            t.append("● ", style="cyan")
+            t.append(job.command[:48], style="#c0caf5")
+            t.append(f"  ⏱ {fmt_runtime(job.runtime())}", style="dim")
+        else:
+            t.append(f"⚙ Tasks ({len(active)})  ", style="bold #7aa2f7")
+            segs = []
+            for job in active[:3]:
+                segs.append(f"● {job.command.split()[0][:16]} {fmt_runtime(job.runtime())}")
+            t.append("  ·  ".join(segs), style="#c0caf5")
+            if len(active) > 3:
+                t.append(f"  +{len(active) - 3} more", style="dim")
+        bar.update(t)
+        bar.add_class("active")
+
+    def _on_task_event_threadsafe(self, event: str, job: Any) -> None:
+        """Registry observer — fires on the background loop thread. Marshal to the
+        UI thread (Textual widgets aren't thread-safe)."""
+        import threading
+
+        # "output" fires on every log chunk; the indicator shows only
+        # command/runtime/count (runtime advances via the 1s timer), so ignore it
+        # here to avoid flooding the UI thread. The panel reads logs directly.
+        if event == "output":
+            return
+        if getattr(self, "_thread_id", None) == threading.get_ident():
+            self._on_task_event(event, job)
+            return
+        try:
+            self.call_from_thread(self._on_task_event, event, job)
         except Exception:  # noqa: BLE001
             pass
 
-    def _on_bg_job_complete(self, job: Any) -> None:
-        """A detached (Ctrl+B) shell/execute job finished. Notify + log + queue a
-        note so the agent picks up the result on its next turn (full output stays
-        available via the wait_for_job / list_jobs tools)."""
-        ok = job.exit_code in (0, None)
-        self._log(
-            Text(
-                f"{'✓' if ok else '✗'} Background job {job.id} finished "
-                f"(exit {job.exit_code}) — {job.command[:70]}",
-                style="green" if ok else "yellow",
+    def _on_task_event(self, event: str, job: Any) -> None:
+        self._refresh_tasks_bar()
+        if event == "started" and job is not None:
+            self._log(
+                Text.assemble(
+                    ("⚙ Running in background: ", "bold #7aa2f7"),
+                    (f"{job.command[:70]}\n", "#c0caf5"),
+                    (f"Task ID: {job.task_id}", "dim"),
+                )
             )
-        )
-        try:
-            self.session_state.add_notification(
-                level="info",
-                title=f"Background job {job.id} finished",
-                message=f"exit {job.exit_code}: {job.command[:120]}",
-                source="shell",
+            # Clarify for the agent on its next turn (a Ctrl+B detach ends the
+            # current turn, so the tool call is patched as "cancelled" — this note
+            # corrects that: the command is still running as a background task).
+            self._pending_job_notes.append(
+                f"You moved {job.task_id} to the background; it is still running "
+                f"(command: {job.command}). Check it with get_task_status('{job.task_id}') "
+                f"or get_task_logs('{job.task_id}')."
             )
-        except Exception:  # noqa: BLE001
-            pass
-        self._pending_job_notes.append(
-            f"Background job {job.id} finished (exit {job.exit_code}). "
-            f"Command: {job.command}. "
-            f"Call wait_for_job({job.id}) or list_jobs() to see its full output."
+        elif event in ("completed", "failed", "terminated") and job is not None:
+            ok = event == "completed"
+            glyph = "✓" if ok else "✗"
+            verb = {"completed": "completed", "failed": "failed", "terminated": "terminated"}[event]
+            self._log(
+                Text(
+                    f"{glyph} Task {verb}: {job.command[:60]} · {job.task_id}"
+                    + (f" · exit {job.exit_code}" if job.exit_code is not None else ""),
+                    style="green" if ok else "yellow",
+                )
+            )
+            try:
+                self.session_state.add_notification(
+                    level="info",
+                    title=f"Task {verb}: {job.task_id}",
+                    message=f"{job.command[:100]} (exit {job.exit_code})",
+                    source="shell",
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            # A Ctrl+B-detached task (the agent was mid-work) auto-resumes the
+            # agent with the result when it finishes naturally — so it "continues
+            # from there" without the user having to prompt. A user-terminated
+            # task, or one that finishes while the agent is busy, just leaves a
+            # note for the next turn.
+            resume = (
+                event in ("completed", "failed")
+                and getattr(job, "resume_on_done", False)
+                and not self._turn_active
+            )
+            if resume:
+                self._log(Text(f"↻ Resuming — {job.task_id} finished.", style="cyan"))
+                self._continue_after_task(job)
+            else:
+                self._pending_job_notes.append(
+                    f"Background {job.task_id} {verb} (exit {job.exit_code}). "
+                    f"Command: {job.command}. Use get_task_logs('{job.task_id}') for output."
+                )
+
+    @work(exclusive=True, group="turn")
+    async def _continue_after_task(self, job: Any) -> None:
+        """Auto-resume the agent after a Ctrl+B-detached background task finishes,
+        feeding it the result so it continues its work from where it left off."""
+        tail = "\n".join(job.output.splitlines()[-40:]) or "(no output)"
+        prompt = (
+            f"[Background task finished] The command you launched and moved to the "
+            f"background — `{job.command}` ({job.task_id}) — has now finished with "
+            f"exit code {job.exit_code}. If you saw a 'tool call was cancelled' note "
+            f"for that command earlier, it referred only to the foreground wait being "
+            f"detached; the command itself ran to completion.\n\n"
+            f"Output (last lines):\n{tail}\n\n"
+            f"Continue with what you were doing, taking this result into account."
         )
+        await self._stream_prompt(prompt)
+        await self._maybe_run_approved_plan()
+
+    @work
+    async def _open_tasks_panel(self) -> None:
+        """Open the Background Tasks panel; handle copy/logs results."""
+        result = await self.push_screen_wait(BackgroundTasksScreen())
+        if not isinstance(result, dict):
+            return
+        if result.get("action") == "copy":
+            cmd = result.get("command", "")
+            try:
+                self.copy_to_clipboard(cmd)
+            except Exception:  # noqa: BLE001
+                pass
+            self._log(Text(f"Copied command: {cmd[:70]}", style="dim"))
+        elif result.get("action") == "logs":
+            from novacode_cli.shell.jobs import get_registry
+
+            job = get_registry().resolve(result.get("task_id", ""))
+            if job is not None:
+                tail = "\n".join(job.output.splitlines()[-40:]) or "(no output yet)"
+                self._log(
+                    Text.assemble(
+                        (f"⚙ {job.task_id} logs ({job.status}):\n", "bold #7aa2f7"),
+                        (tail, "#c0caf5"),
+                    )
+                )
 
     # ── Artifacts (persistent component) ─────────────────────────────────
     def _refresh_artifacts_component(self) -> None:
@@ -2996,12 +3148,17 @@ class NovaApp(App):
             self._log(Text(f"◈ Opening {arts[idx].title} → {url}", style="#7aa2f7"))
 
     def on_click(self, event: Any) -> None:
-        """Open the artifacts list when the persistent footer component is clicked."""
+        """Open the artifacts list or the background-tasks panel when their
+        persistent footer components are clicked."""
         try:
             w = getattr(event, "widget", None)
             while w is not None:
-                if getattr(w, "id", None) == "col-artifacts":
+                wid = getattr(w, "id", None)
+                if wid == "col-artifacts":
                     self._open_artifacts_list()
+                    return
+                if wid == "tasks-bar":
+                    self._open_tasks_panel()
                     return
                 w = getattr(w, "parent", None)
         except Exception:  # noqa: BLE001
@@ -3168,7 +3325,10 @@ class NovaApp(App):
                 await self._do_stream(text, assistant_id)
         except asyncio.CancelledError:
             self._reset_streaming()
-            self._log(Text("Cancelled.", style="yellow"))
+            # A Ctrl+B detach surfaces as an ev.Cancelled event (handled with its
+            # own "moved to background" note); only a real cancel reaches here.
+            if not getattr(self, "_detach_cancelling", False):
+                self._log(Text("Cancelled.", style="yellow"))
         except Exception as ex:  # noqa: BLE001
             msg = str(ex).lower()
             if any(
@@ -3195,6 +3355,7 @@ class NovaApp(App):
                 self._log(Text(f"Error: {ex}", style="red"))
         finally:
             self._turn_active = False
+            self._detach_cancelling = False
             self._set_status("ready")
             self._clear_live_steers()
             # Safety net: clear the Nova review indicator if it's still showing
@@ -4842,6 +5003,10 @@ class NovaApp(App):
     async def _run_artifacts(self) -> None:
         """Open the artifacts list (same as clicking the ◈ Artifacts component)."""
         self._open_artifacts_list()
+
+    async def _run_tasks(self) -> None:
+        """Open the Background Tasks panel (same as clicking the ⚙ indicator)."""
+        self._open_tasks_panel()
 
     async def _run_mcp(self) -> None:
         """Open the MCP servers screen (view + remove)."""
@@ -7177,7 +7342,12 @@ class NovaApp(App):
             await self._handle_interrupt(e)
         elif isinstance(e, ev.Cancelled):
             self._accumulated_reply = ""
-            self._log(Text("Interrupted.", style="yellow"))
+            if getattr(self, "_detach_cancelling", False):
+                # The turn was cancelled by a Ctrl+B detach, not a real interrupt —
+                # the command is now running as a background task.
+                self._log(Text("⚙ Command moved to background — agent is idle.", style="cyan"))
+            else:
+                self._log(Text("Interrupted.", style="yellow"))
         elif isinstance(e, ev.Error):
             self._accumulated_reply = ""
             # Provider failures (usage/rate limit, auth, connectivity) are

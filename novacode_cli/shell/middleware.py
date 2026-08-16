@@ -101,6 +101,16 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
 
         atexit.register(self._cleanup_background_processes)
 
+        # Let the background-task registry restart jobs through this middleware
+        # (re-run a job's command as a fresh background task). Last instance wins;
+        # any working middleware can launch.
+        try:
+            from novacode_cli.shell import jobs as _jobs
+
+            _jobs.get_registry().set_launcher(self._launch_background)
+        except Exception:  # noqa: BLE001
+            pass
+
         # Whether commands actually execute in a sandbox. A CompositeBackend is
         # always passed (for /skills/ etc. routing), so "backend is not None" is
         # not a reliable signal — check whether the *default* backend supports
@@ -704,9 +714,115 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
             "cwd": self._workspace_root,
             "env": self._env,
         }
+        # Put the child in its own process group / session so we can terminate the
+        # WHOLE tree later (e.g. `npm run dev` → node children). We never rely on
+        # terminal signal propagation — termination is always explicit — so this is
+        # safe for foreground commands too.
+        if sys.platform == "win32":
+            import subprocess as _sp
+
+            kwargs["creationflags"] = _sp.CREATE_NEW_PROCESS_GROUP
+        else:
+            kwargs["start_new_session"] = True
         if prog is not None:
             return await asyncio.create_subprocess_exec(*prog, command, **kwargs)
         return await asyncio.create_subprocess_shell(command, **kwargs)
+
+    async def _terminate_tree(self, proc: asyncio.subprocess.Process, *, grace: float = 3.0) -> None:
+        """Gracefully stop a process and its children, then force-kill the tree.
+
+        Uses the process group created in ``_spawn`` so child processes die too.
+        """
+        if proc.returncode is not None:
+            return
+        import os
+        import signal
+
+        try:
+            if sys.platform == "win32":
+                proc.terminate()
+            else:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        except (ProcessLookupError, OSError):
+            pass
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=grace)
+            return
+        except (TimeoutError, asyncio.TimeoutError):
+            pass
+        # Still alive → force-kill the whole tree.
+        try:
+            if sys.platform == "win32":
+                import subprocess as _sp
+
+                _sp.run(
+                    ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                    capture_output=True,
+                    timeout=5,
+                )
+            else:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except Exception:  # noqa: BLE001 — last resort
+            try:
+                proc.kill()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _launch_background(self, command: str, prog: list[str] | None = None):
+        """Registry launcher: start ``command`` as a fresh background job."""
+        from novacode_cli.shell import jobs as _jobs
+
+        reg = _jobs.get_registry()
+        job = reg.add(command, self._tool_name, prog)
+        asyncio.run_coroutine_threadsafe(
+            self._bg_run(command, prog, job.id), _jobs.get_background_loop()
+        )
+        return job
+
+    async def _bg_run(self, command: str, prog: list[str] | None, job_id: int) -> None:
+        """Spawn ``command`` and drain it into an already-registered background job.
+
+        Used for restart / start-in-background. Streams stdout+stderr into the
+        job's bounded log buffer and honours terminate requests (``job.kill``).
+        """
+        from novacode_cli.shell import jobs as _jobs
+
+        reg = _jobs.get_registry()
+        job = reg.get(job_id)
+        if job is None:
+            return
+        try:
+            wrapped = wrap_command(command, self._os_policy)
+            proc = await self._spawn(
+                wrapped,
+                prog,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            reg.attach_pid(job_id, proc.pid)
+            while True:
+                if job.kill.is_set():
+                    await self._terminate_tree(proc)
+                    reg.mark_terminated(job_id, proc.returncode)
+                    return
+                try:
+                    chunk = await asyncio.wait_for(proc.stdout.read(1024), timeout=0.5)  # type: ignore[union-attr]
+                except (TimeoutError, asyncio.TimeoutError):
+                    if proc.returncode is not None:
+                        break
+                    continue
+                if not chunk:
+                    break
+                reg.append_log(job_id, chunk.decode("utf-8", errors="replace"))
+            if proc.returncode is None:
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=2.0)
+                except (TimeoutError, asyncio.TimeoutError):
+                    await self._terminate_tree(proc)
+            reg.complete(job_id, proc.returncode)
+        except Exception as e:  # noqa: BLE001 — never leave a job stuck "running"
+            reg.complete(job_id, None, output=f"\n[background run error: {e}]")
 
     async def _async_local_shell(  # noqa: PLR0912, PLR0915
         self,
@@ -763,20 +879,31 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
                     status = "error"
                     note = "\n\n[Command killed by user (Esc).]"
                     break
+                if detached and _job is not None and _job.kill.is_set():
+                    # terminate_task / panel Stop → gracefully kill the tree.
+                    await self._terminate_tree(proc)
+                    _jobs.get_registry().mark_terminated(_job.id, proc.returncode)
+                    break
                 if not detached and _ctl.detach.is_set():
                     # Ctrl+B: hand this command to a background job and return a
                     # "backgrounded" result to the agent NOW. We keep looping to
-                    # drain the process to completion (no timeout for a bg job).
+                    # drain the process into the job's bounded log buffer.
                     detached = True
-                    _job = _jobs.get_registry().add(command, self._tool_name)
+                    _reg = _jobs.get_registry()
+                    _job = _reg.add(command, self._tool_name, prog)
+                    _job.resume_on_done = True  # agent was mid-task → auto-resume
+                    _reg.attach_pid(_job.id, proc.pid)
+                    # Seed the job log with output captured before detaching.
+                    _job.logs.extend(out_parts)
+                    out_parts = []  # stop unbounded growth; logs are bounded
                     if detach_future is not None and not detach_future.done():
                         detach_future.set_result(
                             ToolMessage(
                                 content=(
-                                    f"[backgrounded: job {_job.id}] `{command}` is still running. "
-                                    f"Continue with other work — you'll be notified when it finishes. "
-                                    f"Call wait_for_job({_job.id}) to get its output, or "
-                                    f"list_jobs() to see all jobs."
+                                    f"[backgrounded: {_job.task_id}] `{command}` is running in the "
+                                    f"background. Continue with other work — you'll be notified when "
+                                    f"it finishes. Inspect it with get_task_status('{_job.task_id}'), "
+                                    f"get_task_logs('{_job.task_id}'), or list_background_tasks()."
                                 ),
                                 tool_call_id=tool_call_id,
                                 name=self._tool_name,
@@ -784,6 +911,35 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
                             )
                         )
                 if not detached and time.time() - start > self._timeout:
+                    # A process still alive at the timeout that looks like a server
+                    # (printed a "listening/serving/ready" banner) should NOT be
+                    # killed — promote it to a background task so it keeps serving.
+                    _looks_like_server = proc.returncode is None and any(
+                        is_server_ready(ln) for ln in "".join(out_parts).splitlines()[-15:]
+                    )
+                    if _looks_like_server:
+                        detached = True
+                        _reg = _jobs.get_registry()
+                        _job = _reg.add(command, self._tool_name, prog)
+                        _reg.attach_pid(_job.id, proc.pid)
+                        _job.logs.extend(out_parts)
+                        out_parts = []
+                        if detach_future is not None and not detach_future.done():
+                            detach_future.set_result(
+                                ToolMessage(
+                                    content=(
+                                        f"[{_job.task_id}] `{command}` is still running past the "
+                                        f"{self._timeout:.0f}s foreground limit and looks like a "
+                                        f"server — moved to the background so it keeps serving. "
+                                        f"Inspect with get_task_logs('{_job.task_id}'), stop with "
+                                        f"terminate_task('{_job.task_id}')."
+                                    ),
+                                    tool_call_id=tool_call_id,
+                                    name=self._tool_name,
+                                    status="success",
+                                )
+                            )
+                        continue  # keep draining as a background task
                     proc.kill()
                     status = "error"
                     note = f"\n\n[Command exceeded {self._timeout:.0f}s and was terminated.]"
@@ -822,13 +978,16 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
                 if not chunk:
                     break  # stdout closed → process is exiting
                 text = chunk.decode("utf-8", errors="replace")
-                out_parts.append(text)
-                tail = (tail + text)[-4096:]
-                # Once detached the tool widget is gone (the agent moved on), so
-                # stop streaming to it — the output is delivered via the job.
-                if tool_call_id and not detached:
-                    from novacode_cli.events import emit_tool_output
-                    emit_tool_output(tool_call_id, text)
+                if detached and _job is not None:
+                    # Detached: append to the job's BOUNDED log buffer (not the
+                    # unbounded out_parts) and stop streaming to the tool widget.
+                    _jobs.get_registry().append_log(_job.id, text)
+                else:
+                    out_parts.append(text)
+                    tail = (tail + text)[-4096:]
+                    if tool_call_id:
+                        from novacode_cli.events import emit_tool_output
+                        emit_tool_output(tool_call_id, text)
         except asyncio.CancelledError:
             proc.kill()
             raise
@@ -857,10 +1016,10 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
             output = f"{output}\n\nExit code: {rc}"
 
         if detached and _job is not None:
-            # The agent already got the "backgrounded" message; deliver the final
-            # output to the job (fires the TUI notify/note callback). The return
-            # value below is discarded by _run_async on the detach path.
-            _jobs.get_registry().complete(_job.id, output + note, rc)
+            # The agent already got the "backgrounded" message; finalize the job
+            # (fires the TUI notify + observers). No-ops if it was terminated. The
+            # return value below is discarded by _run_async on the detach path.
+            _jobs.get_registry().complete(_job.id, rc, output=note or None)
 
         return ToolMessage(
             content=output + note,
@@ -998,28 +1157,77 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
         if self._supports_sandbox_execution():
             return self._run_sandbox_background_command(command, tool_call_id=tool_call_id)
 
-        # Local execution: stream the server's startup in its own loop.
-        try:
-            return self._run_async(
-                lambda: self._async_background_shell(
-                    command, tool_call_id=tool_call_id, startup_timeout=startup_timeout, prog=prog
-                ),
-                timeout=startup_timeout + 10,
-            )
-        except TimeoutError:
+        # Local execution: register a first-class background TASK (⚙ panel,
+        # get_task_logs / terminate_task, cleanup on exit) and wait briefly for a
+        # "server ready" banner or an early crash before returning to the agent.
+        return self._start_background_task(
+            command, tool_call_id=tool_call_id, prog=prog, startup_timeout=startup_timeout
+        )
+
+    def _start_background_task(
+        self,
+        command: str,
+        *,
+        tool_call_id: str | None,
+        prog: list[str] | None,
+        startup_timeout: float,
+    ) -> ToolMessage:
+        """Start a long-running command (e.g. a dev server) as a background task.
+
+        Launches it on the shared background loop via ``_bg_run`` (bounded logs,
+        terminable, tracked in the ⚙ Tasks panel), then polls up to
+        ``startup_timeout`` for a server-ready line or an early exit so the agent
+        gets a useful startup banner without its turn hanging on a process that
+        never exits.
+        """
+        import time as _t
+
+        from novacode_cli.shell import jobs as _jobs
+
+        reg = _jobs.get_registry()
+        job = reg.add(command, self._tool_name, prog)
+        asyncio.run_coroutine_threadsafe(
+            self._bg_run(command, prog, job.id), _jobs.get_background_loop()
+        )
+
+        # Wait only briefly: return as soon as a ready banner shows, the process
+        # exits, or it has been alive a couple seconds (many servers buffer their
+        # "listening" line, so don't block the agent's turn waiting for it).
+        deadline = _t.time() + min(max(startup_timeout, 2.0), 8.0)
+        ready = False
+        while _t.time() < deadline:
+            if job.status != "running":
+                break
+            if any(is_server_ready(line) for line in job.output.splitlines()[-10:]):
+                ready = True
+                break
+            if job.runtime() > 2.5:  # alive and past the crash-on-startup window
+                break
+            _t.sleep(0.2)
+
+        tail = "\n".join(job.output.splitlines()[-20:]) or "<no output yet>"
+        if job.status != "running":
+            # Exited during startup — a crash, a port already in use, or simply a
+            # short command that finished. Surface the output so the agent can react.
+            bad = job.exit_code not in (0, None)
             return ToolMessage(
-                content=f"Error: Server did not start within {startup_timeout:.1f} seconds.",
+                content=f"[{job.task_id}] `{command}` exited during startup (exit {job.exit_code}):\n{tail}",
                 tool_call_id=tool_call_id,
                 name=self._tool_name,
-                status="error",
+                status="error" if bad else "success",
             )
-        except OSError as e:
-            return ToolMessage(
-                content=f"Error running background command: {e}",
-                tool_call_id=tool_call_id,
-                name=self._tool_name,
-                status="error",
-            )
+        note = "is up and ready" if ready else "is running (still starting up)"
+        return ToolMessage(
+            content=(
+                f"[{job.task_id}] `{command}` {note} in the background.\n\n"
+                f"Startup output:\n{tail}\n\n"
+                f"It keeps running — inspect with get_task_logs('{job.task_id}'), "
+                f"stop with terminate_task('{job.task_id}'), or open the ⚙ Tasks panel."
+            ),
+            tool_call_id=tool_call_id,
+            name=self._tool_name,
+            status="success",
+        )
 
     async def _async_background_shell(  # noqa: PLR0912, PLR0915
         self,

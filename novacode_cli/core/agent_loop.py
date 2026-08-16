@@ -57,6 +57,44 @@ from novacode_cli import ui_events as ev
 _HITL_REQUEST_ADAPTER = TypeAdapter(HITLRequest)
 
 
+def format_interrupt_notification(kind: str, payload: Any) -> str:
+    """Turn a raw interrupt payload into a short, human-readable line for
+    notifications (desktop toast, badge, remote) — instead of a dumped dict.
+
+    tool → ``"shell: docker ps --format …"`` (one line per action request);
+    plan/question → a friendly sentence.
+    """
+    try:
+        if kind == "tool":
+            reqs = (payload or {}).get("action_requests") or []
+            lines: list[str] = []
+            for r in reqs:
+                name = r.get("name") or "tool"
+                args = r.get("args") or {}
+                detail = (
+                    args.get("command")
+                    or args.get("file_path")
+                    or args.get("path")
+                    or args.get("url")
+                    or r.get("description")
+                )
+                if not detail and args:
+                    detail = ", ".join(f"{k}={v}" for k, v in list(args.items())[:3])
+                detail = " ".join(str(detail).split()) if detail else ""  # collapse whitespace/newlines
+                lines.append(f"{name}: {detail}" if detail else str(name))
+            msg = "  •  ".join(lines) or "A tool action needs your approval."
+        elif kind == "plan":
+            msg = "A plan is ready for your review and approval."
+        elif kind == "question":
+            q = (payload or {}).get("question") or (payload or {}).get("prompt") or ""
+            msg = " ".join(str(q).split()) or "The agent is asking a question."
+        else:
+            msg = "Nova needs your input."
+    except Exception:  # noqa: BLE001 — a formatter must never break the turn
+        msg = "Nova needs your approval."
+    return msg[:220]
+
+
 def default_interrupt_response(kind: str) -> Any:
     """Safe fallback for an unresolved :class:`~novacode_cli.ui_events.InterruptRequest`.
 
@@ -600,7 +638,7 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
                             _notif_id = session_state.add_notification(
                                 level="approval",
                                 title=_notif_msg,
-                                message=str(payload)[:200],
+                                message=format_interrupt_notification(kind, payload),
                                 source="system",
                                 action_id=interrupt_id,
                                 action_type=("approve" if kind in ("tool", "plan") else "select"),

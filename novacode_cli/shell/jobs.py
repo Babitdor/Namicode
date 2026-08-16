@@ -1,15 +1,18 @@
-"""Cooperative control for the currently-running foreground shell command.
+"""Background tasks + cooperative control for the foreground shell command.
 
-The shell/execute tool runs its subprocess inside a detached thread with its own
-event loop (see ``ShellMiddleware._run_async``), so the TUI cannot reach it via
-normal Textual task cancellation — which is why a hung command used to freeze the
-UI for the full timeout and could crash on force-quit.
+Two things live here:
 
-While a foreground command runs, the middleware publishes a :class:`ForegroundControl`
-here. The TUI sets its events from keybinds (Esc → ``kill``, Ctrl+B → ``detach``)
-and the middleware's read loop polls them each iteration. There is at most one
-foreground command at a time (TUI turns are exclusive), so a single global slot
-is enough.
+1. :class:`ForegroundControl` — the shell/execute tool runs its subprocess inside
+   a detached thread with its own event loop (``ShellMiddleware._run_async``), so
+   the TUI can't reach it via Textual task cancellation. While a foreground command
+   runs, the middleware publishes a control; the TUI sets its events from keybinds
+   (Esc → ``kill``, Ctrl+B → ``detach``) and the read loop polls them.
+
+2. :class:`JobRegistry` — the background task manager. A command detached with
+   Ctrl+B (or launched in the background) becomes a :class:`BackgroundJob` with a
+   bounded live log buffer, a per-job terminate signal, and status transitions
+   (running → done | failed | terminated). Observers (the TUI indicator/panel and
+   the completion notifier) are fired reactively on every state change.
 
 # ponytail: single global foreground slot — one turn runs at a time. If nested
 # subagent shells ever need independent control, key this by tool_call_id.
@@ -17,10 +20,16 @@ is enough.
 
 from __future__ import annotations
 
+import asyncio
 import threading
 import time
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
+
+# ---------------------------------------------------------------------------
+# Foreground control (Esc kill / Ctrl+B detach)
+# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -29,9 +38,7 @@ class ForegroundControl:
 
     command: str
     kill: threading.Event = field(default_factory=threading.Event)
-    """Set by the TUI (Esc) → the loop kills the subprocess and returns an error."""
     detach: threading.Event = field(default_factory=threading.Event)
-    """Set by the TUI (Ctrl+B) → the loop hands the process to a background job."""
 
 
 _current: ForegroundControl | None = None
@@ -54,8 +61,7 @@ def get_current() -> ForegroundControl | None:
 
 
 def clear_current(ctl: ForegroundControl) -> None:
-    """Clear the slot iff ``ctl`` is still the current one (avoids clobbering a
-    newer command that started after this one finished)."""
+    """Clear the slot iff ``ctl`` is still the current one."""
     global _current
     with _lock:
         if _current is ctl:
@@ -63,7 +69,7 @@ def clear_current(ctl: ForegroundControl) -> None:
 
 
 def request_kill() -> bool:
-    """Ask the running foreground command to die. Returns True if one was running."""
+    """Ask the running foreground command to die. True if one was running."""
     ctl = get_current()
     if ctl is not None:
         ctl.kill.set()
@@ -74,7 +80,7 @@ def request_kill() -> bool:
 def request_detach() -> bool:
     """Ask the running foreground command to detach to the background.
 
-    Returns True if a command was running and not already being killed.
+    True if a command was running and not already being killed.
     """
     ctl = get_current()
     if ctl is not None and not ctl.kill.is_set():
@@ -84,111 +90,275 @@ def request_detach() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Background jobs — a detached command keeps running and reports on completion.
+# Background jobs — the task manager
 # ---------------------------------------------------------------------------
+
+_LOG_MAXLEN = 1000  # bounded live-log buffer (~1000 chunks of <=1KB → ~1MB max)
+
+# event ∈ {started, output, completed, failed, terminated, cleared}; job may be
+# None for "cleared".
+Observer = Callable[[str, "BackgroundJob | None"], None]
+
+
+def fmt_runtime(seconds: float) -> str:
+    """Format a runtime as MM:SS (or H:MM:SS past an hour)."""
+    s = int(max(0, seconds))
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    return f"{h}:{m:02d}:{sec:02d}" if h else f"{m:02d}:{sec:02d}"
 
 
 @dataclass
 class BackgroundJob:
-    """A shell/execute command that was detached to run in the background."""
+    """A shell/execute command running (or finished) in the background."""
 
     id: int
     command: str
     tool_name: str
     started_at: float
-    status: str = "running"  # running | done
+    prog: list[str] | None = None
+    status: str = "running"  # running | done | failed | terminated
     exit_code: int | None = None
-    output: str = ""
     finished_at: float | None = None
+    pid: int | None = None
+    resume_on_done: bool = False
+    """True for Ctrl+B-detached jobs: the agent was mid-task, so when this
+    finishes the TUI auto-resumes the agent with the result (vs. just notifying
+    for tasks the user explicitly launched/restarted)."""
+    logs: deque = field(default_factory=lambda: deque(maxlen=_LOG_MAXLEN), repr=False)
+    kill: threading.Event = field(default_factory=threading.Event, repr=False)
     _done: threading.Event = field(default_factory=threading.Event, repr=False)
+
+    @property
+    def task_id(self) -> str:
+        return f"task_{self.id}"
+
+    def runtime(self) -> float:
+        end = self.finished_at if self.finished_at is not None else time.time()
+        return max(0.0, end - self.started_at)
+
+    @property
+    def output(self) -> str:
+        return "".join(self.logs)
+
+    def status_glyph(self) -> str:
+        return {"running": "●", "done": "✓", "failed": "✗", "terminated": "◼"}.get(self.status, "●")
 
 
 class JobRegistry:
-    """Process-global registry of background jobs.
-
-    The middleware's detached drain thread calls :meth:`complete` when a job
-    finishes; the TUI registers a completion callback (notify + transcript note)
-    and the agent inspects jobs via :meth:`list_jobs` / :meth:`wait`.
-    """
+    """Process-global background task manager."""
 
     def __init__(self) -> None:
         self._jobs: dict[int, BackgroundJob] = {}
-        self._next_id = 1
+        self._next_id = 41  # cosmetic: task ids start at task_41 like the spec
         self._lock = threading.Lock()
-        self._on_complete: Callable[[BackgroundJob], None] | None = None
+        self._observers: list[Observer] = []
+        self._completion_cb: Callable[[BackgroundJob], None] | None = None
+        self._launcher: Callable[[str, list | None], BackgroundJob | None] | None = None
 
-    def add(self, command: str, tool_name: str) -> BackgroundJob:
+    # -- lifecycle ---------------------------------------------------------
+    def add(self, command: str, tool_name: str, prog: list | None = None) -> BackgroundJob:
         with self._lock:
             job_id = self._next_id
             self._next_id += 1
             job = BackgroundJob(
-                id=job_id, command=command, tool_name=tool_name, started_at=time.time()
+                id=job_id,
+                command=command,
+                tool_name=tool_name,
+                started_at=time.time(),
+                prog=list(prog) if prog else None,
             )
             self._jobs[job_id] = job
-            return job
+        self._emit("started", job)
+        return job
 
-    def complete(self, job_id: int, output: str, exit_code: int | None) -> None:
+    def append_log(self, job_id: int, text: str) -> None:
+        job = self.get(job_id)
+        if job is None:
+            return
+        job.logs.append(text)
+        self._emit("output", job)
+
+    def attach_pid(self, job_id: int, pid: int | None) -> None:
+        job = self.get(job_id)
+        if job is not None:
+            job.pid = pid
+
+    def complete(self, job_id: int, exit_code: int | None, output: str | None = None) -> None:
         with self._lock:
             job = self._jobs.get(job_id)
             if job is None or job.status != "running":
                 return
-            job.output = output
+            if output is not None:
+                job.logs.append(output)
             job.exit_code = exit_code
-            job.status = "done"
+            job.status = "done" if exit_code in (0, None) else "failed"
             job.finished_at = time.time()
             job._done.set()
-            cb = self._on_complete
-        if cb is not None:
-            try:
-                cb(job)
-            except Exception:  # noqa: BLE001 — a bad callback must not wedge the job
-                pass
+        self._emit("completed" if job.status == "done" else "failed", job)
+        self._fire_completion(job)
 
+    def mark_terminated(self, job_id: int, exit_code: int | None = None) -> None:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None or job.status != "running":
+                return
+            job.status = "terminated"
+            job.exit_code = exit_code
+            job.finished_at = time.time()
+            job._done.set()
+        self._emit("terminated", job)
+        self._fire_completion(job)
+
+    # -- actions -----------------------------------------------------------
+    def terminate(self, job_id: int) -> bool:
+        """Signal a running job to stop (the drain loop terminates its process
+        tree gracefully, then marks it terminated). True if it was running."""
+        job = self.get(job_id)
+        if job is None or job.status != "running":
+            return False
+        job.kill.set()
+        return True
+
+    def restart(self, job_id: int) -> BackgroundJob | None:
+        """Re-run a job's command as a new background job (via the launcher)."""
+        job = self.get(job_id)
+        if job is None or self._launcher is None:
+            return None
+        return self._launcher(job.command, job.prog)
+
+    def clear_completed(self) -> int:
+        with self._lock:
+            done = [jid for jid, j in self._jobs.items() if j.status != "running"]
+            for jid in done:
+                del self._jobs[jid]
+        if done:
+            self._emit("cleared", None)
+        return len(done)
+
+    # -- queries -----------------------------------------------------------
     def get(self, job_id: int) -> BackgroundJob | None:
         with self._lock:
             return self._jobs.get(job_id)
+
+    def resolve(self, ref: str | int) -> BackgroundJob | None:
+        """Look up a job by numeric id, ``"task_42"``, or ``"42"``."""
+        try:
+            jid = int(str(ref).lower().replace("task_", "").strip())
+        except (ValueError, TypeError):
+            return None
+        return self.get(jid)
 
     def list_jobs(self) -> list[BackgroundJob]:
         with self._lock:
             return list(self._jobs.values())
 
+    def active(self) -> list[BackgroundJob]:
+        with self._lock:
+            return [j for j in self._jobs.values() if j.status == "running"]
+
+    def active_count(self) -> int:
+        return len(self.active())
+
     def wait(self, job_id: int, timeout: float | None = None) -> BackgroundJob | None:
-        """Block until the job finishes (or ``timeout``). None if no such job."""
         job = self.get(job_id)
         if job is None:
             return None
         job._done.wait(timeout)
         return job
 
+    # -- observers ---------------------------------------------------------
+    def add_observer(self, cb: Observer) -> None:
+        self._observers.append(cb)
+
+    def set_launcher(self, fn: Callable[[str, list | None], BackgroundJob | None]) -> None:
+        self._launcher = fn
+
     def set_completion_callback(self, cb: Callable[[BackgroundJob], None] | None) -> None:
-        self._on_complete = cb
+        """Back-compat: called once per job on a terminal transition."""
+        self._completion_cb = cb
+
+    def _emit(self, event: str, job: BackgroundJob | None) -> None:
+        for cb in list(self._observers):
+            try:
+                cb(event, job)
+            except Exception:  # noqa: BLE001 — a bad observer must not wedge a job
+                pass
+
+    def _fire_completion(self, job: BackgroundJob) -> None:
+        cb = self._completion_cb
+        if cb is not None:
+            try:
+                cb(job)
+            except Exception:  # noqa: BLE001
+                pass
+
+    def reset(self) -> None:
+        """Drop all jobs, observers, and the completion callback (test isolation)."""
+        with self._lock:
+            self._jobs.clear()
+            self._next_id = 41
+        self._observers.clear()
+        self._completion_cb = None
 
 
 _registry: JobRegistry | None = None
 
 
 def get_registry() -> JobRegistry:
-    """Return the process-global background-job registry."""
+    """Return the process-global background-task registry."""
     global _registry
     if _registry is None:
         _registry = JobRegistry()
+        _register_exit_cleanup()
     return _registry
+
+
+def _kill_pid_tree(pid: int) -> None:
+    """Force-kill a process and its children by pid (sync; for atexit)."""
+    import os
+    import signal
+    import subprocess
+    import sys
+
+    try:
+        if sys.platform == "win32":
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, timeout=5
+            )
+        else:
+            os.killpg(os.getpgid(pid), signal.SIGKILL)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+_exit_cleanup_registered = False
+
+
+def _register_exit_cleanup() -> None:
+    """Kill any still-running background task trees when the process exits, so a
+    detached `npm run dev` doesn't outlive the assistant (spec: clean up on exit)."""
+    global _exit_cleanup_registered
+    if _exit_cleanup_registered:
+        return
+    _exit_cleanup_registered = True
+    import atexit
+
+    def _cleanup() -> None:
+        reg = _registry
+        if reg is None:
+            return
+        for job in reg.active():
+            if job.pid:
+                _kill_pid_tree(job.pid)
+
+    atexit.register(_cleanup)
 
 
 # ---------------------------------------------------------------------------
 # Shared background event loop — lets a detached command's drain outlive the
-# synchronous tool call that started it.
+# synchronous tool call that started it (see the middleware for the full why).
 # ---------------------------------------------------------------------------
-#
-# LangChain runs our sync shell tool via `run_in_executor`, so the tool body
-# has no running loop and would normally do a per-call `asyncio.run(coro)` that
-# blocks the worker thread until the command exits. That can't support Ctrl+B:
-# to hand the agent a "backgrounded" result mid-command while the process keeps
-# being read, the coroutine must run somewhere that outlives the tool return.
-# We run it on one persistent loop (daemon thread) and merely *wait* on it from
-# the tool thread — on detach we stop waiting; the coroutine keeps draining here.
-
-import asyncio  # noqa: E402
 
 _bg_loop: asyncio.AbstractEventLoop | None = None
 _bg_loop_lock = threading.Lock()
@@ -197,8 +367,8 @@ _bg_loop_lock = threading.Lock()
 def get_background_loop() -> asyncio.AbstractEventLoop:
     """Return the shared background event loop, starting it on first use.
 
-    The loop runs in a daemon thread (dies with the process). On Windows the
-    default policy yields a Proactor loop, which supports subprocesses.
+    Runs in a daemon thread (dies with the process). On Windows the default
+    policy yields a Proactor loop, which supports subprocesses.
     """
     global _bg_loop
     with _bg_loop_lock:
@@ -212,34 +382,37 @@ def get_background_loop() -> asyncio.AbstractEventLoop:
 
 
 if __name__ == "__main__":
-    # ponytail: self-check for the slot lifecycle (no subprocess needed).
-    assert get_current() is None
-    assert request_kill() is False  # nothing running
+    # ponytail: self-check for the foreground slot + registry state machine.
+    assert get_current() is None and request_kill() is False
     c = set_current("sleep 100")
-    assert get_current() is c
     assert request_kill() is True and c.kill.is_set()
-    # kill wins over detach: a killed command can't be detached
-    assert request_detach() is False
+    assert request_detach() is False  # kill wins
     clear_current(c)
-    assert get_current() is None
-    # detach on a fresh command
-    c2 = set_current("npm run build")
-    assert request_detach() is True and c2.detach.is_set()
-    # clear only clears the matching control
-    c3 = set_current("other")
-    clear_current(c2)  # stale — must NOT clear c3
-    assert get_current() is c3
-    clear_current(c3)
 
-    # registry: add → complete fires callback and unblocks wait
-    reg = get_registry()
-    fired: list[int] = []
-    reg.set_completion_callback(lambda j: fired.append(j.id))
-    job = reg.add("npm run build", "shell")
-    assert reg.wait(job.id, timeout=0.1).status == "running"  # not done yet
-    reg.complete(job.id, "built ok", 0)
-    assert job.status == "done" and job.exit_code == 0 and fired == [job.id]
-    assert reg.wait(job.id, timeout=0.1).output == "built ok"
-    reg.complete(job.id, "x", 1)  # second complete is a no-op
-    assert job.exit_code == 0 and fired == [job.id]
+    r = JobRegistry()
+    events: list[tuple[str, str | None]] = []
+    r.add_observer(lambda ev, j: events.append((ev, j.task_id if j else None)))
+    j = r.add("npm run dev", "shell")
+    assert j.task_id == "task_41" and j.status == "running"
+    r.append_log(j.id, "listening on :3000\n")
+    assert "listening" in j.output
+    assert r.resolve("task_41") is j and r.resolve(41) is j and r.resolve("nope") is None
+    assert r.terminate(j.id) is True and j.kill.is_set()
+    r.mark_terminated(j.id, exit_code=-15)
+    assert j.status == "terminated"
+    assert r.terminate(j.id) is False  # not running
+
+    j2 = r.add("pytest", "shell")
+    r.complete(j2.id, 1)
+    assert j2.status == "failed" and j2.exit_code == 1
+    j3 = r.add("build", "shell")
+    r.complete(j3.id, 0)
+    assert j3.status == "done"
+    assert r.active_count() == 0
+    assert r.clear_completed() == 3 and r.list_jobs() == []
+    assert [e[0] for e in events] == [
+        "started", "output", "terminated",
+        "started", "failed", "started", "completed", "cleared",
+    ]
+    assert fmt_runtime(151) == "02:31" and fmt_runtime(3661) == "1:01:01"
     print("shell.jobs self-check ok")

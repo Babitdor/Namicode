@@ -3463,3 +3463,103 @@ class RalphScreen(ModalScreen[None]):
         self.dismiss(None)
 
 
+
+
+class BackgroundTasksScreen(ModalScreen[dict | None]):
+    """The Background Tasks panel: live list + actions.
+
+    Acts on the registry directly for terminate/restart/clear (keeps the panel
+    open); dismisses with a result for copy/logs, which need the running app.
+    """
+
+    BINDINGS = [
+        ("escape", "cancel", "Close"),
+        ("t", "terminate", "Terminate"),
+        ("r", "restart", "Restart"),
+        ("l", "logs", "Logs"),
+        ("c", "copy", "Copy cmd"),
+        ("x", "clear", "Clear done"),
+    ]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._tasks: list[Any] = []
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="modal-box"):
+            yield Static(Text("Background Tasks", style="bold"), id="modal-title")
+            yield OptionList(id="tasks-list")
+            yield Static(
+                Text(
+                    "↑/↓ select · [t]erminate · [r]estart · [l]ogs · [c]opy cmd · [x] clear done · Esc close",
+                    style="dim",
+                ),
+                id="tasks-hint",
+            )
+
+    def on_mount(self) -> None:
+        self._refresh()
+        self.set_interval(1.0, self._refresh)  # live runtimes
+
+    def _registry(self):
+        from novacode_cli.shell.jobs import get_registry
+
+        return get_registry()
+
+    def _refresh(self) -> None:
+        from novacode_cli.shell.jobs import fmt_runtime
+
+        ol = self.query_one("#tasks-list", OptionList)
+        keep = ol.highlighted
+        self._tasks = self._registry().list_jobs()
+        ol.clear_options()
+        if not self._tasks:
+            ol.add_option(Option("No background tasks."))
+        else:
+            style = {"running": "cyan", "done": "green", "failed": "red", "terminated": "yellow"}
+            for t in self._tasks:
+                line = Text()
+                line.append(f"{t.status_glyph()} ", style=style.get(t.status, "white"))
+                line.append(f"{t.task_id}  ", style="bold")
+                line.append(f"{t.command[:44]}", style="white")
+                state = t.status + (f" · exit {t.exit_code}" if t.exit_code is not None else "")
+                line.append(f"\n   {state} · {fmt_runtime(t.runtime())}", style="dim")
+                ol.add_option(Option(line))
+        if self._tasks and keep is not None:
+            ol.highlighted = min(keep, len(self._tasks) - 1)
+
+    def _selected(self):
+        ol = self.query_one("#tasks-list", OptionList)
+        idx = ol.highlighted
+        if idx is None or not (0 <= idx < len(self._tasks)):
+            return None
+        return self._tasks[idx]
+
+    def action_terminate(self) -> None:
+        t = self._selected()
+        if t is not None:
+            self._registry().terminate(t.id)
+            self._refresh()
+
+    def action_restart(self) -> None:
+        t = self._selected()
+        if t is not None:
+            self._registry().restart(t.id)
+            self._refresh()
+
+    def action_clear(self) -> None:
+        self._registry().clear_completed()
+        self._refresh()
+
+    def action_logs(self) -> None:
+        t = self._selected()
+        if t is not None:
+            self.dismiss({"action": "logs", "task_id": t.task_id})
+
+    def action_copy(self) -> None:
+        t = self._selected()
+        if t is not None:
+            self.dismiss({"action": "copy", "command": t.command})
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)

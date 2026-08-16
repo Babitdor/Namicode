@@ -1,9 +1,9 @@
-"""Agent tools for background shell/execute jobs.
+"""Agent tools for background tasks.
 
-A shell/execute command detached with Ctrl+B (or auto-backgrounded) keeps running
-as a background job. These tools let the agent see those jobs and collect their
-output when it chooses to — so it can start something long, move on to other work,
-and come back for the result.
+A shell/execute command detached with Ctrl+B (or restarted from the Background
+Tasks panel) keeps running as a background task with a live log buffer. These
+tools let the agent see what is running and act on it — so it can answer "is the
+dev server still running?", tail logs, stop a task, or restart one.
 """
 
 from __future__ import annotations
@@ -11,53 +11,137 @@ from __future__ import annotations
 from langchain.tools import tool
 
 
-@tool
-def list_jobs() -> str:
-    """List background shell/execute jobs and their status.
-
-    Use this to see what long-running commands are still running or have
-    finished. Retrieve a finished job's output with ``wait_for_job``.
-    """
+def _reg():
     from novacode_cli.shell.jobs import get_registry
 
-    jobs = get_registry().list_jobs()
-    if not jobs:
-        return "No background jobs."
-    lines = []
-    for j in jobs:
-        state = j.status + (f" (exit {j.exit_code})" if j.status == "done" else "")
-        lines.append(f"job {j.id}: {state} — {j.command[:80]}")
+    return get_registry()
+
+
+def _fmt(seconds: float) -> str:
+    from novacode_cli.shell.jobs import fmt_runtime
+
+    return fmt_runtime(seconds)
+
+
+@tool
+def list_background_tasks() -> str:
+    """List background tasks with their status, runtime, and command.
+
+    Use to see what long-running commands are active (e.g. dev servers, watchers)
+    or recently finished.
+    """
+    tasks = _reg().list_jobs()
+    if not tasks:
+        return "No background tasks."
+    lines = [f"{len(tasks)} background task(s):"]
+    for t in tasks:
+        state = t.status + (f" (exit {t.exit_code})" if t.status in ("done", "failed") else "")
+        lines.append(f"  {t.task_id}  {state}  {_fmt(t.runtime())}  - {t.command[:70]}")
     return "\n".join(lines)
 
 
 @tool
-def wait_for_job(job_id: int, timeout_seconds: int = 120) -> str:
-    """Wait for a backgrounded shell/execute job to finish and return its output.
-
-    Blocks up to ``timeout_seconds`` for the job to complete. If it finishes,
-    returns the exit code and full captured output. If it is still running when
-    the timeout elapses, returns a "still running" note — call again to keep
-    waiting, or do other work and check back.
+def get_task_status(task_id: str) -> str:
+    """Get a background task's status, runtime, exit code, and command.
 
     Args:
-        job_id: The background job id (from the "[backgrounded: job N]" message
-            or ``list_jobs``).
-        timeout_seconds: How long to wait before giving up (default 120).
+        task_id: e.g. "task_42" (or just the number).
     """
-    from novacode_cli.shell.jobs import get_registry
+    t = _reg().resolve(task_id)
+    if t is None:
+        return f"No background task '{task_id}'. Use list_background_tasks() to see current tasks."
+    parts = [f"{t.task_id}: {t.status}", f"runtime {_fmt(t.runtime())}", f"command: {t.command}"]
+    if t.exit_code is not None:
+        parts.insert(1, f"exit {t.exit_code}")
+    return " · ".join(parts)
 
-    job = get_registry().wait(job_id, timeout=max(0, timeout_seconds))
-    if job is None:
-        return f"No background job with id {job_id}. Use list_jobs() to see current jobs."
-    if job.status != "done":
+
+@tool
+def get_task_logs(task_id: str, tail_lines: int = 50) -> str:
+    """Return the most recent output lines from a background task.
+
+    Args:
+        task_id: e.g. "task_42".
+        tail_lines: How many trailing lines to return (default 50). The buffer is
+            bounded, so very old output may already have been dropped.
+    """
+    t = _reg().resolve(task_id)
+    if t is None:
+        return f"No background task '{task_id}'."
+    text = t.output
+    if not text.strip():
+        return f"{t.task_id} has produced no output yet."
+    lines = text.splitlines()
+    tail = lines[-max(1, tail_lines):]
+    header = f"{t.task_id} ({t.status}) — last {len(tail)} line(s):"
+    return header + "\n" + "\n".join(tail)
+
+
+@tool
+def terminate_task(task_id: str) -> str:
+    """Stop a running background task (graceful terminate, then force-kill its tree).
+
+    Args:
+        task_id: e.g. "task_42".
+    """
+    reg = _reg()
+    t = reg.resolve(task_id)
+    if t is None:
+        return f"No background task '{task_id}'."
+    if not reg.terminate(t.id):
+        return f"{t.task_id} is not running (status: {t.status})."
+    return f"Terminating {t.task_id} ({t.command[:60]}). It will report as terminated shortly."
+
+
+@tool
+def restart_task(task_id: str) -> str:
+    """Re-run a background task's command as a NEW background task.
+
+    Args:
+        task_id: e.g. "task_42".
+    """
+    reg = _reg()
+    t = reg.resolve(task_id)
+    if t is None:
+        return f"No background task '{task_id}'."
+    new = reg.restart(t.id)
+    if new is None:
+        return f"Could not restart {t.task_id} (no launcher available)."
+    return f"Restarted as {new.task_id}: {new.command[:60]}"
+
+
+@tool
+def wait_for_job(task_id: str, timeout_seconds: int = 120) -> str:
+    """Wait for a background task to finish, then return its exit code and output.
+
+    Blocks up to ``timeout_seconds``. If still running when the timeout elapses,
+    returns a "still running" note — call again or do other work.
+
+    Args:
+        task_id: e.g. "task_42".
+        timeout_seconds: How long to wait (default 120).
+    """
+    reg = _reg()
+    t = reg.resolve(task_id)
+    if t is None:
+        return f"No background task '{task_id}'. Use list_background_tasks() to see current tasks."
+    reg.wait(t.id, timeout=max(0, timeout_seconds))
+    if t.status == "running":
         return (
-            f"Job {job_id} is still running after {timeout_seconds}s "
-            f"(command: {job.command}). Call wait_for_job({job_id}) again to keep waiting."
+            f"{t.task_id} is still running after {timeout_seconds}s "
+            f"(command: {t.command}). Call wait_for_job('{t.task_id}') again to keep waiting."
         )
     return (
-        f"Job {job_id} finished (exit {job.exit_code}).\n\n"
-        f"Command: {job.command}\n\nOutput:\n{job.output}"
+        f"{t.task_id} {t.status} (exit {t.exit_code}).\n\n"
+        f"Command: {t.command}\n\nOutput:\n{t.output}"
     )
 
 
-__all__ = ["list_jobs", "wait_for_job"]
+__all__ = [
+    "get_task_logs",
+    "get_task_status",
+    "list_background_tasks",
+    "restart_task",
+    "terminate_task",
+    "wait_for_job",
+]

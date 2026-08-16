@@ -707,11 +707,24 @@ async def _run_agent_session(
     )
     tools.extend([list_trash, restore_file])
 
-    # Background-job tools: inspect / collect output from commands detached with
-    # Ctrl+B (or auto-backgrounded).
-    from novacode_cli.tools.job_tools import list_jobs, wait_for_job
+    # Background-task tools: inspect / control commands detached with Ctrl+B.
+    from novacode_cli.tools.job_tools import (
+        get_task_logs,
+        get_task_status,
+        list_background_tasks,
+        restart_task,
+        terminate_task,
+        wait_for_job,
+    )
 
-    tools.extend([list_jobs, wait_for_job])
+    tools.extend([
+        list_background_tasks,
+        get_task_status,
+        get_task_logs,
+        terminate_task,
+        restart_task,
+        wait_for_job,
+    ])
 
     # Artifact tools: turn session outputs into live, shareable web pages.
     from novacode_cli.tools.artifact_tools import (

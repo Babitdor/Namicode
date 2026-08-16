@@ -91,7 +91,7 @@ def test_detach_backgrounds_then_job_completes() -> None:
     th.join(timeout=10)
 
     msg = box["msg"]
-    assert "backgrounded: job" in msg.content  # returned before the command ended
+    assert "backgrounded: task_" in msg.content  # returned before the command ended
 
     # The command keeps running; wait for the drain to finish.
     for _ in range(120):
@@ -105,3 +105,38 @@ def test_detach_backgrounds_then_job_completes() -> None:
     assert "line 3" in job.output  # full output captured after detach
 
     reg.set_completion_callback(None)  # don't leak the callback into other tests
+
+
+@pytest.mark.timeout(40)
+def test_launch_terminate_and_restart_background_task() -> None:
+    """Launch a background task, stream its logs, terminate it (process-group
+    kill), then restart it as a fresh task."""
+    mw = ShellMiddleware(workspace_root=os.getcwd(), timeout=30.0)
+    reg = jobs.get_registry()
+    prog = [sys.executable, "-u", "-c"]
+    code = "import time\nwhile True:\n print('tick', flush=True)\n time.sleep(0.3)"
+
+    job = mw._launch_background(code, prog)
+    assert job.status == "running" and job.task_id.startswith("task_")
+
+    for _ in range(60):  # live logs stream in
+        if "tick" in job.output:
+            break
+        time.sleep(0.1)
+    assert "tick" in job.output
+
+    assert reg.terminate(job.id) is True
+    for _ in range(80):  # drain loop kills the tree and marks terminated
+        if job.status != "running":
+            break
+        time.sleep(0.1)
+    assert job.status == "terminated"
+
+    j2 = reg.restart(job.id)
+    assert j2 is not None and j2.id != job.id and j2.status == "running"
+    reg.terminate(j2.id)  # cleanup
+    for _ in range(80):
+        if j2.status != "running":
+            break
+        time.sleep(0.1)
+    assert j2.status == "terminated"
