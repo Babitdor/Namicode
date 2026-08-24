@@ -7,6 +7,7 @@ prompt that enforces the clarify → investigate → write plan → exit_plan_mo
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from deepagents.backends import CompositeBackend
@@ -20,7 +21,6 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.pregel import Pregel
 
 from novacode_cli.agents.plan_agent.plan_mode_middleware import PlanModeMiddleware
-from novacode_cli.tracking.loop_guard import LoopGuardMiddleware
 
 # Use Nova's optimized backend (non-hanging grep + ripgrep discovery + regex).
 from novacode_cli.backends import OptimizedFilesystemBackend as FilesystemBackend
@@ -33,8 +33,56 @@ from novacode_cli.config.plan_mode import (
 from novacode_cli.errors import is_retryable_model_error
 from novacode_cli.hitl.interrupts import get_interrupt_configs
 from novacode_cli.prompts import render_template
+from novacode_cli.tracking.loop_guard import LoopGuardMiddleware
+
+logger = logging.getLogger("nova.plan_agent")
 
 __all__ = ["create_plan_agent_with_config", "get_plan_agent_system_prompt"]
+
+# ── Async planning scouts ─────────────────────────────────────────────────
+# The plan agent can dispatch read-only directory-scanning subagents
+# (plan-scout-agent on the LangGraph server) in PARALLEL during investigation.
+# The middleware's default system prompt tells agents to "return control to
+# the user immediately after launching" — that is the wrong behavior in plan
+# mode, where the plan agent must WAIT for scout reports, fold them into the
+# investigation, and only then call exit_plan_mode. This override replaces it.
+PLAN_SCOUT_ASYNC_PROMPT = """## Async planning scouts (remote LangGraph servers)
+
+You can dispatch `plan-scout-agent` to scan the directory in the background
+while you investigate. The scout is strictly **read-only**: it maps files,
+summarizes key files, and searches for references, then returns a structured
+findings report for you to synthesize.
+
+### Tools
+
+- `start_async_task`: Launch a scout in the background. Returns a task ID immediately.
+- `check_async_task`: Get status + result of a scout run.
+- `update_async_task`: Send new instructions to a running scout (interrupts and restarts it).
+- `cancel_async_task`: Stop a scout that is no longer needed.
+- `list_async_tasks`: List all tracked task IDs (survives context compaction).
+
+### Scout workflow (plan mode)
+
+1. **Decompose** the planning question into independent areas (one scout per
+   subsystem, directory, or concern). Keep the scouting question narrow so
+   each report is dense.
+2. **Launch** one `start_async_task` per area. The description must name the
+   paths to scan and the exact questions to answer.
+3. **Wait and collect** — after launching, call `check_async_task` on each
+   task. If it reports "running", wait and check again. Do NOT proceed to
+   `exit_plan_mode` until every scout has reported.
+4. **Synthesize** — fold the scout findings into your investigation. Cite
+   their file paths in your plan steps.
+
+### Critical rules (plan mode differs from normal async usage)
+
+- **Do NOT end your turn after launching scouts.** You must collect their
+  reports before presenting a plan.
+- Never present a plan while a scout is still running.
+- If a scout errors, retry once; if it still fails, proceed with your own
+  read-only tools (read_file / ls / glob / grep) and note the gap in the plan.
+- Scout reports are inputs to synthesis — integrate them, don't just append.
+"""
 
 
 def get_plan_agent_system_prompt(
@@ -49,7 +97,6 @@ def get_plan_agent_system_prompt(
     Returns:
         The system prompt string for plan mode
     """
-
     if sandbox_type:
         from novacode_cli.integrations.sandbox_factory import get_default_working_dir
 
@@ -256,6 +303,58 @@ def create_plan_agent_with_config(
     # shared checkpointer is provided (e.g. standalone/tests).
     plan_checkpointer = checkpointer if checkpointer is not None else InMemorySaver()
 
+    # Async planning scouts: give the plan agent the async-task tools
+    # (start / check / update / cancel / list) so it can dispatch read-only
+    # directory-scanning subagents in parallel during investigation. The
+    # default AsyncSubAgentMiddleware prompt says "return control to the user
+    # immediately after launching" — wrong for plan mode, where the plan agent
+    # must WAIT for scout reports before presenting the plan. Best-effort:
+    # if no scouts are configured or the middleware is unavailable, the plan
+    # agent falls back to its own read-only tools (no behavior change).
+    plan_middleware = [
+        # Retry transient model failures (rate limits / 429, timeouts,
+        # network blips) with exponential backoff before erroring out.
+        # Skip retries on permanent failures (usage cap / bad key) and
+        # re-raise on exhaustion so the agent-loop funnel renders a clean
+        # provider notice instead of hiding it in a fake AIMessage.
+        ModelRetryMiddleware(
+            max_retries=3,
+            retry_on=is_retryable_model_error,
+            on_failure="error",
+            backoff_factor=2.0,
+            initial_delay=1.0,
+        ),
+        PlanModeMiddleware(workspace_root=workspace_root),
+        # Break identical-repeat tool loops (same tool + args + result).
+        # The main agent has this guard; plan mode lacked it, so a stuck
+        # model could re-read the same file indefinitely while planning.
+        LoopGuardMiddleware(threshold=3),
+        # Keep the SHARED session list reference even when empty — using
+        # `or []` would swap in a fresh list and break live steering, since
+        # the list is usually empty at plan-agent creation time.
+        SteeringMiddleware(
+            instructions=(steering_instructions if steering_instructions is not None else [])
+        ),
+    ]
+
+    try:
+        from deepagents.middleware.async_subagents import AsyncSubAgentMiddleware
+
+        from novacode_cli.agents.default_subagents.async_subagents import (
+            retrieve_async_subagents,
+        )
+
+        scout_specs = retrieve_async_subagents()
+        if scout_specs:
+            plan_middleware.append(
+                AsyncSubAgentMiddleware(
+                    async_subagents=scout_specs,
+                    system_prompt=PLAN_SCOUT_ASYNC_PROMPT,
+                )
+            )
+    except Exception:  # noqa: BLE001 — never break plan mode on scout wiring
+        logger.debug("async scout middleware unavailable; plan agent runs read-only", exc_info=True)
+
     agent = create_deep_agent(
         name=assistant_id,
         model=wrapped_model,
@@ -266,32 +365,8 @@ def create_plan_agent_with_config(
         backend=composite_backend,
         store=store,
         interrupt_on=interrupt_on,  # type: ignore
-        subagents=[],  # Plan agents don't use subagents by default
-        middleware=[
-            # Retry transient model failures (rate limits / 429, timeouts,
-            # network blips) with exponential backoff before erroring out.
-            # Skip retries on permanent failures (usage cap / bad key) and
-            # re-raise on exhaustion so the agent-loop funnel renders a clean
-            # provider notice instead of hiding it in a fake AIMessage.
-            ModelRetryMiddleware(
-                max_retries=3,
-                retry_on=is_retryable_model_error,
-                on_failure="error",
-                backoff_factor=2.0,
-                initial_delay=1.0,
-            ),
-            PlanModeMiddleware(workspace_root=workspace_root),
-            # Break identical-repeat tool loops (same tool + args + result).
-            # The main agent has this guard; plan mode lacked it, so a stuck
-            # model could re-read the same file indefinitely while planning.
-            LoopGuardMiddleware(threshold=3),
-            # Keep the SHARED session list reference even when empty — using
-            # `or []` would swap in a fresh list and break live steering, since
-            # the list is usually empty at plan-agent creation time.
-            SteeringMiddleware(
-                instructions=(steering_instructions if steering_instructions is not None else [])
-            ),
-        ],
+        subagents=[],  # Plan agents don't use sync subagents
+        middleware=plan_middleware,
     )
 
     return agent, composite_backend

@@ -98,6 +98,19 @@ Use this agent when:
 The agent scans files, runs linters, analyzes structure, and proposes incremental improvements.
 """
 
+PLAN_SCOUT_AGENT_DESCRIPTION = """An async agent that scans the directory and reports planning-relevant findings.
+
+Use this agent when you are PLANNING a change and need to parallelize
+codebase investigation:
+- You need to map which files exist in an area of the repository
+- You need summaries of key files (headers, exports, wiring) to ground a plan
+- You need to locate references to a symbol/feature across the tree
+- You want several independent areas scanned in parallel before you synthesize a plan
+
+The agent is strictly read-only: it inspects files and returns a structured
+findings report to the planner. It never edits, creates, or deletes anything.
+"""
+
 
 # ── Agent builders ─────────────────────────────────────────────────────────────
 
@@ -167,6 +180,20 @@ def build_refactoring_agent() -> AsyncSubAgent:
     )
 
 
+def build_plan_scout_agent() -> AsyncSubAgent:
+    """Build the plan-scout async subagent config.
+
+    The plan agent dispatches scouts in parallel during investigation, then
+    synthesizes their findings reports into the plan.
+    """
+    return _build_agent_spec(
+        name="plan-scout-agent",
+        graph_id="plan-scout-agent",
+        description=PLAN_SCOUT_AGENT_DESCRIPTION,
+        port=2024,  # one shared server hosts all graphs; routing is by graph_id
+    )
+
+
 def retrieve_async_subagents() -> list[AsyncSubAgent]:
     """Return the list of available async subagents.
 
@@ -182,4 +209,5 @@ def retrieve_async_subagents() -> list[AsyncSubAgent]:
         build_test_generation_agent(),
         build_dependency_audit_agent(),
         build_refactoring_agent(),
+        build_plan_scout_agent(),
     ]
