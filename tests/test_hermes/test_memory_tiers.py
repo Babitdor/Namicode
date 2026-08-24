@@ -167,10 +167,12 @@ class TestParseReviewResponse:
         parsed = parse_review_response("<lesson>\n- a fact\n</lesson>")
         assert parsed["lessons"][0]["topic"] == "lessons"
 
-    def test_unstructured_fallback(self):
+    def test_unstructured_content_is_dropped(self):
+        # Unstructured prose with no XML blocks must NOT be dumped as a lesson
+        # (this was the source of raw thinking-trace pollution in lessons.md).
         parsed = parse_review_response("just some freeform text")
-        assert parsed["lessons"][0]["topic"] == "lessons"
-        assert "freeform" in parsed["lessons"][0]["bullets"]
+        assert parsed["lessons"] == []
+        assert parsed["user_model"] == ""
 
     def test_empty(self):
         parsed = parse_review_response("")

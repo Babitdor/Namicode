@@ -183,6 +183,46 @@ class TestDetection:
         assert launched == []
 
 
+# ── proactive auto-evolve (periodic trigger) ────────────────────────────────
+
+
+class TestAutoEvolve:
+    async def test_proposes_candidate_for_configured_template(self, engine, monkeypatch):
+        eng, history = engine
+        # Point the configured template list at the fixture's template.
+        monkeypatch.setattr(config, "PROMPT_EVOLVE_TEMPLATES", ("test_tpl.jinja",))
+        launched = []
+        eng._spawn = lambda c: (launched.append(c), c.close())
+        await eng.maybe_auto_evolve()
+        assert len(launched) == 1
+
+    async def test_skips_template_already_under_test(self, engine, monkeypatch):
+        eng, history = engine
+        monkeypatch.setattr(config, "PROMPT_EVOLVE_TEMPLATES", ("test_tpl.jinja",))
+        await eng._write_candidate("test_tpl.jinja", "EXISTING")
+        launched = []
+        eng._spawn = lambda c: (launched.append(c), c.close())
+        await eng.maybe_auto_evolve()
+        assert launched == []  # already A/B testing → no new candidate
+
+    async def test_skips_unknown_template(self, engine, monkeypatch):
+        eng, _ = engine
+        monkeypatch.setattr(config, "PROMPT_EVOLVE_TEMPLATES", ("does_not_exist.jinja",))
+        launched = []
+        eng._spawn = lambda c: (launched.append(c), c.close())
+        await eng.maybe_auto_evolve()
+        assert launched == []
+
+    async def test_disabled_is_noop(self, engine, monkeypatch):
+        eng, _ = engine
+        monkeypatch.setattr(config, "PROMPT_EVOLVE_TEMPLATES", ("test_tpl.jinja",))
+        eng._enabled = False
+        launched = []
+        eng._spawn = lambda c: (launched.append(c), c.close())
+        await eng.maybe_auto_evolve()
+        assert launched == []
+
+
 # ── outcome-driven resolution ────────────────────────────────────────────────
 
 

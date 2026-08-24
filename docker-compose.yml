@@ -1,9 +1,10 @@
 services:
-  # ── Ollama (LLM backend) ──────────────────────────────────────────────────
+  # ── Ollama (LLM backend for the async agents) ─────────────────────────────
   ollama:
     image: ollama/ollama:latest
-    ports:
-      - "11434:11434"
+    # No host port publish: langgraph reaches it in-network at ollama:11434, and
+    # publishing 11434 collides with a host Ollama if one is already running.
+    # Add a `ports: ["11435:11434"]` mapping only if you need host access.
     volumes:
       - ollama_data:/root/.ollama
     environment:
@@ -15,94 +16,35 @@ services:
       timeout: 10s
       retries: 3
 
-  # ── Documentation Update Agent ────────────────────────────────────────────
-  doc-agent:
+  # ── LangGraph server (hosts ALL async agent graphs) ───────────────────────
+  # A single server serves every graph registered in langgraph.json
+  # (documentation-update / code-review / test-generation / dependency-audit /
+  # refactoring). Clients pick one by graph_id, so there is no need for a server
+  # per agent — the NOVA CLI reaches them all at ASYNC_AGENT_BASE_URL:2024.
+  langgraph:
     build: .
     ports:
       - "2024:2024"
     environment:
-      - OLLAMA_BASE_URL=http://ollama:11434
-      - DOC_AGENT_MODEL=gemma4:31b-cloud
+      # The async-agent graphs build ChatOllama(model=...) with no base_url, so
+      # the Ollama client honours OLLAMA_HOST. Point it at the host Ollama (which
+      # already has the models + cloud auth); override to http://ollama:11434 to
+      # use the bundled container instead.
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
+      - OLLAMA_BASE_URL=${OLLAMA_HOST:-http://host.docker.internal:11434}
+      - DOC_AGENT_MODEL=${DOC_AGENT_MODEL:-gemma4:31b-cloud}
+      - LANGGRAPH_API_KEY=${LANGGRAPH_API_KEY:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - .:/app
-      - /app/.venv  # preserve container venv
+      - /app/.venv  # keep the image's venv (has langgraph-cli) behind the mount
     depends_on:
       ollama:
         condition: service_healthy
-    command: >
-      sh -c "uv run langgraph dev --host 0.0.0.0 --port 2024"
-    restart: unless-stopped
-
-  # ── Code Review Agent ─────────────────────────────────────────────────────
-  code-review-agent:
-    build: .
-    ports:
-      - "2025:2024"
-    environment:
-      - OLLAMA_BASE_URL=http://ollama:11434
-      - DOC_AGENT_MODEL=gemma4:31b-cloud
-    volumes:
-      - .:/app
-      - /app/.venv
-    depends_on:
-      ollama:
-        condition: service_healthy
-    command: >
-      sh -c "uv run langgraph dev --host 0.0.0.0 --port 2024"
-    restart: unless-stopped
-
-  # ── Test Generation Agent ─────────────────────────────────────────────────
-  test-gen-agent:
-    build: .
-    ports:
-      - "2026:2024"
-    environment:
-      - OLLAMA_BASE_URL=http://ollama:11434
-      - DOC_AGENT_MODEL=gemma4:31b-cloud
-    volumes:
-      - .:/app
-      - /app/.venv
-    depends_on:
-      ollama:
-        condition: service_healthy
-    command: >
-      sh -c "uv run langgraph dev --host 0.0.0.0 --port 2024"
-    restart: unless-stopped
-
-  # ── Dependency Audit Agent ────────────────────────────────────────────────
-  dep-audit-agent:
-    build: .
-    ports:
-      - "2027:2024"
-    environment:
-      - OLLAMA_BASE_URL=http://ollama:11434
-      - DOC_AGENT_MODEL=gemma4:31b-cloud
-    volumes:
-      - .:/app
-      - /app/.venv
-    depends_on:
-      ollama:
-        condition: service_healthy
-    command: >
-      sh -c "uv run langgraph dev --host 0.0.0.0 --port 2024"
-    restart: unless-stopped
-
-  # ── Refactoring Agent ─────────────────────────────────────────────────────
-  refactor-agent:
-    build: .
-    ports:
-      - "2028:2024"
-    environment:
-      - OLLAMA_BASE_URL=http://ollama:11434
-      - DOC_AGENT_MODEL=gemma4:31b-cloud
-    volumes:
-      - .:/app
-      - /app/.venv
-    depends_on:
-      ollama:
-        condition: service_healthy
-    command: >
-      sh -c "uv run langgraph dev --host 0.0.0.0 --port 2024"
+    # langgraph.json references .env; ensure it exists (seed from .env.example)
+    # before starting so the dev server boots even on a fresh checkout.
+    command: sh -c "[ -f .env ] || cp .env.example .env; uv run --no-sync langgraph dev --host 0.0.0.0 --port 2024"
     restart: unless-stopped
 
 volumes:

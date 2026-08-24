@@ -133,7 +133,7 @@ def build_code_review_agent() -> AsyncSubAgent:
         name="code-review-agent",
         graph_id="code-review-agent",
         description=CODE_REVIEW_AGENT_DESCRIPTION,
-        port=2025,
+        port=2024,  # one shared server hosts all graphs; routing is by graph_id
     )
 
 
@@ -143,7 +143,7 @@ def build_test_generation_agent() -> AsyncSubAgent:
         name="test-generation-agent",
         graph_id="test-generation-agent",
         description=TEST_GENERATION_AGENT_DESCRIPTION,
-        port=2026,
+        port=2024,  # one shared server hosts all graphs; routing is by graph_id
     )
 
 
@@ -153,7 +153,7 @@ def build_dependency_audit_agent() -> AsyncSubAgent:
         name="dependency-audit-agent",
         graph_id="dependency-audit-agent",
         description=DEPENDENCY_AUDIT_AGENT_DESCRIPTION,
-        port=2027,
+        port=2024,  # one shared server hosts all graphs; routing is by graph_id
     )
 
 
@@ -163,7 +163,7 @@ def build_refactoring_agent() -> AsyncSubAgent:
         name="refactoring-agent",
         graph_id="refactoring-agent",
         description=REFACTORING_AGENT_DESCRIPTION,
-        port=2028,
+        port=2024,  # one shared server hosts all graphs; routing is by graph_id
     )
 
 

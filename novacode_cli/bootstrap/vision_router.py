@@ -148,8 +148,17 @@ async def caption_images(image_urls: list[str], task_hint: str = "") -> str:
         )
         raw = getattr(resp, "content", "")
         text = (raw if isinstance(raw, str) else str(raw)).strip()
-    except Exception:  # noqa: BLE001 — never crash a turn over a caption
-        logger.warning("Vision captioning failed", exc_info=True)
+    except Exception as e:  # noqa: BLE001 — never crash a turn over a caption
+        # A KNOWN provider problem (region opt-in, auth, quota) means the vision
+        # model is simply unavailable — log one clean line, not a stack trace, so
+        # a region-restricted auxiliary model doesn't spam tracebacks every image.
+        from novacode_cli.errors import friendly_model_error
+
+        notice = friendly_model_error(e)
+        if notice:
+            logger.warning("Vision captioning unavailable: %s", notice.splitlines()[0])
+        else:
+            logger.warning("Vision captioning failed", exc_info=True)
         _mark_vision_errored()
         return _VISION_FAILED
     return text or _VISION_EMPTY

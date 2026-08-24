@@ -35,6 +35,8 @@ Don't exhaustively read transcripts. Look only for things you already suspect ma
 
 For each thing worth remembering, write or update a memory file at the top level of the memory directory.
 
+**Tool rule**: memory files already exist — update them with `edit_file` (read the file first, then replace the exact block). Never use `write_file` on an existing memory file; it is create-only and fails. For a full-file rewrite, anchor on the stable `# Title` header and replace the body in one `edit_file` (re-read the header first — it may have shifted).
+
 Focus on:
 - Merging new signal into existing topic files rather than creating near-duplicates
 - Converting relative dates ("yesterday", "last week") to absolute dates so they remain interpretable after time passes

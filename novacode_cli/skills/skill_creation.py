@@ -5,9 +5,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from deepagents.graph import create_deep_agent
-
-from novacode_cli.backends import OptimizedFilesystemBackend as FilesystemBackend
 from novacode_cli.config.config import COLORS, Settings, console
 from novacode_cli.config.model_create import create_model
 from novacode_cli.skills.load import list_skills
@@ -70,6 +67,11 @@ async def _generate_skill(
         # The system prompt must instruct the agent to use virtual paths like
         # "/SKILL.md" rather than absolute filesystem paths, matching how the
         # core agent works (see core_agent.py for the same pattern).
+        # Lazy imports: deepagents + the filesystem backend are only needed to
+        # build the skill-creation agent, not at module import time.
+        from deepagents.graph import create_deep_agent
+        from novacode_cli.backends import OptimizedFilesystemBackend as FilesystemBackend
+
         skill_creation_agent = create_deep_agent(
             name="Skill-Creation-Agent",
             model=create_model(),

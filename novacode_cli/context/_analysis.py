@@ -109,6 +109,23 @@ MODEL_CONTEXT_WINDOWS: dict[str, int] = {
 CONTEXT_WARNING_THRESHOLD = 0.75  # Yellow warning at 75%
 CONTEXT_CRITICAL_THRESHOLD = 0.90  # Red warning at 90%
 
+# deepagents' built-in SummarizationMiddleware fires at this fraction of
+# ``model.profile["max_input_tokens"]`` (same value in 0.6.x and 0.7.x). Nova
+# seeds that profile from :func:`get_context_window_size`, so both compactors
+# now measure against the SAME window — see
+# ``core_agent._seed_summarization_profile``.
+LIB_SUMMARIZATION_FRACTION = 0.85
+
+# Where Nova's own auto-compaction fires. MUST stay below
+# LIB_SUMMARIZATION_FRACTION: whichever trigger is lower runs first, and we want
+# Nova's compaction (visible in the transcript, loop-guarded, and using Nova's
+# own summary format) to win. The library then only fires as a mid-turn backstop
+# for a single turn that balloons past it — the case Nova's between-turns check
+# cannot catch. Previously Nova sat at 0.90 while the library sat at 0.85, so the
+# library ALWAYS won and the user saw deepagents' "SESSION INTENT" block while
+# the indicator still read "warning, not critical".
+AUTO_COMPACT_THRESHOLD = 0.82
+
 
 @dataclass
 class ContextBreakdown:
@@ -190,6 +207,15 @@ class ContextBreakdown:
         """Whether context usage has reached the critical threshold (90%)."""
         return self.usage_percentage >= CONTEXT_CRITICAL_THRESHOLD * 100
 
+    @property
+    def should_auto_compact(self) -> bool:
+        """Whether Nova should compact now, BEFORE deepagents' backstop fires.
+
+        Deliberately lower than :data:`LIB_SUMMARIZATION_FRACTION` so the
+        harness compacts first and the library stays a mid-turn safety net.
+        """
+        return self.usage_percentage >= AUTO_COMPACT_THRESHOLD * 100
+
 
 @dataclass
 class CompactionResult:
@@ -256,7 +282,7 @@ def _lookup_hardcoded_window(model_name: str) -> int:
     return MODEL_CONTEXT_WINDOWS["default"]
 
 
-def get_context_window_size(model_name: str, use_dyNovac: bool = True) -> int:
+def get_context_window_size(model_name: str, use_dynamic: bool = True) -> int:
     """Get the *effective* context window size for a given model.
 
     For cloud API models (Claude/GPT/Gemini/o-series) this is the model's
@@ -271,7 +297,7 @@ def get_context_window_size(model_name: str, use_dyNovac: bool = True) -> int:
 
     Args:
         model_name: The name of the model (e.g., "gpt-4", "claude-3-opus", "glm-5:cloud").
-        use_dyNovac: Whether to use dynamic detection from Ollama (default: True).
+        use_dynamic: Whether to use dynamic detection from Ollama (default: True).
 
     Returns:
         The effective context window size in tokens (falls back to 128K default).
@@ -289,7 +315,7 @@ def get_context_window_size(model_name: str, use_dyNovac: bool = True) -> int:
     # "Local model" == a model whose context is allocated in *our* VRAM.
     is_local_ollama = not is_cloud_api_model and not is_ollama_cloud
 
-    if use_dyNovac and is_local_ollama:
+    if use_dynamic and is_local_ollama:
         # Best source for a local model: the context Ollama ACTUALLY allocated
         # for the loaded model (`ollama ps`). It may be clamped below the
         # requested num_ctx to fit VRAM, so it's authoritative when present.
@@ -308,7 +334,7 @@ def get_context_window_size(model_name: str, use_dyNovac: bool = True) -> int:
     # Architecture / max window: dynamic `ollama show` probe (works for both
     # local AND cloud Ollama models), else the static table.
     arch_window: int | None = None
-    if use_dyNovac and not is_cloud_api_model:
+    if use_dynamic and not is_cloud_api_model:
         try:
             from novacode_cli.context._dynamic import get_ollama_context_length
 
@@ -323,6 +349,23 @@ def get_context_window_size(model_name: str, use_dyNovac: bool = True) -> int:
                 f"Dynamic context detection failed for {model_name}: {e}, "
                 f"falling back to hardcoded"
             )
+    # Ollama didn't recognize it (arch_window is None) AND it isn't a cloud-API
+    # model → it's a gateway model (OpenCode / OpenRouter / other OpenAI-compatible
+    # endpoint) whose window the hardcoded table misses. Consult models.dev (the
+    # OpenCode-maintained catalog) for the REAL published window. Return it
+    # directly (uncapped): gateway models aren't VRAM-bound, so the local num_ctx
+    # cap must not apply — that mis-cap is what made OpenCode ctx% blow past 100%.
+    if arch_window is None and use_dynamic and not is_cloud_api_model:
+        try:
+            from novacode_cli.context._models_dev import get_models_dev_context
+
+            mdev = get_models_dev_context(model_name)
+            if mdev:
+                logger.debug(f"Context for {model_name}: {mdev:,} (models.dev)")
+                return mdev
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"models.dev lookup failed for {model_name}: {e}")
+
     if arch_window is None:
         arch_window = _lookup_hardcoded_window(model_name)
 
@@ -425,7 +468,7 @@ def _tool_call_text(msg: BaseMessage) -> str:
 def build_context_breakdown(
     messages: list[BaseMessage],
     model_name: str,
-    use_dyNovac: bool = True,
+    use_dynamic: bool = True,
 ) -> ContextBreakdown:
     """Build a ContextBreakdown from the current conversation state.
 
@@ -435,7 +478,7 @@ def build_context_breakdown(
     Args:
         messages: Current conversation messages from agent state.
         model_name: Model name for looking up context window size.
-        use_dyNovac: Whether to use dynamic detection from Ollama (default: True).
+        use_dynamic: Whether to use dynamic detection from Ollama (default: True).
 
     Returns:
         Populated ContextBreakdown with usage stats.
@@ -447,7 +490,7 @@ def build_context_breakdown(
         ToolMessage,
     )
 
-    context_window = get_context_window_size(model_name, use_dyNovac=use_dyNovac)
+    context_window = get_context_window_size(model_name, use_dynamic=use_dynamic)
 
     system_tokens = 0
     user_tokens = 0
@@ -519,7 +562,7 @@ def get_compaction_recommendation(
     messages: list[BaseMessage],
     model_name: str,
     baseline_tokens: int = 0,
-    use_dyNovac: bool = True,
+    use_dynamic: bool = True,
 ) -> CompactionRecommendation:
     """Analyze a conversation and recommend whether compaction should run.
 
@@ -530,12 +573,12 @@ def get_compaction_recommendation(
         messages: Current conversation messages from agent state.
         model_name: Model name for context window lookup.
         baseline_tokens: Baseline tokens (system prompt, tools, memory) already used.
-        use_dyNovac: Whether to use dynamic detection from Ollama (default: True).
+        use_dynamic: Whether to use dynamic detection from Ollama (default: True).
 
     Returns:
         CompactionRecommendation with analysis and recommendation.
     """
-    breakdown = build_context_breakdown(messages, model_name, use_dyNovac=use_dyNovac)
+    breakdown = build_context_breakdown(messages, model_name, use_dynamic=use_dynamic)
 
     total_with_baseline = breakdown.total_tokens + baseline_tokens
     effective_usage_pct = (total_with_baseline / breakdown.context_window_size) * 100

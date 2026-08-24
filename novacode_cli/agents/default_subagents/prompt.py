@@ -111,6 +111,9 @@ DOCKER_AGENT = {
 }
 
 # ── Research Swarm Agents ──────────────────────────────────────────────────────
+# These are NOT in the default subagent roster (see subagents.py) to keep the
+# `task` tool schema lean. They remain defined here for the research-swarm
+# workflow (research_swarm.jinja) and its tests.
 
 WEB_RESEARCHER = {
     "description": "Searches the web and fetches primary sources to investigate a specific research sub-question. Writes structured findings to a designated file. Use for general web research assignments within a research swarm.",
@@ -119,6 +122,7 @@ WEB_RESEARCHER = {
         "web_search",
         "duckduckgo_search",
         "fetch_url",
+        "write_file",
     ],
 }
 
@@ -128,6 +132,7 @@ FACT_CHECKER = {
     "tools": [
         "web_search",
         "duckduckgo_search",
+        "write_file",
     ],
 }
 
@@ -156,6 +161,7 @@ MARKET_ANALYST = {
         "web_search",
         "duckduckgo_search",
         "fetch_url",
+        "write_file",
     ],
 }
 
@@ -166,6 +172,7 @@ FINANCIAL_ANALYST = {
         "web_search",
         "duckduckgo_search",
         "fetch_url",
+        "write_file",
     ],
 }
 
@@ -177,5 +184,6 @@ TECHNICAL_RESEARCHER = {
         "duckduckgo_search",
         "docs_search",
         "fetch_url",
+        "write_file",
     ],
 }

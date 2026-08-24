@@ -42,7 +42,10 @@ class ContextBudget:
         """
         tokens = self._count_tokens(context)
         self.middleware_usage[middleware_name] = tokens
-        self.total_tokens += tokens
+        # Sum, don't accumulate: this is called once per model call with the same
+        # (cached) section, so `+=` grew the total forever and logged a bogus
+        # "budget exceeded" every turn until the log was nothing else.
+        self.total_tokens = sum(self.middleware_usage.values())
 
         if self.total_tokens > self.max_tokens:
             logger.warning(

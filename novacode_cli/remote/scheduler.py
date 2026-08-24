@@ -43,6 +43,19 @@ _TICK_SECONDS = 20
 
 _CRON_FIELDS = 5
 
+#: Built-in learning-consolidation heartbeat (inspired by Prime Agent's
+#: ``rlm-heartbeat``). Fires daily at 02:00 local time. The task is a
+#: consolidation prompt that reviews the session's work and persists what was
+#: learned into memory. Users can disable it with ``/cron remove <id>``.
+_BUILTIN_CONSOLIDATION_CRON = "0 2 * * *"
+_BUILTIN_CONSOLIDATION_ID = "nova-consolidation"
+_BUILTIN_CONSOLIDATION_TASK = (
+    "Learning consolidation heartbeat. Review the recent session(s): "
+    "consolidate what you learned into long-term memory (user model, lessons, "
+    "habits), note any skill or prompt refinements worth making, and record "
+    "them. Be concise; do not invent work that was not done."
+)
+
 
 # ---------------------------------------------------------------------------
 # Cron expression parsing (pure, unit-tested)
@@ -134,6 +147,7 @@ class CronScheduler:
         if self._task is not None and not self._task.done():
             return
         await self._load_jobs()
+        await self._ensure_builtin_jobs()
         self._task = asyncio.create_task(self._run(), name="cron-scheduler")
 
     async def stop(self) -> None:
@@ -245,6 +259,26 @@ class CronScheduler:
             value = getattr(item, "value", None)
             if isinstance(value, dict) and value.get("cron_expr") and value.get("task"):
                 self._jobs[value.get("job_id", getattr(item, "key", ""))] = dict(value)
+
+    async def _ensure_builtin_jobs(self) -> None:
+        """Register the built-in consolidation heartbeat if not already present.
+
+        Idempotent: if the user has removed the built-in job (or it was never
+        added), it is re-registered. If the user explicitly removed it, they can
+        keep it removed by re-removing after this runs; there is no persistent
+        "disabled" flag, matching the simple job model.
+        """
+        if _BUILTIN_CONSOLIDATION_ID in self._jobs:
+            return
+        try:
+            await self.add_job(
+                _BUILTIN_CONSOLIDATION_CRON,
+                _BUILTIN_CONSOLIDATION_TASK,
+                job_id=_BUILTIN_CONSOLIDATION_ID,
+            )
+            logger.info("Registered built-in consolidation heartbeat (%s)", _BUILTIN_CONSOLIDATION_ID)
+        except Exception:
+            logger.exception("Failed to register built-in consolidation heartbeat")
 
 
 async def _noop_reply(_text: str) -> None:

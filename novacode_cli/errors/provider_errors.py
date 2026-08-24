@@ -47,6 +47,13 @@ _NOTICES = {
         "The provider rejected your credentials — check your API key or subscription.\n"
         "Details: {text}"
     ),
+    "region": (
+        "🌏  Model not available in your region\n"
+        "This model is region-restricted and needs an explicit opt-in on your provider "
+        "account (your key is fine). Enable it via the link in the details, or switch to a "
+        "model that doesn't require opt-in.\n"
+        "Details: {text}"
+    ),
     "connection": (
         "⚠️  Could not reach the model provider\n"
         "Check your network, or that the local model server (e.g. Ollama) is running.\n"
@@ -55,7 +62,8 @@ _NOTICES = {
 }
 
 # Categories that won't recover within a retry window, so don't waste backoff.
-_PERMANENT = frozenset({"usage_limit", "auth"})
+# "region" needs a user opt-in on the provider account, so retrying is pointless.
+_PERMANENT = frozenset({"usage_limit", "auth", "region"})
 
 
 def _status_code(exc: BaseException) -> int | None:
@@ -101,6 +109,17 @@ def _classify(exc: BaseException | None) -> str | None:
         or "429" in low
     ):
         return "rate_limit"
+
+    # Region / opt-in restriction — a 403 that is NOT a credentials problem
+    # (e.g. OpenCode: "RegionError … only available hosted in China and requires
+    # explicit opt in"). Must run BEFORE the auth check so it isn't mislabelled
+    # "check your API key".
+    if (
+        "regionerror" in low
+        or "only available hosted in" in low
+        or ("region" in low and ("opt in" in low or "opt-in" in low))
+    ):
+        return "region"
 
     # Authentication / authorization.
     if (

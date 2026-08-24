@@ -493,6 +493,13 @@ class TokenTracker:
         self.current_context = 0  # Total context including messages (from API input_tokens)
         self.last_output = 0
 
+        # Cumulative session usage: input+output summed over every turn. Unlike
+        # current_context (bounded by the window, drops on compaction), this only
+        # ever climbs — it's the "how much have I used this session" number.
+        self.session_total_tokens = 0
+        # Budget the session meter is a percentage of. Configurable; 1M default.
+        self.session_token_budget = 1_000_000
+
         # Prompt-caching breakdown (Anthropic only, 0 for other providers)
         self.last_cache_read = 0  # tokens read from prompt cache this turn
         self.last_cache_creation = 0  # tokens written to prompt cache this turn
@@ -511,6 +518,13 @@ class TokenTracker:
 
         # Detailed breakdown from post-turn analysis
         self._last_breakdown: ContextBreakdown | None = None
+
+    @property
+    def session_pct(self) -> float:
+        """Session usage as a percentage of the configured budget."""
+        if not self.session_token_budget:
+            return 0.0
+        return self.session_total_tokens / self.session_token_budget * 100
 
     def set_model(self, model_name: str) -> None:
         """Set the model name for context window calculation.
@@ -532,8 +546,14 @@ class TokenTracker:
         self.baseline_context = tokens
         self.current_context = tokens
 
-    def reset(self) -> None:
-        """Reset to baseline (for /clear and /compact commands)."""
+    def reset(self, *, reset_session: bool = False) -> None:
+        """Reset to baseline (for /clear and /compact commands).
+
+        By default session_total_tokens is NOT reset — the session usage meter
+        must survive compaction and resume (it tracks cumulative usage, not
+        context). Pass reset_session=True for a true fresh start (/clear), which
+        zeroes the cumulative session meter too.
+        """
         self.current_context = self.baseline_context
         self.last_output = 0
         self.last_cache_read = 0
@@ -543,6 +563,8 @@ class TokenTracker:
         self.assistant_message_count = 0
         self.tool_call_count = 0
         self._last_breakdown = None
+        if reset_session:
+            self.session_total_tokens = 0
 
     def add(
         self,
@@ -566,6 +588,9 @@ class TokenTracker:
         self.last_cache_read = cache_read_tokens
         self.last_cache_creation = cache_creation_tokens
         self.has_api_data = True
+        # add() is called once per finalized turn (agent_loop yields the captured
+        # usage once), so summing here accumulates real per-turn usage.
+        self.session_total_tokens += input_tokens + output_tokens
 
     def increment_user_messages(self) -> None:
         """Increment user message count."""
@@ -606,10 +631,16 @@ class TokenTracker:
 
         if hasattr(self, "_last_breakdown") and self._last_breakdown is not None:
             bd = self._last_breakdown
-            # Override total_tokens with API data if available (more accurate)
+            # Override total_tokens with API data if available (more accurate).
             if self.has_api_data and self.current_context > 0:
                 bd.total_tokens = self.current_context
-                bd.context_window_size = self.context_window_size
+                # Keep bd.context_window_size: it was detected live this turn
+                # (build_context_breakdown, use_dynamic=True), so it reflects the
+                # real Ollama-allocated window once the model has loaded — unlike
+                # self.context_window_size, captured once at set_model() time.
+                # Refresh the stored copy so direct readers stay current too.
+                if bd.context_window_size:
+                    self.context_window_size = bd.context_window_size
             return bd
 
         return ContextBreakdown(

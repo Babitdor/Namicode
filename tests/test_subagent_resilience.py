@@ -44,7 +44,10 @@ def test_existing_subagent_middleware_is_preserved_after_hardening():
     assert isinstance(mw[1], VisionCaptionMiddleware)
     assert isinstance(mw[2], SecurityMiddleware)
     assert isinstance(mw[3], LoopGuardMiddleware)
-    assert mw[4] is sentinel
+    # The caller's own middleware must survive hardening and stay last. Asserted
+    # by position rather than index so adding another hardening middleware (the
+    # async-subagent one, for instance) doesn't false-alarm this test.
+    assert mw[-1] is sentinel
 
 
 def test_fresh_middleware_instances_per_spec_not_shared():

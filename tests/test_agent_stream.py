@@ -638,9 +638,134 @@ def test_plan_auto_approve_completes_turn():
     assert session.approved_plan_content == "Mock Plan content"
 
 
+def test_policy_denied_retry_loop_is_bounded():
+    """A tool the policy auto-rejects, retried forever by the model, must not spin.
+
+    Resuming after an interrupt resets LangGraph's recursion counter, so before
+    the guard this looped indefinitely with no user in the way — the CLI just
+    reprinted the same turn until it died.
+    """
+    from novacode_cli.core.agent_loop import MAX_AUTO_REJECT_RESUMES
+    from novacode_cli.security.policy import reset_policy_cache
+
+    reset_policy_cache()
+
+    class StubbornAgent:
+        """Always asks for the same policy-denied command; never gives up."""
+
+        def __init__(self):
+            self.calls = 0
+
+        async def aget_state(self, config):
+            return _State([])
+
+        async def astream(self, inp, **kw):
+            self.calls += 1
+            assert self.calls <= MAX_AUTO_REJECT_RESUMES, "loop guard did not stop the turn"
+            yield (
+                (),
+                "updates",
+                {
+                    "__interrupt__": [
+                        types.SimpleNamespace(
+                            value={
+                                "action_requests": [
+                                    {
+                                        "name": "shell",
+                                        "args": {"command": "rm -rf /"},
+                                        "description": "run",
+                                    }
+                                ],
+                                "review_configs": [],
+                            },
+                            id="i1",
+                        )
+                    ]
+                },
+            )
+
+        async def aupdate_state(self, **kw):
+            pass
+
+    agent = StubbornAgent()
+    ss = _PolicyRecordingSS()
+    evts = []
+
+    async def _run():
+        async for e in iterate_agent_events("hi", agent, "nova-agent", ss):
+            evts.append(e)
+            if isinstance(e, ev.InterruptRequest):  # never expected on the deny path
+                e.future.set_result({"decisions": [], "any_rejected": True})
+
+    asyncio.run(_run())
+
+    assert agent.calls == MAX_AUTO_REJECT_RESUMES, agent.calls
+    assert any(isinstance(e, ev.Error) and "retried a blocked action" in e.message for e in evts), [
+        type(e).__name__ for e in evts
+    ]
+
+
+def test_user_rejection_does_not_trip_the_guard():
+    """The cap counts only rejections nobody was asked about — a human saying no
+    to an ambiguous command each time is a choice, not a runaway loop."""
+    from novacode_cli.core.agent_loop import MAX_AUTO_REJECT_RESUMES
+    from novacode_cli.security.policy import reset_policy_cache
+
+    reset_policy_cache()
+    _ROUNDS = MAX_AUTO_REJECT_RESUMES + 2
+
+    class AskingAgent:
+        def __init__(self):
+            self.calls = 0
+
+        async def aget_state(self, config):
+            return _State([])
+
+        async def astream(self, inp, **kw):
+            self.calls += 1
+            if self.calls > _ROUNDS:  # outlived the cap → guard stayed out of the way
+                yield ((), "messages", (_Chunk("m9", [{"type": "text", "text": "done"}]), {}))
+                return
+            yield (
+                (),
+                "updates",
+                {
+                    "__interrupt__": [
+                        types.SimpleNamespace(
+                            value={
+                                "action_requests": [
+                                    {
+                                        "name": "shell",
+                                        "args": {"command": "frobnicate --now"},
+                                        "description": "run",
+                                    }
+                                ],
+                                "review_configs": [],
+                            },
+                            id="i1",
+                        )
+                    ]
+                },
+            )
+
+        async def aupdate_state(self, **kw):
+            pass
+
+    agent = AskingAgent()
+    seen = _drive(
+        agent,
+        _PolicyRecordingSS(),
+        on_interrupt=lambda _e: {"decisions": [{"type": "reject"}], "any_rejected": True},
+    )
+    assert seen["interrupts"] == _ROUNDS
+    assert agent.calls == _ROUNDS + 1
+
+
 if __name__ == "__main__":
     test_happy_path_text_tool_todo()
     test_question_interrupt_resumes()
     test_cancellation_emits_cancelled()
     test_plan_auto_approve_completes_turn()
+    test_policy_denied_retry_loop_is_bounded()
+    test_user_rejection_does_not_trip_the_guard()
     print("ALL TESTS PASSED")

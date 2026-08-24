@@ -69,6 +69,17 @@ INLINE_VERIFIER_MAX_RETRIES: Final[int] = 3
 #: Runs required *per variant* before an A/B prompt comparison is decided.
 PROMPT_AB_MIN_RUNS: Final[int] = 20
 
+#: How often (in reviews) the proactive auto-evolve trigger fires. Every N
+#: reviews it proposes a candidate for a template even when no review flagged
+#: one, so the loop explores instead of only reacting to complaints.
+PROMPT_EVOLVE_INTERVAL: Final[int] = 10
+#: Templates the proactive auto-evolve trigger may target. Only these are
+#: considered so the loop never mutates arbitrary files.
+PROMPT_EVOLVE_TEMPLATES: Final[tuple[str, ...]] = (
+    "core_agent_system.jinja",
+    "nova_review.jinja",
+)
+
 # ---------------------------------------------------------------------------
 # Cron / heartbeat scheduler (Enhancement 3)
 # ---------------------------------------------------------------------------

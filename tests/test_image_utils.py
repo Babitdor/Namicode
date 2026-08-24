@@ -6,11 +6,13 @@ import zlib
 
 import pytest
 
+import novacode_cli.image_utils as image_utils
 from novacode_cli.image_utils import (
     MAX_IMAGE_DIMENSION,
     MAX_IMAGE_SIZE_BYTES,
     SUPPORTED_FORMATS,
     ImageData,
+    load_image_from_path,
 )
 
 
@@ -59,44 +61,56 @@ class TestImageData:
         assert data.size_kb > 0
         assert isinstance(data.size_kb, float)
 
-    def test_validate_accepts_valid_image(self):
-        data = _make_test_image_data(width=100, height=100)
-        errors = data.validate()
-        assert errors == []
 
-    def test_validate_rejects_oversized_image(self):
-        oversized_b64 = "A" * int(MAX_IMAGE_SIZE_BYTES * 4 / 3 * 1.1)
-        data = ImageData(base64_data=oversized_b64, format="png", placeholder="[big]")
-        errors = data.validate()
-        assert any("size" in err.lower() for err in errors)
+class TestLoadImageValidation:
+    """The size/format/dimension limits are enforced in ``load_image_from_path``.
 
-    def test_validate_rejects_overdimensioned_image(self):
+    (These previously targeted an ``ImageData.validate()`` helper that does not
+    exist — the limits are applied at load time and raise, rather than being
+    collected into an error list. Same rules, real entry point.)
+    """
+
+    def _write_png(self, tmp_path, name="img.png", width=100, height=100):
+        p = tmp_path / name
+        p.write_bytes(_make_valid_png_bytes(width=width, height=height))
+        return p
+
+    def test_load_accepts_valid_image(self, tmp_path):
+        data = load_image_from_path(self._write_png(tmp_path))
+        assert isinstance(data, ImageData)
+        assert data.base64_data
+
+    def test_load_rejects_oversized_image(self, tmp_path, monkeypatch):
+        # Shrink the cap rather than writing a 20MB file — same branch, fast.
+        monkeypatch.setattr(image_utils, "MAX_IMAGE_SIZE_BYTES", 128)
+        with pytest.raises(ValueError, match="too large"):
+            load_image_from_path(self._write_png(tmp_path))
+
+    def test_load_rejects_overdimensioned_image(self, tmp_path):
         over = MAX_IMAGE_DIMENSION + 100
-        data = _make_test_image_data(width=over, height=100)
-        errors = data.validate()
-        assert any("dimension" in err.lower() or "resolution" in err.lower() for err in errors)
+        with pytest.raises(ValueError, match="dimensions too large"):
+            load_image_from_path(self._write_png(tmp_path, width=over, height=100))
 
-    def test_validate_rejects_overdimensioned_image_tall(self):
+    def test_load_rejects_overdimensioned_image_tall(self, tmp_path):
         over = MAX_IMAGE_DIMENSION + 100
-        data = _make_test_image_data(width=100, height=over)
-        errors = data.validate()
-        assert any("dimension" in err.lower() or "resolution" in err.lower() for err in errors)
+        with pytest.raises(ValueError, match="dimensions too large"):
+            load_image_from_path(self._write_png(tmp_path, height=over, width=100))
 
-    def test_validate_rejects_unsupported_format(self):
-        data = ImageData(base64_data="AAAA", format="ico", placeholder="[bad]")
-        errors = data.validate()
-        assert any("format" in err.lower() or "unsupported" in err.lower() for err in errors)
+    def test_load_rejects_unsupported_format(self, tmp_path):
+        bad = tmp_path / "img.ico"
+        bad.write_bytes(_make_valid_png_bytes())
+        with pytest.raises(ValueError, match="Unsupported image format"):
+            load_image_from_path(bad)
 
-    def test_validate_rejects_empty_base64(self):
-        data = ImageData(base64_data="", format="png", placeholder="[empty]")
-        errors = data.validate()
-        assert len(errors) > 0
+    def test_load_rejects_corrupt_image(self, tmp_path):
+        bad = tmp_path / "corrupt.png"
+        bad.write_bytes(b"not actually a png")
+        with pytest.raises(ValueError, match="Invalid image file"):
+            load_image_from_path(bad)
 
-    def test_validate_returns_multiple_errors(self):
-        oversized_b64 = "A" * int(MAX_IMAGE_SIZE_BYTES * 4 / 3 * 1.1)
-        data = ImageData(base64_data=oversized_b64, format="ico", placeholder="[double]")
-        errors = data.validate()
-        assert len(errors) >= 2
+    def test_load_rejects_missing_file(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            load_image_from_path(tmp_path / "nope.png")
 
 
 class TestConstants:

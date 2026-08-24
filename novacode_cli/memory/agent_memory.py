@@ -1,5 +1,6 @@
 """Middleware for loading agent-specific long-term memory into the system prompt."""
 
+import re
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, TypedDict, cast
@@ -29,6 +30,38 @@ from novacode_cli.prompts import render_template
 # written newest-first — see novacode_cli/memory/limits.py for the invariant).
 _MEMORY_TRUNCATION_NOTICE = "\n\n... [memory truncated — use read_file for full content]"
 
+# Per-turn memory retrieval tunables.
+_MAX_RETRIEVED_MEMORIES = 3  # top-K topic bodies injected per turn
+_RETRIEVAL_PER_FILE_CAP = 900  # chars per injected memory body
+_RETRIEVAL_CHAR_BUDGET = 2200  # total chars across injected bodies
+_MIN_RELEVANCE = 2  # min lexical score to inject (drops weak single-word hits)
+
+
+# Generic words (>=4 chars) that survive the length filter but carry no topical
+# signal — they cause unrelated queries to spuriously match a lesson.
+_STOPWORDS = frozenset(
+    {
+        "about", "above", "after", "again", "against", "already", "also", "another",
+        "because", "been", "being", "could", "does", "doing", "done", "each", "else",
+        "even", "ever", "from", "have", "here", "into", "just", "like", "made", "make",
+        "many", "more", "most", "much", "need", "only", "other", "over", "please",
+        "question", "really", "should", "some", "such", "than", "that", "their", "them",
+        "then", "there", "these", "they", "thing", "things", "this", "those", "unrelated",
+        "very", "want", "well", "were", "what", "when", "where", "which", "while", "will",
+        "with", "would", "your", "yours",
+    }
+)
+
+
+def _tokens(text: str) -> frozenset[str]:
+    """Lowercased alphanumeric words of length >= 4, minus generic stopwords —
+    the topical signal used for lexical relevance scoring."""
+    return frozenset(
+        w
+        for w in re.findall(r"[a-z0-9]+", (text or "").lower())
+        if len(w) >= 4 and w not in _STOPWORDS
+    )
+
 
 class AgentMemoryState(AgentState):
     """State for the agent memory middleware."""
@@ -45,6 +78,10 @@ class AgentMemoryState(AgentState):
     habits_memory: NotRequired[str]
     """Good-habits surface (~/.nova/{agent}/HABITS.md), always injected."""
 
+    learning_overview: NotRequired[str]
+    """Compact at-a-glance view of Nova's learning state (memory topics, skills,
+    prompt evolution, recent refinements). See hermes/overview.py."""
+
 
 class AgentMemoryStateUpdate(TypedDict):
     """A state update for the agent memory middleware."""
@@ -60,6 +97,10 @@ class AgentMemoryStateUpdate(TypedDict):
 
     habits_memory: NotRequired[str]
     """Good-habits surface (~/.nova/{agent}/HABITS.md), always injected."""
+
+    learning_overview: NotRequired[str]
+    """Compact at-a-glance view of Nova's learning state (memory topics, skills,
+    prompt evolution, recent refinements). See hermes/overview.py."""
 
 
 # Long-term Memory Documentation
@@ -146,10 +187,19 @@ class AgentMemoryMiddleware(AgentMiddleware):
         self._cached_project_memory: str | None = None
         self._cached_memory_index: str | None = None
         self._cached_habits_memory: str | None = None
+        self._cached_learning_overview: str | None = None
         # Cache for rendered memory section to avoid re-rendering on every request
         self._memory_section_cache: str | None = None
         self._memory_section_cache_time: float = 0
         self._memory_section_cache_ttl: float = 30.0  # 30 seconds TTL
+
+        # Per-turn memory RETRIEVAL: the INDEX only injects topic pointers, so
+        # learned lesson bodies never reach the model unless it chooses to read
+        # them. These cache the scored topic corpus (by dir mtime) and the last
+        # query's retrieved block (so tool-loop iterations don't re-scan).
+        self._corpus_cache: dict[str, tuple[frozenset[str], str, frozenset[str]]] | None = None
+        self._corpus_mtime: float | None = None
+        self._retrieval_cache: tuple[str, str] | None = None
 
     def _get_file_mtime(self, path: Path) -> float | None:
         """Get modification time for a file, or None if it doesn't exist."""
@@ -379,6 +429,13 @@ class AgentMemoryMiddleware(AgentMiddleware):
                     habits_content = habits_content[:MAX_MEMORY_CHARS] + _MEMORY_TRUNCATION_NOTICE
                 result["habits_memory"] = habits_content
 
+        # Load the compact learning overview (memory topics, skills, prompt
+        # evolution, recent refinements). Best-effort; empty when nothing exists.
+        if needs_reload or "learning_overview" not in state:
+            overview = self._build_learning_overview()
+            if overview:
+                result["learning_overview"] = overview
+
         # Load project memory from ALL available sources if not in state or if files changed
         # Project memory is read from sandbox when available, local otherwise
         if not self.skip_project_memory and (needs_reload or "project_memory" not in state):
@@ -472,6 +529,11 @@ class AgentMemoryMiddleware(AgentMiddleware):
                     habits_content = habits_content[:MAX_MEMORY_CHARS] + _MEMORY_TRUNCATION_NOTICE
                 result["habits_memory"] = habits_content
 
+        if needs_reload or "learning_overview" not in state:
+            overview = self._build_learning_overview()
+            if overview:
+                result["learning_overview"] = overview
+
         if not self.skip_project_memory and (needs_reload or "project_memory" not in state):
             combined_memories: list[str] = []
             self.loaded_project_memory_sources = []
@@ -494,6 +556,119 @@ class AgentMemoryMiddleware(AgentMiddleware):
 
         return result
 
+    @staticmethod
+    def _latest_user_text(request: ModelRequest) -> str:
+        """Text of the most recent user/human message in the request, or ''."""
+        messages = getattr(request, "messages", None) or []
+        for msg in reversed(messages):
+            role = getattr(msg, "type", None) or (msg.get("role") if isinstance(msg, dict) else None)
+            if role not in ("human", "user"):
+                continue
+            content = getattr(msg, "content", None)
+            if content is None and isinstance(msg, dict):
+                content = msg.get("content")
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):  # provider block format
+                parts = [
+                    b.get("text", "") for b in content if isinstance(b, dict)
+                ]
+                return " ".join(p for p in parts if p)
+            return ""
+        return ""
+
+    def _load_memory_corpus(
+        self,
+    ) -> dict[str, tuple[frozenset[str], str, frozenset[str]]]:
+        """Load + tokenize the topic memory files (topic -> (title_toks, body, body_toks)).
+
+        Cached in memory, refreshed only when the memories dir changes (reviews
+        add/update files), so scoring doesn't re-read 58 files every turn.
+        """
+        mem_dir = self.agent_dir / "memories"
+        try:
+            mtime = mem_dir.stat().st_mtime
+        except OSError:
+            self._corpus_cache, self._corpus_mtime = {}, None
+            return {}
+        if self._corpus_cache is not None and self._corpus_mtime == mtime:
+            return self._corpus_cache
+
+        corpus: dict[str, tuple[frozenset[str], str, frozenset[str]]] = {}
+        for path in mem_dir.glob("*.md"):
+            if path.name == "INDEX.md":
+                continue
+            try:
+                body = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if not body.strip():
+                continue
+            title_toks = _tokens(path.stem.replace("-", " ").replace("_", " "))
+            corpus[path.stem] = (title_toks, body, _tokens(body))
+        self._corpus_cache, self._corpus_mtime = corpus, mtime
+        return corpus
+
+    def _relevant_memories(self, request: ModelRequest) -> str:
+        """Retrieve topic bodies relevant to this turn's user message, formatted
+        for injection. Lexical overlap scoring (title hits weighted 2x); cached
+        per-query so tool-loop iterations reuse the result. '' when nothing scores."""
+        query = self._latest_user_text(request)
+        if not query:
+            return ""
+        if self._retrieval_cache is not None and self._retrieval_cache[0] == query:
+            return self._retrieval_cache[1]
+
+        q = _tokens(query)
+        block = ""
+        if q:
+            corpus = self._load_memory_corpus()
+            scored = []
+            for topic, (title_toks, body, body_toks) in corpus.items():
+                score = 2 * len(q & title_toks) + len(q & body_toks)
+                if score >= _MIN_RELEVANCE:
+                    scored.append((score, topic, body))
+            scored.sort(key=lambda t: t[0], reverse=True)
+
+            used = 0
+            chunks: list[str] = []
+            for _score, topic, body in scored[:_MAX_RETRIEVED_MEMORIES]:
+                snippet = body.strip()[:_RETRIEVAL_PER_FILE_CAP]
+                if used + len(snippet) > _RETRIEVAL_CHAR_BUDGET:
+                    break
+                chunks.append(f"### {topic}\n{snippet}")
+                used += len(snippet)
+            if chunks:
+                block = (
+                    "<relevant_memory>\n"
+                    "Lessons from past sessions relevant to this request "
+                    "(retrieved automatically — apply them):\n\n"
+                    + "\n\n".join(chunks)
+                    + "\n</relevant_memory>"
+                )
+        self._retrieval_cache = (query, block)
+        return block
+
+    def _build_learning_overview(self) -> str:
+        """Build the compact learning overview for injection.
+
+        Aggregates memory topics, skills, prompt-evolution status, and recent
+        refinement events into a single at-a-glance block (see
+        ``hermes/overview.py``). Best-effort: returns ``""`` when nothing is
+        available or the sources can't be read.
+        """
+        try:
+            from novacode_cli.hermes.overview import build_learning_overview
+
+            return build_learning_overview(
+                agent_dir=self.agent_dir,
+                skills_dir=self.agent_dir / "skills",
+                prompt_history_dir=self.agent_dir / "prompt_history",
+                refinement_log_path=self.agent_dir.parent.parent / "refinement_events.json",
+            )
+        except Exception:  # noqa: BLE001 — overview is best-effort, never fatal
+            return ""
+
     def _build_system_prompt(self, request: ModelRequest) -> str:
         """Build the complete system prompt with memory sections.
 
@@ -511,6 +686,7 @@ class AgentMemoryMiddleware(AgentMiddleware):
         project_memory = state.get("project_memory")
         memory_index = state.get("memory_index")
         habits_memory = state.get("habits_memory")
+        learning_overview = state.get("learning_overview")
         base_system_prompt = request.system_prompt
 
         current_time = time.time()
@@ -522,6 +698,7 @@ class AgentMemoryMiddleware(AgentMiddleware):
             project_memory or "",
             memory_index or "",
             habits_memory or "",
+            learning_overview or "",
         )
         can_use_cache = (
             self._memory_section_cache is not None
@@ -530,6 +707,7 @@ class AgentMemoryMiddleware(AgentMiddleware):
             and (self._cached_project_memory or "") == memory_content[1]
             and (self._cached_memory_index or "") == memory_content[2]
             and (self._cached_habits_memory or "") == memory_content[3]
+            and (self._cached_learning_overview or "") == memory_content[4]
         )
 
         if can_use_cache:
@@ -566,6 +744,7 @@ class AgentMemoryMiddleware(AgentMiddleware):
                 project_deepagents_dir=project_deepagents_dir,
                 memory_index=memory_index,
                 habits_memory=habits_memory,
+                learning_overview=learning_overview,
             )
 
             # Cache the result
@@ -575,10 +754,17 @@ class AgentMemoryMiddleware(AgentMiddleware):
             self._cached_project_memory = memory_content[1]
             self._cached_memory_index = memory_content[2]
             self._cached_habits_memory = memory_content[3]
+            self._cached_learning_overview = memory_content[4]
 
         # memory_section is guaranteed to be set at this point
         assert memory_section is not None
         system_prompt: str = memory_section
+
+        # Per-turn retrieval: surface the lesson BODIES relevant to this request.
+        # Kept OUT of the cached memory_section above because it varies by query.
+        relevant = self._relevant_memories(request)
+        if relevant:
+            system_prompt += "\n\n" + relevant
 
         if base_system_prompt:
             system_prompt += "\n\n" + base_system_prompt

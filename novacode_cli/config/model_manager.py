@@ -16,8 +16,12 @@ from novacode_cli.config.nova_config import NovaConfig
 # OpenRouter is OpenAI-API-compatible; routed through ChatOpenAI with this base URL.
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
+# OpenCode Go is OpenCode's subscription model gateway, OpenAI-API-compatible.
+# Routed through ChatOpenAI with this base URL (same pattern as OpenRouter).
+OPENCODE_BASE_URL = "https://opencode.ai/zen/go/v1"
+
 # Type for supported providers
-ProviderType = Literal["openai", "anthropic", "ollama", "google", "openrouter"]
+ProviderType = Literal["openai", "anthropic", "ollama", "google", "openrouter", "opencode"]
 
 
 # Model provider presets
@@ -97,6 +101,39 @@ MODEL_PRESETS: dict[str, dict[str, Any]] = {
             "google/gemini-2.0-flash-exp",
             "meta-llama/llama-3.3-70b-instruct",
             "deepseek/deepseek-chat",
+        ],
+    },
+    "opencode": {
+        "name": "OpenCode Go",
+        "description": "OpenCode's subscription gateway (OpenAI-compatible chat models: GLM, Kimi, DeepSeek, MiMo, Hy3, Ox)",
+        "default_model": "glm-5.3",
+        "env_var": "OPENCODE_MODEL",
+        "api_key_var": "OPENCODE_API_KEY",
+        "requires_api_key": True,
+        "base_url": OPENCODE_BASE_URL,
+        # Only the models served via /chat/completions work through ChatOpenAI.
+        # MiniMax/Qwen need the Anthropic Messages API and Grok/GPT-5.6/Muse
+        # need the Responses API — those are NOT OpenAI-chat-compatible and are
+        # intentionally excluded here (they'd fail with ChatOpenAI).
+        "models": [
+            "glm-5.3",
+            "glm-5.2",
+            "glm-5.1",
+            "glm-5",
+            "kimi-k3",
+            "kimi-k2.7-code",
+            "kimi-k2.6",
+            "kimi-k2.5",
+            "deepseek-v4-pro",
+            "deepseek-v4-flash",
+            "deepseek-v4-flash-vision-exp",
+            "mimo-v2.5-pro",
+            "mimo-v2.5",
+            "mimo-v2-pro",
+            "mimo-v2-omni",
+            "hy3",
+            "hy3-preview",
+            "ox-alpha-free",
         ],
     },
 }
@@ -199,6 +236,9 @@ class ModelManager:
         if self.settings.has_openrouter:
             model = os.environ.get("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet")
             return ("OpenRouter", model)
+        if self.settings.has_opencode:
+            model = os.environ.get("OPENCODE_MODEL", "glm-5.3")
+            return ("OpenCode Go", model)
         # Default to Ollama (always available, no API key needed)
         model = os.environ.get("OLLAMA_MODEL", "qwen3-coder:480b-cloud")
         return ("Ollama", model)

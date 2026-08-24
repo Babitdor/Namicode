@@ -102,6 +102,51 @@ uv run harbor run \
   --jobs-dir jobs/Novacode-chess --env docker
 ```
 
+---
+
+## Custom Nova task dataset (`nova-tasks/`)
+
+`nova-tasks/` is a custom Harbor-format dataset written to stress Nova Code's
+strengths — multi-bug debugging, cross-file refactoring, git forensics, shell
+debugging, data correctness, and security hardening. Each task is a standard
+Harbor task directory (`instruction.md`, `task.toml`, `environment/`,
+`tests/`, `solution/`).
+
+| Task | Category | What the agent must do |
+|------|----------|------------------------|
+| `fix-broken-python-project` | debugging | Fix a syntax error, a bad import, and an off-by-one so all tests pass |
+| `refactor-duplicated-logic` | refactoring | Extract duplicated validation into a shared module; update both call sites |
+| `git-bisect-regression` | git | Use git history to find the commit that introduced a regression, then fix it |
+| `debug-flaky-shell-script` | shell | Fix quoting, race-condition, and exit-code bugs in a bash script |
+| `fix-data-processing-bug` | data | Find and fix a subtle off-by-one that drops the last CSV record |
+| `harden-insecure-web-app` | security | Fix an SQL injection so malicious input cannot break out or drop tables |
+
+### Run the custom dataset
+
+```bash
+# All 6 tasks, Docker
+make run-nova-tasks-docker
+
+# A single task, e.g. git-bisect-regression
+make run-nova-task TASK=git-bisect-regression
+
+# Via the local JSON registry (registry.json)
+make run-nova-tasks-registry
+```
+
+Directly:
+
+```bash
+uv run harbor run \
+  --agent-import-path deepagents_harbor:NovaCodeWrapper \
+  --path nova-tasks -n 6 --jobs-dir jobs/Novacode-tasks --env docker --model claude-sonnet-4-6
+```
+
+> **Note:** the agent-facing test suites are baked into each task's image at
+> `/app/tests/` (so the agent can run them); the verifier runs the same tests
+> from there. The `tests/` dir in each task only contains the verifier
+> `test.sh`.
+
 ### DeepAgents baseline agent
 
 ```bash

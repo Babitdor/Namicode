@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import sys
 import threading
 import time
@@ -93,13 +94,21 @@ def test_detach_backgrounds_then_job_completes() -> None:
     msg = box["msg"]
     assert "backgrounded: task_" in msg.content  # returned before the command ended
 
-    # The command keeps running; wait for the drain to finish.
+    m = re.search(r"backgrounded: task_(\d+)", msg.content)
+    assert m, msg.content
+    task_id = int(m.group(1))
+
+    # Wait for OUR job specifically. The registry is process-global and its
+    # reset() drops references without stopping work already in flight, so a job
+    # leaked from an earlier test can complete here and fire this callback first
+    # — completed[0] was then a foreign 'terminated' job under full-suite load.
+    job = None
     for _ in range(120):
-        if completed:
+        job = next((j for j in completed if j.id == task_id), None)
+        if job is not None:
             break
         time.sleep(0.1)
-    assert completed, "completion callback never fired"
-    job = completed[0]
+    assert job is not None, f"completion callback never fired for task_{task_id}"
     assert job.status == "done"
     assert job.exit_code == 0
     assert "line 3" in job.output  # full output captured after detach
@@ -140,3 +149,42 @@ def test_launch_terminate_and_restart_background_task() -> None:
             break
         time.sleep(0.1)
     assert j2.status == "terminated"
+
+
+def test_execute_tool_is_intercepted_for_background_parity() -> None:
+    """The deepagents `execute` tool (local mode) is routed through Nova's shell
+    path so it gets background/Ctrl+B parity; other tools pass through; a
+    long-running server started via execute becomes a background task."""
+    mw = ShellMiddleware(workspace_root=os.getcwd(), timeout=30.0)  # local (no sandbox)
+
+    class _Req:
+        def __init__(self, name, **args):
+            self.tool_call = {"name": name, "id": "c1", "args": args}
+
+    # non-execute tool passes through to the handler untouched
+    seen = {"h": False}
+
+    def handler(_req):
+        seen["h"] = True
+        return "HANDLER"
+
+    assert mw.wrap_tool_call(_Req("read_file", file_path="x"), handler) == "HANDLER"
+    assert seen["h"]
+
+    # execute is intercepted (handler NOT called) and runs locally
+    seen["h"] = False
+    msg = mw.wrap_tool_call(_Req("execute", command="echo hi-exec"), handler)
+    assert not seen["h"]
+    assert "hi-exec" in getattr(msg, "content", str(msg))
+
+    # a server started via execute becomes a tracked background task
+    import re
+
+    msg2 = mw.wrap_tool_call(
+        _Req("execute", command="python -m http.server 8131 --bind 127.0.0.1"), handler
+    )
+    m = re.search(r"task_\d+", getattr(msg2, "content", str(msg2)))
+    assert m, "server via execute should background into a task"
+    job = jobs.get_registry().resolve(m.group(0))
+    assert job is not None and job.status == "running"
+    jobs.get_registry().terminate(job.id)  # cleanup

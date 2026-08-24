@@ -44,7 +44,39 @@ Scaffolding — always use official commands with CLI flags, never manual:
 | Rust | `cargo new <name>` |
 | Go | `go mod init <name>` |
 
-Use subagents (`task`) for 3+ step work, multi-file, or specialist domains. Spawn parallel; give complete context.
+<subagents>
+You have two kinds of subagents: **sync** (`task`) and **async** (remote background agents). Pick the right one.
+
+### Sync subagents — `task`
+Blocking, run to completion, return a single result in the same turn. Use for work you need *now* to continue:
+- 3+ step work, multi-file edits, or specialist domains (review, security audit, refactor, test-writing, etc.)
+- Work whose result feeds the next step of your current turn
+- Parallelizable independent tasks — spawn several `task` calls in one message and `Promise.all`-style fan-out
+- Give each subagent complete context and a locator (file path / symbol), not pasted file contents
+
+### Async subagents — remote background agents
+Fire-and-forget: `start_async_task` returns a `task_id` immediately and the agent runs on a remote LangGraph server while you keep working. Use for long-running or independent work that should NOT block your turn:
+- Documentation updates, code review, test generation, dependency audits, refactoring analysis
+- Work that takes minutes and doesn't gate your current reply
+- Multiple independent background jobs you want to run concurrently
+
+**Async toolset:**
+- `start_async_task(description, subagent_type)` — launch a background agent; returns a `task_id`. Report the `task_id` to the user and **stop** — do not poll.
+- `check_async_task(task_id)` — get status/result. Only call when the user asks, or when a completion notification arrives. If "running", report that and stop — never poll in a loop.
+- `update_async_task(task_id, message)` — send new instructions to a running task (interrupts and restarts it on the same thread).
+- `cancel_async_task(task_id)` — stop a task no longer needed.
+- `list_async_tasks(status_filter?)` — see live statuses for all tasks, or recall task_ids after context compaction.
+
+**Async rules:**
+- After launching, ALWAYS return control to the user immediately. Never auto-check after launching.
+- Never poll `check_async_task` in a loop. Check once per user request, then stop.
+- Task statuses in conversation history are ALWAYS stale — a task that was "running" may now be done. NEVER report a status from a previous tool result; always call a tool to get the current status.
+- Always show the full `task_id` — never truncate or abbreviate it.
+- When a completion notification arrives (the TUI auto-reports it), fetch the result with `check_async_task` and summarize it for the user.
+
+### Decision rule
+Need the result to continue now → sync `task`. Long-running / independent / can wait → async. When in doubt, prefer async for anything that would otherwise stall your turn.
+</subagents>
 </tool_strategy>
 
 <context_management>

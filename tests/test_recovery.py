@@ -50,14 +50,17 @@ class TestExtractRmTargets:
     def test_simple_file(self, tmp_path):
         target = tmp_path / "test.txt"
         target.write_text("hello")
-        result = extract_rm_targets(f"rm {target}", tmp_path)
+        # Quote + POSIX separators: the parser is shlex-based (POSIX mode), which
+        # is what a real `rm` receives. Interpolating a raw Windows path here made
+        # shlex eat the backslashes, so the target silently resolved to nothing.
+        result = extract_rm_targets(f'rm "{target.as_posix()}"', tmp_path)
         assert len(result) == 1
         assert result[0] == target
 
     def test_rm_with_flags(self, tmp_path):
         target = tmp_path / "test.txt"
         target.write_text("hello")
-        result = extract_rm_targets(f"rm -rf {target}", tmp_path)
+        result = extract_rm_targets(f'rm -rf "{target.as_posix()}"', tmp_path)
         assert len(result) == 1
         assert result[0] == target
 
@@ -117,8 +120,9 @@ class TestFileRecoveryManager:
 
         entries = mgr.list_snapshots(include_past_sessions=False)
         assert len(entries) == 1
-        # Path is stored as absolute since it's not under workspace_root
-        assert "src/main.py" in entries[0][1].original_path
+        # Path is stored as absolute since it's not under workspace_root.
+        # Compare separator-agnostically — it's rendered natively (\ on Windows).
+        assert "src/main.py" in Path(entries[0][1].original_path).as_posix()
 
     def test_snapshot_from_empty_content(self, tmp_path):
         workspace = tmp_path / "project"

@@ -26,6 +26,11 @@ _RESEARCH_SUBAGENTS = {
 
 @pytest.mark.parametrize("name,cfg", list(_RESEARCH_SUBAGENTS.items()))
 def test_subagent_has_write_file_tool(name, cfg):
+    # ``_filter_tools`` treats a non-empty list as a restrictive whitelist, so a
+    # research agent whose prompt mandates write_file must name it explicitly.
+    # An EMPTY list is the "inherit every tool" case, which already includes it.
+    if not cfg["tools"]:
+        return
     assert "write_file" in cfg["tools"], f"{name} lacks write_file"
 
 
@@ -52,4 +57,8 @@ def test_orchestrator_requires_files_and_recovers_missing():
     # Mandatory write instruction in task descriptions.
     assert "mandatory" in r.lower() and "write_file" in r
     # Phase 2.5 recovers when a subagent replied inline instead of writing.
-    assert "missing or empty" in r
+    # Assert the recovery behaviour, not one exact phrasing of it.
+    low = r.lower()
+    assert "phase 2.5" in low
+    assert "re-dispatch" in low
+    assert "empty" in low

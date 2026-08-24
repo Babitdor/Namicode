@@ -38,8 +38,11 @@ def test_provision_script_contains_baseline_tools(monkeypatch):
     monkeypatch.delenv("NOVA_SANDBOX_EXTRA_APT", raising=False)
     monkeypatch.delenv("NOVA_SANDBOX_EXTRA_PIP", raising=False)
     script = sf._build_provision_script()
-    # Baseline tools the agent needs for vcs / lint / test.
-    for tool in ("git", "ruff", "pytest", "build-essential"):
+    # Baseline tools the agent needs for vcs / lint / test. Driven off the
+    # package tuple itself so a deliberate slim-down (build-essential and other
+    # heavy packages were dropped to save ~250MB/container) doesn't read as a
+    # regression, while an accidental removal still fails.
+    for tool in (*sf._PROVISION_APT_PACKAGES, "ruff", "pytest"):
         assert tool in script
     # Idempotent + best-effort markers.
     assert "command -v git" in script

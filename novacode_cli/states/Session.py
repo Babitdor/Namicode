@@ -601,6 +601,13 @@ class SessionState:
         # discard any approved-but-unconsumed plan.
         self.clear_plan_agent()
         self.consume_approved_plan()
+        # Agent-to-agent mailbox is per-conversation; start the new chat empty.
+        try:
+            from novacode_cli.agents.agent_mailbox import clear_mailbox
+
+            clear_mailbox()
+        except Exception:  # noqa: BLE001
+            pass
 
     def set_plan_content(self, plan_content: str) -> None:
         """Store current plan content from plan agent."""

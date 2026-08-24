@@ -39,13 +39,31 @@ def test_deepagents_trigger_becomes_window_fraction():
     assert after["trigger"][0] == "fraction"  # now tied to the real window
 
 
-def test_does_not_clobber_existing_profile():
+def test_overwrites_an_existing_window_to_keep_both_compactors_in_sync():
+    """A model-supplied window is REPLACED by Nova's, on purpose.
+
+    deepagents summarizes at a fraction of ``max_input_tokens`` while Nova's
+    ctx% indicator (and its own auto-compaction) measure against
+    ``get_context_window_size``. If those two numbers differ, the library
+    summarizes at a point the indicator never shows — compaction appears to fire
+    for no reason. Consistency matters more than whose number is nominally
+    better, so Nova's window wins. (This previously no-op'd, which is how the
+    two drifted apart.)
+    """
     from langchain_ollama import ChatOllama
 
+    from novacode_cli.context import ContextManager
+
     model = ChatOllama(model="qwen3-coder:480b-cloud")
-    model.profile = {"max_input_tokens": 999}  # type: ignore[assignment]
+    model.profile = {"max_input_tokens": 999, "max_output_tokens": 4096}  # type: ignore[assignment]
     _seed_summarization_profile(model, "qwen3-coder:480b-cloud")
-    assert model.profile["max_input_tokens"] == 999  # untouched
+
+    assert model.profile["max_input_tokens"] == ContextManager(
+        "qwen3-coder:480b-cloud"
+    ).window_size()
+    assert model.profile["max_input_tokens"] != 999
+    # Unrelated keys are preserved — only the window is overwritten.
+    assert model.profile["max_output_tokens"] == 4096
 
 
 def test_no_op_for_non_model():

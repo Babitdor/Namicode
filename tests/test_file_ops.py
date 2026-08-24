@@ -94,14 +94,17 @@ class TestResolvePhysicalPath:
     def test_empty_path_returns_none(self):
         assert resolve_physical_path("", "agent-1") is None
 
-    def test_absolute_path(self):
-        result = resolve_physical_path("/tmp/test.txt", None)
-        assert result == Path("/tmp/test.txt")
+    def test_absolute_path(self, tmp_path):
+        # tmp_path is absolute on every platform; "/tmp/x" is NOT absolute on
+        # Windows (no drive letter), which is why a hardcoded POSIX path here
+        # silently took the relative branch instead.
+        target = tmp_path / "test.txt"
+        assert resolve_physical_path(str(target), None) == target
 
-    def test_relative_path(self, monkeypatch):
-        monkeypatch.chdir("/tmp")
+    def test_relative_path(self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
         result = resolve_physical_path("relative/path.txt", None)
-        assert result == Path("/tmp/relative/path.txt")
+        assert result == (tmp_path / "relative" / "path.txt").resolve()
 
     def test_memories_path(self, monkeypatch):
         # Mock settings.get_agent_dir
@@ -157,8 +160,11 @@ class TestFormatDisplayPath:
     def test_empty_returns_unknown(self):
         assert format_display_path("") == "(unknown)"
 
-    def test_absolute_path_returns_basename(self):
-        assert format_display_path("/some/long/path/file.txt") == "file.txt"
+    def test_absolute_path_returns_basename(self, tmp_path):
+        # Must be absolute *for this platform* to hit the basename branch.
+        assert format_display_path(str(tmp_path / "long" / "file.txt")) == "file.txt"
 
     def test_relative_path(self):
-        assert format_display_path("relative/path.txt") == "relative/path.txt"
+        # Relative paths pass through, but rendered with the native separator.
+        rel = "relative/path.txt"
+        assert format_display_path(rel) == str(Path(rel))

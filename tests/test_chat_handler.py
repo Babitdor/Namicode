@@ -16,6 +16,19 @@ import pytest
 from novacode_cli import council
 from novacode_cli.commands import chat_handler as ch
 
+
+@pytest.fixture(autouse=True)
+def _reset_council_history():
+    """Isolate the process-global council history between tests.
+
+    ``chat_handler._council_history`` is a module-level list that every completed
+    council round appends to. Any other test that runs a round leaves entries
+    behind, so the "fresh server" assertion here failed depending on test order.
+    """
+    ch._council_history.clear()
+    yield
+    ch._council_history.clear()
+
 # ---------------------------------------------------------------------------
 # Fake model
 # ---------------------------------------------------------------------------

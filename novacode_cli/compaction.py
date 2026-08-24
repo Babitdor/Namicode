@@ -47,18 +47,185 @@ def _format_message_content(content: Any) -> str:
     return str(content)
 
 
+def _message_parts(messages: list[BaseMessage]) -> list[str]:
+    """Render each message to a compact ``ROLE: text`` line (per-message truncation)."""
+    parts: list[str] = []
+    for msg in messages:
+        if isinstance(msg, HumanMessage):
+            content = _format_message_content(msg.content)
+            if len(content) > 2000:
+                content = content[:2000] + "... [truncated]"
+            parts.append(f"USER: {content}")
+        elif isinstance(msg, AIMessage):
+            content = _format_message_content(msg.content)
+            if len(content) > 2000:
+                content = content[:2000] + "... [truncated]"
+            parts.append(f"ASSISTANT: {content}")
+        elif isinstance(msg, ToolMessage):
+            content = _format_message_content(msg.content)
+            if len(content) > 500:
+                content = content[:500] + "... [truncated]"
+            parts.append(f"TOOL({msg.name}): {content}")
+    return parts
+
+
+def _budget_chars(model: BaseChatModel, context_window: int | None = None) -> int:
+    """Character budget for the summarizer's input, sized to the model's context
+    window so a long conversation never overflows the summarization call itself.
+
+    Prefers the caller-supplied ``context_window`` (the TUI passes the token
+    tracker's effective window, which already accounts for Ollama ``num_ctx``);
+    otherwise falls back to the static table (``use_dynamic=False`` — no slow/
+    flaky live query here). Reserves ~45% of the window for the prompt template +
+    generated summary; rough 4-chars/token.
+    """
+    window = context_window
+    if not window or window <= 0:
+        name = getattr(model, "model_name", None) or getattr(model, "model", None) or ""
+        try:
+            from novacode_cli.context._analysis import get_context_window_size
+
+            window = get_context_window_size(str(name), use_dynamic=False)
+        except Exception:  # noqa: BLE001
+            window = 8192
+    return max(8000, int(window * 0.55) * 4)
+
+
+def _chunk_parts(parts: list[str], max_chars: int) -> list[list[str]]:
+    """Group formatted parts into chunks each within ``max_chars``."""
+    chunks: list[list[str]] = []
+    cur: list[str] = []
+    cur_len = 0
+    for p in parts:
+        if len(p) > max_chars:  # a single oversized part — hard-truncate it
+            p = p[:max_chars] + "... [truncated]"
+        if cur and cur_len + len(p) + 2 > max_chars:
+            chunks.append(cur)
+            cur, cur_len = [], 0
+        cur.append(p)
+        cur_len += len(p) + 2
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+
+async def _summarize_text(
+    model: BaseChatModel, conversation_text: str, focus_instructions: str | None
+) -> str:
+    """One summarization LLM call over ``conversation_text``."""
+    if focus_instructions:
+        focus_text = (
+            f"\n**IMPORTANT - User requested focus on**: {focus_instructions}\n\n"
+            "Make sure to especially preserve information related to this focus area.\n"
+        )
+    else:
+        focus_text = ""
+    prompt = render_template(
+        "summarization.jinja",
+        focus_instructions=focus_text,
+        conversation=conversation_text,
+    )
+    response = await model.ainvoke([HumanMessage(content=prompt)])
+    return _format_message_content(response.content)
+
+
+def _answer_budget(budget: int, questions: str) -> int:
+    """Conversation budget for the answer pass (reserve room for questions + template)."""
+    return max(1000, budget - len(questions) - 500)
+
+
+async def _generate_questions(model: BaseChatModel, summary: str) -> str:
+    """One LLM call: read the summary and ask what important details are missing."""
+    prompt = render_template("summarization_questions.jinja", summary=summary)
+    response = await model.ainvoke([HumanMessage(content=prompt)])
+    return _format_message_content(response.content).strip()
+
+
+async def _answer_questions(
+    model: BaseChatModel, questions: str, parts: list[str], budget: int
+) -> str:
+    """Answer the clarifying questions from the full conversation.
+
+    Fits in one call when the conversation does; otherwise answers per chunk
+    and merges the per-chunk answers into one consolidated Q&A block.
+    """
+    text = "\n\n".join(parts)
+    q_budget = _answer_budget(budget, questions)
+    if len(text) <= q_budget:
+        prompt = render_template(
+            "summarization_answers.jinja", questions=questions, conversation=text
+        )
+        response = await model.ainvoke([HumanMessage(content=prompt)])
+        return _format_message_content(response.content).strip()
+
+    per_chunk: list[str] = []
+    for chunk in _chunk_parts(parts, q_budget):
+        prompt = render_template(
+            "summarization_answers.jinja",
+            questions=questions,
+            conversation="\n\n".join(chunk),
+        )
+        response = await model.ainvoke([HumanMessage(content=prompt)])
+        per_chunk.append(_format_message_content(response.content).strip())
+
+    # Merge: consolidate the per-chunk answers into one Q&A block (bounded).
+    merged = "\n\n".join(
+        f"## Excerpt {i + 1} of {len(per_chunk)}\n{a}" for i, a in enumerate(per_chunk)
+    )
+    prompt = render_template(
+        "summarization_answers.jinja",
+        questions=questions,
+        conversation=merged[:q_budget],
+    )
+    response = await model.ainvoke([HumanMessage(content=prompt)])
+    return _format_message_content(response.content).strip()
+
+
+async def _qa_refine(
+    model: BaseChatModel, summary: str, parts: list[str], budget: int
+) -> str:
+    """Gap-fill a lossy summary: ask what it missed, restore it from the source.
+
+    Best-effort — any failure returns ``""`` so compaction falls back to the
+    plain summary. Returns the Q&A block to append, or ``""`` when nothing
+    is missing.
+    """
+    try:
+        questions = await _generate_questions(model, summary)
+        if not questions or "NONE" in questions.upper():
+            return ""
+        answers = await _answer_questions(model, questions, parts, budget)
+        if not answers.strip():
+            return ""
+        return f"## Clarifying Q&A\n\n{answers.strip()}"
+    except Exception:  # noqa: BLE001 — refinement must never break compaction
+        return ""
+
+
 async def summarize_conversation(
     model: BaseChatModel,
     messages: list[BaseMessage],
     focus_instructions: str | None = None,
+    context_window: int | None = None,
 ) -> str:
-    """Summarize a conversation using the LLM.
+    """Summarize a conversation, budgeted to the model's context window.
+
+    Short conversations are summarized in a single call. Long ones (that would
+    overflow the summarizer's own window — exactly when compaction matters most)
+    are summarized **hierarchically**: chunk → summarize each chunk → summarize
+    the chunk-summaries into one cohesive summary, recursing if still too large.
+    The hierarchical path then runs a **Q&A gap-filling pass** (Meta-Harness
+    port): a second call reads the summary and asks what important details are
+    missing, and a third answers those questions from the full conversation —
+    recovering details a single lossy pass drops. Best-effort: any failure falls
+    back to the plain summary.
 
     Args:
         model: The LLM to use for summarization
         messages: The conversation messages to summarize
-        focus_instructions: Optional focus instructions from user
-            (e.g., "Focus on authentication changes")
+        focus_instructions: Optional focus instructions from the user
+        context_window: Optional explicit context window (tokens); the TUI passes
+            the token tracker's effective window.
 
     Returns:
         The summarized conversation as a string
@@ -66,45 +233,41 @@ async def summarize_conversation(
     Raises:
         Exception: If the LLM call fails
     """
-    # Build conversation text
-    conversation_parts = []
-    for msg in messages:
-        if isinstance(msg, HumanMessage):
-            content = _format_message_content(msg.content)
-            # Truncate very long messages
-            if len(content) > 2000:
-                content = content[:2000] + "... [truncated]"
-            conversation_parts.append(f"USER: {content}")
-        elif isinstance(msg, AIMessage):
-            content = _format_message_content(msg.content)
-            if len(content) > 2000:
-                content = content[:2000] + "... [truncated]"
-            conversation_parts.append(f"ASSISTANT: {content}")
-        elif isinstance(msg, ToolMessage):
-            content = _format_message_content(msg.content)
-            if len(content) > 500:
-                content = content[:500] + "... [truncated]"
-            conversation_parts.append(f"TOOL({msg.name}): {content}")
+    parts = _message_parts(messages)
+    budget = _budget_chars(model, context_window)
+    text = "\n\n".join(parts)
 
-    conversation_text = "\n\n".join(conversation_parts)
+    if len(text) <= budget:
+        return await _summarize_text(model, text, focus_instructions)
 
-    # Build focus instructions section
-    if focus_instructions:
-        focus_text = f"\n**IMPORTANT - User requested focus on**: {focus_instructions}\n\nMake sure to especially preserve information related to this focus area.\n"
-    else:
-        focus_text = ""
+    # Too big for one call → hierarchical summarization.
+    chunks = _chunk_parts(parts, budget)
+    summaries: list[str] = []
+    for i, chunk in enumerate(chunks):
+        s = await _summarize_text(model, "\n\n".join(chunk), focus_instructions)
+        summaries.append(f"## Part {i + 1} of {len(chunks)}\n{s}")
+    combined = "\n\n".join(summaries)
 
-    # Create summarization prompt using Jinja template
-    prompt = render_template(
-        "summarization.jinja",
-        focus_instructions=focus_text,
-        conversation=conversation_text,
-    )
+    # If even the combined chunk-summaries are too large, collapse them further.
+    depth = 0
+    while len(combined) > budget and depth < 3:
+        depth += 1
+        summaries = [
+            await _summarize_text(model, "\n\n".join(group), focus_instructions)
+            for group in _chunk_parts(combined.split("\n\n"), budget)
+        ]
+        combined = "\n\n".join(summaries)
 
-    # Get summary from model
-    response = await model.ainvoke([HumanMessage(content=prompt)])
+    # Final pass: one cohesive summary from the collapsed material.
+    final = await _summarize_text(model, combined[:budget], focus_instructions)
 
-    return _format_message_content(response.content)
+    # Q&A gap-filling (Meta-Harness port): the hierarchical path is lossy — ask
+    # what the summary missed and restore it from the full conversation. Only
+    # here: short single-pass summaries are already high-fidelity.
+    qa = await _qa_refine(model, final, parts, budget)
+    if qa:
+        final = f"{final}\n\n{qa}"
+    return final
 
 
 async def compact_conversation(
@@ -112,6 +275,7 @@ async def compact_conversation(
     model: BaseChatModel,
     thread_id: str,
     focus_instructions: str | None = None,
+    context_window: int | None = None,
 ) -> CompactionResult:
     """Compact a conversation by summarizing and replacing history.
 
@@ -161,8 +325,10 @@ async def compact_conversation(
         except Exception:
             original_tokens = len(original_text) // 4
 
-        # Generate summary
-        summary = await summarize_conversation(model, messages, focus_instructions)
+        # Generate summary (budgeted to the model's context window)
+        summary = await summarize_conversation(
+            model, messages, focus_instructions, context_window=context_window
+        )
 
         # Replace all existing messages with the summary in a single atomic update.
         # LangGraph's messages reducer uses add_messages semantics — passing

@@ -59,6 +59,28 @@ class SkillManager:
         """Return the set of tracked background tasks."""
         return self._refinement_tasks
 
+    def _log_refinement(self, action: str, target: str, detail: str = "") -> None:
+        """Append a skill refinement event to the unified audit trail.
+
+        Best-effort: a failed append never blocks the skill mutation. The skills
+        dir lives at ``~/.nova/skills``, so the shared ``~/.nova`` root is its
+        parent.
+        """
+        if not self._skills_dir:
+            return
+        try:
+            from novacode_cli.hermes.refinement_log import append_refinement_event
+
+            append_refinement_event(
+                self._skills_dir.parent,
+                domain="skill",
+                action=action,
+                target=target,
+                detail=detail,
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("Could not append skill refinement event", exc_info=True)
+
     # -- Skill creation from review -----------------------------------------
 
     async def maybe_create_from_review(self, review_text: str) -> None:
@@ -80,6 +102,7 @@ class SkillManager:
             if spec is None:
                 return
             await write_skill_from_spec(spec, self._skills_dir, self._store)
+            self._log_refinement("skill", "create", spec.get("name") or "unknown")
         except Exception:  # noqa: BLE001
             logger.exception("Failed to create skill from review")
 
@@ -170,6 +193,7 @@ class SkillManager:
                         store=self._store,
                     )
                 )
+                self._log_refinement("refine", skill_name, f"high_failure: {issue}")
                 break  # one refinement per cycle
         except Exception:  # noqa: BLE001
             logger.exception("Failed to check skill effectiveness / refine")

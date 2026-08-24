@@ -60,7 +60,8 @@ def test_research_template_includes_context_when_present():
         agent_count=1,
         conversation_context=d,
     )
-    assert "Prior Conversation" in r and "build a parser" in r
+    # Case-insensitive: the heading's capitalisation is prose, not contract.
+    assert "prior conversation" in r.lower() and "build a parser" in r
     # Absent context -> no section.
     r0 = render_template(
         "research_swarm.jinja",

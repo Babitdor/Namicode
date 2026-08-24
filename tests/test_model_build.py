@@ -65,8 +65,11 @@ def test_google_kwargs_pinned():
 def test_ollama_kwargs_pinned():
     m = build_chat_model("ollama", "llama3")
     assert type(m).__name__ == "ChatOllama"
-    assert m.disable_streaming is True
-    assert m.keep_alive == 600
+    # Streaming is enabled so the agent loop's astream emits tokens as they're
+    # generated (perceived-latency win) instead of buffering the whole response.
+    assert m.disable_streaming is False
+    # Model kept resident for 2 min after last use (was 600s) to free VRAM/RAM.
+    assert m.keep_alive == 120
     assert m.num_ctx == 8192
 
 
@@ -76,7 +79,13 @@ def test_unknown_provider_raises():
 
 
 def test_from_config_returns_none_without_key(monkeypatch):
+    # "No key" means neither env NOR keychain. Deleting the env var alone left a
+    # developer's real keyring entry visible, so the gate passed and the client
+    # raised instead of returning None.
+    from novacode_cli.config import model_create
+
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(model_create.settings, "openai_api_key", None, raising=False)
     assert create_model_from_config("openai", "gpt-5-mini") is None
 
 

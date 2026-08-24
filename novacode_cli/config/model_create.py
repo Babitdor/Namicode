@@ -10,6 +10,7 @@ PROVIDER_KEY_ENV: dict[str, str] = {
     "anthropic": "ANTHROPIC_API_KEY",
     "google": "GOOGLE_API_KEY",
     "openrouter": "OPENROUTER_API_KEY",
+    "opencode": "OPENCODE_API_KEY",
 }
 
 
@@ -22,7 +23,7 @@ def build_chat_model(provider: str, model_name: str) -> BaseChatModel:
     fall back / raise) — this function only constructs.
 
     Args:
-        provider: "ollama" | "openai" | "anthropic" | "google" | "openrouter".
+        provider: "ollama" | "openai" | "anthropic" | "google" | "openrouter" | "opencode".
         model_name: The model identifier for that provider.
 
     Raises:
@@ -48,13 +49,21 @@ def build_chat_model(provider: str, model_name: str) -> BaseChatModel:
         return ChatOllama(
             model=model_name,
             temperature=0,
-            disable_streaming=True,
-            keep_alive=600,
+            # Streaming is enabled so the agent loop's `astream` emits tokens as
+            # they're generated instead of buffering the whole response (the
+            # single biggest perceived-latency win for local/Ollama users). The
+            # content-block patch above already handles the file/image edge
+            # cases that originally motivated disabling it.
+            disable_streaming=False,
+            # Keep the model resident for 2 minutes after last use (was 600s).
+            # Long enough to avoid reload churn on back-to-back turns, short
+            # enough to free VRAM/RAM promptly when idle.
+            keep_alive=120,
             num_ctx=get_ollama_num_ctx(),
             **ollama_kwargs,
         )
 
-    if provider in ("openai", "openrouter"):
+    if provider in ("openai", "openrouter", "opencode"):
         from langchain_openai import ChatOpenAI
 
         openai_kwargs: dict = {}
@@ -65,7 +74,30 @@ def build_chat_model(provider: str, model_name: str) -> BaseChatModel:
             from novacode_cli.config.model_manager import OPENROUTER_BASE_URL
 
             openai_kwargs["base_url"] = OPENROUTER_BASE_URL
-            openai_kwargs["api_key"] = os.environ.get("OPENROUTER_API_KEY")
+            # Resolve via settings (keyring-or-env) then env — a key saved to the
+            # system keychain is NOT in os.environ on a fresh session, so reading
+            # os.environ alone left the model with api_key=None on every restart.
+            openai_kwargs["api_key"] = settings.openrouter_api_key or os.environ.get(
+                "OPENROUTER_API_KEY"
+            )
+        elif provider == "opencode":
+            # OpenCode Go is OpenAI-compatible: same client, custom base URL + key.
+            from novacode_cli.config.model_manager import OPENCODE_BASE_URL
+
+            openai_kwargs["base_url"] = OPENCODE_BASE_URL
+            # Keyring-aware (see openrouter note): os.environ alone was empty on a
+            # restart even with the key saved, so OpenCode silently 401'd.
+            openai_kwargs["api_key"] = settings.opencode_api_key or os.environ.get(
+                "OPENCODE_API_KEY"
+            )
+        else:
+            # Plain OpenAI: same keyring-or-env resolution as the gateways above.
+            # Without this, a key held only in the system keychain passed the
+            # caller's has-key gate but never reached the client, so ChatOpenAI
+            # raised "api_key must be set" instead of working.
+            openai_key = settings.openai_api_key or os.environ.get("OPENAI_API_KEY")
+            if openai_key:
+                openai_kwargs["api_key"] = openai_key
 
         return ChatOpenAI(model=model_name, max_retries=5, **openai_kwargs)
 
@@ -124,15 +156,20 @@ def create_model_from_config(provider: str, model_name: str) -> BaseChatModel | 
     falls back to another provider.  This is used for vision captioning (gemma).
 
     Args:
-        provider: One of ``"ollama"``, ``"openai"``, ``"anthropic"``, ``"google"``, ``"openrouter"``.
+        provider: One of ``"ollama"``, ``"openai"``, ``"anthropic"``, ``"google"``, ``"openrouter"``, ``"opencode"``.
         model_name: The model name/identifier.
 
     Returns:
         A ``BaseChatModel`` instance, or ``None`` if the provider cannot be used.
     """
     key_var = PROVIDER_KEY_ENV.get(provider)
-    if key_var and not os.environ.get(key_var):
-        return None
+    if key_var:
+        # Keyring-aware: a key saved to the system keychain is absent from
+        # os.environ on a fresh session, so an env-only check wrongly returned
+        # None on restart (settings.<provider>_api_key resolves keychain-or-env).
+        has_key = os.environ.get(key_var) or getattr(settings, f"{provider}_api_key", None)
+        if not has_key:
+            return None
     try:
         return build_chat_model(provider, model_name)
     except ValueError:
@@ -185,6 +222,13 @@ def create_model() -> BaseChatModel:
             "OPENROUTER_MODEL",
             "anthropic/claude-3.5-sonnet",
             "OpenRouter",
+        ),
+        (
+            settings.has_opencode,
+            "opencode",
+            "OPENCODE_MODEL",
+            "glm-5.3",
+            "OpenCode Go",
         ),
     ]
     for available, provider, model_env, default_model, label in _ENV_PRIORITY:

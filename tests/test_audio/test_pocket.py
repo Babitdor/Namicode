@@ -23,7 +23,7 @@ def test_pocket_raises_import_error_when_pocket_tts_missing(monkeypatch):
     assert "pip install" in str(exc_info.value)
 
 
-def test_pocket_speaker_lifecycle(monkeypatch):
+def test_pocket_speaker_lifecycle(monkeypatch, tmp_path):
     """Test PocketSpeaker initialization, download checks, and mock synthesis playback."""
     mock_pocket = MagicMock()
     monkeypatch.setitem(sys.modules, "pocket_tts", mock_pocket)
@@ -43,20 +43,26 @@ def test_pocket_speaker_lifecycle(monkeypatch):
     speaker = PocketSpeaker(voice="marius")
     assert speaker._voice_name == "marius"
 
-    # Test needs_download checks correctly (checking cache path exists)
-    with patch("pathlib.Path.exists") as mock_exists:
-        mock_exists.return_value = False
-        assert speaker.needs_download is True
+    # needs_download globs the HF hub cache for a `models--kyutai--pocket-tts*`
+    # dir. Point HF_HOME at an empty temp dir so this reads the fixture, not the
+    # developer's real cache (patching Path.exists was a no-op once the check
+    # moved from .exists() to .glob(), so it silently tested nothing).
+    monkeypatch.setenv("HF_HOME", str(tmp_path))
+    assert speaker.needs_download is True
 
-        mock_exists.return_value = True
-        assert speaker.needs_download is False
+    cached = tmp_path / "hub" / "models--kyutai--pocket-tts-without-voice-cloning"
+    cached.mkdir(parents=True)
+    assert speaker.needs_download is False
 
     # Check synthesis and playback flow
     played: dict = {}
 
-    def _fake_play(pcm, sr):
+    def _fake_play(pcm, sr, **kwargs):
+        # **kwargs so playback options the provider passes (latency=...) don't
+        # break the double the way a fixed 2-arg signature did.
         played["pcm"] = pcm
         played["sr"] = sr
+        played["opts"] = kwargs
 
     # Mock sounddevice calls
     monkeypatch.setattr("sounddevice.play", _fake_play)

@@ -43,6 +43,7 @@ from novacode_cli.core.streaming import (
     format_condensed_activity,
     is_internal_context_text,
 )
+from novacode_cli.tracking.loop_guard import TextRepetitionGuard
 from novacode_cli.core.subagent_tracking import (
     SubagentTracker,
     get_status_icon,
@@ -55,6 +56,15 @@ from novacode_cli.ui.ui_elements import (
 from novacode_cli import ui_events as ev
 
 _HITL_REQUEST_ADAPTER = TypeAdapter(HITLRequest)
+
+
+class _RepetitionLoop(Exception):
+    """Raised to abort a turn whose model output has started cycling."""
+
+
+#: Consecutive policy-rejected resumes (no human asked) before the turn is
+#: aborted. Each resume is a fresh model call, so this bounds a runaway loop.
+MAX_AUTO_REJECT_RESUMES = 3
 
 
 def format_interrupt_notification(kind: str, payload: Any) -> str:
@@ -185,6 +195,10 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
     file_op_tracker = get_session_file_op_tracker(assistant_id=assistant_id, backend=backend)
     subagent_tracker = SubagentTracker()
 
+    # Watches the model's own prose for a verbatim-repeat cycle — the failure
+    # LoopGuardMiddleware can't see, because no tool is ever called.
+    text_guard = TextRepetitionGuard()
+
     displayed_tool_ids: set[str] = set()
     tool_call_buffers: dict[str | int, dict] = {}
     tool_call_to_name: dict[str, str] = {}
@@ -287,9 +301,17 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
     auto_approve_val = bool(getattr(session_state, "auto_approve", False))
     token = _auto_approve_var.set(auto_approve_val)
 
+    # Resuming after an interrupt restarts LangGraph's recursion counter, so a
+    # rejection the *policy* resolves on its own (plan-mode block, deny rule) can
+    # spin forever: reject -> model retries the same call -> reject -> ... with no
+    # user in the way and no step limit to hit. LoopGuardMiddleware can't see it
+    # (the tool never executes), so cap the streak here.
+    auto_reject_streak = 0
+
     try:
         while True:
             interrupt_occurred = False
+            user_prompted = False
             hitl_response: dict[str, Any] = {}
             command_state_update: dict = {}
             # Collected interrupts to resolve after the stream pauses:
@@ -498,6 +520,8 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
                                 pending_text += text
                                 _streamed_pending = True
                                 yield ev.TextDelta(text)
+                                if text_guard.feed(text):
+                                    raise _RepetitionLoop
                         elif btype in ("reasoning", "thinking"):
                             if is_main_agent and not _is_completed_msg:
                                 rtext = (
@@ -508,6 +532,8 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
                                 )
                                 if rtext:
                                     yield ev.ReasoningDelta(rtext)
+                                    if text_guard.feed(rtext):
+                                        raise _RepetitionLoop
                         elif btype in ("tool_call_chunk", "tool_call"):
                             async for _e in _handle_tool_call_chunk(
                                 block,
@@ -647,6 +673,7 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
                         except Exception:  # noqa: BLE001 — never break the turn on a notification
                             pass
 
+                    user_prompted = True
                     yield ev.InterruptRequest(kind=kind, payload=payload, future=fut)
                     response = await fut
 
@@ -695,6 +722,21 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
 
                 if any_rejected:
                     yield ev.ErrorOutput("Command rejected. Tell the agent what to do differently.")
+
+                # Only a rejection nobody was asked about can loop unattended.
+                if any_rejected and not user_prompted:
+                    auto_reject_streak += 1
+                    if auto_reject_streak >= MAX_AUTO_REJECT_RESUMES:
+                        yield ev.Error(
+                            f"Stopped: the agent retried a blocked action "
+                            f"{auto_reject_streak} times in a row and it was rejected "
+                            "automatically each time (plan mode or an approval-policy "
+                            "deny rule). Tell it to take a different approach, or "
+                            "approve the action."
+                        )
+                        break
+                else:
+                    auto_reject_streak = 0
 
                 # A separate plan agent (/plan) must not be resumed after approval:
                 # it carries the unconditional PlanModeMiddleware, so resuming runs
@@ -770,6 +812,17 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
         # top-level `__interrupt__` event, not exceptions bubbling out of a
         # subagent — so render a concise, actionable note instead of dumping the
         # raw interrupt value as a scary error.
+        if isinstance(e, _RepetitionLoop):
+            # Drop the runaway preview rather than committing the repeated blob
+            # as a message — the user watched it stream, and rendering it as
+            # markdown is exactly the work that was killing the UI.
+            yield ev.TextDiscard()
+            yield ev.Error(
+                "Stopped: the model started repeating itself verbatim and the "
+                "response was going nowhere. Nothing was committed for this "
+                "turn — rephrase the request or narrow it down."
+            )
+            return
         try:
             from langgraph.errors import GraphInterrupt
         except Exception:  # noqa: BLE001

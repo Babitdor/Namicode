@@ -162,6 +162,29 @@ class PromptEvolutionEngine:
             return  # already A/B testing a candidate for this template
         self._launch(self.run_evolution(safe, evidence))
 
+    async def maybe_auto_evolve(self) -> None:
+        """Proactively propose a candidate for a template (periodic trigger).
+
+        Unlike :meth:`maybe_evolve_prompt` — which waits for a review to flag a
+        template — this fires on a cadence and picks the first configured
+        template that isn't already under A/B test, so the loop explores even
+        when nothing is being complained about. Best-effort: any failure is
+        logged and leaves the active prompts untouched.
+        """
+        if not self._enabled:
+            return
+        try:
+            for name in config.PROMPT_EVOLVE_TEMPLATES:
+                safe = self._normalise_name(name)
+                if safe is None:
+                    continue
+                if (self._dir(safe) / "candidate.jinja").exists():
+                    continue  # already testing a candidate for this template
+                self._launch(self.run_evolution(safe, evidence=""))
+                return  # one candidate at a time
+        except Exception:
+            logger.exception("Proactive prompt evolution failed")
+
     # -- Evolution (OOB) ----------------------------------------------------
 
     async def run_evolution(self, name: str, evidence: str) -> None:
@@ -244,6 +267,7 @@ class PromptEvolutionEngine:
         await self._store_pointer(name, manifest)
         await self._clear_ab_log(name)
         reset_ab_choices()
+        self._log_refinement("promote", name)
         return True
 
     async def discard(self, name: str) -> bool:
@@ -257,6 +281,8 @@ class PromptEvolutionEngine:
         self._save_manifest(name, manifest)
         await self._clear_ab_log(name)
         reset_ab_choices()
+        if existed:
+            self._log_refinement("discard", name)
         return existed
 
     async def rollback(self, name: str) -> str:
@@ -273,6 +299,7 @@ class PromptEvolutionEngine:
             self._save_manifest(name, manifest)
             await self._store_pointer(name, manifest)
             reset_ab_choices()
+            self._log_refinement("rollback", name)
             return "reverted to packaged template"
         return "nothing to roll back"
 
@@ -306,6 +333,25 @@ class PromptEvolutionEngine:
 
     def _dir(self, name: str) -> Path:
         return PROMPT_HISTORY_DIR / name.removesuffix(".jinja")
+
+    def _log_refinement(self, action: str, name: str) -> None:
+        """Append a prompt-evolution event to the unified audit trail.
+
+        Best-effort: a failed append never blocks the prompt mutation.
+        ``PROMPT_HISTORY_DIR`` lives at ``~/.nova/prompt_history``, so the shared
+        ``~/.nova`` root is its parent.
+        """
+        try:
+            from novacode_cli.hermes.refinement_log import append_refinement_event
+
+            append_refinement_event(
+                PROMPT_HISTORY_DIR.parent,
+                domain="prompt",
+                action=action,
+                target=name.removesuffix(".jinja"),
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("Could not append prompt refinement event", exc_info=True)
 
     def _active_source_text(self, name: str) -> str:
         override = self._dir(name) / "active.jinja"

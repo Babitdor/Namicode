@@ -221,7 +221,7 @@ async def handle_command(
                 sandbox_registry.retie(sandbox_id, session_state.session_id)
             except Exception:  # noqa: BLE001
                 pass
-        token_tracker.reset()
+        token_tracker.reset(reset_session=True)
         console.clear()
         console.print(NOVA_CODE_ASCII, style=f"bold {COLORS['primary']}")
         console.print()
@@ -306,6 +306,15 @@ async def handle_command(
             return await handle_prompt_command(cmd_args, session_state, console)
         except Exception as e:
             console.print(f"[red]Error running /prompt command: {e}[/red]")
+        return True
+
+    if cmd == "refine":
+        try:
+            from novacode_cli.commands.refine_handler import handle_refine_command
+
+            return await handle_refine_command(cmd_args, session_state, console)
+        except Exception as e:
+            console.print(f"[red]Error running /refine command: {e}[/red]")
         return True
 
     if cmd == "voice":

@@ -346,7 +346,7 @@ MODEL_CONFIGS = {
 }
 
 
-def get_model_config(model_name: str, use_dyNovac: bool = True) -> ModelConfig:
+def get_model_config(model_name: str, use_dynamic: bool = True) -> ModelConfig:
     """Get configuration for a specific model.
 
     Looks up ``model_name`` (normalized) in the hardcoded table, trying an exact
@@ -354,7 +354,7 @@ def get_model_config(model_name: str, use_dyNovac: bool = True) -> ModelConfig:
 
     Args:
         model_name: Model identifier (e.g., "glm-5", "gpt-4", "claude-3").
-        use_dyNovac: Accepted for backward compatibility; the table is the
+        use_dynamic: Accepted for backward compatibility; the table is the
             single source of truth (window sizes are detected separately by
             :func:`novacode_cli.context._analysis.get_context_window_size`).
 

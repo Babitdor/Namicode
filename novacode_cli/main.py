@@ -111,22 +111,9 @@ except ImportError:
 # The Ollama content-block patch is NOT applied here: it would import
 # langchain_ollama (~1s) for every user. It's applied at ChatOllama
 # construction time in model_create.py / model_manager.py instead.
-from novacode_cli.utils.backend_patches import (
-    apply_filesystem_host_path_patch,
-    apply_write_file_dict_content_patch,
-)
-# Let the agent pass real host paths inside the project to file tools without
-# tripping deepagents' "Windows absolute paths are not supported" rejection.
-apply_filesystem_host_path_patch()
-# Tolerate a dict/list `content` to write_file (models pass JSON as an object) —
-# serialize it to a string so the write succeeds (e.g. /init graph fragments).
-apply_write_file_dict_content_patch()
+# The filesystem/write_file patches are applied in _run_agent_session (not at
+# module import) so they don't pull deepagents (~4s) at CLI startup.
 
-from novacode_cli.agents.core_agent import (
-    create_agent_with_config,
-    list_agents,
-    reset_agent,
-)
 from novacode_cli.commands.commands import (
     execute_skills_command,
 )
@@ -148,11 +135,6 @@ _proc_logger = logging.getLogger("novacode_cli.remote")
 
 # Initialize LangSmith tracing from environment variables (no-op when not configured)
 _auto_configure_tracing()
-from novacode_cli.integrations.sandbox_factory import (
-    create_sandbox,
-    parse_ports,
-    resolve_sandbox_type,
-)
 from novacode_cli.mcp.commands import execute_mcp_command, setup_mcp_parser
 from novacode_cli.migrate import check_migration_status, migrate_agents
 from novacode_cli.path_approval import PathApprovalManager, check_path_approval
@@ -640,6 +622,10 @@ async def _run_agent_session(
         session_manager: SessionManager for session persistence
         restored_session_data: Tuple of (session_data, warnings, nova_md_loaded) for continuation
     """
+    # Lazy import: core_agent pulls in deepagents (~4s) which we only need once
+    # we're actually building the agent, not at CLI startup.
+    from novacode_cli.agents.core_agent import create_agent_with_config
+
     # Create agent with conditional tools.
     # NOTE: several built-in tools are intentionally NOT registered to keep the
     # agent lean — browser automation
@@ -708,13 +694,14 @@ async def _run_agent_session(
     tools.extend([list_trash, restore_file])
 
     # Background-task tools: inspect / control commands detached with Ctrl+B.
+    # (No blocking wait — background tasks are fire-and-forget; these are all
+    # non-blocking so the agent stays free while a task runs.)
     from novacode_cli.tools.job_tools import (
         get_task_logs,
         get_task_status,
         list_background_tasks,
         restart_task,
         terminate_task,
-        wait_for_job,
     )
 
     tools.extend([
@@ -723,7 +710,6 @@ async def _run_agent_session(
         get_task_logs,
         terminate_task,
         restart_task,
-        wait_for_job,
     ])
 
     # Artifact tools: turn session outputs into live, shareable web pages.
@@ -741,6 +727,17 @@ async def _run_agent_session(
     # transient=True means the animation disappears cleanly before simple_cli
     # displays the splash screen.
     from novacode_cli.config.config import BootAnimation
+
+    # Apply the filesystem/write_file patches here (not at module import) so
+    # they don't pull deepagents (~4s) at CLI startup. They're only needed once
+    # file tools run, which is after the agent is built below.
+    from novacode_cli.utils.backend_patches import (
+        apply_filesystem_host_path_patch,
+        apply_write_file_dict_content_patch,
+    )
+
+    apply_filesystem_host_path_patch()
+    apply_write_file_dict_content_patch()
 
     with BootAnimation.start():
         agent, composite_backend = create_agent_with_config(
@@ -1257,6 +1254,10 @@ async def main(
         commands confined to the workspace by an OS kernel sandbox. ``"none"``
         (and the Windows Docker-unavailable fallback) runs unconfined.
         """
+        # Lazy import: sandbox_factory pulls in deepagents; only needed when
+        # actually launching a sandboxed session, not at CLI startup.
+        from novacode_cli.integrations.sandbox_factory import create_sandbox
+
         try:
             await _run_agent_session(
                 model,
@@ -1745,6 +1746,13 @@ def _setup_headless_io() -> int | None:
 
 def cli_main() -> None:
     """Entry point for console script."""
+    # Lazy imports: sandbox_factory pulls in deepagents; only needed when
+    # actually resolving/launching a sandbox, not at CLI startup.
+    from novacode_cli.integrations.sandbox_factory import (
+        parse_ports,
+        resolve_sandbox_type,
+    )
+
     # Fix for gRPC fork issue on macOS
     # https://github.com/grpc/grpc/issues/37642
     if sys.platform == "darwin":
@@ -1806,8 +1814,12 @@ def cli_main() -> None:
         elif args.command == "help":
             show_help()
         elif args.command == "list":
+            from novacode_cli.agents.core_agent import list_agents
+
             list_agents()
         elif args.command == "reset":
+            from novacode_cli.agents.core_agent import reset_agent
+
             reset_agent(args.agent, args.source_agent)
         elif args.command == "skills":
             execute_skills_command(args)

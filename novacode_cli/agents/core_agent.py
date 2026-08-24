@@ -138,6 +138,7 @@ from deepagents.backends.store import StoreBackend
 from deepagents.middleware.subagents import SubAgent
 
 from novacode_cli.agents.default_subagents.subagents import retrieve_core_subagents
+from novacode_cli.backends import ConversationHistoryBackend
 from novacode_cli.backends import OptimizedFilesystemBackend as FilesystemBackend
 from novacode_cli.backends import OptimizedLocalShellBackend
 from novacode_cli.agents.default_subagents.async_subagents import (
@@ -580,6 +581,7 @@ def _harden_subagent_specs(specs: list, skill_sources: list[str] | None = None) 
       agent. Skipped if the spec already declares skills / carries curation.
     """
     from langchain.agents.middleware import ModelRetryMiddleware
+    from novacode_cli.agents.agent_mailbox import read_agent_messages, send_agent_message
     from novacode_cli.bootstrap import VisionCaptionMiddleware
     from novacode_cli.errors import is_retryable_model_error
     from novacode_cli.security.middleware import SecurityMiddleware
@@ -591,6 +593,22 @@ def _harden_subagent_specs(specs: list, skill_sources: list[str] | None = None) 
     # subagent invoking one raises an unresolvable ``GraphInterrupt`` that crashes
     # the turn. The main agent keeps them; it's the sole HITL boundary.
     _interrupting_tools = {"ask_user_question", "enter_plan_mode", "exit_plan_mode"}
+
+    # Agent-to-agent: give each subagent the async-task tools (start / update /
+    # check / cancel / list) so a SUBAGENT — not only the orchestrator — can
+    # launch, message, and poll remote agents on the LangGraph server over the
+    # Agent Protocol. One shared middleware instance carries the tools + the
+    # `async_tasks` state schema (merged into each subagent graph). Built once,
+    # best-effort: if no async agents are configured, subagents are unchanged.
+    _async_mw = None
+    try:
+        from deepagents.middleware.async_subagents import AsyncSubAgentMiddleware
+
+        _async_specs = retrieve_async_subagents()
+        if _async_specs:
+            _async_mw = AsyncSubAgentMiddleware(async_subagents=_async_specs)
+    except Exception:  # noqa: BLE001 — never break the subagent build on this
+        _async_mw = None
 
     out: list = []
     for spec in specs:
@@ -606,12 +624,29 @@ def _harden_subagent_specs(specs: list, skill_sources: list[str] | None = None) 
             new_spec["tools"] = [
                 t for t in spec_tools if getattr(t, "name", None) not in _interrupting_tools
             ]
+        # Agent-to-agent mailbox: peer messaging between subagents. Append the
+        # tools (deduped) and tell the subagent its own name so it can address
+        # its inbox (as_agent) and sign its messages (from_agent).
+        _sa_name = new_spec.get("name") or "subagent"
+        _cur_tools = list(new_spec.get("tools") or [])
+        _have = {getattr(t, "name", None) for t in _cur_tools}
+        for _mb in (send_agent_message, read_agent_messages):
+            if _mb.name not in _have:
+                _cur_tools.append(_mb)
+        new_spec["tools"] = _cur_tools
+        new_spec["system_prompt"] = (
+            (new_spec.get("system_prompt") or "")
+            + f"\n\nYour agent name is '{_sa_name}'. For agent-to-agent messaging use "
+            f"send_agent_message(to_agent=<peer>, message=..., from_agent='{_sa_name}') "
+            f"and read_agent_messages(as_agent='{_sa_name}')."
+        )
 
         has_retry = any(type(m).__name__ == "ModelRetryMiddleware" for m in existing)
         has_vision = any(type(m).__name__ == "VisionCaptionMiddleware" for m in existing)
         has_security = any(type(m).__name__ == "SecurityMiddleware" for m in existing)
         has_curation = any(type(m).__name__ == "SkillCurationMiddleware" for m in existing)
         has_loopguard = any(type(m).__name__ == "LoopGuardMiddleware" for m in existing)
+        has_async = any(type(m).__name__ == "AsyncSubAgentMiddleware" for m in existing)
 
         # Give the subagent the (full) skill sources so deepagents attaches a
         # SkillsMiddleware on the shared backend — unless the spec already
@@ -641,6 +676,10 @@ def _harden_subagent_specs(specs: list, skill_sources: list[str] | None = None) 
         # instance per spec — the guard keeps per-instance history state.
         if not has_loopguard:
             mw_to_add.append(LoopGuardMiddleware(threshold=3))
+        # Agent-to-agent tools (see _async_mw above): the subagent can now message
+        # remote agents on the LangGraph server, not just the orchestrator.
+        if _async_mw is not None and not has_async:
+            mw_to_add.append(_async_mw)
         # Only curate when the subagent actually has skills (either just granted
         # above or pre-declared by the spec) — no point adding a no-op clamp.
         if new_spec.get("skills") and not has_curation:
@@ -666,17 +705,30 @@ def _seed_summarization_profile(model: object, model_name: str) -> None:
     the same window Nova uses for ``/context`` ties the summarization trigger to
     the displayed ctx %.
 
-    No-op when the model already exposes a profile (cloud models often ship one)
-    or isn't a chat-model instance. Never raises — it's a pure optimization.
+    The window is ALWAYS overwritten, even when the model ships its own profile.
+    A model-supplied number (e.g. ChatOpenAI's 128K for gpt-4o) can disagree with
+    the window Nova computes and displays — and then the library summarizes on
+    one budget while the ctx% indicator reports another, so compaction appears to
+    fire "for no reason". Both must measure the same window; other profile keys
+    (max_output_tokens, …) are preserved.
+
+    Nova's own auto-compaction runs first, at
+    :data:`~novacode_cli.context._analysis.AUTO_COMPACT_THRESHOLD` (0.82), below
+    the library's 0.85 — so this middleware only fires as a mid-turn backstop.
+
+    No-op when the model isn't a chat-model instance. Never raises.
     """
     try:
-        if not isinstance(model, BaseChatModel) or getattr(model, "profile", None) is not None:
+        if not isinstance(model, BaseChatModel):
             return
         from novacode_cli.context import ContextManager
 
         window = ContextManager(model_name).window_size()
         if window and window > 0:
-            model.profile = {"max_input_tokens": int(window)}  # type: ignore[assignment]
+            existing = getattr(model, "profile", None)
+            profile = dict(existing) if isinstance(existing, dict) else {}
+            profile["max_input_tokens"] = int(window)
+            model.profile = profile  # type: ignore[assignment]
     except Exception:  # noqa: BLE001 - never block agent build on a profile hint
         __import__("logging").getLogger(__name__).debug(
             "Could not seed model profile for summarization", exc_info=True
@@ -910,11 +962,17 @@ def _build_composite_backend(
     # Same treatment for /conversation_history/ — the summarization middleware
     # offloads evicted conversation history there, and without a route it too
     # leaks into the project directory.
+    #
+    # Write-only on purpose (ConversationHistoryBackend refuses reads): the
+    # summarizer tells the model it can "recover the full text by reading the
+    # offloaded file", and following that re-inhales the context eviction just
+    # cleared, re-triggering summarization — the repeating SESSION INTENT loop.
+    # The file is still written, so the transcript survives for the user.
     _conv_history_dir = (
         Path.home() / ".nova" / "sessions" / (session_id or "default") / "conversation_history"
     )
     _conv_history_dir.mkdir(parents=True, exist_ok=True)
-    _routes["/conversation_history/"] = FilesystemBackend(
+    _routes["/conversation_history/"] = ConversationHistoryBackend(
         root_dir=str(_conv_history_dir),
         virtual_mode=True,
     )
@@ -966,6 +1024,12 @@ def _build_middleware_stack(
         ContextEditingMiddleware,
     )
 
+    # Hermes learning loop is opt-in (persisted config). Off by default so the
+    # periodic review + skill-creation LLM calls don't run unless the user asks.
+    from novacode_cli.config.nova_config import NovaConfig
+
+    _learning_enabled = NovaConfig().get_learning_enabled()
+
     import warnings as _warnings
 
     with _warnings.catch_warnings():
@@ -999,10 +1063,17 @@ def _build_middleware_stack(
         # Positioned after ModelRetryMiddleware so retried tool calls don't
         # inflate the counter, but before other middleware so learning data
         # is collected for all downstream operations.
+        #
+        # The Hermes learning loop (periodic review + skill creation) fires
+        # out-of-band LLM calls every N tool calls. It is OFF by default to keep
+        # per-turn LLM cost and latency minimal; users opt in via the persisted
+        # `learning_enabled` config (NovaConfig). When disabled, the middleware
+        # is a no-op tracker (no LLM calls).
         NovaLearningMiddleware(
             store=store,  # type: ignore
             skills_dir=skills_dir,
             agent_dir=agent_dir,
+            enabled=_learning_enabled,
         ),
         # Screen URL-bearing tool args for deceptive Unicode / spoofed domains
         # (warn + sanitize) before the tool runs. Early in the stack so the
@@ -1175,8 +1246,14 @@ def create_agent_with_config(
     steering_instructions: list | None = None,
     exec_sandbox: bool = False,
     session_id: str | None = None,
+    workspace_root: str | None = None,
+    extra_middleware: list | None = None,
 ) -> tuple[Pregel, CompositeBackend]:
     """Create and configure an agent with the specified model and tools.
+
+    ``workspace_root`` overrides the default (``settings.get_workspace_root()``) —
+    used by Cowork to root the agent at a granted folder. ``extra_middleware`` is
+    appended to the stack (Cowork injects its WorkspacePolicy broker there).
 
     Args:
         model: LLM model to use
@@ -1199,6 +1276,16 @@ def create_agent_with_config(
     """
     # Lazy import for tracing (speeds up startup)
     from novacode_cli.tracking.tracing import is_tracing_enabled, get_tracing_config
+
+    # Agent-to-agent mailbox on the orchestrator too: it can message its
+    # subagents by name and read replies. Copy (never mutate the caller's list);
+    # subagents that inherit the main tool list (tools=None) get these for free.
+    from novacode_cli.agents.agent_mailbox import read_agent_messages, send_agent_message
+
+    _have_tool = {getattr(t, "name", None) for t in tools}
+    _mb_extra = [t for t in (send_agent_message, read_agent_messages) if t.name not in _have_tool]
+    if _mb_extra:
+        tools = list(tools) + _mb_extra
 
     tracing_enabled = False
 
@@ -1245,7 +1332,7 @@ def create_agent_with_config(
     ) = _build_skill_sources()
 
     # Determine workspace root for path containment (resolves to subdirectory if applicable)
-    workspace_root = settings.get_workspace_root()
+    workspace_root = Path(workspace_root) if workspace_root else settings.get_workspace_root()
 
     # Build list of allowed directories for filesystem access
     # This includes the workspace root plus user directories like skills, memory, etc.
@@ -1489,6 +1576,11 @@ This file stores your preferences and context that persist across sessions.
             agent_middleware.append(CodeInterpreterMiddleware())
     except ImportError:
         pass
+
+    # Caller-injected middleware (e.g. Cowork's WorkspacePolicy broker) goes last
+    # so it wraps tool calls closest to execution — a denied call never runs.
+    if extra_middleware:
+        agent_middleware.extend(extra_middleware)
 
     agent = create_deep_agent(
         name=assistant_id,

@@ -161,6 +161,9 @@ TUI_COMMANDS: dict[str, SlashCommand] = {
     "resume": SlashCommand("_run_resume", "resume a saved session for this path (/resume <id>)"),
     "artifacts": SlashCommand("_run_artifacts", "open the artifacts list", wants_text=False),
     "tasks": SlashCommand("_run_tasks", "open the background tasks panel", wants_text=False),
+    "cowork": SlashCommand(
+        "_run_cowork", "launch the Nova Cowork desktop app (/cowork [task])", aliases=("desktop",)
+    ),
     "mcp": SlashCommand("_run_mcp", "view / remove MCP servers", wants_text=False),
     "skills": SlashCommand("_run_skills", "list skills", wants_text=False),
     "agents": SlashCommand("_run_agents", "list subagents", wants_text=False),
@@ -231,6 +234,9 @@ TUI_COMMANDS: dict[str, SlashCommand] = {
         "_run_wiki", "show Obsidian LLM Wiki browser (interactive)", wants_text=False
     ),
     "effort": SlashCommand("_run_effort", "set model reasoning effort"),
+    "learning": SlashCommand(
+        "_run_learning", "toggle Nova's autonomous learning loop (/learning on|off|status)"
+    ),
 }
 
 _TUI_COMMAND_ALIASES: dict[str, str] = {
@@ -283,6 +289,10 @@ def _approval_details(action_requests: list[dict]) -> Text:
                 t.append(f"      {k}: {sval}\n", style="dim")
     return t
 
+
+
+#: Characters of in-progress prose kept in the live (pre-commit) preview.
+_LIVE_PREVIEW_CHARS = 20_000
 
 
 class NovaApp(App):
@@ -723,6 +733,9 @@ class NovaApp(App):
         # Deferred prompts: messages sent during an active turn that weren't
         # consumed by the steering middleware are re-dispatched as new turns.
         self._deferred_prompts: list[str] = []
+        # Slash/bash commands submitted during an active turn: queued to RUN as
+        # commands once the turn ends (not steered / not sent to the agent as text).
+        self._deferred_commands: list[str] = []
         # Nova learning status (review cycles) shown inline in the #status line
         # beside the context %, so it never overlaps the input. _nova_status is
         # the current message (or None); the timer auto-clears it after a moment.
@@ -771,7 +784,7 @@ class NovaApp(App):
                     yield Static("/model", classes="info-label")
                     yield Static("", id="info-model", classes="info-value")
                 with Vertical(classes="info-col"):
-                    yield Static("quota", classes="info-label")
+                    yield Static("usage", classes="info-label")
                     yield Static("", id="info-quota", classes="info-value")
                 # Persistent artifacts component — fixed in the footer, click (or
                 # /artifacts) to open the list. Updates live via a registry observer.
@@ -1378,7 +1391,12 @@ class NovaApp(App):
         self._stream_flush_scheduled = False
         painted = False
         if self._stream_msg is not None:
-            self._stream_msg.update_body(Text(self._live_buf))
+            # Tail only: repainting the whole buffer every 100ms is quadratic in
+            # the answer length, so a model that never stops talking pegs the UI
+            # and takes the app (and the terminal state) down with it. The full
+            # text is committed as markdown on AssistantMessage; the viewport is
+            # pinned to the end anyway.
+            self._stream_msg.update_body(Text(self._live_buf[-_LIVE_PREVIEW_CHARS:]))
             painted = True
         if self._reason_msg is not None:
             self._reason_msg.update_body(Text(self._reasoning_buf[-2000:], style="dim italic"))
@@ -2083,25 +2101,36 @@ class NovaApp(App):
             branch = "—"
         self.call_from_thread(self._set_info, "#info-branch", Text(branch, style="bold #bb9af7"))
 
+    @staticmethod
+    def _fmt_tokens(n: int) -> str:
+        """Compact token count: 950 → '950', 12_300 → '12k', 1_240_000 → '1.2M'."""
+        if n >= 1_000_000:
+            return f"{n / 1_000_000:.1f}M"
+        if n >= 1_000:
+            return f"{n / 1_000:.0f}k"
+        return str(n)
+
     def _refresh_quota(self) -> None:
-        """Lightweight quota-only refresh (called from _tick during active turns)."""
-        quota_text = Text("—", style="dim")
-        if self.token_tracker is not None:
-            try:
-                bd = self.token_tracker.get_breakdown()
-                if bd is not None:
-                    p = bd.usage_percentage
-                    if p >= 90:
-                        c = "#f7768e"
-                    elif p >= 75:
-                        c = "#e0af68"
-                    else:
-                        c = "#9ece6a"
-                    quota_text = Text(f"{p:.0f}% used", style=f"bold {c}")
-            except Exception:  # noqa: BLE001
-                pass
+        """Cumulative session-usage refresh (called from _tick during active turns).
+
+        Shows session usage as a percentage of the token budget — input+output
+        summed over every turn ÷ budget. Monotonic (unlike the bounded context
+        gauge) and recolors green→amber→red as it approaches the cap.
+        """
+        usage_text = Text("—", style="dim")
+        tot = getattr(self.token_tracker, "session_total_tokens", 0)
+        if tot:
+            pct = getattr(self.token_tracker, "session_pct", 0.0)
+            budget = getattr(self.token_tracker, "session_token_budget", 0)
+            if pct >= 90:
+                c = "#f7768e"
+            elif pct >= 75:
+                c = "#e0af68"
+            else:
+                c = "#7aa2f7"
+            usage_text = Text(f"{pct:.0f}% of {self._fmt_tokens(budget)}", style=f"bold {c}")
         try:
-            self._w("#info-quota", Static).update(quota_text)
+            self._w("#info-quota", Static).update(usage_text)
         except NoMatches:
             pass
 
@@ -2567,7 +2596,17 @@ class NovaApp(App):
         # (injected for its next step) instead of cancelling it or starting a new
         # turn. Esc still cancels. Empty turns route normally.
         if self._turn_active:
-            self._add_live_steer(text)
+            # A slash command or !bash isn't a message to the agent — queue it to
+            # RUN as a command when the turn ends, rather than steering the agent
+            # with its literal text.
+            stripped = text.lstrip()
+            if stripped.startswith("/") or stripped.startswith("!"):
+                self._deferred_commands.append(text)
+                self._log(
+                    Text(f"↳ Queued command (runs after this turn): {text}", style="dim")
+                )
+            else:
+                self._add_live_steer(text)
             return
         self._dispatch(text)
 
@@ -2915,22 +2954,28 @@ class NovaApp(App):
 
     # ── Background tasks (persistent indicator + panel) ──────────────────
     def _refresh_tasks_bar(self) -> None:
-        """Rebuild the ``⚙`` indicator: what's running + runtime + count. Runs on
-        the 1s timer (live clock) and on every registry event."""
+        """Rebuild the ``⚙`` indicator: background shell jobs (●) + running async
+        subagents (◇), with live runtime + count. Runs on the 1s timer (live
+        clock) and on every registry event."""
+        active = []
+        fmt_runtime = lambda s: f"{int(s)}s"  # noqa: E731 — fallback if jobs import fails
         try:
-            from novacode_cli.shell.jobs import fmt_runtime, get_registry
+            from novacode_cli.shell.jobs import fmt_runtime as _fr, get_registry
 
+            fmt_runtime = _fr
             active = get_registry().active()
         except Exception:  # noqa: BLE001
-            active = []
+            pass
+        watcher = getattr(self, "_async_watcher", None)
+        agents = watcher.running_tasks() if watcher is not None else []
         try:
             bar = self._w("#tasks-bar", Static)
         except NoMatches:
             return
-        if not active:
+        if not active and not agents:
             bar.remove_class("active")
             bar.update("")
-            # No active tasks → stop the runtime ticker so it never interferes
+            # Nothing running → stop the runtime ticker so it never interferes
             # with the rest of the UI when idle.
             if self._tasks_timer is not None:
                 try:
@@ -2939,27 +2984,37 @@ class NovaApp(App):
                     pass
                 self._tasks_timer = None
             return
-        # Active tasks → ensure the 1s runtime ticker is running.
+        # Something running → ensure the 1s runtime ticker is running.
         if self._tasks_timer is None:
             try:
                 self._tasks_timer = self.set_interval(1.0, self._refresh_tasks_bar)
             except Exception:  # noqa: BLE001
                 self._tasks_timer = None
         t = Text()
-        if len(active) == 1:
+        total = len(active) + len(agents)
+        if total == 1 and active:
             job = active[0]
             t.append("⚙ Background  ", style="bold #7aa2f7")
             t.append("● ", style="cyan")
             t.append(job.command[:48], style="#c0caf5")
             t.append(f"  ⏱ {fmt_runtime(job.runtime())}", style="dim")
+        elif total == 1 and agents:
+            a = agents[0]
+            t.append("◇ Async agent  ", style="bold #bb9af7")
+            t.append("● ", style="#bb9af7")
+            t.append(str(a["agent_name"])[:36], style="#c0caf5")
+            t.append(f"  ⏱ {fmt_runtime(a['runtime'])}", style="dim")
         else:
-            t.append(f"⚙ Tasks ({len(active)})  ", style="bold #7aa2f7")
+            t.append(f"⚙ Tasks ({total})  ", style="bold #7aa2f7")
             segs = []
-            for job in active[:3]:
-                segs.append(f"● {job.command.split()[0][:16]} {fmt_runtime(job.runtime())}")
+            for job in active[:2]:
+                segs.append(f"● {job.command.split()[0][:14]} {fmt_runtime(job.runtime())}")
+            for a in agents[:2]:
+                segs.append(f"◇ {str(a['agent_name'])[:14]} {fmt_runtime(a['runtime'])}")
             t.append("  ·  ".join(segs), style="#c0caf5")
-            if len(active) > 3:
-                t.append(f"  +{len(active) - 3} more", style="dim")
+            shown = min(len(active), 2) + min(len(agents), 2)
+            if total > shown:
+                t.append(f"  +{total - shown} more", style="dim")
         bar.update(t)
         bar.add_class("active")
 
@@ -3366,7 +3421,9 @@ class NovaApp(App):
         # proactively manage the context window once the turn has settled.
         await self._update_context_breakdown()
         await self._check_context()
-        # Auto-dispatch any deferred prompts that weren't consumed as steers.
+        # Run commands queued during the turn (as commands), then any deferred
+        # prompts that weren't consumed as steers.
+        await self._drain_deferred_commands()
         await self._drain_deferred_prompts()
 
     async def _update_context_breakdown(self) -> None:
@@ -3446,6 +3503,21 @@ class NovaApp(App):
                 pass
         self._live_steers.clear()
 
+    async def _drain_deferred_commands(self) -> None:
+        """Run slash/bash commands that were queued during the turn — as actual
+        commands (routing like _dispatch), not as agent messages."""
+        while self._deferred_commands:
+            cmd = self._deferred_commands.pop(0)
+            self._log(Text(f"↳ Running queued command: {cmd}", style="italic #9ece6a"))
+            low = cmd.strip().lower()
+            if low in ("/quit", "/exit", "quit", "exit", "q"):
+                await self.action_quit()
+                return
+            if cmd.startswith("!"):
+                await self._run_bash(cmd)
+            elif cmd.startswith("/"):
+                await self._run_slash(cmd)
+
     async def _drain_deferred_prompts(self) -> None:
         """Dispatch prompts that were queued during the previous turn.
 
@@ -3481,8 +3553,32 @@ class NovaApp(App):
         if not bd:
             return
         pct = getattr(bd, "usage_percentage", 0.0)
-        if getattr(bd, "is_critical", False):
+        # Auto-compact fires at AUTO_COMPACT_THRESHOLD (0.82), deliberately below
+        # deepagents' 0.85 summarization backstop, so Nova's own compaction wins
+        # the race and the library only catches mid-turn overflow. Falls back to
+        # is_critical for breakdown objects that predate the property.
+        _due = getattr(bd, "should_auto_compact", None)
+        if _due is None:
+            _due = getattr(bd, "is_critical", False)
+        if _due:
             if self._auto_compact:
+                # Loop guard: if we ALSO auto-compacted on the previous turn and
+                # are still critical, compaction isn't winning (a too-small window,
+                # or the agent keeps re-filling context — e.g. re-reading the saved
+                # conversation_history to "recover the task"). Repeating just spams
+                # the summary. Stop and hand control back to the user.
+                if getattr(self, "_compacted_last_turn", False):
+                    self._auto_compact = False
+                    self._compacted_last_turn = False
+                    self._log(
+                        Text(
+                            "⚠ Repeated auto-compaction isn't freeing space (likely a "
+                            "context-window loop). Auto-compact disabled — use /clear to "
+                            "start fresh, or switch to a larger-context model.",
+                            style="bold #f7768e",
+                        )
+                    )
+                    return
                 self._log(
                     Text(
                         f"⚠ Context {pct:.0f}% — auto-compacting to free space…",
@@ -3490,6 +3586,30 @@ class NovaApp(App):
                     )
                 )
                 await self._run_compact("")
+                self._compacted_last_turn = True
+                # Floor: if compaction couldn't get us back under the critical
+                # line, further auto-compaction is futile (the summary itself is
+                # near the window — usually a too-small model). Stop the per-turn
+                # loop and tell the user how to recover.
+                try:
+                    bd2 = self.token_tracker.get_breakdown()
+                except Exception:  # noqa: BLE001
+                    bd2 = None
+                _still_due = None
+                if bd2 is not None:
+                    _still_due = getattr(bd2, "should_auto_compact", None)
+                    if _still_due is None:
+                        _still_due = getattr(bd2, "is_critical", False)
+                if _still_due:
+                    self._auto_compact = False
+                    self._log(
+                        Text(
+                            "⚠ Auto-compact couldn't free enough space (context window "
+                            "too small for this conversation). Auto-compact disabled — "
+                            "use /clear to start fresh or switch to a larger-context model.",
+                            style="bold #f7768e",
+                        )
+                    )
             else:
                 self._log(
                     Text(
@@ -3499,6 +3619,8 @@ class NovaApp(App):
                 )
             self._ctx_warned = True
         elif getattr(bd, "is_warning", False):
+            # Below critical — a compaction did free space, so the loop guard resets.
+            self._compacted_last_turn = False
             if not self._ctx_warned:
                 self._ctx_warned = True
                 self._log(
@@ -3510,6 +3632,7 @@ class NovaApp(App):
         else:
             # Dropped back below the warning line (e.g. after /compact) — re-arm.
             self._ctx_warned = False
+            self._compacted_last_turn = False
 
     async def _do_stream(self, text: str, assistant_id: str | None = None) -> None:
         ag, backend = self._active_agent()
@@ -5008,6 +5131,38 @@ class NovaApp(App):
         """Open the Background Tasks panel (same as clicking the ⚙ indicator)."""
         self._open_tasks_panel()
 
+    async def _run_cowork(self, text: str) -> None:
+        """Launch (or focus) the Nova Cowork desktop app in the browser.
+
+        Reuses Nova's FastAPI agent server + the /cowork UI + WorkspacePolicy
+        broker. Server startup is heavy, so it runs off the event loop.
+        """
+        parts = text.split(maxsplit=1)
+        task = parts[1].strip() if len(parts) > 1 else None
+        self._log(Text("◆ Launching Nova Cowork desktop… (grant a folder to begin)", style="#7aa2f7"))
+        self._launch_cowork(task)
+
+    @work(thread=True, exclusive=True, group="cowork")
+    def _launch_cowork(self, task: str | None) -> None:
+        try:
+            from novacode_cli.cowork.launcher import cowork_url
+
+            sid = getattr(self.session_state, "session_id", None)
+            url = cowork_url(session_id=sid, task=task)
+        except Exception as e:  # noqa: BLE001
+            self.call_from_thread(self._log, Text(f"Cowork failed to launch: {e}", style="red"))
+            return
+        import webbrowser
+
+        try:
+            webbrowser.open(url)
+        except Exception:  # noqa: BLE001
+            pass
+        self.call_from_thread(
+            self._log,
+            Text.assemble(("◆ Nova Cowork ready — ", "bold #7aa2f7"), (url, "underline #7aa2f7")),
+        )
+
     async def _run_mcp(self) -> None:
         """Open the MCP servers screen (view + remove)."""
         await self.push_screen_wait(McpScreen())
@@ -5221,7 +5376,6 @@ class NovaApp(App):
         from novacode_cli.commands.log_commands import (
             _list_runs,
             _load_json,
-            _run_summary_line,
             _runs_dir,
         )
 
@@ -5305,15 +5459,43 @@ class NovaApp(App):
             await self._passthrough_command(text)
             return
 
-        runs = _list_runs(runs_dir)[:20]
+        # /log list → recent interactive SESSIONS. The .nova/runs/ turn format the
+        # other subcommands read is only produced by the offline eval harness;
+        # interactive work is recorded under ~/.nova/sessions instead, so list
+        # from there (that's what "recent runs" means in normal use).
+        from novacode_cli.session.session_persistence import SessionManager
+
+        sm = self.session_manager or SessionManager()
+        try:
+            sessions = sm.list_sessions(limit=20)
+        except Exception:  # noqa: BLE001
+            sessions = []
         t = Text()
-        t.append("Recent runs\n", style="bold")
-        if not runs:
-            t.append("  (no runs yet — start a session to generate logs)\n", style="dim")
+        t.append("Recent sessions\n", style="bold")
+        if not sessions:
+            t.append("  (no sessions yet — start chatting to record one)\n", style="dim")
         else:
-            for r in runs:
-                t.append(f"  {_run_summary_line(r)}\n", style="dim")
+            for s in sessions:
+                t.append(f"  {self._session_log_line(s)}\n", style="dim")
         self._log(t)
+
+    @staticmethod
+    def _session_log_line(s: Any) -> str:
+        """One-line summary of a saved session for /log list."""
+        sid = (getattr(s, "session_id", "") or "")[:8]
+        model = getattr(s, "model_name", None) or "?"
+        msgs = getattr(s, "message_count", 0)
+        status = getattr(s, "task_status", "") or ""
+        when = getattr(s, "last_active", "") or ""
+        try:
+            from datetime import datetime
+
+            when = datetime.fromisoformat(when).strftime("%m-%d %H:%M")
+        except (ValueError, TypeError):
+            when = when[:16]
+        task = getattr(s, "current_task", None)
+        task_str = f"  · {task[:40]}" if task else ""
+        return f"{sid}  {when}  msgs={msgs}  {status}  {model}{task_str}"
 
     # -- plan mode ------------------------------------------------------------
     def _active_agent(self) -> tuple[Any, Any]:
@@ -5397,10 +5579,19 @@ class NovaApp(App):
                 await self._transcript().remove_children()
                 self._show_home_banner()
                 self._log(Text("✓ Plan approved — starting fresh execution…", style="cyan"))
+                _tid = getattr(self.session_state, "thread_id", "?")
+                self._log(Text(f"[plan-debug] executing on thread {str(_tid)[:8]}, plan {len(approved)} chars", style="dim"))
                 await self._stream_prompt(
                     "The user has approved the following plan. Execute it step by step, "
                     "marking each step complete as you go:\n\n" + approved
                 )
+                try:
+                    _st = await self.agent.aget_state({"configurable": {"thread_id": _tid}})
+                    _msgs = _st.values.get("messages", []) if _st else []
+                    _kinds = [type(m).__name__ for m in _msgs][-6:]
+                    self._log(Text(f"[plan-debug] after execution: {len(_msgs)} msgs, last={_kinds}", style="dim"))
+                except Exception as _ex:  # noqa: BLE001
+                    self._log(Text(f"[plan-debug] state read failed: {_ex}", style="dim red"))
         finally:
             # "Auto-approve edits" was scoped to this plan run — restore, so
             # the NEXT plan prompts for approval again instead of silently
@@ -5596,12 +5787,17 @@ class NovaApp(App):
         self._turn_start = time.monotonic()
         self._set_status("compacting…")
         try:
-            model = create_model()
+            # Summarize with the SESSION's live model (honors an in-session /model
+            # switch), falling back to config only if none is set.
+            model = getattr(self.session_state, "_model", None) or create_model()
             result = await compact_conversation(
                 agent=self.agent,
                 model=model,
                 thread_id=self.session_state.thread_id,
                 focus_instructions=focus,
+                # The tracker's effective window (accounts for Ollama num_ctx) so
+                # the summarizer input is budgeted to what this model can accept.
+                context_window=getattr(self.token_tracker, "context_window_size", None),
             )
         except Exception as ex:  # noqa: BLE001
             self._log(Text(f"/compact failed: {ex}", style="red"))
@@ -5702,6 +5898,18 @@ class NovaApp(App):
         self._clear_live_steers()
         self._seen.clear()
         self._restored_messages = []
+        # Discard anything queued for the (now-cleared) conversation.
+        self._deferred_commands.clear()
+        self._deferred_prompts.clear()
+        # Stale background-task completion notes must not bleed into the new chat.
+        self._pending_job_notes.clear()
+        # Attached images are conversation context (re-attached to every turn) —
+        # clear them so the fresh chat doesn't inherit the old conversation's images.
+        if self.image_tracker is not None:
+            try:
+                self.image_tracker.clear()
+            except Exception:  # noqa: BLE001
+                pass
 
         await self._transcript().remove_children()
 
@@ -5712,7 +5920,7 @@ class NovaApp(App):
         # Re-baseline context/token accounting for the fresh chat.
         if self.token_tracker is not None:
             try:
-                self.token_tracker.reset()
+                self.token_tracker.reset(reset_session=True)
             except Exception:  # noqa: BLE001
                 pass
         # Plan/steer were cleared above — refresh the input badge to match.
@@ -5802,6 +6010,73 @@ class NovaApp(App):
             self._set_nova_indicator(
                 "⚠ terminal too small — enlarge the window", style="yellow", auto_clear=4.0
             )
+
+    async def _run_learning(self, text: str) -> None:
+        """Handle /learning natively: toggle the Hermes autonomous-learning loop.
+
+        The loop is off by default and its middleware's ``enabled`` flag is baked
+        at agent-build time, so turning it on/off rebuilds the agent (same model)
+        to apply the change to the running session — mirroring /effort.
+        """
+        from novacode_cli.config.model_create import create_model
+        from novacode_cli.config.nova_config import NovaConfig
+
+        parts = text.split(maxsplit=1)
+        arg = parts[1].strip().lower() if len(parts) > 1 else ""
+        cfg = NovaConfig()
+        current = cfg.get_learning_enabled()
+
+        if arg in ("", "status"):
+            t = Text()
+            t.append("Nova Learning (Hermes)\n", style="bold")
+            t.append("Status: ", style="dim")
+            t.append("on\n" if current else "off\n", style="bold green" if current else "bold yellow")
+            t.append(
+                "\nWhen on, Nova periodically self-reviews its tool usage, extracts\n"
+                "lessons to memory, and creates/refines skills as you work.\n",
+                style="dim",
+            )
+            t.append("Usage: /learning <on|off>\n", style="dim")
+            self._log(t)
+            return
+
+        if arg not in ("on", "off"):
+            self._log(
+                Text(f"Invalid option '{arg}'. Usage: /learning <on|off|status>", style="red")
+            )
+            return
+
+        want = arg == "on"
+        if want == current:
+            self._log(Text(f"Nova learning already {arg}.", style="dim"))
+            return
+
+        cfg.set_learning_enabled(want)
+        t = Text(
+            f"✓ Nova learning {'enabled' if want else 'disabled'} and saved to config.\n",
+            style="green",
+        )
+
+        applied = False
+        if self.session_state is not None:
+            try:
+                new_agent, new_backend = await self.session_state.switch_model(create_model())
+                self.agent = new_agent
+                self.backend = new_backend
+                applied = True
+            except Exception as e:  # noqa: BLE001
+                t.append(f"⚠ Could not apply to the running session: {e}\n", style="yellow")
+
+        if applied:
+            t.append(
+                "✓ Applied to this session." if want else "✓ Stopped for this session.",
+                style="green",
+            )
+        else:
+            t.append("Takes effect on restart.", style="dim")
+
+        self._log(t)
+        self._refresh_status()
 
     async def _run_effort(self, text: str) -> None:
         """Handle /effort natively: set reasoning effort level."""
@@ -7368,6 +7643,80 @@ class NovaApp(App):
             if getattr(self, "_accumulated_reply", None):
                 self._speak_reply(self._accumulated_reply)
                 self._accumulated_reply = ""
+            await self._sync_async_task_watcher()
+
+    def _notify_async_done(self, level: str, title: str, message: str) -> None:
+        """Surface a finished async subagent as a notification, and — when the
+        agent is idle — proactively trigger a turn that fetches and reports the
+        result, so the user doesn't have to ask for a status report."""
+        try:
+            self.session_state.add_notification(level, title, message, source="async-agent")
+        except Exception:  # noqa: BLE001
+            pass
+        # Extract the full task_id the watcher embeds so we can drive a turn.
+        m = re.search(r"\[async_task_id=([^\]]+)\]", message)
+        task_id = m.group(1) if m else None
+        if not task_id:
+            return
+        # Only auto-report when the agent is idle — never interrupt an active
+        # turn. If busy, the notification (🔔 badge) still surfaces the event.
+        if getattr(self, "_turn_active", False):
+            return
+        self._log(Text(f"↻ Async agent finished — fetching result…", style="cyan"))
+        self._auto_report_async_done(task_id)
+
+    @work(exclusive=True, group="turn")
+    async def _auto_report_async_done(self, task_id: str) -> None:
+        """Proactively report a finished async subagent's result.
+
+        Injects a visible message into the transcript and runs a turn that asks
+        the agent to fetch the task result and summarize it — closing the gap
+        where a finished remote agent otherwise waits for the user to ask."""
+        try:
+            await self._add_message(
+                Text("You", style="bold cyan"),
+                "user",
+                Text(f"[async agent finished — auto-reporting result]"),
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        prompt = (
+            f"[Async subagent finished] A remote async subagent has completed. "
+            f"Fetch its result with check_async_task('{task_id}') and give the "
+            f"user a concise summary of what it produced. If the task errored, "
+            f"report the error clearly."
+        )
+        await self._stream_prompt(prompt)
+        await self._maybe_run_approved_plan()
+
+    async def _sync_async_task_watcher(self) -> None:
+        """After a turn, watch any newly-launched async subagent so its completion
+        surfaces as a notification. Async subagents are otherwise fire-and-forget
+        (start returns a task_id and nothing pushes completion back), so without
+        this a finished remote agent never reaches the user until they poll."""
+        if self.agent is None or self.session_state is None:
+            return
+        try:
+            config = {"configurable": {"thread_id": self.session_state.thread_id}}
+            state = await asyncio.wait_for(self.agent.aget_state(config), timeout=5.0)
+            tasks = state.values.get("async_tasks") or {}
+        except Exception:  # noqa: BLE001 — never let telemetry break a turn
+            return
+        if not tasks:
+            return
+        watcher = getattr(self, "_async_watcher", None)
+        if watcher is None:
+            from novacode_cli.remote.async_task_watcher import AsyncTaskWatcher
+
+            watcher = AsyncTaskWatcher(self._notify_async_done)
+            self._async_watcher = watcher
+        watcher.sync_from_state(tasks)
+        # Surface newly-running agents in the ⚙ tasks bar right away (and start
+        # its 1s runtime ticker, which will also drop them once they finish).
+        try:
+            self._refresh_tasks_bar()
+        except Exception:  # noqa: BLE001
+            pass
 
     async def _ask_remote_question(self, question_request: dict) -> dict:
         """Route an agent question to the remote user via Discord/Telegram."""

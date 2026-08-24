@@ -25,16 +25,32 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from deepagents.middleware.skills import SkillMetadata
-from deepagents.middleware.skills import _list_skills as list_skills_from_backend
-
-from novacode_cli.backends import OptimizedFilesystemBackend as FilesystemBackend
+# Lazy deepagents imports: `list_skills` pulls in deepagents + the filesystem
+# backend (~4s). We defer them to first call so importing this module (and the
+# modules that import it, e.g. skills.skill_creation) doesn't pay that cost at
+# CLI startup. `SkillMetadata` stays importable via a lazy proxy below.
+if TYPE_CHECKING:
+    from deepagents.middleware.skills import SkillMetadata
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 # Maximum size for SKILL.md files (10MB)
 MAX_SKILL_FILE_SIZE = 10 * 1024 * 1024
+
+
+class _LazySkillMetadata:
+    """Lazy proxy so ``from novacode_cli.skills.load import SkillMetadata`` works
+    without importing deepagents at module load. Resolves on first attribute
+    access (used only as a type in annotations and dict values)."""
+
+    def __getattr__(self, name: str):
+        from deepagents.middleware.skills import SkillMetadata
+
+        return getattr(SkillMetadata, name)
+
+
+SkillMetadata = _LazySkillMetadata()  # type: ignore[assignment]
 
 # Re-export for CLI commands
 __all__ = ["SkillMetadata", "list_skills"]
@@ -72,6 +88,12 @@ def list_skills(
         taking precedence over earlier ones when names conflict. Each skill
         includes a 'source' field indicating its origin.
     """
+    # Lazy deepagents imports (see module docstring): only needed when actually
+    # listing skills, not at import time.
+    from deepagents.middleware.skills import SkillMetadata
+    from deepagents.middleware.skills import _list_skills as list_skills_from_backend
+    from novacode_cli.backends import OptimizedFilesystemBackend as FilesystemBackend
+
     all_skills: dict[str, SkillMetadata] = {}
 
     # Load user skills first (foundation)

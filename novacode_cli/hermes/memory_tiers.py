@@ -354,15 +354,11 @@ def parse_review_response(response_content: str) -> dict[str, Any]:
     if habit_matches:
         result["habits"] = "\n".join(m.strip() for m in habit_matches if m.strip())
 
-    # Fallback: unstructured response with content → a single default-topic lesson.
-    # A habit-only response must not be re-filed as a lesson, so habits gate it too.
-    if (
-        not result["user_model"]
-        and not result["lessons"]
-        and not result["habits"]
-        and response_content.strip()
-    ):
-        result["lessons"].append({"topic": _DEFAULT_TOPIC, "bullets": response_content.strip()})
+    # NOTE: unstructured responses (no <user_model>/<lesson>/<habit> blocks) are
+    # intentionally dropped — they are usually raw thinking/prose, not distilled
+    # lessons. Dumping them verbatim was the source of thinking-trace pollution
+    # in lessons.md. The review prompt already asks for <lesson> blocks; if the
+    # model emits prose instead, recording nothing is correct.
 
     return result
 

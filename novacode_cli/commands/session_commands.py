@@ -220,8 +220,8 @@ async def handle_compact_command(
     console.print("[bold]Compacting Conversation[/bold]", style=COLORS["primary"])
     console.print()
 
-    # Get the model for summarization
-    model = create_model()
+    # Summarize with the session's live model when available (honors /model), else config.
+    model = getattr(session_state, "_model", None) or create_model()
 
     with console.status("[bold]Summarizing conversation...[/bold]", spinner="dots"):
         result = await compact_conversation(

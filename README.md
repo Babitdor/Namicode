@@ -47,7 +47,7 @@ An open-source, terminal-based AI coding assistant built on LangGraph and the `d
 - **Skills System**: 50+ built-in skills with progressive disclosure — domain-specific workflows loaded on demand. Install skills from any public GitHub repo
 - **Plugin System**: Python entry-point based plugins that can register slash commands, add middleware at defined slots, and extend the agent
 - **Custom Subagents**: 20+ built-in specialized subagents (code review, security audit, refactoring, testing, research swarm, browser automation, frontend/backend/docker engineering, and more)
-- **Async Subagents**: Background task execution on remote LangGraph servers — documentation updates, code reviews, test generation, dependency audits, refactoring
+- **Async Subagents**: Background task execution on remote LangGraph servers — documentation updates, code reviews, test generation, dependency audits, refactoring; results are automatically reported to the user when the agent is idle
 - **Wiki System**: Persistent project wiki at `.nova/wiki/` — ingest web clippings (`/ingest`), ask questions with wiki context (`/ask`), file conversation knowledge as wiki pages (`/file`), and browse the vault (`/wiki`)
 
 ### Sandbox & Safety

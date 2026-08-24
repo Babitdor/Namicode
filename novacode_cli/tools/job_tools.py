@@ -110,31 +110,11 @@ def restart_task(task_id: str) -> str:
     return f"Restarted as {new.task_id}: {new.command[:60]}"
 
 
-@tool
-def wait_for_job(task_id: str, timeout_seconds: int = 120) -> str:
-    """Wait for a background task to finish, then return its exit code and output.
-
-    Blocks up to ``timeout_seconds``. If still running when the timeout elapses,
-    returns a "still running" note — call again or do other work.
-
-    Args:
-        task_id: e.g. "task_42".
-        timeout_seconds: How long to wait (default 120).
-    """
-    reg = _reg()
-    t = reg.resolve(task_id)
-    if t is None:
-        return f"No background task '{task_id}'. Use list_background_tasks() to see current tasks."
-    reg.wait(t.id, timeout=max(0, timeout_seconds))
-    if t.status == "running":
-        return (
-            f"{t.task_id} is still running after {timeout_seconds}s "
-            f"(command: {t.command}). Call wait_for_job('{t.task_id}') again to keep waiting."
-        )
-    return (
-        f"{t.task_id} {t.status} (exit {t.exit_code}).\n\n"
-        f"Command: {t.command}\n\nOutput:\n{t.output}"
-    )
+# NOTE: there is intentionally NO blocking "wait_for_job" tool. Background tasks
+# are fire-and-forget: keep working and check progress with the non-blocking
+# get_task_status / get_task_logs, or terminate_task to stop one. A Ctrl+B-
+# detached task auto-resumes the agent with its result when it finishes, so the
+# agent never needs to block a turn waiting.
 
 
 __all__ = [
@@ -143,5 +123,4 @@ __all__ = [
     "list_background_tasks",
     "restart_task",
     "terminate_task",
-    "wait_for_job",
 ]

@@ -33,6 +33,7 @@ too without overriding the async variants.
 from __future__ import annotations
 
 import functools
+import inspect
 import json
 import os
 import re
@@ -166,6 +167,47 @@ _SKIP_DIRS = frozenset(
 )
 
 
+# deepagents changed its internal grep contract in 0.7.0, and pyproject allows
+# both (``deepagents>=0.6.8``):
+#
+#   0.6.10: _ripgrep_search(pattern, base, glob)             -> dict | None
+#           _python_search(pattern, base, glob, *, timeout)   -> (dict, error)
+#   0.7.0:  _ripgrep_search(pattern, base, glob, max_count)   -> (dict | None, truncated)
+#           _python_search(..., *, max_count, timeout)        -> (dict, truncated, error)
+#
+# The parent's own ``grep()`` unpacks whichever shape ITS version expects, so an
+# override that returns only one shape breaks the other install ("'tuple' object
+# has no attribute 'items'" on 0.6.x). Detect the installed contract once and
+# have the overrides return the matching shape.
+_PARENT_RG_V2 = "max_count" in inspect.signature(FilesystemBackend._ripgrep_search).parameters
+_PARENT_PY_V2 = "max_count" in inspect.signature(FilesystemBackend._python_search).parameters
+
+
+def _cap_results(
+    results: dict[str, list[tuple[int, str]]], max_count: int | None
+) -> tuple[dict[str, list[tuple[int, str]]], bool]:
+    """Trim *results* to at most ``max_count`` matches, reporting truncation.
+
+    Mirrors the upstream grep contract: the caller gets exactly ``max_count``
+    matches and ``truncated=True`` only when matches were actually dropped.
+    """
+    if max_count is None or max_count < 0:
+        return results, False
+    kept = 0
+    capped: dict[str, list[tuple[int, str]]] = {}
+    truncated = False
+    for fpath, items in results.items():
+        if kept >= max_count:
+            truncated = True
+            break
+        room = max_count - kept
+        capped[fpath] = items[:room]
+        if len(items) > room:
+            truncated = True
+        kept += len(capped[fpath])
+    return capped, truncated
+
+
 class OptimizedFilesystemBackend(FilesystemBackend):
     """FilesystemBackend with a non-hanging grep fallback and regex support."""
 
@@ -266,26 +308,51 @@ class OptimizedFilesystemBackend(FilesystemBackend):
         except re.error as e:
             return GrepResult(error=f"Invalid regex pattern: {e}", matches=[])
 
-        results = self._ripgrep_search(pattern, base_full, glob, use_regex=True)
+        # Call the impls, not the version-adaptive overrides: these always return
+        # the rich tuple regardless of which deepagents is installed.
+        results, truncated = self._rg_impl(pattern, base_full, glob, use_regex=True)
         partial_error: str | None = None
         if results is None:
-            results, partial_error = self._python_search(pattern, base_full, glob)
+            results, truncated, partial_error = self._py_impl(pattern, base_full, glob)
 
         matches = [
             {"path": fpath, "line": int(line_num), "text": line_text}
             for fpath, items in results.items()
             for line_num, line_text in items
         ]
+        # GrepResult gained `truncated` in 0.7; 0.6.x rejects the kwarg.
+        if _PARENT_RG_V2:
+            return GrepResult(error=partial_error, matches=matches, truncated=truncated)
         return GrepResult(error=partial_error, matches=matches)
 
-    def _ripgrep_search(  # noqa: PLR0912, PLR0915
+    def _ripgrep_search(
         self,
         pattern: str,
         base_full: Path,
         include_glob: str | None,
+        max_count: int | None = None,
         *,
         use_regex: bool = False,
-    ) -> dict[str, list[tuple[int, str]]] | None:
+    ):
+        """Version-adaptive override the parent ``grep()`` calls.
+
+        Returns ``(results, truncated)`` on deepagents >= 0.7 and a bare
+        ``results`` dict on 0.6.x — matching whatever the installed parent
+        unpacks. Nova's own code should call :meth:`_rg_impl` instead, which
+        always returns the richer tuple.
+        """
+        out = self._rg_impl(pattern, base_full, include_glob, max_count, use_regex=use_regex)
+        return out if _PARENT_RG_V2 else out[0]
+
+    def _rg_impl(  # noqa: PLR0912, PLR0915
+        self,
+        pattern: str,
+        base_full: Path,
+        include_glob: str | None,
+        max_count: int | None = None,
+        *,
+        use_regex: bool = False,
+    ) -> tuple[dict[str, list[tuple[int, str]]] | None, bool]:
         """Search with ripgrep.
 
         Identical to the upstream implementation except that the fixed-string
@@ -293,12 +360,14 @@ class OptimizedFilesystemBackend(FilesystemBackend):
         interpreted as a regular expression. The parent's literal ``grep()`` call
         passes no ``use_regex`` and therefore keeps ``-F``.
 
-        Returns ``None`` to signal "fall back to the Python search" (ripgrep
-        missing, timed out, or errored).
+        Returns ``(results, truncated)`` — matching the upstream contract, which
+        the parent ``grep()`` unpacks. ``results`` is ``None`` to signal "fall
+        back to the Python search" (ripgrep missing, timed out, or errored);
+        ``truncated`` is True when ``max_count`` capped the result set.
         """
         rg_path = _resolve_ripgrep_path()
         if rg_path is None:
-            return None
+            return None, False
 
         # --smart-case: a lower-case pattern matches case-insensitively, but a
         # pattern containing an upper-case letter stays case-sensitive. Matches
@@ -327,22 +396,22 @@ class OptimizedFilesystemBackend(FilesystemBackend):
                 cwd=rg_cwd,
             )
         except subprocess.TimeoutExpired:
-            return None
+            return None, False
         except (FileNotFoundError, PermissionError, NotADirectoryError):
             # rg resolved at cache time but failed to exec — re-probe next call.
             _resolve_ripgrep_path.cache_clear()
-            return None
+            return None, False
 
         # 0 = match, 1 = no match (both fine); 2+ = hard error → fall back.
         if proc.returncode not in (0, 1):
-            return None
+            return None, False
 
         results: dict[str, list[tuple[int, str]]] = {}
         base_resolved = base_full.resolve()
         # On Windows, proc.stdout can be None even with a 0/1 returncode.
         # Treat that as "no matches" rather than crashing on splitlines().
         if not proc.stdout:
-            return results
+            return results, False
         for line in proc.stdout.splitlines():
             try:
                 data = json.loads(line)
@@ -374,16 +443,40 @@ class OptimizedFilesystemBackend(FilesystemBackend):
             lt = pdata.get("lines", {}).get("text", "").rstrip("\n")
             results.setdefault(virt, []).append((int(ln), lt))
 
-        return results
+        # ponytail: cap applied after collection, not by killing rg mid-stream as
+        # upstream does. Same visible contract (exactly max_count, flagged
+        # truncated); only the peak-memory bound is looser. Stream it if a huge
+        # match set ever actually hurts.
+        return _cap_results(results, max_count)
 
-    def _python_search(  # noqa: PLR0912
+    def _python_search(
         self,
         pattern: str,
         base_full: Path,
         include_glob: str | None,
         *,
+        max_count: int | None = None,
         timeout: int = _GREP_TIMEOUT,
-    ) -> tuple[dict[str, list[tuple[int, str]]], str | None]:
+    ):
+        """Version-adaptive override the parent ``grep()`` calls.
+
+        ``(results, truncated, error)`` on deepagents >= 0.7, ``(results, error)``
+        on 0.6.x. Nova's own code should call :meth:`_py_impl`.
+        """
+        results, truncated, error = self._py_impl(
+            pattern, base_full, include_glob, max_count=max_count, timeout=timeout
+        )
+        return (results, truncated, error) if _PARENT_PY_V2 else (results, error)
+
+    def _py_impl(  # noqa: PLR0912
+        self,
+        pattern: str,
+        base_full: Path,
+        include_glob: str | None,
+        *,
+        max_count: int | None = None,
+        timeout: int = _GREP_TIMEOUT,
+    ) -> tuple[dict[str, list[tuple[int, str]]], bool, str | None]:
         """Python fallback that prunes large directories to avoid hanging.
 
         Drop-in replacement for the upstream ``_python_search`` (same signature,
@@ -397,11 +490,14 @@ class OptimizedFilesystemBackend(FilesystemBackend):
                 search (the parent does this) or a raw regex for regex mode.
             base_full: Resolved base path to search.
             include_glob: Optional glob to filter files.
+            max_count: Optional cap on total matches collected.
             timeout: Wall-clock budget in seconds.
 
         Returns:
-            ``(results, partial_error)``; ``partial_error`` is set when the walk
-            was cut short by the timeout or aborted mid-iteration.
+            ``(results, truncated, partial_error)`` — the upstream contract the
+            parent ``grep()`` unpacks. ``truncated`` is True when ``max_count``
+            dropped matches; ``partial_error`` is set when the walk was cut short
+            by the timeout or aborted mid-iteration.
         """
         deadline = time.monotonic() + timeout
         # Smart-case to mirror the ripgrep path: case-insensitive unless the
@@ -419,10 +515,18 @@ class OptimizedFilesystemBackend(FilesystemBackend):
                 f"or a narrower path."
             )
 
+        # Collect one past the cap so truncation can be reported exactly (a run
+        # that lands on max_count with nothing left is complete, not truncated).
+        probe = None if max_count is None else max_count + 1
+        matched = 0
+
         try:
             for dirpath, dirnames, filenames in os.walk(str(root)):
+                if probe is not None and matched >= probe:
+                    break
                 if time.monotonic() > deadline:
-                    return results, _timed_out()
+                    capped, trunc = _cap_results(results, max_count)
+                    return capped, trunc, _timed_out()
 
                 # Prune in place so os.walk never descends into skipped subtrees.
                 dirnames[:] = [
@@ -430,8 +534,11 @@ class OptimizedFilesystemBackend(FilesystemBackend):
                 ]
 
                 for filename in filenames:
+                    if probe is not None and matched >= probe:
+                        break
                     if time.monotonic() > deadline:
-                        return results, _timed_out()
+                        capped, trunc = _cap_results(results, max_count)
+                        return capped, trunc, _timed_out()
 
                     fp = Path(dirpath) / filename
 
@@ -454,6 +561,8 @@ class OptimizedFilesystemBackend(FilesystemBackend):
                         continue
 
                     for line_num, line in enumerate(content.splitlines(), 1):
+                        if probe is not None and matched >= probe:
+                            break
                         if not regex.search(line):
                             continue
                         if self.virtual_mode:
@@ -464,12 +573,15 @@ class OptimizedFilesystemBackend(FilesystemBackend):
                         else:
                             virt_path = str(fp)
                         results.setdefault(virt_path, []).append((line_num, line))
+                        matched += 1
 
         except (OSError, RuntimeError) as e:
             msg = f"Grep of '{base_full}' aborted after {len(results)} matching file(s): {e}"
-            return results, msg
+            capped, trunc = _cap_results(results, max_count)
+            return capped, trunc, msg
 
-        return results, None
+        capped, trunc = _cap_results(results, max_count)
+        return capped, trunc, None
 
     # -- read: recover non-utf-8 files ---------------------------------------
 
@@ -593,6 +705,34 @@ class OptimizedFilesystemBackend(FilesystemBackend):
             return self._resolve_path(path_str).stat().st_mtime
         except (OSError, RuntimeError, ValueError):
             return 0.0
+
+
+class ConversationHistoryBackend(FilesystemBackend):
+    """Write-only store for conversation history evicted by summarization.
+
+    The summarization middleware offloads replaced history here and tells the
+    model it can "recover the full text by reading the offloaded file". Acting on
+    that advice re-inhales the exact context eviction just cleared, which pushes
+    usage back over the summarization threshold and summarizes again — the
+    repeating "SESSION INTENT / task not recoverable" loop.
+
+    Writes still land on disk, so the transcript stays available to the user and
+    to `/resume`; only the agent-facing *read* is refused, which is what breaks
+    the cycle. Deterministic on purpose: a prompt-level "don't re-read this" can
+    be ignored by the model, a refused read cannot.
+    """
+
+    def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
+        """Refuse the read with a short instruction instead of the transcript."""
+        return ReadResult(
+            error=(
+                "This file holds earlier conversation history that was already "
+                "summarized out of the active context. Re-reading it would undo "
+                "that compaction and re-trigger summarization, so it is not "
+                "readable. Continue from the summary you have; if the goal is "
+                "unclear, ask the user rather than trying to reconstruct it."
+            )
+        )
 
 
 class OptimizedLocalShellBackend(LocalShellBackend, OptimizedFilesystemBackend):

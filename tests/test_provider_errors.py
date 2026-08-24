@@ -40,6 +40,34 @@ def test_ollama_weekly_usage_limit_is_usage_notice():
     assert "https://ollama.com/settings" in notice
 
 
+# OpenCode DeepSeek V4: a 403 that is a region opt-in requirement, NOT bad creds.
+_OPENCODE_REGION = (
+    "Error code: 403 - {'type': 'error', 'error': {'type': 'RegionError', 'message': "
+    "'The latest version of this model is only available hosted in China and requires "
+    "explicit opt in: https://opencode.ai/workspace/wrk_01M0/go'}}"
+)
+
+
+def test_region_error_is_not_mislabelled_as_auth():
+    notice = friendly_model_error(_ResponseError(_OPENCODE_REGION, 403))
+    assert notice is not None
+    assert "region" in notice.lower()
+    # Must NOT tell the user to check their API key — the key is fine.
+    assert "API key" not in notice
+    # The opt-in link is preserved so the user can act on it.
+    assert "opencode.ai/workspace" in notice
+
+
+def test_region_error_is_not_retried():
+    # Region opt-in needs a user action; retrying wastes backoff.
+    assert is_retryable_model_error(_ResponseError(_OPENCODE_REGION, 403)) is False
+
+
+def test_plain_403_still_classified_as_auth():
+    notice = friendly_model_error(_ResponseError("403 Forbidden: invalid api key", 403))
+    assert notice is not None and "authentication" in notice.lower()
+
+
 def test_usage_limit_takes_priority_over_429_rate_limit():
     # The message contains both "usage limit" and "429"; the usage notice wins.
     notice = friendly_model_error(_ResponseError(_OLLAMA_USAGE_LIMIT, 429))

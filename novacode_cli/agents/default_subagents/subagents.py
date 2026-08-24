@@ -24,14 +24,6 @@ from .prompt import (
     FRONTEND_AGENT,
     BACKEND_AGENT,
     DOCKER_AGENT,
-    # Research swarm agents
-    WEB_RESEARCHER,
-    FACT_CHECKER,
-    RESEARCH_SYNTHESIZER,
-    LITERATURE_REVIEWER,
-    MARKET_ANALYST,
-    FINANCIAL_ANALYST,
-    TECHNICAL_RESEARCHER,
 )
 
 AnyTool = BaseTool | Callable[..., Any]
@@ -75,14 +67,13 @@ def retrieve_core_subagents(
         ("frontend-agent", FRONTEND_AGENT),
         ("backend-agent", BACKEND_AGENT),
         ("docker-agent", DOCKER_AGENT),
-        # Research swarm agents
-        ("web-researcher", WEB_RESEARCHER),
-        ("fact-checker", FACT_CHECKER),
-        ("research-synthesizer", RESEARCH_SYNTHESIZER),
-        ("literature-reviewer", LITERATURE_REVIEWER),
-        ("market-analyst", MARKET_ANALYST),
-        ("financial-analyst", FINANCIAL_ANALYST),
-        ("technical-researcher", TECHNICAL_RESEARCHER),
+        # NOTE: the research-swarm agents (web-researcher, fact-checker,
+        # research-synthesizer, literature-reviewer, market-analyst,
+        # financial-analyst, technical-researcher) were removed from the default
+        # roster. They are niche, unreferenced anywhere in the codebase, and each
+        # one's description is loaded into the `task` tool schema on every turn
+        # (~30 tokens each). The general-purpose agent handles these tasks fine.
+        # Re-add them here if a dedicated research-swarm workflow is built.
     ]
 
     subagents: list[SubAgent] = [
@@ -150,29 +141,6 @@ def retrieve_core_subagents(
         ],
         "docker-agent": [
             "/skills/docker-deploy/",
-        ],
-        # Research swarm agents
-        "web-researcher": [
-            "/skills/web-research/",
-            "/skills/arxiv-search/",
-        ],
-        "fact-checker": [
-            "/skills/web-research/",
-        ],
-        "technical-researcher": [
-            "/skills/web-research/",
-            "/skills/codebase-explorer/",
-        ],
-        "literature-reviewer": [
-            "/skills/arxiv-search/",
-            "/skills/web-research/",
-        ],
-        "market-analyst": [
-            "/skills/web-research/",
-        ],
-        "financial-analyst": [
-            "/skills/web-research/",
-            "/skills/xlsx/",
         ],
     }
     for sa in subagents:

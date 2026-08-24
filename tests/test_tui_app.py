@@ -84,6 +84,21 @@ class _SS:
         self.plan_mode_enabled = False
 
 
+async def _wait_for_screen(app, pilot, expected_type, timeout: float = 3.0) -> None:
+    """Pump the event loop until the pushed screen is ``expected_type``.
+
+    Screen pushes run through an async dispatch worker, and some screens load
+    data from disk before mounting — so a single ``pilot.pause()`` races the
+    push and made these assertions flaky in a full-suite run (fine alone, failing
+    under load). Waits on the condition instead of a fixed number of pauses.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline and not isinstance(app.screen, expected_type):
+        await pilot.pause()
+        await asyncio.sleep(0.02)
+
+
 async def _drive():
     from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
@@ -389,7 +404,12 @@ async def _drive_agents_skills():
         model_name="m",
     )
     async with app.run_test() as pilot:
-        for cmd in ("/agents", "/skills", "/servers", "/hooks", "/wiki"):
+        # /wiki is deliberately NOT in this loop: it builds a real WikiManager,
+        # which resolves a project root and creates .nova/wiki/** on disk as a
+        # side effect, and whose screen then depends on ambient repo state (it
+        # passed only when an earlier test had already set that up). WikiScreen
+        # has dedicated, fully-stubbed coverage in test_tui_wiki_screen.
+        for cmd in ("/agents", "/skills", "/servers", "/hooks"):
             inp = app.query_one("#prompt", Input)
             inp.value = cmd
             inp.focus()
@@ -402,10 +422,9 @@ async def _drive_agents_skills():
                 expected_type = SkillsScreen
             elif cmd == "/servers":
                 expected_type = ServersScreen
-            elif cmd == "/wiki":
-                expected_type = WikiScreen
             else:
                 expected_type = HooksScreen
+            await _wait_for_screen(app, pilot, expected_type)
             assert isinstance(app.screen, expected_type), (cmd, type(app.screen).__name__)
             app.screen.query_one("#close", Button).press()
             await pilot.pause()
@@ -1505,9 +1524,12 @@ async def _drive_transcript_cap():
         )
         async with app.run_test() as pilot:
             # Mark an (old) widget as in-progress so pruning must spare it.
+            # Use _stream_msg: _init_widget was removed from the app (/init is
+            # log-only now), so assigning it protected nothing and the widget was
+            # correctly pruned — the test was pinning a dead reference.
             protected = Static("PROTECTED")
             await app._mount(protected)
-            app._init_widget = protected
+            app._stream_msg = protected
             for i in range(30):
                 await app._mount(Static(f"line {i}"))
             await pilot.pause()
@@ -3111,12 +3133,9 @@ async def _drive_wiki_screen():
             await pilot.press("enter")
             
             # Pushes a modal via push_screen_wait, which blocks dispatch worker.
-            # Pump events until WikiScreen is active.
-            for _ in range(10):
-                await pilot.pause()
-                if isinstance(app.screen, WikiScreen):
-                    break
-
+            # Wait on the condition (a fixed pause count still lost the race
+            # under full-suite load).
+            await _wait_for_screen(app, pilot, WikiScreen)
             assert isinstance(app.screen, WikiScreen)
             
             # Check default tab: Synthesized Pages

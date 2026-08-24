@@ -121,20 +121,20 @@ def test_resolve_sandbox_type(
     platform: str,
     expected: tuple[str, bool],
 ):
-    from novacode_cli.main import resolve_sandbox_type
+    from novacode_cli.integrations.sandbox_factory import resolve_sandbox_type
 
     assert resolve_sandbox_type(arg, no_sandbox, platform=platform) == expected
 
 
 def test_resolve_rejects_docker_off_windows():
-    from novacode_cli.main import resolve_sandbox_type
+    from novacode_cli.integrations.sandbox_factory import resolve_sandbox_type
 
     with pytest.raises(ValueError, match="Windows-only"):
         resolve_sandbox_type("docker", no_sandbox=False, platform="linux")
 
 
 def test_resolve_rejects_no_sandbox_with_explicit_sandbox():
-    from novacode_cli.main import resolve_sandbox_type
+    from novacode_cli.integrations.sandbox_factory import resolve_sandbox_type
 
     with pytest.raises(ValueError, match="conflicts"):
         resolve_sandbox_type("modal", no_sandbox=True, platform="linux")

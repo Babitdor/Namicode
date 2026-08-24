@@ -37,8 +37,6 @@ from typing import TYPE_CHECKING, Any, Literal
 
 logger = logging.getLogger(__name__)
 
-from deepagents.backends.utils import perform_string_replacement
-
 from novacode_cli.config.config import settings
 
 if TYPE_CHECKING:
@@ -264,6 +262,10 @@ def build_approval_preview(
     assistant_id: str | None,
 ) -> ApprovalPreview | None:
     """Collect summary info and diff for HITL approvals."""
+    # Lazy import: deepagents is only needed to compute the replacement preview,
+    # not at module import time (keeps startup fast).
+    from deepagents.backends.utils import perform_string_replacement
+
     path_str = str(args.get("file_path") or args.get("path") or "")
     display_path = format_display_path(path_str)
     physical_path = resolve_physical_path(path_str, assistant_id)
@@ -649,7 +651,7 @@ class FileOpTracker:
 # Session-Level FileOpTracker (shared between main agent and subagents)
 # ============================================================================
 
-_session_file_op_tracker: FileOpTracker | None = None
+_session_file_op_trackers: dict[str | None, FileOpTracker] = {}
 
 
 def get_session_file_op_tracker(
@@ -668,19 +670,26 @@ def get_session_file_op_tracker(
     Returns:
         The session-level FileOpTracker instance.
     """
-    global _session_file_op_tracker
-    if _session_file_op_tracker is None:
-        _session_file_op_tracker = FileOpTracker(
-            assistant_id=assistant_id, backend=backend
-        )
-    return _session_file_op_tracker
+    # Keyed by assistant_id, NOT a single process global: the main-thread TUI
+    # agent ("nova-agent") and the cowork server agent ("nova-server") run
+    # concurrently in one process with DIFFERENT backends/workspace roots. A
+    # single shared tracker meant whichever agent ran first "owned" it, so the
+    # other resolved file ops against the wrong backend/root → "Agent run failed".
+    # Keying isolates them; the main agent and its subagents still share (same id).
+    tracker = _session_file_op_trackers.get(assistant_id)
+    if tracker is None:
+        tracker = FileOpTracker(assistant_id=assistant_id, backend=backend)
+        _session_file_op_trackers[assistant_id] = tracker
+    return tracker
 
 
-def reset_session_file_op_tracker() -> None:
-    """Reset the session-level FileOpTracker.
+def reset_session_file_op_tracker(assistant_id: str | None = None) -> None:
+    """Reset session-level FileOpTracker(s).
 
-    Should be called at the start of a new session to clear
-    any previous file operation history.
+    With no argument, clears every tracker (start of a fresh process/session);
+    with an *assistant_id*, drops only that agent's tracker.
     """
-    global _session_file_op_tracker
-    _session_file_op_tracker = None
+    if assistant_id is None:
+        _session_file_op_trackers.clear()
+    else:
+        _session_file_op_trackers.pop(assistant_id, None)

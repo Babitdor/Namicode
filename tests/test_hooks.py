@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -23,7 +24,9 @@ class TestValidateCommand:
         assert _validate_command(["echo", "hello"]) is None
 
     def test_valid_absolute_binary(self):
-        assert _validate_command(["/bin/sh", "-c", "echo hi"]) is None
+        # An absolute path to a binary that actually exists on this platform
+        # (/bin/sh is absent on Windows, so hardcoding it failed there).
+        assert _validate_command([sys.executable, "-c", "print(1)"]) is None
 
     def test_empty_list(self):
         err = _validate_command([])

@@ -219,6 +219,7 @@ _DANGEROUS_ENV_VARS: frozenset[str] = frozenset(
         "ANTHROPIC_API_KEY",
         "GOOGLE_API_KEY",
         "OPENROUTER_API_KEY",
+        "OPENCODE_API_KEY",
         "TAVILY_API_KEY",
         "REPLICATE_API_KEY",
         "REPLICATE_API_TOKEN",

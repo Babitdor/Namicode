@@ -135,3 +135,6 @@ conversation_history/
 novacode_cli/cli_session/
 
 # Project directories (external projects)
+# Local working checkout of an external agent repo (has its own .git) — never
+# vendor it into this repository.
+prime-agent/

@@ -11,8 +11,13 @@ from novacode_cli.tui.app import (
 
 
 def test_help_documents_every_slash_command():
+    # Derive from TUI_COMMANDS (the built-in registry), NOT _TUI_SLASH_COMMANDS:
+    # the latter is a module-level list that `_load_plugin_commands()` appends to
+    # at runtime, so once any test boots a NovaApp the developer's installed
+    # plugin commands leak in permanently and this test starts demanding /help
+    # document them. That made it pass alone but fail in a full-suite run.
     help_str = NovaApp._help_text(None).plain
-    missing = [c for c in _TUI_SLASH_COMMANDS if c not in help_str]
+    missing = [f"/{name}" for name in TUI_COMMANDS if f"/{name}" not in help_str]
     assert not missing, f"commands missing from /help: {missing}"
 
 

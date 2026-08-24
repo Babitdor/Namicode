@@ -12,12 +12,32 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from novacode_cli.security.policy import (
     ApprovalPolicy,
     load_policy,
     reset_policy_cache,
 )
 from novacode_cli.ui.hitl_approval import evaluate_tool_actions
+
+
+@pytest.fixture(autouse=True)
+def _isolate_user_policy(monkeypatch, tmp_path):
+    """Keep the developer's real ``~/.nova/approval-policy.json`` out of these tests.
+
+    ``load_policy`` merges ``HOME_DIR/approval-policy.json`` into *every* policy,
+    so a personal rule (e.g. a broad ``paths.allow`` glob accumulated from
+    "always allow" clicks) silently flips security assertions — the suite then
+    passes or fails depending on whose machine it runs on. Point HOME_DIR at an
+    empty temp dir so only the built-in defaults + explicit project config apply.
+    """
+    from novacode_cli.security import policy as policy_mod
+
+    monkeypatch.setattr(policy_mod, "HOME_DIR", tmp_path / "empty_home")
+    reset_policy_cache()
+    yield
+    reset_policy_cache()
 
 
 def _default_policy() -> ApprovalPolicy:

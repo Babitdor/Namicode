@@ -36,6 +36,45 @@ from novacode_cli.shell.utils import (
 )
 
 
+# The shell's OWN "I don't understand this" diagnostics — the small, stable
+# error vocabulary of cmd.exe / PowerShell / bash, NOT an enumeration of
+# commands. When the chosen shell emits one of these, the command's syntax was
+# rejected (so nothing meaningful ran) and it's safe to retry it in the other
+# shell. This lets a bash command sent to the PowerShell `shell`/`execute` tool
+# (the #1 Windows failure) succeed by re-running in bash, without predicting or
+# hard-coding what "looks like" bash. Empirical, not heuristic.
+_SHELL_REJECTION = re.compile(
+    r"is not recognized"                                          # cmd.exe / pwsh: unknown command
+    r"|command not found"                                         # bash: `foo: command not found`
+    r"|CommandNotFoundException"                                  # pwsh
+    r"|ParameterBindingException"                                 # pwsh: bash-style flags (`-rf`)
+    r"|A parameter cannot be found that matches parameter name"   # pwsh
+    r"|positional parameter cannot be found"                      # pwsh
+    r"|Unexpected token|ParserError"                              # pwsh parse
+    r"|syntax error near unexpected token|syntax error:",         # bash parse
+    re.IGNORECASE,
+)
+
+
+def _result_text(result: "ToolMessage | str") -> str:
+    if isinstance(result, str):
+        return result
+    content = getattr(result, "content", "")
+    return content if isinstance(content, str) else str(content)
+
+
+def _looks_like_shell_rejection(result: "ToolMessage | str") -> bool:
+    """True when the shell rejected the command's SYNTAX (nothing meaningful ran,
+    so retrying in the other shell is safe) — not when a command ran and returned
+    a legitimate error. Keyed on the shell's own recognition/parse diagnostics."""
+    # A ToolMessage that isn't an error can't be a rejection; a str carries no
+    # status, so fall through to the pattern check.
+    if not isinstance(result, str) and getattr(result, "status", "error") not in ("error", None):
+        return False
+    text = _result_text(result)
+    return bool(text) and bool(_SHELL_REJECTION.search(text))
+
+
 class ShellMiddleware(AgentMiddleware[AgentState, Any]):
     """Give basic shell access to agents via the shell.
 
@@ -193,6 +232,10 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
                 self._native_prog = [_pwsh, "-NoProfile", "-Command"]
         _bash_exe = shutil.which("bash")
         self._bash_prog: list[str] | None = [_bash_exe, "-c"] if _bash_exe else None
+        # Auto-routing is only meaningful on Windows, where the native `shell`
+        # (PowerShell) and `bash` are genuinely different dialects. Elsewhere the
+        # native shell already IS a POSIX shell, so there's nothing to reroute.
+        self._native_is_pwsh: bool = sys.platform == "win32" and self._native_prog is not None
 
         bash_description = (
             "Execute a command in the **bash** shell — use POSIX/bash syntax "
@@ -224,18 +267,12 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
                         name="bash",
                         status="error",
                     )
-                if not interactive and is_interactive_command(command):
-                    interactive = True
-                if background or is_long_running_command(command):
-                    return self._run_background_shell_command(
-                        command, tool_call_id=runtime.tool_call_id, prog=prog
-                    )
-                if interactive:
-                    return self._run_interactive_shell_command(
-                        command, tool_call_id=runtime.tool_call_id, prog=prog
-                    )
-                return self._run_shell_command(
-                    command, tool_call_id=runtime.tool_call_id, prog=prog
+                return self._dispatch_local(
+                    command,
+                    tool_call_id=runtime.tool_call_id,
+                    prog=prog,
+                    interactive=interactive,
+                    background=background,
                 )
 
             return _impl
@@ -252,6 +289,35 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
                 _make_impl(self._bash_prog, is_bash=True)
             )
             self.tools.append(self._bash_alias)
+
+    def _alternate_prog(self, prog: "list[str] | None") -> "list[str] | None":
+        """The interpreter to retry with when *prog* rejected the syntax.
+
+        PowerShell ↔ bash; the ``execute`` default (``prog is None`` → cmd.exe)
+        most often carries bash intent, so try bash first, then PowerShell.
+        """
+        if prog is self._bash_prog:
+            return self._native_prog  # bash rejected → PowerShell
+        if prog is self._native_prog:
+            return self._bash_prog  # PowerShell rejected → bash
+        return self._bash_prog or self._native_prog  # cmd.exe default → bash, else pwsh
+
+    def _run_foreground_with_fallback(
+        self, command: str, *, tool_call_id: str | None, prog: "list[str] | None"
+    ) -> "ToolMessage | str":
+        """Run a foreground command; if the shell rejected its SYNTAX, retry once
+        in the other shell (Windows only). Empirical: the shell's own error is the
+        signal, so this needs no command list and adapts to anything."""
+        result = self._run_shell_command(command, tool_call_id=tool_call_id, prog=prog)
+        if not self._native_is_pwsh or not _looks_like_shell_rejection(result):
+            return result
+        alt = self._alternate_prog(prog)
+        if alt is None or alt is prog:
+            return result
+        retry = self._run_shell_command(command, tool_call_id=tool_call_id, prog=alt)
+        # If the other shell also rejects it, the first error was the more honest
+        # one (or neither shell has the tool) — return the original.
+        return retry if not _looks_like_shell_rejection(retry) else result
 
     def _init_os_sandbox(self, exec_sandbox: bool, allow_network: bool) -> None:  # noqa: FBT001
         """Probe and configure the OS-level shell sandbox (Pattern A).
@@ -361,6 +427,80 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
             )
 
         return command
+
+    def _dispatch_local(
+        self,
+        command: str,
+        *,
+        tool_call_id: str | None,
+        prog: list[str] | None,
+        interactive: bool = False,
+        background: bool = False,
+    ) -> ToolMessage | str:
+        """Route a command to the right local execution path: background task
+        (server / long-running), interactive-prompt-aware, or plain foreground.
+        Shared by the ``shell``/``bash`` tools and the intercepted ``execute``."""
+        if not interactive and is_interactive_command(command):
+            interactive = True
+        if background or is_long_running_command(command):
+            return self._run_background_shell_command(command, tool_call_id=tool_call_id, prog=prog)
+        if interactive:
+            return self._run_interactive_shell_command(command, tool_call_id=tool_call_id, prog=prog)
+        return self._run_foreground_with_fallback(command, tool_call_id=tool_call_id, prog=prog)
+
+    def _intercept_execute(self, request: Any) -> str | None:
+        """Return the command string when ``request`` is a local ``execute`` call
+        we should handle ourselves (to add background + Ctrl+B support), else None.
+
+        Only intercepts in local mode — a real sandbox backend keeps its own
+        ``execute`` so commands still run inside the sandbox.
+        """
+        try:
+            tc = request.tool_call
+            if tc.get("name") != "execute":
+                return None
+            if self._supports_sandbox_execution():
+                return None  # sandbox owns execute
+            cmd = (tc.get("args") or {}).get("command")
+            return cmd if isinstance(cmd, str) and cmd.strip() else None
+        except Exception:  # noqa: BLE001
+            return None
+
+    def wrap_tool_call(
+        self, request: Any, handler: Callable[[Any], ToolMessage | Any]
+    ) -> ToolMessage | Any:
+        """Intercept local ``execute`` and run it through Nova's shell path so it
+        gets background/Ctrl+B parity with ``shell``. Uses ``prog=None`` (the
+        platform default shell) to match deepagents' ``execute`` semantics."""
+        cmd = self._intercept_execute(request)
+        if cmd is None:
+            return handler(request)
+        args = request.tool_call.get("args") or {}
+        return self._dispatch_local(
+            cmd,
+            tool_call_id=request.tool_call.get("id"),
+            prog=None,
+            interactive=bool(args.get("interactive", False)),
+            background=bool(args.get("background", False)),
+        )
+
+    async def awrap_tool_call(
+        self, request: Any, handler: Callable[[Any], Awaitable[ToolMessage | Any]]
+    ) -> ToolMessage | Any:
+        """Async twin of :meth:`wrap_tool_call`. Runs the (blocking) local dispatch
+        in a thread so the event loop keeps serving the ⚙ tasks / detach flow."""
+        cmd = self._intercept_execute(request)
+        if cmd is None:
+            return await handler(request)
+        args = request.tool_call.get("args") or {}
+        return await asyncio.to_thread(
+            self._dispatch_local,
+            cmd,
+            tool_call_id=request.tool_call.get("id"),
+            prog=None,
+            interactive=bool(args.get("interactive", False)),
+            background=bool(args.get("background", False)),
+        )
 
     def _run_async(
         self,
@@ -901,8 +1041,9 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
                             ToolMessage(
                                 content=(
                                     f"[backgrounded: {_job.task_id}] `{command}` is running in the "
-                                    f"background. Continue with other work — you'll be notified when "
-                                    f"it finishes. Inspect it with get_task_status('{_job.task_id}'), "
+                                    f"background. Do NOT wait for it — continue with other work; "
+                                    f"you'll be notified when it finishes. Check progress anytime "
+                                    f"(non-blocking) with get_task_status('{_job.task_id}') / "
                                     f"get_task_logs('{_job.task_id}'), or list_background_tasks()."
                                 ),
                                 tool_call_id=tool_call_id,
@@ -1221,8 +1362,10 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
             content=(
                 f"[{job.task_id}] `{command}` {note} in the background.\n\n"
                 f"Startup output:\n{tail}\n\n"
-                f"It keeps running — inspect with get_task_logs('{job.task_id}'), "
-                f"stop with terminate_task('{job.task_id}'), or open the ⚙ Tasks panel."
+                f"Do NOT wait for it — continue with the user's request. It keeps "
+                f"running on its own; check progress anytime (non-blocking) with "
+                f"get_task_logs('{job.task_id}') / get_task_status('{job.task_id}'), "
+                f"or stop it with terminate_task('{job.task_id}')."
             ),
             tool_call_id=tool_call_id,
             name=self._tool_name,

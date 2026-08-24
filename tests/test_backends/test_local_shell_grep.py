@@ -40,10 +40,45 @@ def test_grep_uses_optimized_not_deepagents_base():
     assert OptimizedLocalShellBackend._ripgrep_search is OptimizedFilesystemBackend._ripgrep_search
 
 
+def test_search_overrides_match_installed_deepagents_contract():
+    """The overrides must return the shape the INSTALLED parent grep() unpacks.
+
+    deepagents changed this in 0.7.0 (dict -> (dict, truncated)) and pyproject
+    allows both (>=0.6.8). Returning only the new shape under 0.6.x made the
+    parent call .items() on a tuple — "'tuple' object has no attribute 'items'"
+    on every literal grep. Pin the adaptation to the parent's real signature.
+    """
+    import inspect
+
+    from deepagents.backends.filesystem import FilesystemBackend
+
+    import novacode_cli.backends.filesystem as fsmod
+
+    rg_v2 = "max_count" in inspect.signature(FilesystemBackend._ripgrep_search).parameters
+    py_v2 = "max_count" in inspect.signature(FilesystemBackend._python_search).parameters
+    assert fsmod._PARENT_RG_V2 is rg_v2
+    assert fsmod._PARENT_PY_V2 is py_v2
+
+    # And the override's arity must accept however the parent calls it.
+    params = inspect.signature(FilesystemBackend._ripgrep_search).parameters
+    ours = inspect.signature(fsmod.OptimizedFilesystemBackend._ripgrep_search).parameters
+    for name in params:
+        assert name in ours, f"parent passes {name!r} but our override lacks it"
+
+
+def test_grep_returns_matches_under_installed_contract(tmp_path: Path):
+    """End-to-end literal grep through the parent's grep() — the path that broke."""
+    (tmp_path / "a.py").write_text("hello world\n", encoding="utf-8")
+    backend = _backend(tmp_path)
+    result = backend.grep("hello", path=".")
+    assert result.error is None
+    assert len(result.matches) == 1
+
+
 def test_none_stdout_does_not_crash(tmp_path: Path):
     backend = _backend(tmp_path)
     with patch.object(subprocess, "run", return_value=_FakeProc(returncode=0, stdout=None)):
-        result = backend._ripgrep_search("some_pattern", tmp_path, None)
+        result, _truncated = backend._rg_impl("some_pattern", tmp_path, None)
     assert result == {}
 
 

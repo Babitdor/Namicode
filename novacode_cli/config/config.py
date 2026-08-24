@@ -777,6 +777,7 @@ class Settings:
     anthropic_api_key: str | None
     google_api_key: str | None
     openrouter_api_key: str | None
+    opencode_api_key: str | None
     tavily_api_key: str | None
     langsmith_api_key: str | None
 
@@ -832,6 +833,9 @@ class Settings:
             openrouter_key = secret_manager.get_secret(
                 "openrouter_api_key"
             ) or os.environ.get("OPENROUTER_API_KEY")
+            opencode_key = secret_manager.get_secret(
+                "opencode_api_key"
+            ) or os.environ.get("OPENCODE_API_KEY")
             tavily_key = secret_manager.get_secret("tavily_api_key") or os.environ.get(
                 "TAVILY_API_KEY"
             )
@@ -840,6 +844,7 @@ class Settings:
             anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
             google_key = os.environ.get("GOOGLE_API_KEY")
             openrouter_key = os.environ.get("OPENROUTER_API_KEY")
+            opencode_key = os.environ.get("OPENCODE_API_KEY")
             tavily_key = os.environ.get("TAVILY_API_KEY")
 
         langsmith_key = os.environ.get("LANGSMITH_API_KEY")
@@ -860,6 +865,7 @@ class Settings:
             anthropic_api_key=anthropic_key,
             google_api_key=google_key,
             openrouter_api_key=openrouter_key,
+            opencode_api_key=opencode_key,
             tavily_api_key=tavily_key,
             langsmith_api_key=langsmith_key,
             ollama_host=ollama_host,
@@ -888,6 +894,11 @@ class Settings:
     def has_openrouter(self) -> bool:
         """Check if OpenRouter API key is configured."""
         return self.openrouter_api_key is not None
+
+    @property
+    def has_opencode(self) -> bool:
+        """Check if OpenCode Go API key is configured."""
+        return self.opencode_api_key is not None
 
     @property
     def has_tavily(self) -> bool:

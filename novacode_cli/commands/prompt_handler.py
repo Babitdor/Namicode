@@ -3,6 +3,7 @@
 Subcommands::
 
     /prompt status              show templates with active/candidate overrides
+    /prompt evolve <name>       proactively propose a rewrite now (manual lever)
     /prompt rollback <name>     undo the latest change (drop candidate, else revert active)
     /prompt accept <name>       force-promote the candidate now
     /prompt reject <name>       discard the candidate now
@@ -33,7 +34,7 @@ def _engine() -> PromptEvolutionEngine:
     return PromptEvolutionEngine(get_durable_store())
 
 
-async def handle_prompt_command(
+async def handle_prompt_command(  # noqa: PLR0911 — command dispatcher, one return per subcommand
     cmd_args: str | None,
     session_state: SessionState,  # noqa: ARG001 — uniform command-handler signature
     console: Console,
@@ -62,6 +63,16 @@ async def handle_prompt_command(
         await _run_action(engine, action, name, console)
         return True
 
+    if action == "evolve":
+        if len(tokens) < _MIN_ACTION_TOKENS:
+            console.print("[yellow]Usage:[/yellow] /prompt evolve <template>")
+            return True
+        name = tokens[1]
+        if not name.endswith(".jinja"):
+            name = f"{name}.jinja"
+        await _run_evolve(engine, name, console)
+        return True
+
     console.print(f"[yellow]Unknown /prompt subcommand:[/yellow] {action}")
     return True
 
@@ -86,6 +97,37 @@ async def _run_action(
             f"  [green]✓[/green] Discarded candidate for {name}"
             if discarded
             else f"  [dim]No candidate to discard for {name}[/dim]"
+        )
+
+
+async def _run_evolve(
+    engine: PromptEvolutionEngine, name: str, console: Console
+) -> None:
+    """Proactively propose a rewrite for ``name`` (manual evolution lever).
+
+    Unlike the review-driven path, this stages a candidate immediately without
+    waiting for a ``<prompt_issue>`` flag. The candidate then flows through the
+    same A/B evaluate/select machinery as any other.
+    """
+    if engine._normalise_name(name) is None:
+        console.print(f"[red]Unknown template: {name}[/red]")
+        return
+    if (engine._dir(name) / "candidate.jinja").exists():
+        console.print(
+            f"[yellow]A candidate for {name} is already under A/B test.[/yellow] "
+            "Use /prompt accept, /prompt reject, or /prompt rollback first."
+        )
+        return
+    console.print(f"[dim]Proposing a rewrite for {name}…[/dim]")
+    await engine.run_evolution(name, evidence="")
+    if (engine._dir(name) / "candidate.jinja").exists():
+        console.print(
+            f"[green]✓[/green] Candidate staged for {name}. It will be A/B-tested "
+            "against the active version on subsequent turns."
+        )
+    else:
+        console.print(
+            f"[yellow]No candidate produced for {name} (model returned no change).[/yellow]"
         )
 
 

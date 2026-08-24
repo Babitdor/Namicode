@@ -37,6 +37,7 @@ API_KEY_NAMES = {
     "anthropic": "anthropic_api_key",
     "google": "google_api_key",
     "openrouter": "openrouter_api_key",
+    "opencode": "opencode_api_key",
     "groq": "groq_api_key",
 }
 
@@ -341,6 +342,7 @@ class OnboardingWizard:
         "3": {"name": "anthropic", "display": "Anthropic"},
         "4": {"name": "google", "display": "Google (Gemini)"},
         "5": {"name": "openrouter", "display": "OpenRouter"},
+        "6": {"name": "opencode", "display": "OpenCode Go"},
     }
 
     def __init__(self) -> None:

@@ -88,3 +88,55 @@ async def test_fallback_swallows_aget_state_errors():
     await _capture_fallback_usage(agent, {}, tracker)
 
     assert tracker.has_api_data is False
+
+
+def test_session_total_accumulates_and_survives_reset():
+    """The 'usage' meter sums input+output per turn, climbs monotonically, and
+    survives /compact (reset) but is zeroed by /clear (reset_session=True)."""
+    t = TokenTracker()
+    assert t.session_total_tokens == 0
+
+    t.add(1000, 200)
+    t.add(1500, 300)
+    assert t.session_total_tokens == 3000  # (1000+200) + (1500+300)
+
+    t.reset()  # /compact
+    assert t.session_total_tokens == 3000  # survives compaction
+
+    t.add(500, 100)
+    assert t.session_total_tokens == 3600  # keeps climbing afterwards
+
+    t.reset(reset_session=True)  # /clear — true fresh start
+    assert t.session_total_tokens == 0  # usage meter zeroed
+
+    t.add(200, 50)
+    assert t.session_total_tokens == 250  # restarts from zero
+
+
+def test_live_window_supersedes_stale_startup_window():
+    """The per-turn live-detected window (e.g. Ollama ps after the model loads)
+    must reach get_breakdown(), not get clobbered by the window captured once at
+    set_model() time."""
+    from novacode_cli.context import ContextBreakdown
+
+    t = TokenTracker()
+    t.context_window_size = 200_000  # captured at startup (model not yet loaded)
+    t.add(50_000, 1_000)  # has_api_data=True, current_context=50_000
+
+    # Per-turn breakdown detects the real window live (e.g. cloud model = 1M).
+    t.set_breakdown(ContextBreakdown(context_window_size=1_048_576))
+
+    bd = t.get_breakdown()
+    assert bd.context_window_size == 1_048_576  # live wins, not the stale 200k
+    assert bd.total_tokens == 50_000  # API total override still applies
+    assert t.context_window_size == 1_048_576  # stored copy refreshed for direct readers
+
+
+def test_session_pct_is_fraction_of_budget():
+    t = TokenTracker()
+    t.session_token_budget = 10_000
+    assert t.session_pct == 0.0
+    t.add(2000, 500)  # 2500 / 10_000
+    assert t.session_pct == 25.0
+    t.session_token_budget = 0  # guard: no divide-by-zero
+    assert t.session_pct == 0.0

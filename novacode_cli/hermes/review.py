@@ -286,8 +286,17 @@ class ReviewRunner:
             content = raw if isinstance(raw, str) else str(raw)
 
             await self._apply_review_content(content)
-        except Exception:  # noqa: BLE001
-            logger.exception("Nova out-of-band review failed")
+        except Exception as e:  # noqa: BLE001
+            # A known provider problem (region opt-in, auth, quota) on the review's
+            # out-of-band model call means it can't run right now — one clean line,
+            # not a per-cycle traceback. Unknown failures keep the full trace.
+            from novacode_cli.errors import friendly_model_error
+
+            notice = friendly_model_error(e)
+            if notice:
+                logger.warning("Nova review skipped: %s", notice.splitlines()[0])
+            else:
+                logger.exception("Nova out-of-band review failed")
 
     async def run_review_task(self, request: ModelRequest) -> None:
         """Background wrapper around :meth:`run_review`.
@@ -374,6 +383,40 @@ class ReviewRunner:
                 record_habit(self._agent_dir, parsed["habits"])
                 logger.info("Nova review recorded a good habit")
 
+            # Unified refinement audit trail: record what this review changed.
+            # Best-effort — a failed append must never block applying the review.
+            if self._agent_dir:
+                try:
+                    from novacode_cli.hermes.refinement_log import append_refinement_event
+
+                    nova_root = self._agent_dir.parent.parent
+                    if parsed["user_model"]:
+                        append_refinement_event(
+                            nova_root,
+                            domain="memory",
+                            action="update_user_model",
+                            target="agent.md",
+                            detail="review user-model update",
+                        )
+                    for lesson in parsed["lessons"]:
+                        append_refinement_event(
+                            nova_root,
+                            domain="memory",
+                            action="record_lesson",
+                            target=lesson.get("topic") or "lessons",
+                            detail="review lesson",
+                        )
+                    if parsed.get("habits"):
+                        append_refinement_event(
+                            nova_root,
+                            domain="memory",
+                            action="record_habit",
+                            target="HABITS.md",
+                            detail="review good habit",
+                        )
+                except Exception:  # noqa: BLE001
+                    logger.debug("Could not append refinement events", exc_info=True)
+
             current_count = await self._get_review_count()
 
             review_id = f"review_{int(time.time())}"
@@ -414,6 +457,18 @@ class ReviewRunner:
                 from novacode_cli.hermes.tuner import ThresholdTuner
 
                 self._skill_manager.spawn_task(ThresholdTuner(self._store).run_tuning_pass())
+
+                # Proactive prompt evolution (Enhancement 2, proactive arm):
+                # on the same cadence, propose a candidate for a template even
+                # when no review flagged one, so the loop explores rather than
+                # only reacting to complaints. The candidate flows through the
+                # same A/B evaluate/select machinery. Best-effort.
+                from novacode_cli.hermes.prompt_evolution import PromptEvolutionEngine
+
+                engine = PromptEvolutionEngine(
+                    self._store, spawn=self._skill_manager.spawn_task
+                )
+                self._skill_manager.spawn_task(engine.maybe_auto_evolve())
 
             # Prompt hill-climbing (Enhancement 2): if this review (and enough
             # recent ones) flag the same template, evolve it. Runs on every

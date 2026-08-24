@@ -36,7 +36,7 @@ class TestRipgrepNoneStdout:
         fake_proc = _FakeCompletedProcess(returncode=0, stdout=None)
 
         with patch.object(subprocess, "run", return_value=fake_proc):
-            result = backend._ripgrep_search("some_pattern", tmp_path, None)
+            result, truncated = backend._rg_impl("some_pattern", tmp_path, None)
 
         assert result == {}
         assert isinstance(result, dict)
@@ -48,7 +48,7 @@ class TestRipgrepNoneStdout:
         fake_proc = _FakeCompletedProcess(returncode=1, stdout=None)
 
         with patch.object(subprocess, "run", return_value=fake_proc):
-            result = backend._ripgrep_search("some_pattern", tmp_path, None)
+            result, truncated = backend._rg_impl("some_pattern", tmp_path, None)
 
         assert result == {}
 
@@ -59,7 +59,7 @@ class TestRipgrepNoneStdout:
         fake_proc = _FakeCompletedProcess(returncode=1, stdout="")
 
         with patch.object(subprocess, "run", return_value=fake_proc):
-            result = backend._ripgrep_search("some_pattern", tmp_path, None)
+            result, truncated = backend._rg_impl("some_pattern", tmp_path, None)
 
         assert result == {}
 
@@ -79,7 +79,7 @@ class TestRipgrepNoneStdout:
         fake_proc = _FakeCompletedProcess(returncode=0, stdout=rg_json_line)
 
         with patch.object(subprocess, "run", return_value=fake_proc):
-            result = backend._ripgrep_search("hello", tmp_path, None)
+            result, truncated = backend._rg_impl("hello", tmp_path, None)
 
         # Should have one match
         assert len(result) == 1

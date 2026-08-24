@@ -63,13 +63,13 @@ class ContextManager:
     def window_size(self) -> int:
         """Context window size in tokens for the bound model."""
         return get_context_window_size(
-            self._require_model(), use_dyNovac=self.use_dynamic
+            self._require_model(), use_dynamic=self.use_dynamic
         )
 
     def breakdown(self, messages: list[BaseMessage]) -> ContextBreakdown:
         """Token breakdown of ``messages`` against the bound model's window."""
         return build_context_breakdown(
-            messages, self._require_model(), use_dyNovac=self.use_dynamic
+            messages, self._require_model(), use_dynamic=self.use_dynamic
         )
 
     def recommend_compaction(
@@ -80,12 +80,12 @@ class ContextManager:
             messages,
             self._require_model(),
             baseline_tokens=baseline_tokens,
-            use_dyNovac=self.use_dynamic,
+            use_dynamic=self.use_dynamic,
         )
 
     def model_config(self) -> ModelConfig:
         """Per-model tuning config (budgets, thresholds, cost) for the bound model."""
-        return get_model_config(self._require_model(), use_dyNovac=self.use_dynamic)
+        return get_model_config(self._require_model(), use_dynamic=self.use_dynamic)
 
     # ── Model-independent ───────────────────────────────────────────────
 

@@ -88,6 +88,25 @@ run-compare:
 	harbor run --agent-import-path deepagents_harbor:NovaCodeWrapper --dataset terminal-bench@2.0 -n 1 --jobs-dir jobs/compare-Novacode --env docker --model $(MODEL)
 
 ######################
+# RUN NOVA CUSTOM TASKS (nova-tasks/ dataset)
+######################
+
+# Run the full custom dataset (6 tasks) with Docker.
+run-nova-tasks-docker:
+	@mkdir -p jobs/Novacode-tasks
+	harbor run --agent-import-path deepagents_harbor:NovaCodeWrapper --path nova-tasks -n 6 --jobs-dir jobs/Novacode-tasks --env docker --model $(MODEL)
+
+# Run a single custom task by directory name, e.g. TASK=git-bisect-regression
+run-nova-task:
+	@mkdir -p jobs/Novacode-$(TASK)
+	harbor run --agent-import-path deepagents_harbor:NovaCodeWrapper --path nova-tasks/$(TASK) -n 1 --jobs-dir jobs/Novacode-$(TASK) --env docker --model $(MODEL)
+
+# Run the custom dataset via the local JSON registry (registry.json)
+run-nova-tasks-registry:
+	@mkdir -p jobs/Novacode-tasks
+	harbor run --agent-import-path deepagents_harbor:NovaCodeWrapper --registry-path registry.json --dataset nova-tasks@1.0 -n 6 --jobs-dir jobs/Novacode-tasks --env docker --model $(MODEL)
+
+######################
 # LINTING AND FORMATTING
 ######################
 
