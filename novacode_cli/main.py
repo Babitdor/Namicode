@@ -460,6 +460,11 @@ def parse_args():
         help="Headless only: auto-reject tool approvals (fail-closed) instead of "
         "auto-approving. The agent runs read-only and reports what it could not do.",
     )
+    # Internal: how a parent Nova TUI launches a parallel session. The child
+    # speaks JSONL on stdio (see novacode_cli.sessions.worker) and is bound to
+    # its own git worktree purely by the cwd it is spawned in. Not for humans.
+    parser.add_argument("--session-worker", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--session-id", default=None, help=argparse.SUPPRESS)
     parser.add_argument(
         "--version",
         action="version",
@@ -752,6 +757,10 @@ async def _run_agent_session(
             steering_instructions=session_state.steering_instructions,
             exec_sandbox=exec_sandbox,
             session_id=session_state.session_id or session_state.thread_id,
+            # Redundant today (it defaults to the same value), but explicit:
+            # a parallel-session child is bound to its git worktree solely by
+            # the cwd it was spawned in, and this is where that binding lands.
+            workspace_root=str(settings.get_workspace_root()),
         )
 
         # Set agent context in session state for dynamic model switching
@@ -887,6 +896,32 @@ async def _run_agent_session(
 
     # Extract model name for context window calculation
     model_name = getattr(model, "model_name", None) or getattr(model, "model", "unknown")
+
+    # Parallel-session child: stay up and serve the parent over stdio JSONL.
+    # Checked BEFORE the headless branch because a worker also sets `headless`
+    # (for its non-interactive guards) but has no one-shot prompt to run.
+    if getattr(session_state, "worker", False):
+        from novacode_cli.sessions.worker import run_session_worker
+        from novacode_cli.ui.ui_elements import TokenTracker
+
+        token_tracker = TokenTracker()
+        token_tracker.set_baseline(baseline_tokens)
+        if model_name:
+            token_tracker.set_model(model_name)
+        session_state.token_tracker = token_tracker
+        try:
+            exit_code = await run_session_worker(
+                agent=agent,
+                assistant_id=assistant_id,
+                session_state=session_state,
+                backend=composite_backend,
+                model_name=model_name,
+                session_manager=session_manager,
+            )
+        finally:
+            await _shutdown_background_services(session_state)
+        session_state.headless_exit_code = exit_code
+        return
 
     # Headless (non-interactive) mode: run the single prompt through the shared
     # event stream, format machine-readable output, auto-save, and exit. Shares
@@ -1849,6 +1884,21 @@ def cli_main() -> None:
             # TUI is the only interactive UI. Headless mode uses its own path.
             session_state.use_tui = headless_prompt is None
             session_state.headless = headless_prompt is not None
+
+            # Parallel-session child. `headless` is reused as the umbrella
+            # "non-interactive process" flag — it already suppresses the splash,
+            # the voice preload, the Vixie server and the cron scheduler, all of
+            # which would fight the parent over the terminal, devices and ports.
+            # auto_approve is deliberately NOT set: a human IS watching, in the
+            # parent, and interrupts are forwarded there for a real decision.
+            if getattr(args, "session_worker", False):
+                session_state.use_tui = False
+                session_state.headless = True
+                session_state.worker = True
+                session_state.no_splash = True
+                session_state.headless_out_fd = _setup_headless_io()
+                if args.session_id:
+                    session_state.session_id = args.session_id
             if headless_prompt is not None:
                 session_state.headless_prompt = headless_prompt
                 session_state.headless_output_format = args.output_format

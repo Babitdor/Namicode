@@ -84,6 +84,51 @@ class _SS:
         self.plan_mode_enabled = False
 
 
+async def _wait_until(pilot, predicate, *, timeout: float = 3.0) -> bool:
+    """Pump the event loop until *predicate* is true (or time runs out).
+
+    Widgets are mounted and populated asynchronously, so asserting on the frame
+    right after an action races the UI. Exceptions from *predicate* count as
+    "not yet" — the widget may not exist at all until a later frame.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        try:
+            if predicate():
+                return True
+        except Exception:  # noqa: BLE001 — widget not mounted yet
+            pass
+        await pilot.pause()
+        await asyncio.sleep(0.02)
+    return False
+
+
+async def _wait_for_status(app, pilot, needle: str, *, present: bool = True, timeout: float = 3.0):
+    """Poll the status bar until *needle* is (or is no longer) displayed.
+
+    ``_build_status_tail`` caches its result for 0.25s, so a ``_refresh_status()``
+    issued immediately after a state change can re-render the *previous* tail and
+    miss a badge that is about to appear. Whether the cache has expired depends on
+    how long app startup took, which made single-frame assertions flaky. Drop the
+    cache and poll instead, then assert on what this returns.
+    """
+    from textual.widgets import Static as _Static
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    text = ""
+    while loop.time() < deadline:
+        text = str(app.query_one("#prompt-hint-bar", _Static).render())
+        if (needle in text) is present:
+            return text
+        app._status_tail = None  # drop the 0.25s TTL cache, force a rebuild
+        app._refresh_status()
+        await pilot.pause()
+        await asyncio.sleep(0.02)
+    return text
+
+
 async def _wait_for_screen(app, pilot, expected_type, timeout: float = 3.0) -> None:
     """Pump the event loop until the pushed screen is ``expected_type``.
 
@@ -377,12 +422,31 @@ async def _drive_autocomplete():
         await pilot.press("/")
         await pilot.press("m")
         await pilot.press("o")
-        await pilot.pause()
-        assert pal.display and pal.option_count >= 1
+        # The palette is filled by a background worker (group="palette"). Waiting
+        # only for "populated" was not enough: the STALE unfiltered list (from
+        # the bare "/") is also populated, so Enter could accept whatever was
+        # highlighted there — the flake showed up as "/help" landing in the
+        # prompt instead of "/model". Wait for the list to actually be filtered.
+        def _filtered():
+            return (
+                pal.display
+                and pal.option_count >= 1
+                and all(
+                    str(pal.get_option_at_index(i).prompt).startswith("/mo")
+                    for i in range(pal.option_count)
+                )
+            )
+
+        await _wait_until(pilot, _filtered)
+        assert _filtered(), [
+            str(pal.get_option_at_index(i).prompt) for i in range(pal.option_count)
+        ]
         opts = [str(pal.get_option_at_index(i).prompt) for i in range(pal.option_count)]
         assert "/model" in opts, opts
         await pilot.press("enter")
-        await pilot.pause()
+        await _wait_until(
+            pilot, lambda: app.query_one("#prompt", Input).value.strip() == "/model"
+        )
         assert app.query_one("#prompt", Input).value.strip() == "/model"
         assert not pal.display
 
@@ -1697,12 +1761,16 @@ async def _drive_approval():
             future=fut,
         )
         app.run_worker(app._handle_interrupt(req))
-        await pilot.pause()
+        await _wait_for_screen(app, pilot, ApprovalModal)
         assert isinstance(app.screen, ApprovalModal), type(app.screen).__name__
         # Choices must be present and reachable (regression: a long body used to
         # push the OptionList off-screen, leaving only Enter usable).
         from textual.widgets import OptionList
 
+        # The OptionList populates after mount; one pause() raced it.
+        await _wait_until(
+            pilot, lambda: app.screen.query_one("#choices", OptionList).option_count >= 2
+        )
         choices = app.screen.query_one("#choices", OptionList)
         assert choices.option_count >= 2, choices.option_count
         assert app.screen.query("#modal-body-scroll"), "body must be in a scroll region"
@@ -2435,7 +2503,7 @@ async def _drive_notifications_native():
         ss.add_notification("success", "Build done", "ok", "tests")
         app._refresh_status()
         await pilot.pause()
-        status_txt = str(app.query_one("#prompt-hint-bar", Static).render())
+        status_txt = await _wait_for_status(app, pilot, "🔔")
         assert "🔔" in status_txt, status_txt
 
         # /notifications lists it natively.
@@ -2452,7 +2520,8 @@ async def _drive_notifications_native():
         assert ss.unread_notification_count() == 0
         app._refresh_status()
         await pilot.pause()
-        assert "🔔" not in str(app.query_one("#prompt-hint-bar", Static).render())
+        cleared = await _wait_for_status(app, pilot, "🔔", present=False)
+        assert "🔔" not in cleared, cleared
 
 
 def test_tui_notifications_native():

@@ -19,6 +19,7 @@ The archive lives *outside* the skills root so archived skills are never listed.
 
 from __future__ import annotations
 
+import itertools
 import json
 import logging
 import shutil
@@ -32,9 +33,20 @@ _MANIFEST = "manifest.json"
 _ARCHIVE_DIRNAME = "skills-archive"
 
 
+_version_seq = itertools.count()
+
+
 def _now_version() -> str:
-    """A sortable, collision-resistant version id."""
-    return datetime.now().strftime("%Y%m%dT%H%M%S_%f")
+    """A sortable, collision-resistant version id.
+
+    The timestamp alone was NOT collision-resistant: the system clock can be
+    coarse enough (notably on Windows) that two snapshots taken back-to-back
+    produce the same string, so the second silently overwrote the first and
+    restoring the earlier version handed back the later content. A per-process
+    counter breaks ties while keeping ids lexicographically sortable — equal
+    timestamps fall back to creation order.
+    """
+    return f"{datetime.now().strftime('%Y%m%dT%H%M%S_%f')}_{next(_version_seq):04d}"
 
 
 def _manifest_path(skill_dir: Path) -> Path:

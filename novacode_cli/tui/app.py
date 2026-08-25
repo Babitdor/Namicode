@@ -20,6 +20,7 @@ from __future__ import annotations
 from novacode_cli.prompts import render_template
 
 import asyncio
+import contextlib
 import re
 import time
 from dataclasses import dataclass
@@ -38,10 +39,13 @@ from textual.widget import Widget
 from textual.widgets import (
     Button,
     Collapsible,
+    ContentSwitcher,
     Input,
     OptionList,
     Static,
     RichLog,
+    Tab,
+    Tabs,
 )
 from textual.widgets.option_list import Option
 
@@ -158,6 +162,9 @@ TUI_COMMANDS: dict[str, SlashCommand] = {
     "init": SlashCommand("_run_init", "generate NOVA.md from the codebase"),
     "model": SlashCommand("_run_model", "switch provider / model", wants_text=False),
     "sessions": SlashCommand("_run_sessions", "list / delete saved sessions", wants_text=False),
+    "session": SlashCommand(
+        "_run_session_command", "parallel sessions: new / list / close (ctrl+n, alt+<n>)"
+    ),
     "resume": SlashCommand("_run_resume", "resume a saved session for this path (/resume <id>)"),
     "artifacts": SlashCommand("_run_artifacts", "open the artifacts list", wants_text=False),
     "tasks": SlashCommand("_run_tasks", "open the background tasks panel", wants_text=False),
@@ -255,6 +262,19 @@ from novacode_cli.input_utils import (
 )
 
 
+def _status_for_event(event: Any, current: str) -> str:
+    """Derive a session's tab status from the events already flowing.
+
+    Cheaper than a side-channel status protocol, and it works identically for the
+    in-process root session and a spawned child.
+    """
+    if isinstance(event, (ev.Done, ev.Cancelled, ev.Error)):
+        return "idle"
+    if isinstance(event, (ev.ToolCall, ev.AssistantMessage, ev.StatusUpdate)):
+        return "running"
+    return current
+
+
 def _capture(fn, *args, **kwargs) -> Text:
     """Render an existing ``console.print``-based helper into a ``Text``.
 
@@ -305,6 +325,21 @@ class NovaApp(App):
     /* --- App chrome --- */
     Screen { background: $background; }
 
+    /* Session panes. The ContentSwitcher wrapping the transcript must be fully
+       transparent to layout: without these it defaults to auto sizing, the
+       transcript stops filling the screen and its content width shrinks, so the
+       Matrix-rain banner (sized from the TERMINAL width) no longer fits its
+       container and every row wraps — which pushed the logo down a row and then
+       back up as the rain shifted. Panes are styled as a group so a spawned
+       session's transcript looks identical to the root one. */
+    #panes { height: 1fr; width: 100%; }
+    #panes > VerticalScroll { height: 1fr; width: 100%; padding: 1 2; }
+    /* Hidden until a second session exists; _refresh_tabs() toggles it.
+       Height MUST be explicit: the Tabs widget's inner tabs-scroll is height:1fr,
+       and a 1fr child inside an `auto` parent expands to the whole screen — the
+       tab bar then ate ~30 rows and crushed #panes (every session pane, root
+       included) to a 1-row sliver, so nothing rendered once the bar appeared. */
+    #session-tabs { display: none; height: 3; width: 100%; }
     #transcript { height: 1fr; padding: 1 2; }
     #transcript > .subagent {
         border-left: thick $accent; padding: 0 2;
@@ -597,6 +632,13 @@ class NovaApp(App):
         ("ctrl+g", "voice_talk", "Talk"),
         ("ctrl+l", "voice_toggle", "Listen"),
         ("escape", "cancel_turn", "Cancel"),
+        # Parallel sessions. alt+… chords are used because ctrl+a/e/k/u/w are
+        # shadowed by Textual's Input editing bindings while #prompt has focus
+        # (the normal state).
+        ("ctrl+n", "new_session", "New session"),
+        ("alt+right", "next_session", "Next session"),
+        ("alt+left", "prev_session", "Prev session"),
+        *[(f"alt+{i}", f"goto_session({i})", f"Session {i}") for i in range(1, 10)],
     ]
 
     def __init__(
@@ -754,7 +796,15 @@ class NovaApp(App):
         return name, color
 
     def compose(self) -> ComposeResult:
-        yield VerticalScroll(id="transcript")
+        # One scroll region per session, swapped by a ContentSwitcher. The root
+        # pane deliberately keeps id="transcript" so existing CSS, the widget
+        # cache and every test that queries "#transcript" are unaffected while
+        # there is only one session.
+        # Hidden until a second session exists, so a single-session run looks
+        # exactly as it did before.
+        yield Tabs(id="session-tabs")
+        with ContentSwitcher(initial="transcript", id="panes"):
+            yield VerticalScroll(id="transcript")
         yield OptionList(id="cmdpalette")
         with Vertical(id="prompt-dock"):
             yield Static("", id="prompt-hint-bar")
@@ -838,6 +888,7 @@ class NovaApp(App):
             except NoMatches:
                 pass
         self.query_one("#cmdpalette", OptionList).display = False
+        self._init_root_pane()
         self._set_status("ready")
         self._update_mode_badge()
         self._refresh_hint_bar()
@@ -992,7 +1043,525 @@ class NovaApp(App):
         return w
 
     def _transcript(self) -> VerticalScroll:
+        """The active session's scroll region.
+
+        Resolved through the active pane rather than the ``_w`` cache: that cache
+        keys on the selector, so after a tab switch it would keep handing back
+        the previous pane's widget and content would land in the wrong session.
+        """
+        pane = getattr(self, "_active_pane", None)
+        if pane is not None and pane.scroll is not None:
+            return pane.scroll
         return self._w("#transcript", VerticalScroll)
+
+    # ── session panes ────────────────────────────────────────────────────
+
+    def _init_root_pane(self) -> None:
+        """Register the in-process session as pane 0.
+
+        Called once at mount. With a single session this changes nothing the user
+        can see: the pane simply wraps the existing ``#transcript`` widget.
+        """
+        from novacode_cli.tui.session_pane import SessionPane
+
+        try:
+            scroll = self.query_one("#transcript", VerticalScroll)
+        except NoMatches:  # pragma: no cover - compose always yields it
+            return
+        pane = SessionPane(
+            sid="root",
+            title=(getattr(self.session_state, "session_id", "") or "main")[:8],
+            scroll=scroll,
+            kind="root",
+        )
+        self._panes: list = [pane]
+        self._root_pane = pane
+        self._active_pane = pane
+        # Seed the (hidden) tab bar now so it is never empty when a session is
+        # spawned later. See _refresh_tabs for why an empty bar is a problem.
+        self._refresh_tabs()
+
+    def _pane_for(self, sid: str):
+        """The pane owning session *sid*, or None."""
+        for pane in getattr(self, "_panes", []):
+            if pane.sid == sid:
+                return pane
+        return None
+
+    async def _deliver(self, pane, event) -> None:
+        """Route one stream event to *pane*: render if visible, else buffer.
+
+        A hidden pane must not draw, because the app's widget references
+        (``_stream_msg``, ``_tool_group``, …) belong to whichever pane is
+        currently swapped in — rendering into a hidden pane would scribble into
+        the visible one. Transient deltas are dropped rather than buffered: the
+        authoritative text arrives as ``AssistantMessage``, so replaying a
+        thousand keystroke-sized fragments on switch would be pure cost.
+        """
+        if pane is None:  # before panes exist (early mount) — render directly
+            await self._render(event)
+            return
+        pane.status = _status_for_event(event, pane.status)
+        if pane is getattr(self, "_active_pane", pane):
+            await self._render(event)
+        else:
+            if not isinstance(event, (ev.TextDelta, ev.ReasoningDelta, ev.StatusUpdate)):
+                pane.buffer.append(event)
+                pane.unread += 1
+
+    async def _switch_to(self, pane) -> None:
+        """Make *pane* the visible session, swapping conversation state with it."""
+        current = getattr(self, "_active_pane", None)
+        if pane is current:
+            return
+        if current is not None:
+            current.save_from(self)
+        if pane.has_state:
+            pane.load_into(self)
+
+        self._active_pane = pane
+        try:
+            self.query_one("#panes", ContentSwitcher).current = pane.scroll.id
+        except NoMatches:  # pragma: no cover - switcher always present
+            pass
+        # Keep the tab highlight in sync with the pane that is actually active.
+        # Re-entry is harmless: the TabActivated handler no-ops when the pane is
+        # already active.
+        with contextlib.suppress(Exception):
+            tabs = self.query_one("#session-tabs", Tabs)
+            if tabs.active != pane.sid:
+                tabs.active = pane.sid
+
+        # Replay what arrived while this pane was hidden.
+        while pane.buffer:
+            await self._render(pane.buffer.popleft())
+        pane.unread = 0
+
+        self._refresh_status()
+        self._update_mode_badge()
+        self._scroll_end()
+
+    async def _dispatch_to_child(self, pane, text: str) -> None:
+        """Handle input while a spawned session's tab is active.
+
+        Only session-management commands are interpreted locally; everything else
+        is forwarded to the child as a prompt.
+
+        # ponytail: other slash commands operate on self.agent, which a child
+        # pane doesn't own. Forward a command channel to the child only if it
+        # turns out people want /model, /compact etc. per session.
+        """
+        stripped = text.strip()
+        low = stripped.lower()
+
+        if low in ("/quit", "/exit", "quit", "exit", "q"):
+            await self.action_quit()
+            return
+        if low in ("/close", "/session close"):
+            await self._close_session(pane)
+            return
+        if low.startswith("/session"):
+            await self._run_session_command(stripped)
+            return
+        if stripped.startswith("/") or stripped.startswith("!"):
+            self._log(
+                Text(
+                    f"“{stripped.split()[0]}” isn't available inside a spawned session. "
+                    "Use /close, or switch to the main session (alt+1).",
+                    style="#e0af68",
+                )
+            )
+            return
+
+        await self._add_message(Text("You", style="bold cyan"), "user", Markdown(stripped))
+        if await self._supervisor().send_prompt(pane.sid, stripped) is None:
+            self._log(Text("✖ that session is no longer running.", style="bold #f7768e"))
+        pane.status = "running"
+        self._refresh_tabs()
+
+    async def _run_session_command(self, text: str) -> None:
+        """``/session new|list|close [name[: task]]``."""
+        parts = text.split(maxsplit=2)
+        sub = (parts[1] if len(parts) > 1 else "list").lower()
+        rest = parts[2] if len(parts) > 2 else ""
+
+        if sub == "new":
+            name, _, task = rest.partition(":")
+            await self.spawn_session(name.strip() or "session", task.strip())
+            return
+
+        if sub == "close":
+            pane = self._pane_for(rest.strip()) if rest.strip() else self._active_pane
+            if pane is None:
+                self._log(Text(f"No session “{rest.strip()}”.", style="#e0af68"))
+                return
+            await self._close_session(pane)
+            return
+
+        block = Text()
+        for i, pane in enumerate(getattr(self, "_panes", []), 1):
+            glyph = self._PANE_GLYPHS.get(pane.status, "●")
+            marker = "→" if pane is self._active_pane else " "
+            block.append(f"{marker} {i}. {glyph} {pane.title}  [{pane.status}]")
+            if pane.branch:
+                block.append(f"  {pane.branch}", style="dim")
+            block.append("\n")
+        block.append("\n/session new <name>[: task] · /session close [name] · alt+<n>", style="dim")
+        self._log(block)
+
+    # ── tab bar ──────────────────────────────────────────────────────────
+
+    _PANE_GLYPHS = {
+        "idle": "●",
+        "running": "◐",
+        "needs-approval": "⚠",
+        "starting": "⏳",
+        "crashed": "✖",
+        "exited": "○",
+    }
+
+    def _refresh_tabs(self) -> None:
+        """Redraw the session tab bar; hidden while there is only one session."""
+        panes = getattr(self, "_panes", [])
+        try:
+            tabs = self.query_one("#session-tabs", Tabs)
+        except NoMatches:  # pragma: no cover - compose always yields it
+            return
+
+        # Visibility is cosmetic; the tab set is always kept in sync. The root
+        # tab is therefore present (hidden) from startup, so adding the first
+        # child never lands in an EMPTY bar — which would auto-activate the tab
+        # being added and queue a stale TabActivated that switched the user back.
+        tabs.display = len(panes) > 1
+
+        want = []
+        for i, pane in enumerate(panes, 1):
+            glyph = self._PANE_GLYPHS.get(pane.status, "●")
+            unread = f" +{pane.unread}" if pane.unread else ""
+            want.append((pane.sid, f"{i}:{glyph} {pane.title}{unread}"))
+
+        # Update INCREMENTALLY; never clear() and rebuild. clear()+add_tab emits
+        # a TabActivated for the first tab, delivered asynchronously — so it
+        # landed after the rebuild and dragged the user back to pane 1. That is
+        # why a freshly spawned session seemed to "do nothing": you were silently
+        # returned to the root pane and everything you typed went to the root
+        # agent. Adding a tab to a non-empty bar does not change the selection.
+        existing = {t.id: t for t in tabs.query(Tab)}
+        wanted = {sid for sid, _ in want}
+
+        for sid in existing:
+            if sid not in wanted:
+                with contextlib.suppress(Exception):
+                    tabs.remove_tab(sid)
+
+        for sid, label in want:
+            tab = existing.get(sid)
+            if tab is None:
+                tabs.add_tab(Tab(label, id=sid))
+            else:
+                tab.label = label
+
+    def on_tabs_tab_activated(self, event) -> None:
+        """Clicking / keyboard-selecting a tab switches sessions.
+
+        Ignored while the bar is being rebuilt: adding tabs emits TabActivated
+        for the first one, which would otherwise drag the user back to pane 1
+        every time a session is spawned or closed.
+        """
+        if getattr(self, "_rebuilding_tabs", False):
+            return
+        tab = getattr(event, "tab", None)
+        pane = self._pane_for(getattr(tab, "id", "") or "")
+        if pane is not None and pane is not getattr(self, "_active_pane", None):
+            self.run_worker(self._switch_to(pane))
+
+    # ── session actions ──────────────────────────────────────────────────
+
+    def action_new_session(self) -> None:
+        self.run_worker(self._prompt_new_session())
+
+    def action_next_session(self) -> None:
+        self._cycle_session(1)
+
+    def action_prev_session(self) -> None:
+        self._cycle_session(-1)
+
+    def _cycle_session(self, delta: int) -> None:
+        panes = getattr(self, "_panes", [])
+        if len(panes) < 2:
+            return
+        try:
+            idx = panes.index(self._active_pane)
+        except ValueError:
+            idx = 0
+        self.run_worker(self._switch_to(panes[(idx + delta) % len(panes)]))
+
+    def action_goto_session(self, number: int) -> None:
+        """alt+<n>: jump straight to the nth session."""
+        panes = getattr(self, "_panes", [])
+        if 1 <= number <= len(panes):
+            self.run_worker(self._switch_to(panes[number - 1]))
+
+    # ── spawning child sessions ──────────────────────────────────────────
+
+    def _supervisor(self):
+        """The child-process manager, created on first use."""
+        sup = getattr(self, "_session_supervisor", None)
+        if sup is None:
+            from novacode_cli.sessions.supervisor import SessionSupervisor
+
+            sup = SessionSupervisor(self._on_child_message)
+            self._session_supervisor = sup
+        return sup
+
+    async def _prompt_new_session(self) -> None:
+        """Ctrl+N: ask for a name + task, then spawn."""
+        from novacode_cli.tui.screens import QuestionModal
+
+        answer = await self.push_screen_wait(
+            QuestionModal(
+                {
+                    "question": (
+                        "New parallel session — name it, optionally with a task:\n"
+                        "  fix-parser: add retry logic to the HTTP client"
+                    )
+                }
+            )
+        )
+        # QuestionModal dismisses with {"response": QuestionResponse}, and
+        # QuestionResponse is a TypedDict — so the answer is response["answer"],
+        # NOT an attribute. Reading it as an attribute silently stringified the
+        # whole dict and named the session "{'answer'".
+        raw = ""
+        if isinstance(answer, dict):
+            response = answer.get("response")
+            if isinstance(response, dict):
+                raw = str(response.get("answer") or "")
+            elif isinstance(response, str):
+                raw = response
+        elif isinstance(answer, str):
+            raw = answer
+        if not raw.strip():
+            return
+        name, _, task = raw.partition(":")
+        await self.spawn_session(name.strip() or "session", task.strip())
+
+    async def spawn_session(self, name: str, task: str = "") -> None:
+        """Create a worktree, launch a child session, and show it as a new tab."""
+        import uuid
+
+        from novacode_cli.sessions import worktree as wt
+        from novacode_cli.tui.session_pane import SessionPane
+
+        sup = self._supervisor()
+        if sup.at_capacity():
+            self._log(
+                Text(
+                    "⚠ Session limit reached — close one before starting another.",
+                    style="bold #e0af68",
+                )
+            )
+            return
+
+        sid = f"s-{uuid.uuid4().hex[:8]}"
+        self._log(Text(f"⏳ preparing worktree for “{name}”…", style="#7aa2f7"))
+
+        try:
+            info = await asyncio.to_thread(
+                wt.create_worktree, name, repo=wt.repo_root(Path.cwd()), session_id=sid
+            )
+        except Exception as e:  # noqa: BLE001 — surface, don't crash the TUI
+            self._log(Text(f"✖ could not create worktree: {e}", style="bold #f7768e"))
+            return
+
+        for warn in info.warnings:
+            self._log(Text(f"⚠ {warn}", style="#e0af68"))
+
+        # Mount the pane immediately: agent build takes seconds and the UI must
+        # never block on it.
+        scroll = VerticalScroll(id=f"pane-{sid}")
+        await self.query_one("#panes", ContentSwitcher).mount(scroll)
+        # ContentSwitcher only hides non-current children at COMPOSE time; one
+        # mounted later stays visible and renders on top of the active pane. The
+        # new (empty) pane then covered the running session's transcript, which
+        # looked like everything had vanished. Hide it until switched to.
+        scroll.display = False
+        pane = SessionPane(
+            sid=sid,
+            title=name,
+            scroll=scroll,
+            kind="child",
+            status="starting",
+            worktree=info.path,
+            branch=info.branch,
+        )
+        # A pane with no saved state inherits whatever is on the app when it is
+        # switched to — including the previous pane's live widget refs. _render
+        # reuses `_stream_msg` when it isn't None, so the child's reply streamed
+        # into the ROOT pane's hidden widget and this tab stayed black. Start it
+        # from a blank conversation instead.
+        from novacode_cli.states.Session import SessionState
+        from novacode_cli.tui.session_pane import fresh_state
+
+        child_state = SessionState(auto_approve=False, no_splash=True)
+        child_state.session_id = sid
+        pane.state = fresh_state(
+            session_state=child_state,
+            assistant_id=self.assistant_id,
+            model_name=self.model_name,
+        )
+        self._panes.append(pane)
+        self._refresh_tabs()
+        # Switch to it. Without this the new tab merely EXISTS while the root
+        # session stays active, so everything typed next goes to the root agent
+        # and renders in the root transcript — the spawned session just sits
+        # there never receiving a prompt, which reads as "the tab does nothing".
+        await self._switch_to(pane)
+
+        try:
+            child = await sup.spawn(
+                session_id=sid,
+                name=name,
+                worktree=info.path,
+                branch=info.branch,
+                assistant_id=self.assistant_id or "nova-agent",
+            )
+        except Exception as e:  # noqa: BLE001
+            pane.status = "crashed"
+            self._refresh_tabs()
+            self._log(Text(f"✖ could not start session: {e}", style="bold #f7768e"))
+            return
+
+        pane.child = child
+        self._pending_task_for = getattr(self, "_pending_task_for", {})
+        if task:
+            self._pending_task_for[sid] = task
+        note = Text()
+        note.append(f"◆ you are now in session “{name}”\n", style="bold #9ece6a")
+        note.append(f"   {info.path}", style="dim")
+        if info.branch:
+            note.append(f"  ·  {info.branch}", style="dim")
+        note.append("\n   alt+1 returns to the main session · /close ends this one", style="dim")
+        self._log(note)
+
+    async def _on_child_message(self, sid: str, msg: dict) -> None:
+        """Handle one JSONL frame from a child session."""
+        from novacode_cli.sessions import protocol
+
+        pane = self._pane_for(sid)
+        if pane is None:
+            return
+        kind = msg.get("t")
+
+        if kind == "ready":
+            pane.status = "idle"
+            # Send the task it was spawned with, now that it can accept one.
+            task = getattr(self, "_pending_task_for", {}).pop(sid, None)
+            if task:
+                await self._supervisor().send_prompt(sid, task)
+
+        elif kind == "ev":
+            event = protocol.decode_event(msg)
+            if event is not None:
+                await self._deliver(pane, event)
+
+        elif kind == "interrupt":
+            pane.status = "needs-approval"
+            pane.pending_interrupt = msg
+            if pane is self._active_pane:
+                await self._handle_child_interrupt(pane)
+            else:
+                # Never steal the screen for a background session: flag the tab
+                # and present it when the user switches there.
+                with contextlib.suppress(Exception):
+                    self.session_state.add_notification(
+                        "warn",
+                        f"{pane.title}: approval needed",
+                        "A background session is waiting for a decision.",
+                        "sessions",
+                    )
+
+        elif kind == "turn_done":
+            pane.status = "idle"
+
+        elif kind == "error":
+            await self._deliver(pane, ev.Error(message=str(msg.get("message") or "")))
+
+        elif kind == "exited":
+            pane.status = "crashed" if msg.get("crashed") else "exited"
+
+        self._refresh_tabs()
+
+    async def _handle_child_interrupt(self, pane) -> None:
+        """Present a child's approval in this UI and send the decision back.
+
+        Reuses ``_handle_interrupt`` verbatim, so a spawned session gets exactly
+        the same modals as the local one. ``session_state`` is swapped for the
+        duration so "remember for this session" and auto-approve apply to the
+        CHILD, not the root conversation.
+        """
+        msg = pane.pending_interrupt
+        if msg is None:
+            return
+        pane.pending_interrupt = None
+
+        fut: asyncio.Future = asyncio.get_running_loop().create_future()
+        request = ev.InterruptRequest(
+            kind=str(msg.get("kind") or "tool"), payload=msg.get("payload"), future=fut
+        )
+        prev_state = self.session_state
+        proxy = pane.state.get("session_state")
+        try:
+            if proxy is not None:
+                self.session_state = proxy
+            await self._handle_interrupt(request)
+            result = await fut
+        except Exception:  # noqa: BLE001 — never leave the child blocked
+            result = None
+        finally:
+            self.session_state = prev_state
+
+        await self._supervisor().reply_interrupt(pane.sid, str(msg.get("id")), result)
+        pane.status = "running"
+        self._refresh_tabs()
+
+    async def _close_session(self, pane) -> None:
+        """Close a spawned session and report what happened to its worktree."""
+        from novacode_cli.sessions import worktree as wt
+
+        if pane.kind == "root":
+            self._log(Text("The main session can't be closed.", style="#e0af68"))
+            return
+
+        await self._supervisor().close(pane.sid)
+
+        # Worktree cleanup runs only after the process is gone: on Windows a
+        # directory a live process holds open cannot be removed. Work is never
+        # destroyed — a dirty or committed worktree is kept and reported.
+        outcome = ""
+        if pane.worktree is not None and pane.branch:
+            with contextlib.suppress(Exception):
+                repo = wt.repo_root(Path.cwd())
+                if repo is not None:
+                    outcome = await asyncio.to_thread(
+                        wt.remove_worktree, pane.worktree, repo=repo
+                    )
+
+        if pane in self._panes:
+            self._panes.remove(pane)
+        with contextlib.suppress(Exception):
+            await pane.scroll.remove()
+
+        if pane is self._active_pane:
+            await self._switch_to(self._root_pane)
+        self._refresh_tabs()
+
+        note = f"◆ session “{pane.title}” closed"
+        if outcome:
+            note += f" — worktree {outcome}"
+        if pane.branch and "removed" not in outcome:
+            note += f" (branch {pane.branch})"
+        self._log(Text(note, style="#7aa2f7"))
 
     def _prune_transcript(self) -> None:
         """Cap the transcript: drop the oldest widgets once it grows too large.
@@ -2673,7 +3242,19 @@ class NovaApp(App):
                 self._set_status("killing command…")
         except Exception:  # noqa: BLE001
             pass
-        self.workers.cancel_all()
+
+        # A spawned session runs in its own process — cancel THAT, not our workers.
+        pane = getattr(self, "_active_pane", None)
+        if pane is not None and pane.kind == "child":
+            self.run_worker(self._supervisor().cancel(pane.sid))
+            self._set_status("cancelling…")
+            return
+
+        # Cancel only the turn (and speech), NOT every worker: cancel_all() would
+        # also kill the supervisor's child-output readers and the remote consumer,
+        # silently detaching every background session.
+        self.workers.cancel_group(self, "turn")
+        self.workers.cancel_group(self, "voice_tts")
         self._set_status("cancelling…")
 
     # ── Voice I/O ─────────────────────────────────────────────────────────
@@ -3249,6 +3830,12 @@ class NovaApp(App):
             unregister_tool_output_callback(self._on_tool_output)
         except Exception:
             pass
+        # Shut spawned sessions down before we go: main.py ends in os._exit(),
+        # which runs no finally blocks, so anything still alive here is orphaned.
+        sup = getattr(self, "_session_supervisor", None)
+        if sup is not None:
+            with contextlib.suppress(Exception):
+                await sup.close_all(timeout=5.0)
         await self._save_session()
         self.exit()
 
@@ -3295,6 +3882,13 @@ class NovaApp(App):
     async def _dispatch(self, text: str) -> None:
         """Route input: quit / !bash / slash command / @agent / agent prompt."""
         self.workers.cancel_group(self, "voice_tts")
+
+        # Input typed while a spawned session is on screen goes to THAT process.
+        pane = getattr(self, "_active_pane", None)
+        if pane is not None and pane.kind == "child":
+            await self._dispatch_to_child(pane, text)
+            return
+
         low = text.lower()
         if low in ("/quit", "/exit", "quit", "exit", "q"):
             await self.action_quit()
@@ -3646,7 +4240,10 @@ class NovaApp(App):
             image_tracker=self.image_tracker,
             seen_message_ids=self._seen,
         ):
-            await self._render(e)
+            # Through _deliver, not _render directly: if the user switches tabs
+            # mid-turn, this turn's events must keep going to the ROOT pane
+            # rather than into whichever pane is now on screen.
+            await self._deliver(getattr(self, "_root_pane", None), e)
 
     @work(group="remote")
     async def _remote_consumer(self) -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import sys
 from unittest.mock import MagicMock, patch
 
@@ -23,6 +24,10 @@ def test_pocket_raises_import_error_when_pocket_tts_missing(monkeypatch):
     assert "pip install" in str(exc_info.value)
 
 
+@pytest.mark.skipif(
+    importlib.util.find_spec("sounddevice") is None,
+    reason="sounddevice is an optional audio dependency and isn't installed here",
+)
 def test_pocket_speaker_lifecycle(monkeypatch, tmp_path):
     """Test PocketSpeaker initialization, download checks, and mock synthesis playback."""
     mock_pocket = MagicMock()

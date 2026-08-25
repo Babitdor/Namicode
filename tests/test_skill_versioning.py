@@ -72,6 +72,37 @@ class TestVersioningModule:
         content = (d / "SKILL.md").read_text(encoding="utf-8")
         assert "A" in content and "B" not in content and "C" not in content
 
+    def test_rapid_snapshots_get_distinct_versions(self, tmp_path):
+        """Back-to-back snapshots must not collide on the same id.
+
+        Version ids were a bare timestamp, and the clock is coarse enough
+        (notably on Windows) that two quick snapshots produced the SAME id — the
+        second overwrote the first, so restoring the earlier version silently
+        returned the later content. This made restore tests fail ~50% of runs.
+        """
+        d = _write_skill(tmp_path / "skills", "s", "v0")
+        ids = []
+        for i in range(8):
+            (d / "SKILL.md").write_text(f"v{i}", encoding="utf-8")
+            ids.append(versioning.snapshot(d, reason=f"edit{i}"))
+
+        assert len(set(ids)) == len(ids), f"duplicate version ids: {ids}"
+        # Sortable: creation order must survive as lexicographic order.
+        assert ids == sorted(ids)
+        assert len(versioning.list_versions(d)) == len(ids)
+
+    def test_each_rapid_version_restores_its_own_content(self, tmp_path):
+        d = _write_skill(tmp_path / "skills", "s", "v0")
+        made = []
+        for i in range(5):
+            (d / "SKILL.md").write_text(f"content-{i}", encoding="utf-8")
+            made.append((versioning.snapshot(d, reason=f"e{i}"), f"content-{i}"))
+
+        for version, expected in made:
+            ok, _ = versioning.restore(d, version=version)
+            assert ok
+            assert (d / "SKILL.md").read_text(encoding="utf-8") == expected
+
     def test_restore_no_history(self, tmp_path):
         d = _write_skill(tmp_path / "skills", "s", "x")
         ok, msg = versioning.restore(d)
