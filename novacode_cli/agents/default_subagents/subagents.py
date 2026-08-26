@@ -126,9 +126,12 @@ def retrieve_core_subagents(
             "/skills/webapp-testing/",
         ],
         # Browser automation agent
+        # No browser skills here: this agent only has fetch_url +
+        # duckduckgo_search, and agent-browser/browser-use teach driving a
+        # browser it cannot drive — which is what made it accept impossible
+        # tasks. The main agent owns real browser work (playwright_browser_*).
         "browser-automation-agent": [
-            "/skills/agent-browser/",
-            "/skills/browser-use/",
+            "/skills/web-research/",
         ],
         # Domain-specific engineering agents
         "frontend-agent": [

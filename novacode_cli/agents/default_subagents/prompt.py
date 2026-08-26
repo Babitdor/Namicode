@@ -78,8 +78,18 @@ TESTING_AGENT = {
 
 # ── Browser Automation Agent ───────────────────────────────────────────────────
 
+# NOTE: this agent does HTTP fetching, not browser automation. Its prompt used
+# to describe `browser_automate` and `capture_browser_console`, neither of which
+# exists — so it confidently accepted tasks it could not perform. Real browser
+# work belongs to the MAIN agent, which has the `playwright_browser_*` MCP tools;
+# subagent specs are built from the plain tool list and never receive MCP tools
+# (those attach via MCPMiddleware.tools), so they cannot be delegated here.
 BROWSER_AUTOMATION_AGENT = {
-    "description": "Automates browser interactions for web testing, form filling, screenshots, data extraction, and console log capture.",
+    "description": (
+        "Researches and extracts information from the web over HTTP (fetch + search). "
+        "Cannot run JavaScript, click, log in, or screenshot — for those, use the "
+        "playwright_browser_* tools directly rather than delegating here."
+    ),
     "prompt": _load_prompt("browser_automation_agent.jinja"),
     "tools": [
         "fetch_url",

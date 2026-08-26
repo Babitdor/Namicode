@@ -595,7 +595,17 @@ class MCPMiddleware(AgentMiddleware):
         else:
             servers = self.mcp_config.list_servers()
             servers_list = self._format_servers_list(servers, mcp_tools)
-            mcp_section = render_template("mcp.jinja", servers_list=servers_list)
+            # Only teach the browser workflow when those tools are actually
+            # loaded — a section describing tools the model does not have is
+            # worse than none (it invents calls that fail). Keyed on the tool
+            # NAMES, not the server name, so it works whatever the user called
+            # the server in mcp.json.
+            has_playwright = any(
+                str(t.get("name", "")).endswith("browser_navigate") for t in mcp_tools
+            )
+            mcp_section = render_template(
+                "mcp.jinja", servers_list=servers_list, has_playwright=has_playwright
+            )
 
             self._mcp_section_cache = mcp_section
             self._mcp_section_cache_time = current_time
