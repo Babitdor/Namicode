@@ -82,3 +82,49 @@ def test_tool_flow_serves_page_and_updates_in_place() -> None:
 
     listing = list_artifacts.invoke({})
     assert aid in listing and "Arch Dashboard" in listing
+
+
+# ── design guidance reaches the model ────────────────────────────────────────
+
+
+def test_create_artifact_schema_directs_the_model_to_the_design_skill() -> None:
+    """Artifacts were shipping with default browser styling.
+
+    A `create-html-artifact` skill existed, but with ~220 skills installed the
+    model rarely noticed it mid-task. The tool's own docstring becomes its
+    schema description — the one thing the model always reads at call time — so
+    the design instruction has to live there.
+    """
+    desc = create_artifact.description
+    assert "DESIGN FIRST" in desc
+    assert "frontend-design" in desc, "must name the skill to read"
+    assert "srcdoc" in desc, "must warn that relative URLs do not resolve"
+    assert "background" in desc, "must warn the iframe canvas is white"
+
+
+def test_create_artifact_steers_away_from_unstylable_markdown() -> None:
+    """markdown renders with raw HTML disabled, so it cannot be styled."""
+    desc = create_artifact.description
+    assert "cannot be styled" in desc
+
+
+def test_update_artifact_warns_content_is_a_full_replacement() -> None:
+    """A partial re-send silently drops the page's <style> block."""
+    desc = update_artifact.description
+    assert "REPLACES" in desc
+    assert "full document" in desc
+
+
+def test_styled_html_survives_into_the_served_page() -> None:
+    """The design the model writes must actually reach the browser."""
+    css = "body{background:#0d0d12;color:#e8e8f0}"
+    out = create_artifact.invoke(
+        {
+            "title": "Styled",
+            "type": "html",
+            "content": f"<html><head><style>{css}</style></head><body><h1>x</h1></body></html>",
+        }
+    )
+    url = re.search(r"URL: (\S+)", out).group(1)
+    page = urllib.request.urlopen(url, timeout=5).read().decode()
+    assert "background:#0d0d12" in page.replace("&#x27;", "'").replace("&quot;", '"')

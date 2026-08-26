@@ -22,13 +22,31 @@ def create_artifact(title: str, type: str = "markdown", content: str = "") -> st
     artifact". A persistent `◈ Artifacts` component in the TUI updates and the
     user can open it in the browser.
 
+    DESIGN FIRST (html/dashboard): before writing the HTML, read the
+    `frontend-design` skill and follow it. An artifact is a *designed page*, not
+    a dump of default-styled tags — unstyled output is the most common failure
+    of this tool. Commit to a deliberate direction: a real type scale and font
+    pairing, CSS custom properties for the palette, intentional spacing and
+    layout, and restraint. Read `create-html-artifact` too if present; it covers
+    this viewer specifically.
+
+    Write a complete standalone document: `<style>` in the `<head>`, semantic
+    markup in the `<body>`. Everything must be inline — the page is rendered from
+    a `srcdoc` iframe, so relative URLs and local files do not resolve. Web fonts
+    from a CDN (e.g. Google Fonts) do load, so use them rather than settling for
+    system defaults. Set an explicit background on `body`: the viewer's iframe
+    is white, so a page that assumes a dark canvas will look broken without one.
+
     Args:
         title: Human-readable name shown in the TUI list and the page header.
         type: One of html, markdown, or dashboard. `html`/`dashboard` render as a
             full HTML page inside a sandboxed iframe (safe to include CSS/JS);
-            `markdown` renders as formatted prose. Defaults to markdown.
-        content: The artifact body — full HTML for html/dashboard, Markdown text
-            for markdown. Never has access to the host, filesystem, or secrets.
+            `markdown` renders as formatted prose with raw HTML disabled, so it
+            cannot be styled — choose `html` whenever presentation matters.
+            Defaults to markdown.
+        content: The artifact body — a full HTML document for html/dashboard,
+            Markdown text for markdown. Never has access to the host,
+            filesystem, or secrets.
 
     Returns:
         The artifact id and its shareable URL.
@@ -57,11 +75,15 @@ def update_artifact(
 
     Prefer this over creating a new artifact when refining the same output.
 
+    `content` REPLACES the whole body — it is not a patch. Re-send the complete
+    document, including its `<style>`, or the page loses its design. The same
+    design bar as `create_artifact` applies to the replacement.
+
     Args:
         id: The artifact id returned by create_artifact / list_artifacts.
         title: New title (optional).
         type: New type — one of html, markdown, dashboard (optional).
-        content: New body (optional).
+        content: New body — the full document, not a fragment (optional).
     """
     from novacode_cli.artifacts.registry import get_registry
     from novacode_cli.artifacts.server import artifact_url
