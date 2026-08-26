@@ -36,6 +36,12 @@ _TODO_GLYPH: dict[str, str] = {
     "pending": "☐",
 }
 _TODO_MAX = 8
+# Live text is a *window*, not a transcript: the finished answer is sent as its
+# own message when the turn ends. Telegram's edit_fn rolls over to a NEW message
+# every ~3900 chars, so an uncapped trace would spam several messages of scratch
+# text per turn. Keep the most recent slice — the part a watching user is
+# actually reading.
+_TEXT_MAX = 1200
 
 
 class RemoteStatusLine:
@@ -45,6 +51,7 @@ class RemoteStatusLine:
         self._edit = edit_fn
         self._names: list[str] = []
         self._todos: list[tuple[str, str]] = []  # (content, status)
+        self._text_parts: list[tuple[str, str]] = []  # (kind, text) streamed prose
         self._dirty = False
         self._interval = interval
         self._task: asyncio.Task | None = None
@@ -55,6 +62,41 @@ class RemoteStatusLine:
         if name:
             self._names.append(str(name))
             self._dirty = True
+
+    def note_text(self, text: str, *, kind: str = "text") -> None:
+        """Record streamed model prose/reasoning, shown live edit-in-place.
+
+        Replaces the tool-count summary once real text arrives: a remote user
+        sees the model actually thinking, not just "⚙️ working…" followed by a
+        finished answer. ``kind="reasoning"`` is prefixed with a "🤔" marker so
+        the thinking trace is visually distinct from committed prose.
+
+        Text arrives as a stream of tiny deltas (often a single token), so
+        consecutive deltas of the same kind are CONCATENATED into one part.
+        Appending each delta separately rendered one token per line.
+        """
+        if not text:
+            return
+        if self._text_parts and self._text_parts[-1][0] == kind:
+            prev_kind, prev_text = self._text_parts[-1]
+            self._text_parts[-1] = (prev_kind, prev_text + text)
+        else:
+            self._text_parts.append((kind, text))
+        self._dirty = True
+
+    def reset_text(self) -> None:
+        """Drop all streamed live text.
+
+        Mirrors the terminal's ``TextDiscard`` contract: internal-context
+        scratchpad or a deduplicated buffer is suppressed for the user, so a
+        remotely-streamed preview of it must vanish too (reverting to the tool
+        digest / ``⚙️ working…`` placeholder) rather than sitting frozen on
+        screen in the chat.
+        """
+        if not self._text_parts:
+            return
+        self._text_parts = []
+        self._dirty = True
 
     def note_todos(self, todos: list) -> None:
         """Set the current plan/checklist (TodoWrite). Shown live, in place."""
@@ -79,6 +121,16 @@ class RemoteStatusLine:
         return lines
 
     def _content(self) -> str:
+        # Once the model starts producing prose (or reasoning), that text owns
+        # the live message — the tool-count summary is the pre-text placeholder.
+        if self._text_parts:
+            out: list[str] = []
+            for kind, text in self._text_parts:
+                out.append(f"🤔 {text}" if kind == "reasoning" else text)
+            body = "\n".join(out).strip()
+            if len(body) > _TEXT_MAX:
+                body = "…" + body[-_TEXT_MAX:]
+            return body
         # The plan (when present) on top, the condensed tool activity beneath.
         lines = self._todo_lines() if self._todos else []
         summary = self._summary()
@@ -117,7 +169,14 @@ class RemoteStatusLine:
             return
 
     async def finalize(self) -> None:
-        """Stop the pump and settle the status to a compact done-summary."""
+        """Stop the pump and settle the status.
+
+        Reasoning survives; answer prose does not. The turn's answer is sent as
+        its own chat message immediately after this, so leaving the streamed
+        prose here showed it TWICE, back to back. The thinking trace is the part
+        with no other home, and the live message is a truncated window anyway —
+        it could never stand in for the real answer.
+        """
         self._closed = True
         if self._task is not None:
             self._task.cancel()
@@ -127,6 +186,28 @@ class RemoteStatusLine:
                 pass
             self._task = None
 
+        if self._text_parts:
+            self._text_parts = [p for p in self._text_parts if p[0] == "reasoning"]
+            try:
+                if self._text_parts:
+                    # Flush deltas the pump had not painted yet, so the trace is
+                    # not left frozen mid-thought.
+                    await self._edit(self._content(), False)
+                else:
+                    # Prose only: settle to the tool digest rather than leaving a
+                    # duplicate of the answer on screen.
+                    await self._edit(self._done_summary(), True)
+            except Exception:  # noqa: BLE001
+                logger.debug("status final flush failed", exc_info=True)
+            return
+
+        try:
+            await self._edit(self._done_summary(), True)
+        except Exception:  # noqa: BLE001
+            logger.debug("status finalize failed", exc_info=True)
+
+    def _done_summary(self) -> str:
+        """The settled '✅ N tools · …' line, with the plan above it when present."""
         summary = self._summary()
         total = len([n for n in self._names if n])
         plural = "s" if total != 1 else ""
@@ -134,8 +215,4 @@ class RemoteStatusLine:
         # Keep the (now-complete) plan visible above the done-summary so the final
         # status reflects what got accomplished.
         lines = self._todo_lines() if self._todos else []
-        text = "\n".join([*lines, done]) if lines else done
-        try:
-            await self._edit(text, True)
-        except Exception:  # noqa: BLE001
-            logger.debug("status finalize failed", exc_info=True)
+        return "\n".join([*lines, done]) if lines else done

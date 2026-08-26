@@ -8051,6 +8051,11 @@ class NovaApp(App):
                 self._reason_msg = ChatMessage(Text("💭 reasoning", style="dim italic"), "reason")
                 await self._mount(self._reason_msg)
             self._schedule_stream_flush()
+            # Mirror the thinking trace to the remote live message so a
+            # Telegram/Discord user sees Nova reason in real time instead of
+            # only a tool-count summary and a final answer.
+            if self._remote_status is not None:
+                self._remote_status.note_text(e.text, kind="reasoning")
             if self._activity != "thinking…":
                 self._set_status("thinking…")
         elif isinstance(e, ev.TextDelta):
@@ -8064,8 +8069,12 @@ class NovaApp(App):
             self._schedule_stream_flush()
             if self._activity != "responding…":
                 self._set_status("responding…")
-            # Remote turns don't mirror the answer live — the full answer is sent
-            # as a normal chat message when the turn ends (chat-style flow).
+            # Mirror prose into the remote live message as it streams, so the
+            # user sees progress. finalize() drops it again — the complete
+            # answer is sent as its own chat message, and leaving it here too
+            # showed the answer twice, back to back.
+            if self._remote_status is not None:
+                self._remote_status.note_text(e.text, kind="text")
         elif isinstance(e, ev.TextDiscard):
             self._stream_flush_scheduled = False
             if self._stream_msg is not None:
@@ -8075,6 +8084,11 @@ class NovaApp(App):
                     pass
                 self._stream_msg = None
             self._live_buf = ""
+            # Text suppressed locally (internal scratchpad / deduplicated
+            # buffer) must vanish remotely too, or the discarded preview stays
+            # frozen on screen in the chat.
+            if self._remote_status is not None:
+                self._remote_status.reset_text()
         elif isinstance(e, ev.AssistantMessage):
             # Commit: finalize the streaming widget as rendered markdown. Cancel
             # any pending coalesced flush so it can't repaint a finalized widget.
