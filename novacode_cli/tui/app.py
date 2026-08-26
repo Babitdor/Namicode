@@ -907,10 +907,24 @@ class NovaApp(App):
             pass
         self._refresh_tasks_bar()
         # Persistent artifacts component: observe the registry + show initial count.
+        # bind_session first, so a resumed session's artifacts are back in the
+        # registry (and its count) before the component renders.
         try:
+            from novacode_cli.artifacts.registry import bind_session as _bind_artifacts
             from novacode_cli.artifacts.registry import get_registry as _get_art_registry
 
+            _restored_artifacts = _bind_artifacts(
+                getattr(self.session_state, "session_id", "") or "",
+                getattr(self.session_manager, "sessions_dir", None),
+            )
             _get_art_registry().add_observer(self._on_artifact_event_threadsafe)
+            if _restored_artifacts:
+                self._log(
+                    Text(
+                        f"◈ restored {_restored_artifacts} artifact(s) from this session",
+                        style="dim",
+                    )
+                )
         except Exception:  # noqa: BLE001
             pass
         self._refresh_artifacts_component()

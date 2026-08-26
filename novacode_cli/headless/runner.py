@@ -93,6 +93,17 @@ async def run_headless(  # noqa: PLR0912, PLR0915 — single linear event loop
     subtype = "success"
     is_error = False
 
+    # Artifacts persist per session (headless -c/--resume reuses the id).
+    try:
+        from novacode_cli.artifacts.registry import bind_session
+
+        bind_session(
+            getattr(session_state, "session_id", "") or "",
+            getattr(session_manager, "sessions_dir", None),
+        )
+    except Exception:  # noqa: BLE001 — never fail a run on artifact restore
+        pass
+
     source = iterate_agent_events(
         prompt,
         agent,

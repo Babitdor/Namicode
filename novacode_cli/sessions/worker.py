@@ -247,6 +247,17 @@ class SessionWorker:
             }
         )
 
+        # Artifacts persist per session, same as the parent TUI.
+        try:
+            from novacode_cli.artifacts.registry import bind_session
+
+            bind_session(
+                getattr(self.session_state, "session_id", "") or "",
+                getattr(self.session_manager, "sessions_dir", None),
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("artifact bind failed", exc_info=True)
+
         pump = asyncio.create_task(self._stdin_pump())
         exit_code = EXIT_OK
         get_msg = asyncio.create_task(self.inbox.get())

@@ -8,11 +8,16 @@ component and any web clients can refresh.
 
 from __future__ import annotations
 
+import json
+import logging
 import threading
 import time
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, fields
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 VALID_TYPES = frozenset({"html", "markdown", "dashboard"})
 # ponytail: dashboard renders exactly like html (sandboxed iframe) — it's a
@@ -57,11 +62,70 @@ def _coerce_type(t: str | None) -> str:
 class ArtifactRegistry:
     """Session-scoped artifact store with change observers."""
 
-    def __init__(self) -> None:
+    def __init__(self, path: Path | None = None) -> None:
         self._by_id: dict[str, Artifact] = {}
         self._order: list[str] = []
         self._lock = threading.Lock()
         self._observers: list[Observer] = []
+        # Where to persist. None = in-memory only (tests, pre-session startup).
+        self._path: Path | None = Path(path) if path is not None else None
+
+    # -- persistence -------------------------------------------------------
+    def bind(self, path: Path) -> None:
+        """Persist to *path* from now on, loading whatever is already there."""
+        self._path = Path(path)
+        self.load()
+
+    def load(self) -> int:
+        """Merge artifacts from disk into this registry. Returns how many loaded.
+
+        Anything already in memory with the same id wins (it is newer than the
+        file). Best-effort: a missing or corrupt file leaves the registry as-is.
+        """
+        if self._path is None or not self._path.exists():
+            return 0
+        try:
+            raw = json.loads(self._path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, ValueError):
+            logger.debug("artifacts: unreadable store at %s", self._path, exc_info=True)
+            return 0
+
+        known = {f.name for f in fields(Artifact)}
+        loaded = 0
+        with self._lock:
+            for item in raw.get("artifacts", []) if isinstance(raw, dict) else []:
+                if not isinstance(item, dict) or not item.get("id"):
+                    continue
+                # Tolerate version skew: drop unknown fields, let defaults fill.
+                data = {k: v for k, v in item.items() if k in known}
+                try:
+                    art = Artifact(**data)
+                except TypeError:
+                    continue
+                if art.id in self._by_id:
+                    continue  # in-memory copy is newer
+                self._by_id[art.id] = art
+                self._order.append(art.id)
+                loaded += 1
+        return loaded
+
+    def _save(self) -> None:
+        """Write the whole store atomically.
+
+        Never raises: persistence is best-effort and must not break the tool
+        call that triggered it.
+        """
+        if self._path is None:
+            return
+        with self._lock:
+            payload = {"artifacts": [asdict(self._by_id[i]) for i in self._order]}
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self._path.with_suffix(self._path.suffix + ".tmp")
+            tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            tmp.replace(self._path)  # atomic: no half-written store after a crash
+        except OSError:
+            logger.debug("artifacts: could not save to %s", self._path, exc_info=True)
 
     def create(self, title: str, type: str, content: str) -> Artifact:
         art = Artifact(
@@ -75,6 +139,7 @@ class ArtifactRegistry:
         with self._lock:
             self._by_id[art.id] = art
             self._order.append(art.id)
+        self._save()
         self._notify("created", art)
         return art
 
@@ -99,6 +164,7 @@ class ArtifactRegistry:
             art.version += 1
             art.updated_at = time.time()
             art.status = "updated"
+        self._save()
         self._notify("updated", art)
         return art
 
@@ -127,6 +193,30 @@ class ArtifactRegistry:
 
 
 _registry: ArtifactRegistry | None = None
+
+
+def store_path(session_id: str, sessions_dir: "Path | None" = None) -> Path:
+    """Where a session's artifacts live: ``<sessions_dir>/<session_id>/artifacts.json``."""
+    base = sessions_dir or Path.home() / ".nova" / "sessions"
+    return Path(base) / session_id / "artifacts.json"
+
+
+def bind_session(session_id: str, sessions_dir: "Path | None" = None) -> int:
+    """Point the global registry at *session_id*'s store and load it.
+
+    Returns the number of artifacts restored. Safe on both a fresh and a
+    resumed session; best-effort, so a bad path never blocks startup.
+    """
+    if not session_id:
+        return 0
+    try:
+        reg = get_registry()
+        before = reg.count()
+        reg.bind(store_path(session_id, sessions_dir))
+        return reg.count() - before
+    except Exception:  # noqa: BLE001 - never break startup on artifact restore
+        logger.debug("artifacts: bind_session failed", exc_info=True)
+        return 0
 
 
 def get_registry() -> ArtifactRegistry:
