@@ -771,6 +771,36 @@ def _build_skill_sources() -> tuple[list[str], Path, Path, list[Path], list[tupl
     return skill_sources, skills_dir, claude_skills_dir, project_skills_dirs, plugin_skills
 
 
+def _host_drive_roots(workspace_root: Path) -> list[str]:
+    """Filesystem roots to mount so real absolute paths resolve.
+
+    Windows: every fixed drive present (``C:/``, ``B:/``, …) — the user's files
+    are routinely on a different drive from the workspace. POSIX: just ``/``.
+    Probing drives is cheap (``Path("X:/").exists()``) and done once at build.
+    """
+    import contextlib
+
+    if os.name != "nt":
+        return ["/"]
+
+    roots: list[str] = []
+    # The workspace's own drive first — the common case, and guaranteed to
+    # exist even if the probe below is restricted in some environment.
+    with contextlib.suppress(Exception):
+        anchor = Path(workspace_root).anchor.replace("\\", "/")
+        if anchor:
+            roots.append(anchor if anchor.endswith("/") else f"{anchor}/")
+
+    for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+        root = f"{letter}:/"
+        if root in roots:
+            continue
+        with contextlib.suppress(OSError):
+            if Path(root).exists():
+                roots.append(root)
+    return roots
+
+
 def _build_composite_backend(
     *,
     sandbox: SandboxBackendProtocol | None,
@@ -976,6 +1006,28 @@ def _build_composite_backend(
         root_dir=str(_conv_history_dir),
         virtual_mode=True,
     )
+
+    # Real absolute host paths (local mode only). The model constantly passes a
+    # path it can see — a sibling project, a file the user named, something from
+    # an error trace — and deepagents refused every one of them outright:
+    #
+    #   Windows absolute paths are not supported: B:/…/ai-job-search/docs/CV.pdf
+    #
+    # Paths inside the workspace are rewritten to virtual form (host_path.py) and
+    # were always fine; anything one directory over was unreachable, for reads
+    # AND writes. Mounting each drive root serves those paths for real, the same
+    # way Claude Code takes real paths — access is gated by the approval policy
+    # (write_file/edit_file default to "ask"; system/secret globs are denied),
+    # not by refusing to name the file.
+    #
+    # These routes sort SHORTEST, so every "/…" virtual route above still wins;
+    # only a drive-letter path reaches them. Remote/sandbox mode is skipped —
+    # there the host filesystem is not the agent's filesystem.
+    if sandbox is None:
+        for _drive in _host_drive_roots(workspace_root):
+            _routes.setdefault(
+                _drive, FilesystemBackend(root_dir=_drive, virtual_mode=True)
+            )
 
     composite_backend = CompositeBackend(
         default=_default_backend,

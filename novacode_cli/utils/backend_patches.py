@@ -139,13 +139,53 @@ def apply_filesystem_host_path_patch() -> None:
                 pass
         return tuple(pairs)
 
-    def _patched_validate_path(path: Any, *, allowed_prefixes: Any = None) -> str:
+    def _is_real_host_path(path: str) -> bool:
+        """True if *path* names a real location on the host filesystem.
+
+        The path itself need only exist *or* have an existing parent directory —
+        ``write_file`` creates new files, so requiring the file to exist would
+        allow reads of outside paths while still refusing to create anything
+        next to them.
+
+        A virtual path, a relative path, or a typo in a nonexistent directory
+        still falls through to the stock validator.
+        """
+        from pathlib import Path
+
         try:
-            if isinstance(path, str):
+            p = Path(path)
+            if not p.is_absolute():
+                return False
+            return p.exists() or p.parent.exists()
+        except OSError:
+            return False
+
+    def _patched_validate_path(path: Any, *, allowed_prefixes: Any = None) -> str:
+        if isinstance(path, str):
+            try:
                 root = _current_workspace_root()
-                path = host_path_to_virtual(path, root or "", list(_mount_roots()))
-        except Exception:  # noqa: BLE001
-            pass  # Never let normalization break validation; fall through.
+                rewritten = host_path_to_virtual(path, root or "", list(_mount_roots()))
+            except Exception:  # noqa: BLE001
+                rewritten = path  # never let normalization break validation
+
+            if rewritten != path:
+                # Inside the workspace (or a mounted skills dir): use the virtual
+                # form, which keeps every existing route working.
+                path = rewritten
+            elif _is_real_host_path(path):
+                # Outside the workspace, but a real file/dir on disk. deepagents
+                # refuses drive-letter paths outright, which made reading a
+                # sibling project impossible ("Windows absolute paths are not
+                # supported: B:/…/CV.pdf") for reads AND writes. Pass it through:
+                # drive roots are mounted as routes (see core_agent), and the
+                # approval policy gates access — write_file/edit_file default to
+                # "ask" and system/secret globs are denied. Same model as Claude
+                # Code: real paths, gated by permissions, not by path rewriting.
+                #
+                # allowed_prefixes is deliberately not applied — it scopes
+                # VIRTUAL routes, and a host path belongs to none of them.
+                return str(path).replace("\\", "/")
+
         return _original(path, allowed_prefixes=allowed_prefixes)
 
     _fsmod.validate_path = _patched_validate_path
