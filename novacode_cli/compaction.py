@@ -4,6 +4,7 @@ This module provides functionality to compress conversation history
 by generating an intelligent summary that preserves key context.
 """
 
+from pathlib import Path
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
@@ -276,6 +277,7 @@ async def compact_conversation(
     thread_id: str,
     focus_instructions: str | None = None,
     context_window: int | None = None,
+    agent_dir: Path | None = None,
 ) -> CompactionResult:
     """Compact a conversation by summarizing and replacing history.
 
@@ -289,6 +291,10 @@ async def compact_conversation(
         model: The LLM model for summarization
         thread_id: The thread/session ID
         focus_instructions: Optional user instructions for what to preserve
+        context_window: Model context window (tokens) to budget the summary to
+        agent_dir: If given, the compaction summary is also persisted as a
+            durable memory lesson (``memories/session-summary.md``) so the
+            conversation's knowledge survives the rewrite.
 
     Returns:
         CompactionResult with details of the compaction operation
@@ -367,6 +373,18 @@ async def compact_conversation(
         except Exception:
             new_tokens = len(summary) // 4
 
+        # Persist the summary as a durable memory lesson so the conversation's
+        # knowledge survives the rewrite (best-effort; never fails compaction).
+        learnings = ""
+        if agent_dir is not None:
+            try:
+                from novacode_cli.hermes.memory_tiers import record_lesson
+
+                record_lesson(agent_dir, "session-summary", summary)
+                learnings = summary
+            except Exception:  # noqa: BLE001 — memory persistence is best-effort
+                learnings = ""
+
         return CompactionResult(
             success=True,
             original_tokens=original_tokens,
@@ -375,6 +393,7 @@ async def compact_conversation(
             messages_before=messages_before,
             messages_after=1,
             summary=summary,
+            learnings=learnings,
         )
 
     except Exception as e:

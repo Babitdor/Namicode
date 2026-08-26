@@ -229,6 +229,7 @@ class CompactionResult:
         messages_before: Number of messages before compaction
         messages_after: Number of messages after compaction
         summary: The generated summary text
+        learnings: Durable memory content persisted for this compaction ("" if none)
         error: Error message if compaction failed
     """
 
@@ -239,6 +240,7 @@ class CompactionResult:
     messages_before: int
     messages_after: int
     summary: str
+    learnings: str = ""
     error: str | None = None
 
 

@@ -148,3 +148,58 @@ def test_qa_refinement_best_effort_on_failure(monkeypatch: pytest.MonkeyPatch) -
     out = asyncio.run(C.summarize_conversation(m, msgs))
     assert out == "SUMMARY"
     assert "Clarifying Q&A" not in out
+
+
+# ── compact_conversation: agent_dir → durable memory ────────────────────────
+class _CompactAgent:
+    """Minimal LangGraph agent: returns a fixed history, records the rewrite."""
+
+    def __init__(self, messages: list) -> None:
+        self.messages = messages
+        self.updated: list[dict] = []
+
+    async def aget_state(self, config):
+        # LangGraph state objects expose .values as a dict.
+        return type("State", (), {"values": {"messages": self.messages}})()
+
+    async def aupdate_state(self, *, config, values, as_node=None):
+        self.updated.append(values)
+
+
+def _compact_model():
+    class _M:
+        model_name = "mock-model"
+
+        async def ainvoke(self, msgs):
+            return AIMessage(content="SUMMARY")
+
+    return _M()
+
+
+def test_compact_persists_summary_to_memory_when_agent_dir_given(
+    monkeypatch: pytest.MonkeyPatch, tmp_path,
+) -> None:
+    """With agent_dir, the summary is recorded as a durable lesson and surfaced
+    in result.learnings (the TUI shows '🧠 N learnings preserved to memory')."""
+    monkeypatch.setattr(C, "_budget_chars", lambda _m, _cw=None: 2000)
+    agent = _CompactAgent([HumanMessage(content="build X", id="h1"), AIMessage(content="done", id="a1")])
+    result = asyncio.run(
+        C.compact_conversation(agent, _compact_model(), "t1", agent_dir=tmp_path)
+    )
+    assert result.success
+    assert result.learnings == "SUMMARY"
+    memory = tmp_path / "memories" / "session-summary.md"
+    assert memory.exists(), "summary should be persisted to durable memory"
+    assert "SUMMARY" in memory.read_text(encoding="utf-8")
+
+
+def test_compact_skips_memory_without_agent_dir(tmp_path) -> None:
+    """No agent_dir → no memory write, learnings stays empty (the pre-existing
+    callers — e.g. the CLI /compact — are unaffected)."""
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(C, "_budget_chars", lambda _m, _cw=None: 2000)
+    agent = _CompactAgent([HumanMessage(content="build X", id="h1"), AIMessage(content="done", id="a1")])
+    result = asyncio.run(C.compact_conversation(agent, _compact_model(), "t1"))
+    assert result.success
+    assert result.learnings == ""
+    assert not (tmp_path / "memories").exists()
