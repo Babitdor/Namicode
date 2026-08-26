@@ -847,15 +847,45 @@ class _QuietThreadingHTTPServer(ThreadingHTTPServer):
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _port_is_answered(port: int, *, timeout: float = 0.35) -> bool:
+    """True if something already answers connections on *port*.
+
+    A successful ``bind("localhost", port)`` is NOT proof the port is usable.
+    When another process holds ``0.0.0.0:port`` (Docker Desktop's proxy is the
+    common case, and WSL's relay behaves the same way), binding the narrower
+    ``localhost`` address still succeeds, but connections are answered by that
+    process — so /council opened to somebody else's 404
+    (``{"detail":"Not Found"}``) instead of Nova's page.
+
+    Connecting is the only honest test: if the connect succeeds, someone is
+    listening and the port is not ours to take.
+    """
+    for family, addr in (
+        (socket.AF_INET, ("127.0.0.1", port)),
+        (socket.AF_INET6, ("::1", port)),
+    ):
+        try:
+            with socket.socket(family, socket.SOCK_STREAM) as s:
+                s.settimeout(timeout)
+                if s.connect_ex(addr) == 0:
+                    return True
+        except OSError:
+            continue  # e.g. no IPv6 stack — not evidence of a squatter
+    return False
+
+
 def _find_available_port(start_port: int = 8000, max_attempts: int = 100) -> int:
-    """Find an available port starting from *start_port*."""
+    """Find a port that is both bindable AND not already being answered."""
     for port in range(start_port, start_port + max_attempts):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             try:
                 s.bind(("localhost", port))
-                return port
             except OSError:
                 continue
+        # Bindable is necessary but not sufficient — see _port_is_answered.
+        if _port_is_answered(port):
+            continue
+        return port
     raise RuntimeError(
         f"No available ports in range {start_port}-{start_port + max_attempts}"
     )

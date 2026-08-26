@@ -562,6 +562,14 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
                                         session_state.plan_mode_enabled = True
                                     except Exception:  # noqa: BLE001
                                         pass
+                                # A tool call is proof the turn is advancing, so
+                                # prose repeats from before it must not count
+                                # toward the "going nowhere" verdict. The guard
+                                # exists for prose with NO tool calls at all;
+                                # without this reset it killed long productive
+                                # turns whose narration repeats around each step.
+                                if isinstance(_e, ev.ToolCall):
+                                    text_guard.note_progress()
                                 yield _e
 
                     if getattr(message, "chunk_position", None) == "last":

@@ -287,6 +287,21 @@ class TextRepetitionGuard:
         self._recent: deque[int] = deque(maxlen=window)
         self._seen: dict[tuple[int, ...], int] = {}
 
+    def note_progress(self) -> None:
+        """Record that the turn did real work (a tool call), clearing the history.
+
+        Repetition only means "stuck" when nothing else is happening. A tool
+        call is proof the turn is advancing, so blocks seen before it must not
+        count toward blocks seen after it. Without this, a long productive turn
+        whose narration repeats around each step ("Now I will apply the
+        change… / I will read the surrounding context…") accumulated repeats
+        across unrelated steps and was killed mid-flight, reporting that
+        nothing had been committed.
+        """
+        self._recent.clear()
+        self._seen.clear()
+        self._partial = ""
+
     def feed(self, text: str) -> bool:
         """Add streamed text. Returns True once the output is a repetition loop."""
         if self.tripped or not text:
