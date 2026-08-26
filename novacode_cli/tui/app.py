@@ -200,6 +200,9 @@ TUI_COMMANDS: dict[str, SlashCommand] = {
     "cron": SlashCommand("_passthrough_command", "manage scheduled (heartbeat) tasks"),
     "webhook": SlashCommand("_passthrough_command", "manage the webhook ingress server"),
     "prompt": SlashCommand("_passthrough_command", "manage evolving system-prompt templates"),
+    "refine": SlashCommand(
+        "_passthrough_command", "refinement audit trail (/refine history|rollback <id>)"
+    ),
     "voice": SlashCommand("_run_voice", "local voice I/O settings (STT / VAD / TTS)"),
     "research": SlashCommand("_run_research", "launch a multi-agent research swarm"),
     "dream": SlashCommand("_run_dream", "reflect over memories to surface ideas", wants_text=False),
@@ -1469,7 +1472,13 @@ class NovaApp(App):
             pane.status = "needs-approval"
             pane.pending_interrupt = msg
             if pane is self._active_pane:
-                await self._handle_child_interrupt(pane)
+                # @work: returns a Worker, not an awaitable. The handler shows
+                # approval modals via push_screen_wait, which Textual only
+                # permits inside a worker — child interrupts arrive on the
+                # supervisor's raw stdout-reader task, so without @work the
+                # push raised NoActiveWorker and every child approval failed
+                # closed to a silent reject ("User rejected the tool call").
+                self._handle_child_interrupt(pane)
             else:
                 # Never steal the screen for a background session: flag the tab
                 # and present it when the user switches there.
@@ -1492,6 +1501,7 @@ class NovaApp(App):
 
         self._refresh_tabs()
 
+    @work
     async def _handle_child_interrupt(self, pane) -> None:
         """Present a child's approval in this UI and send the decision back.
 
@@ -6387,6 +6397,15 @@ class NovaApp(App):
             # Summarize with the SESSION's live model (honors an in-session /model
             # switch), falling back to config only if none is set.
             model = getattr(self.session_state, "_model", None) or create_model()
+            # Resolve the agent dir so durable learnings can be persisted to memory.
+            agent_dir = None
+            try:
+                from novacode_cli.config.config import settings
+
+                if getattr(self, "assistant_id", None):
+                    agent_dir = settings.get_agent_dir(self.assistant_id)
+            except Exception:  # noqa: BLE001 — persistence is best-effort
+                agent_dir = None
             result = await compact_conversation(
                 agent=self.agent,
                 model=model,
@@ -6395,6 +6414,7 @@ class NovaApp(App):
                 # The tracker's effective window (accounts for Ollama num_ctx) so
                 # the summarizer input is budgeted to what this model can accept.
                 context_window=getattr(self.token_tracker, "context_window_size", None),
+                agent_dir=agent_dir,
             )
         except Exception as ex:  # noqa: BLE001
             self._log(Text(f"/compact failed: {ex}", style="red"))
@@ -6420,6 +6440,13 @@ class NovaApp(App):
                 style="dim",
             )
             t.append(f"  tokens saved: ~{result.tokens_saved:,}\n", style="dim")
+            learnings = getattr(result, "learnings", "") or ""
+            if learnings:
+                n = learnings.count("\n") + 1
+                t.append(
+                    f"  🧠 {n} learning{'s' if n != 1 else ''} preserved to memory\n",
+                    style="green",
+                )
             summary = getattr(result, "summary", "") or ""
             if summary:
                 t.append(

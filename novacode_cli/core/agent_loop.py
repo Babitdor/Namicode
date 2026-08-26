@@ -713,6 +713,20 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
                         su = response.get("state_update")
                         if su:
                             command_state_update.update(su)
+                            # Mirror the approval onto THIS loop's session_state,
+                            # not just the graph update. The pre-HITL gate reads
+                            # session_state.plan_mode_enabled, so a resolver that
+                            # can only reach a copy of the state — the parent TUI
+                            # answering a spawned session's approval, where the
+                            # flag it clears is a proxy in another process — left
+                            # the real flag set and every write stayed auto-
+                            # rejected after the plan was approved (plan mode
+                            # appeared to hang forever).
+                            if "plan_mode_enabled" in su:
+                                try:
+                                    session_state.plan_mode_enabled = su["plan_mode_enabled"]
+                                except Exception:  # noqa: BLE001
+                                    pass
                         # When the plan is approved, don't resume the plan agent —
                         # the caller (TUI or CLI) handles the hand-off to the main
                         # execution agent. Resuming would let the model continue its
