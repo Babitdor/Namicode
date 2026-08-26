@@ -13,13 +13,17 @@ Server-Sent Events (see :mod:`novacode_cli.commands.chat_handler`).
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+
+logger = logging.getLogger(__name__)
 
 # Max web searches a single persona may run before it must answer.
 _MAX_TOOL_ROUNDS = 2
@@ -140,19 +144,39 @@ PERSONAS: list[Persona] = [
 ]
 
 _RESPONSE_GUIDE = (
-    " You are one member of a council of advisors. Independently analyze the "
-    "question and give your OWN best answer — you cannot see the other members' "
-    "answers. Stay in character, speak in the first person, be technically "
-    "substantive, and keep it focused (~160 words). If you need current or "
-    "factual information, call the web search tool first, then answer."
+    "\n\nYou are one member of a council of advisors answering independently — "
+    "you cannot see the others' answers, so give a COMPLETE answer rather than "
+    "a single angle, and never refer to what anyone else said.\n"
+    "\n"
+    "Answer in this shape, without headings or preamble:\n"
+    "1. Your recommendation, in the first sentence. Commit to one — a reader "
+    "who stops there should know what you would do.\n"
+    "2. The reasoning that actually drives it, from your perspective.\n"
+    "3. The strongest case against your own recommendation, and why you still "
+    "hold it. If it would change your mind, name what evidence would.\n"
+    "\n"
+    "Be concrete: name the technique, the tradeoff, the failure. Prefer a "
+    "specific claim you might be wrong about over a safe generality. No "
+    "bullet-point walls, no restating the question, no 'it depends' without "
+    "saying what it depends on. Roughly 150-200 words. Speak in the first "
+    "person, in character — your perspective is why you are on this council, "
+    "but the answer must stand on its merits, not on your persona.\n"
+    "If the question turns on current or factual information you are unsure "
+    "of, search first, then answer."
 )
 
 _VOTE_GUIDE = (
-    " The council has answered independently. You have read every answer "
-    "(yours is among them, unlabeled). Vote for the SINGLE best answer on merit "
-    "— you may NOT vote for your own. Respond with ONLY a JSON object of the "
-    'form {"choice":"<exact advisor name>","reason":"<one short sentence>"} '
-    "and nothing else."
+    "\n\nThe council has answered independently. Vote for the SINGLE best "
+    "answer on merit. Your own answer is not on the ballot.\n"
+    "\n"
+    "Judge by: does it actually answer the question asked; is the reasoning "
+    "sound; is it specific enough to act on; does it hold up against the risks "
+    "it acknowledges. Do NOT reward the answer that most resembles your own "
+    "outlook, length, or confidence — vote for the one you would want acted on "
+    "if the decision were yours and you had to live with it.\n"
+    "\n"
+    'Respond with ONLY this JSON and nothing else: {"choice":"<exact advisor '
+    'name>","reason":"<one specific sentence naming what made it best>"}'
 )
 
 
@@ -354,6 +378,40 @@ async def _stream_persona_turn(
         rounds += 1
 
 
+async def _cast_ballot(
+voter: Persona,
+answered: list[Persona],
+answers: dict[str, str],
+topic: str,
+model: Any,
+) -> tuple[Persona, str | None, str]:
+    """One ballot. Never raises — a failed vote is simply an abstention."""
+    others = [p for p in answered if p.id != voter.id]
+    if not others:
+        return voter, None, ""
+    valid_names = {p.name for p in others}
+
+    ballot = f"The question was:\n\n{topic}\n\nThe answers:\n\n"
+    for p in others:
+        ballot += f"=== {p.name} ===\n{answers.get(p.id, '')}\n\n"
+    ballot += "Vote for the single best answer."
+
+    try:
+        resp = await model.ainvoke(
+            [("system", voter.system + _VOTE_GUIDE), ("human", ballot)]
+        )
+        return voter, *_parse_vote(_content_text(resp), valid_names)
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 — a bad ballot must not kill the run
+        logger.debug("council vote by %s failed", voter.id, exc_info=True)
+        return voter, None, ""
+
+# Ballots are independent, so run them concurrently: voting was 5 sequential
+# model calls purely because it was written as a loop. Results are emitted in
+# council order so the UI stays deterministic.
+
+
 async def run_council(
     topic: str,
     model: Any,
@@ -407,40 +465,61 @@ async def run_council(
         convo += f"The question before the council:\n\n{topic}\n\n"
         convo += "Give your own independent answer."
 
+        # One member failing must not end the council. A provider hiccup used to
+        # propagate out of run_council and kill the run mid-flight — the user
+        # lost the answers already on screen and got nothing. That member is
+        # dropped from the round instead; the rest still answer and vote.
         full = ""
-        async for event in _stream_persona_turn(persona, convo, model):
-            if event[0] == "delta":
-                full += event[1]
-                yield {"type": "agent_delta", "id": persona.id, "text": event[1]}
-            else:  # ("tool", query)
-                yield {"type": "agent_tool", "id": persona.id, "query": event[1]}
+        failed: str | None = None
+        try:
+            async for event in _stream_persona_turn(persona, convo, model):
+                if event[0] == "delta":
+                    full += event[1]
+                    yield {"type": "agent_delta", "id": persona.id, "text": event[1]}
+                else:  # ("tool", query)
+                    yield {"type": "agent_tool", "id": persona.id, "query": event[1]}
+        except asyncio.CancelledError:
+            raise  # client disconnected / run cancelled — do not swallow
+        except Exception as exc:  # noqa: BLE001 — one member must not end the run
+            failed = f"{type(exc).__name__}: {exc}"
+            logger.debug("council member %s failed", persona.id, exc_info=True)
 
-        answers[persona.id] = full.strip()
-        yield {"type": "agent_done", "id": persona.id, "text": answers[persona.id]}
+        text = full.strip()
+        if failed and not text:
+            yield {
+                "type": "agent_failed",
+                "id": persona.id,
+                "name": persona.name,
+                "message": failed,
+            }
+            continue  # not in `answers`, so excluded from the ballot entirely
+
+        answers[persona.id] = text
+        yield {"type": "agent_done", "id": persona.id, "text": text}
 
     # --- Phase 2: democratic voting (one vote each) ----------------------
+    # Only members who actually produced an answer are on the ballot or hold a
+    # vote — a member that failed above must not be votable (nobody read an
+    # answer from it) and cannot cast one.
+    answered = [p for p in members if answers.get(p.id)]
+    if not answered:
+        yield {
+            "type": "council_error",
+            "message": "No advisor produced an answer — the model may be unavailable.",
+        }
+        yield {"type": "done"}
+        return
+
     yield {"type": "vote_start"}
-    tally: dict[str, int] = {p.id: 0 for p in members}
+    tally: dict[str, int] = {p.id: 0 for p in answered}
 
-    for voter in members:
-        others = [p for p in members if p.id != voter.id]
-        valid_names = {p.name for p in others}
+    ballots = await asyncio.gather(
+        *(_cast_ballot(v, answered, answers, topic, model) for v in answered)
+    )
 
-        ballot = f"The question was:\n\n{topic}\n\nThe answers:\n\n"
-        for p in others:
-            ballot += f"=== {p.name} ===\n{answers.get(p.id, '')}\n\n"
-        ballot += "Vote for the single best answer."
-
-        try:
-            resp = await model.ainvoke(
-                [("system", voter.system + _VOTE_GUIDE), ("human", ballot)]
-            )
-            choice_name, reason = _parse_vote(_content_text(resp), valid_names)
-        except Exception:  # noqa: BLE001 — a bad ballot must not kill the run
-            choice_name, reason = None, ""
-
+    for voter, choice_name, reason in ballots:
         choice_id = name_to_id.get(choice_name) if choice_name else None
-        if choice_id is not None:
+        if choice_id is not None and choice_id in tally:
             tally[choice_id] += 1
 
         yield {
@@ -453,18 +532,26 @@ async def run_council(
         }
 
     # --- Phase 3: majority verdict ---------------------------------------
-    # Winner = most votes; ties broken by council order (first member wins).
+    # Winner = most votes, over the members who actually answered (a failed
+    # member is not in `tally`). Ties break by council order, so the outcome is
+    # deterministic rather than dict-order dependent. With no votes at all
+    # (every ballot abstained) the first answering member stands.
     winner_id = (
-        max(members, key=lambda p: (tally[p.id], -members.index(p))).id
+        max(answered, key=lambda p: (tally[p.id], -answered.index(p))).id
         if any(tally.values())
-        else (members[0].id if members else None)
+        else answered[0].id
     )
+    top = tally[winner_id]
+    tied = [p.id for p in answered if tally[p.id] == top and top > 0]
     yield {
         "type": "verdict",
         "winner_id": winner_id,
         "winner_name": id_to_name.get(winner_id, "") if winner_id else "",
         "tally": tally,
         "votes": sum(tally.values()),
+        # Surfaced so the UI can say "tied, resolved by council order" rather
+        # than presenting a coin-flip as a clear majority.
+        "tied": len(tied) > 1,
         "answer": answers.get(winner_id, "") if winner_id else "",
     }
     yield {"type": "done"}

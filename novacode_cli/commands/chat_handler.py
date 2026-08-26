@@ -54,13 +54,23 @@ _run_lock = threading.Lock()
 # GET /api/council/reset or when the server stops.
 _council_history: list[dict[str, Any]] = []
 
+# How many rounds to retain. The prompt only reads the last few
+# (council._MAX_HISTORY_ROUNDS); a small margin over that lets the UI show a
+# little more scrollback without the list growing without bound.
+_MAX_KEPT_ROUNDS = 12
+
 
 # ---------------------------------------------------------------------------
 # Embedded HTML council page
 # ---------------------------------------------------------------------------
 
 def _make_chat_html() -> str:
-    """Return a self-contained dark editorial council UI (Crimson Archive)."""
+    """Return a self-contained council UI styled after the Nova Textual TUI.
+
+    Tokyo-night palette, JetBrains Mono, matrix-rain banner with the NOVA ASCII
+    logo, accent-bar message cards, and a prompt-dock composer with the ``>``
+    chevron — mirroring ``cowork/ui.py`` so the council feels like the TUI.
+    """
     return r"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -69,323 +79,245 @@ def _make_chat_html() -> str:
 <title>Nova — Council</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&family=Playfair+Display:ital,wght@0,500;0,700;1,500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <style>
-  :root {
-    --crimson: #a21c30;
-    --crimson-light: #d43b52;
-    --charcoal: #1a1614;
-    --charcoal-2: #231f1c;
-    --charcoal-3: #2d2824;
-    --cream: #efe9e3;
-    --cream-muted: #b5ada3;
-    --cream-dim: #7d756b;
-    --gold: #b8860b;
+  :root{
+    --bg:#13141d; --surface:#1a1b26; --panel:#24283b; --boost:#2f3346;
+    --border:#3b4261; --fg:#c0caf5; --muted:#565f89;
+    --primary:#7aa2f7; --secondary:#9ece6a; --accent:#bb9af7;
+    --success:#73daca; --warning:#e0af68; --error:#f7768e;
   }
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
   body {
-    font-family: 'DM Sans', sans-serif;
-    background: var(--charcoal);
-    color: var(--cream);
-    height: 100vh; display: flex; flex-direction: column;
-    background-image:
-      radial-gradient(ellipse at 20% 50%, rgba(162,28,48,0.06) 0%, transparent 60%),
-      radial-gradient(ellipse at 80% 20%, rgba(162,28,48,0.04) 0%, transparent 50%),
-      repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.007) 2px, rgba(255,255,255,0.007) 4px);
+    font-family: 'JetBrains Mono', ui-monospace, 'Cascadia Code', 'SF Mono', monospace;
+    background: var(--bg); color: var(--fg);
+    height: 100vh; display: flex; flex-direction: column; overflow: hidden;
   }
-  header {
-    padding: 18px 32px 16px;
-    display: flex; align-items: center; gap: 14px;
-    flex-shrink: 0;
-    border-bottom: 1px solid var(--charcoal-3);
-    position: relative;
-    background: linear-gradient(180deg, rgba(162,28,48,0.06), transparent);
-  }
-  header::after {
-    content: ''; position: absolute; bottom: -1px; left: 32px;
-    width: 60px; height: 2px; background: var(--crimson);
-  }
-  header .seal {
-    font-size: 26px; line-height: 1;
-    width: 44px; height: 44px; border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    border: 1px solid var(--crimson); color: var(--crimson-light);
-    background: radial-gradient(circle at 50% 40%, rgba(162,28,48,0.18), transparent 70%);
-    box-shadow: 0 0 0 4px rgba(162,28,48,0.05);
-  }
-  header .brand { display: flex; flex-direction: column; gap: 2px; }
-  header h1 {
-    font-family: 'Playfair Display', serif;
-    font-weight: 700; font-size: 21px; font-style: italic;
-    color: var(--cream); letter-spacing: 0.02em; line-height: 1.1;
-  }
-  header .brand span {
-    font-size: 10.5px; color: var(--cream-dim);
-    text-transform: uppercase; letter-spacing: 0.13em;
-  }
-  header .spacer { flex: 1; }
+  ::selection { background: var(--primary); color: #0f0f16; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border); }
+  ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
 
-  /* The bench — advisor seats with live state + vote tally */
-  #bench {
-    display: none; flex-shrink: 0;
-    gap: 10px; padding: 14px 32px;
-    border-bottom: 1px solid var(--charcoal-3);
-    background: var(--charcoal-2);
-    overflow-x: auto;
-  }
+  /* --- matrix-rain banner (TUI home screen) --- */
+  .banner { position: relative; flex: 0 0 auto; height: clamp(120px, 15vw, 180px);
+    overflow: hidden; border-bottom: 1px solid var(--border); background: var(--bg);
+    animation: fadein .5s ease both; }
+  #rain { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .logo { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    padding-bottom: 18px; font-size: clamp(4.5px, 0.95vw, 11px); line-height: 1.3; white-space: pre;
+    color: var(--primary); text-shadow: 0 0 16px rgba(122,162,247,.45);
+    user-select: none; pointer-events: none; overflow: hidden; }
+  .bootline { position: absolute; left: 0; right: 0; bottom: 8px; text-align: center;
+    font-size: 11px; color: var(--muted); letter-spacing: .06em; min-height: 16px; }
+  .bootline .ok { color: var(--success); }
+
+  /* --- header (TUI info bar) --- */
+  header { display: flex; align-items: center; gap: 10px; padding: 8px 14px;
+    background: var(--surface); border-bottom: 1px solid var(--border); flex: 0 0 auto;
+    animation: rise .35s ease both; }
+  .mark { color: var(--primary); font-weight: 800; letter-spacing: .02em; white-space: nowrap; }
+  .mode { font-size: 10px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase;
+    color: #b4c6ef; background: #161f33; border: 1px solid var(--primary); padding: 2px 8px; white-space: nowrap; }
+  .state { font-size: 11px; padding: 2px 8px; border: 1px solid; white-space: nowrap; }
+  .state.ok { color: var(--success); border-color: var(--success); }
+  .state.deny { color: var(--warning); border-color: var(--warning); }
+  .run-badge { display: none; font-size: 11px; padding: 2px 8px; border: 1px solid var(--accent);
+    color: var(--accent); white-space: nowrap; animation: pulse 1.6s ease-in-out infinite; }
+  .run-badge.show { display: inline-block; }
+  .sid { margin-left: auto; color: var(--muted); font-size: 11px; white-space: nowrap; }
+  #new-thread { background: transparent; color: var(--muted); border: 1px solid var(--border);
+    font: inherit; font-size: 10px; padding: 3px 10px; cursor: pointer; text-transform: uppercase;
+    letter-spacing: .1em; transition: border-color .15s, color .15s; white-space: nowrap; }
+  #new-thread:hover { border-color: var(--primary); color: var(--fg); }
+
+  /* --- the bench — advisor seats with live state + vote tally --- */
+  #bench { display: none; flex-shrink: 0; gap: 8px; padding: 10px 14px;
+    border-bottom: 1px solid var(--border); background: var(--surface); overflow-x: auto; }
   #bench.active { display: flex; }
-  #bench .seat {
-    flex: 1 1 0; min-width: 96px;
-    display: flex; flex-direction: column; align-items: center; gap: 5px;
-    padding: 10px 6px; border-radius: 8px;
-    border: 1px solid var(--charcoal-3);
-    background: var(--charcoal);
-    transition: border-color 0.3s, box-shadow 0.3s, opacity 0.3s, transform 0.2s;
-    opacity: 0.5;
-  }
-  #bench .seat-av {
-    position: relative; font-size: 22px;
-    width: 40px; height: 40px; border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    border: 2px solid var(--seat); background: var(--charcoal-2);
-  }
-  #bench .seat-badge {
-    position: absolute; top: -6px; right: -8px;
-    min-width: 18px; height: 18px; padding: 0 4px; border-radius: 9px;
-    font-size: 11px; font-weight: 700; line-height: 18px; text-align: center;
-    background: var(--charcoal-3); color: var(--cream-dim);
-    font-family: 'DM Sans', sans-serif; opacity: 0; transform: scale(0.6);
-    transition: opacity 0.25s, transform 0.25s, background 0.25s, color 0.25s;
-  }
-  #bench .seat-badge.has { opacity: 1; transform: scale(1); background: var(--gold); color: #1a1410; }
-  #bench .seat-name {
-    font-size: 11.5px; font-weight: 600; color: var(--cream-muted); text-align: center;
-  }
-  #bench .seat-state {
-    font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.06em;
-    color: var(--cream-dim);
-  }
+  #bench .seat { flex: 1 1 0; min-width: 92px; display: flex; flex-direction: column;
+    align-items: center; gap: 4px; padding: 8px 6px; border-radius: 4px;
+    border: 1px solid var(--border); border-left: 3px solid var(--seat, var(--border));
+    background: var(--panel); transition: border-color .3s, box-shadow .3s, opacity .3s, transform .2s;
+    opacity: .5; }
+  #bench .seat-av { position: relative; font-size: 20px; width: 36px; height: 36px;
+    border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    border: 1px solid var(--seat, var(--border)); background: var(--bg); }
+  #bench .seat-badge { position: absolute; top: -6px; right: -8px; min-width: 17px; height: 17px;
+    padding: 0 4px; border-radius: 9px; font-size: 10px; font-weight: 700; line-height: 17px;
+    text-align: center; background: var(--panel); color: var(--muted); font-family: inherit;
+    opacity: 0; transform: scale(.6); transition: opacity .25s, transform .25s, background .25s, color .25s; }
+  #bench .seat-badge.has { opacity: 1; transform: scale(1); background: var(--warning); color: #1a1410; }
+  #bench .seat-name { font-size: 10.5px; font-weight: 600; color: var(--fg); text-align: center; }
+  #bench .seat-state { font-size: 9px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
   #bench .seat[data-state="speaking"] { opacity: 1; border-color: var(--seat); box-shadow: 0 0 0 1px var(--seat); }
   #bench .seat[data-state="speaking"] .seat-av { animation: pulse 1.3s ease-in-out infinite; }
   #bench .seat[data-state="answered"] { opacity: 1; }
   #bench .seat[data-state="answered"] .seat-state { color: var(--seat); }
   #bench .seat[data-state="voting"] { opacity: 1; }
-  #bench .seat[data-state="voting"] .seat-state { color: var(--gold); }
-  #bench .seat[data-state="winner"] {
-    opacity: 1; border-color: var(--gold);
-    box-shadow: 0 0 0 1px var(--gold), 0 0 22px rgba(184,134,11,0.25);
-    transform: translateY(-2px);
-  }
-  #bench .seat[data-state="winner"] .seat-state { color: var(--gold); font-weight: 700; }
-  @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 var(--seat); } 50% { box-shadow: 0 0 0 4px transparent; } }
-  #new-thread {
-    background: transparent; color: var(--cream-muted);
-    border: 1px solid var(--charcoal-3); border-radius: 4px;
-    padding: 6px 12px; font-size: 11px; font-family: 'DM Sans', sans-serif;
-    text-transform: uppercase; letter-spacing: 0.08em; cursor: pointer;
-    transition: border-color 0.2s, color 0.2s;
-  }
-  #new-thread:hover { border-color: var(--crimson); color: var(--cream); }
-  #messages {
-    flex: 1; overflow-y: auto; padding: 28px 32px;
-    display: flex; flex-direction: column; gap: 18px;
-    scroll-behavior: smooth;
-  }
-  #messages::-webkit-scrollbar { width: 6px; }
-  #messages::-webkit-scrollbar-thumb { background: var(--charcoal-3); border-radius: 3px; }
+  #bench .seat[data-state="voting"] .seat-state { color: var(--warning); }
+  #bench .seat[data-state="winner"] { opacity: 1; border-color: var(--warning);
+    box-shadow: 0 0 0 1px var(--warning), 0 0 22px rgba(224,175,104,.25); transform: translateY(-2px); }
+  #bench .seat[data-state="winner"] .seat-state { color: var(--warning); font-weight: 700; }
 
-  .topic-banner {
-    align-self: center; max-width: 80%;
-    text-align: center; color: var(--cream-muted);
-    font-family: 'Playfair Display', serif; font-style: italic; font-size: 17px;
-    padding: 8px 20px; border-bottom: 1px solid var(--charcoal-3);
-  }
+  /* --- messages --- */
+  #messages { flex: 1; overflow-y: auto; padding: 20px 16px; display: flex;
+    flex-direction: column; gap: 12px; scroll-behavior: smooth; }
+  #messages::-webkit-scrollbar { width: 8px; }
+  #messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 
-  /* Agent message */
-  .agent {
-    max-width: 82%; align-self: flex-start;
-    background: var(--charcoal-2);
-    border-left: 3px solid var(--seat, var(--crimson));
-    border-radius: 0 6px 6px 0;
-    padding: 12px 18px; animation: msgIn 0.35s ease-out both;
-  }
-  .agent .who {
-    display: flex; align-items: center; gap: 8px;
-    margin-bottom: 6px; font-weight: 600; font-size: 13.5px;
-    color: var(--seat, var(--cream));
-  }
-  .agent .who .avatar { font-size: 16px; }
-  .agent .search-chip {
-    font-size: 11.5px; color: var(--gold); margin-bottom: 6px;
-    font-family: 'JetBrains Mono', 'Fira Code', monospace; opacity: 0.9;
-    word-break: break-word;
-  }
-  .agent .body { line-height: 1.6; font-size: 14px; color: var(--cream); }
+  .topic-banner { align-self: center; max-width: 80%; text-align: center; color: var(--muted);
+    font-size: 13px; padding: 6px 18px; border-bottom: 1px solid var(--border); }
+
+  /* agent message — accent-bar card like the TUI transcript */
+  .agent { max-width: 84%; align-self: flex-start; background: var(--surface);
+    border-left: 3px solid var(--seat, var(--primary)); padding: 10px 14px;
+    animation: rise .3s ease both; }
+  .agent .who { display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
+    font-weight: 700; font-size: 11px; color: var(--seat, var(--fg)); }
+  .agent .who .avatar { font-size: 14px; }
+  .agent .who-tag { margin-left: auto; font-size: 9px; font-weight: 500; text-transform: uppercase;
+    letter-spacing: .08em; color: var(--muted); border: 1px solid var(--border); padding: 1px 6px;
+    border-radius: 10px; white-space: nowrap; }
+  .agent .search-chip { font-size: 11px; color: var(--warning); margin-bottom: 6px; opacity: .9;
+    word-break: break-word; }
+  .agent .body { line-height: 1.6; font-size: 13px; color: var(--fg); }
   .agent .body p { margin: 0 0 8px; }
   .agent .body p:last-child { margin-bottom: 0; }
-  .agent .body pre {
-    background: #0d0b09 !important; border-radius: 3px; padding: 12px;
-    overflow-x: auto; margin: 10px 0; border: 1px solid var(--charcoal-3);
-    font-size: 12.5px;
-  }
-  .agent .body code {
-    background: rgba(162,28,48,0.12); padding: 1px 6px; border-radius: 3px;
-    font-size: 13px; color: var(--crimson-light);
-  }
-  .agent .body pre code { background: none !important; padding: 0 !important; }
-  .agent.streaming .body::after {
-    content: '▍'; color: var(--seat, var(--crimson-light));
-    animation: caret 1s steps(1) infinite; margin-left: 1px;
-  }
-  @keyframes caret { 50% { opacity: 0; } }
-  @keyframes msgIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+  .agent .body pre { background: var(--bg) !important; border: 1px solid var(--border);
+    border-left: 3px solid var(--accent); border-radius: 3px; padding: 10px 12px; overflow-x: auto;
+    margin: 8px 0; font-size: 12px; }
+  .agent .body code { background: var(--boost); border: 1px solid var(--border); padding: 1px 5px;
+    border-radius: 3px; font-size: 12px; color: var(--secondary); }
+  .agent .body pre code { background: none !important; border: 0; padding: 0 !important; color: var(--fg); }
+  .agent.streaming .body::after { content: '▍'; color: var(--seat, var(--primary));
+    animation: blink 1s steps(1) infinite; margin-left: 1px; }
 
-  /* Voting */
-  .phase {
-    align-self: center; color: var(--gold); font-size: 12px;
-    text-transform: uppercase; letter-spacing: 0.2em; font-weight: 600;
-    margin: 10px 0 2px; display: flex; align-items: center; gap: 12px;
-  }
-  .phase::before, .phase::after {
-    content: ''; height: 1px; width: 60px; background: var(--charcoal-3);
-  }
-  .vote-card {
-    max-width: 82%; align-self: flex-start;
-    background: var(--charcoal-2); border: 1px solid var(--charcoal-3);
-    border-radius: 6px; padding: 10px 16px; font-size: 13px;
-    animation: msgIn 0.3s ease-out both;
-  }
-  .vote-card .voter {
-    font-weight: 600; color: var(--seat, var(--cream)); margin-bottom: 6px;
-    display: flex; align-items: center; gap: 6px;
-  }
-  .vote-card .ballot {
-    display: flex; justify-content: space-between; gap: 10px;
-    padding: 3px 0; color: var(--cream-muted); border-top: 1px dashed var(--charcoal-3);
-  }
-  .vote-card .ballot:first-of-type { border-top: none; }
-  .vote-card .ballot .pts {
-    color: var(--gold); font-weight: 600; font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-  .vote-card .ballot .why { color: var(--cream-dim); font-size: 12px; }
+  /* phase divider */
+  .phase { align-self: center; color: var(--accent); font-size: 10px; text-transform: uppercase;
+    letter-spacing: .2em; font-weight: 700; margin: 8px 0 2px; display: flex; align-items: center; gap: 12px; }
+  .phase::before, .phase::after { content: ''; height: 1px; width: 60px; background: var(--border); }
+  .phase-sub { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--muted);
+    font-size: 10px; margin-left: 10px; }
 
-  /* Verdict */
-  .verdict {
-    align-self: stretch; margin: 8px 0;
-    background: linear-gradient(180deg, rgba(162,28,48,0.10), rgba(162,28,48,0.02));
-    border: 1px solid var(--crimson); border-radius: 8px;
-    padding: 18px 22px; animation: msgIn 0.4s ease-out both;
-  }
-  .verdict h3 {
-    font-family: 'Playfair Display', serif; font-style: italic;
-    font-size: 18px; color: var(--cream); margin-bottom: 12px;
-    display: flex; align-items: center; gap: 10px;
-  }
-  .leaderboard { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
-  .lb-row { display: flex; align-items: center; gap: 10px; font-size: 13px; }
-  .lb-row .lb-name { width: 150px; color: var(--cream-muted); flex-shrink: 0; }
-  .lb-row.win .lb-name { color: var(--cream); font-weight: 600; }
-  .lb-bar { flex: 1; height: 8px; background: var(--charcoal-3); border-radius: 4px; overflow: hidden; }
-  .lb-fill { height: 100%; background: var(--seat, var(--crimson)); border-radius: 4px; transition: width 0.6s ease; }
-  .lb-row .lb-pts { width: 34px; text-align: right; color: var(--gold); font-weight: 600; font-variant-numeric: tabular-nums; }
-  .verdict .winner-answer {
-    border-top: 1px solid var(--charcoal-3); padding-top: 12px;
-    line-height: 1.6; font-size: 14px; color: var(--cream);
-  }
-  .verdict .winner-answer pre { background: #0d0b09 !important; padding: 12px; border-radius: 3px; overflow-x: auto; }
-
-  .error-msg {
-    align-self: center; color: var(--crimson-light); font-size: 13px;
-    padding: 10px 20px; text-align: center;
-    background: rgba(162,28,48,0.08);
-    border-radius: 4px; border: 1px solid rgba(162,28,48,0.2);
-  }
-
-  #input-area {
-    display: flex; gap: 10px; padding: 16px 32px 20px;
-    border-top: 1px solid var(--charcoal-3);
-    flex-shrink: 0; align-items: flex-end; background: var(--charcoal);
-  }
-  #input-area textarea {
-    flex: 1; padding: 12px 16px; border: 1px solid var(--charcoal-3);
-    background: var(--charcoal-2); color: var(--cream);
-    font-size: 14px; font-family: 'DM Sans', sans-serif;
-    resize: none; outline: none; min-height: 46px; max-height: 180px;
-    transition: border-color 0.25s, box-shadow 0.25s; border-radius: 4px;
-  }
-  #input-area textarea::placeholder { color: var(--cream-dim); }
-  #input-area textarea:focus { border-color: var(--crimson); box-shadow: 0 0 0 1px rgba(162,28,48,0.2); }
-  #input-area textarea:disabled { opacity: 0.5; }
-  #input-area button {
-    padding: 12px 24px; border-radius: 4px; border: none;
-    background: var(--crimson); color: #fff; font-size: 13px; font-weight: 500;
-    font-family: 'DM Sans', sans-serif; cursor: pointer;
-    transition: background 0.2s, transform 0.15s;
-    letter-spacing: 0.04em; text-transform: uppercase; min-height: 46px;
-  }
-  #input-area button:hover { background: var(--crimson-light); transform: translateY(-1px); }
-  #input-area button:disabled { opacity: 0.35; cursor: not-allowed; transform: none; }
-  #status-bar {
-    padding: 6px 32px; font-size: 11px; color: var(--cream-dim);
-    background: var(--charcoal-2); text-align: center; flex-shrink: 0;
-    text-transform: uppercase; letter-spacing: 0.08em;
-    border-top: 1px solid var(--charcoal-3);
-  }
-  .welcome { text-align: center; margin: auto; padding: 60px 32px; max-width: 520px; animation: msgIn 0.6s ease-out both; }
-  .welcome h2 { font-family: 'Playfair Display', serif; font-weight: 700; font-size: 28px; font-style: italic; color: var(--cream); margin-bottom: 6px; }
-  .welcome .divider { width: 40px; height: 2px; background: var(--crimson); margin: 16px auto; }
-  .welcome p { font-size: 13.5px; line-height: 1.7; color: var(--cream-muted); margin-bottom: 8px; }
-  .welcome .seats { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 16px; }
-  .welcome .seat { font-size: 12px; padding: 4px 10px; border: 1px solid var(--charcoal-3); border-radius: 20px; color: var(--cream-muted); }
-
-  /* "independent answer" tag on each advisor card */
-  .agent .who-tag {
-    margin-left: auto; font-size: 9.5px; font-weight: 500;
-    text-transform: uppercase; letter-spacing: 0.08em;
-    color: var(--cream-dim); border: 1px solid var(--charcoal-3);
-    padding: 2px 7px; border-radius: 10px;
-  }
-  /* phase divider title/subtitle */
-  .phase-title { }
-  .phase-sub {
-    text-transform: none; letter-spacing: 0; font-weight: 400;
-    color: var(--cream-dim); font-size: 11px; margin-left: 10px;
-  }
   /* one-line democratic votes */
-  .vote-row {
-    align-self: stretch; max-width: 82%;
-    display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px;
-    padding: 7px 14px; font-size: 13px;
-    border-left: 2px solid var(--seat, var(--crimson));
-    background: var(--charcoal-2); border-radius: 0 4px 4px 0;
-    animation: msgIn 0.25s ease-out both;
-  }
-  .vote-row .v-voter { font-weight: 600; color: var(--seat, var(--cream)); }
-  .vote-row .v-arrow { color: var(--cream-dim); }
-  .vote-row .v-choice { font-weight: 600; }
-  .vote-row .v-choice.muted { color: var(--cream-dim); font-weight: 400; font-style: italic; }
-  .vote-row .v-why { flex-basis: 100%; color: var(--cream-dim); font-size: 11.5px; }
-  /* verdict extras */
-  .verdict-sub { color: var(--gold); font-size: 12px; margin: -6px 0 12px; letter-spacing: 0.03em; }
-  .verdict h3 .w-name { color: var(--cream); }
-  .winner-label {
-    margin-top: 4px; font-size: 10.5px; text-transform: uppercase;
-    letter-spacing: 0.12em; color: var(--cream-dim);
-  }
+  .vote-row { align-self: stretch; max-width: 84%; display: flex; flex-wrap: wrap;
+    align-items: baseline; gap: 8px; padding: 6px 12px; font-size: 12px;
+    border-left: 3px solid var(--seat, var(--primary)); background: var(--surface);
+    animation: rise .25s ease both; }
+  .vote-row .v-voter { font-weight: 700; color: var(--seat, var(--fg)); }
+  .vote-row .v-arrow { color: var(--muted); }
+  .vote-row .v-choice { font-weight: 700; }
+  .vote-row .v-choice.muted { color: var(--muted); font-weight: 400; font-style: italic; }
+  .vote-row .v-why { flex-basis: 100%; color: var(--muted); font-size: 11px; }
+
+  /* verdict */
+  .verdict { align-self: stretch; margin: 8px 0; background: var(--surface);
+    border: 1px solid var(--border); border-left: 4px solid var(--warning); border-radius: 4px;
+    padding: 16px 18px; animation: rise .4s ease both; }
+  .verdict h3 { font-size: 14px; color: var(--fg); margin-bottom: 10px; display: flex;
+    align-items: center; gap: 10px; font-weight: 800; }
+  .verdict h3 .w-name { color: var(--warning); }
+  .verdict-sub { color: var(--muted); font-size: 11px; margin: -4px 0 12px; letter-spacing: .03em; }
+  .leaderboard { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+  .lb-row { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+  .lb-row .lb-name { width: 150px; color: var(--muted); flex-shrink: 0; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .lb-row.win .lb-name { color: var(--fg); font-weight: 700; }
+  .lb-bar { flex: 1; height: 8px; background: var(--panel); border-radius: 4px; overflow: hidden; }
+  .lb-fill { height: 100%; background: var(--seat, var(--primary)); border-radius: 4px;
+    transition: width .6s ease; }
+  .lb-row .lb-pts { width: 60px; text-align: right; color: var(--warning); font-weight: 600;
+    font-variant-numeric: tabular-nums; }
+  .winner-label { margin-top: 4px; font-size: 9.5px; text-transform: uppercase; letter-spacing: .12em;
+    color: var(--muted); }
+  .verdict .winner-answer { border-top: 1px solid var(--border); padding-top: 10px; line-height: 1.6;
+    font-size: 13px; color: var(--fg); }
+  .verdict .winner-answer pre { background: var(--bg) !important; border: 1px solid var(--border);
+    border-left: 3px solid var(--accent); padding: 10px 12px; border-radius: 3px; overflow-x: auto; }
+
+  .error-msg { align-self: center; color: var(--error); font-size: 12px; padding: 8px 18px;
+    text-align: center; background: rgba(247,118,142,.08); border-radius: 4px;
+    border: 1px solid rgba(247,118,142,.25); }
+
+  /* welcome */
+  .welcome { text-align: center; margin: auto; padding: 40px 24px; max-width: 520px;
+    animation: rise .5s ease both; }
+  .welcome h2 { font-weight: 800; font-size: 22px; color: var(--fg); margin-bottom: 6px; }
+  .welcome .divider { width: 40px; height: 2px; background: var(--primary); margin: 14px auto; }
+  .welcome p { font-size: 12.5px; line-height: 1.7; color: var(--muted); margin-bottom: 8px; }
+  .welcome .seats { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 14px; }
+  .welcome .seat { font-size: 11px; padding: 3px 10px; border: 1px solid var(--border);
+    border-radius: 20px; color: var(--muted); }
+
+  /* --- composer (TUI prompt dock) --- */
+  #input-area { display: flex; align-items: stretch; border-top: 1px solid var(--border);
+    background: var(--panel); flex-shrink: 0; }
+  .mode-badge { display: flex; align-items: center; padding: 0 10px; font-size: 10px; font-weight: 700;
+    letter-spacing: .14em; text-transform: uppercase; color: #b4c6ef; background: #161f33;
+    border-right: 1px solid var(--primary); }
+  .prefix { display: flex; align-items: center; padding: 0 10px; color: var(--accent); font-weight: 800;
+    font-size: 16px; background: var(--panel); user-select: none; }
+  #input-area textarea { flex: 1; resize: none; min-height: 56px; max-height: 180px; background: var(--panel);
+    border: 0; color: var(--fg); font: inherit; font-size: 13px; padding: 16px 12px; outline: none;
+    transition: background .2s; }
+  #input-area textarea::placeholder { color: var(--muted); }
+  #input-area textarea:focus { background: var(--boost); }
+  #input-area textarea:disabled { opacity: .45; }
+  #input-area button { background: var(--primary); color: #0f0f16; border: 0; font: inherit; font-weight: 700;
+    font-size: 12px; padding: 0 18px; cursor: pointer; letter-spacing: .06em; transition: background .15s; }
+  #input-area button:hover:not(:disabled) { background: #8fb4ff; }
+  #input-area button:disabled { opacity: .4; cursor: not-allowed; }
+
+  /* --- status bar --- */
+  #status-bar { display: flex; align-items: center; gap: 16px; padding: 5px 14px;
+    background: var(--surface); border-top: 1px solid var(--border); font-size: 11px; color: var(--muted);
+    flex: 0 0 auto; animation: rise .4s ease both; animation-delay: .24s; }
+  #status-bar .dot.on { color: var(--success); }
+  #status-bar .dot.off { color: var(--muted); }
+  #status-bar .spacer { flex: 1; }
+  #status-bar .hint { color: var(--muted); }
+
+  /* --- atmosphere --- */
+  .scanlines { position: fixed; inset: 0; pointer-events: none; z-index: 9998; opacity: .5;
+    background: repeating-linear-gradient(0deg, rgba(0,0,0,.14) 0 1px, transparent 1px 3px); }
+  .vignette { position: fixed; inset: 0; pointer-events: none; z-index: 9997;
+    background: radial-gradient(ellipse at center, transparent 58%, rgba(0,0,0,.38)); }
+
+  /* --- motion --- */
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  @keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes blink { 0%,49% { opacity: 1; } 50%,100% { opacity: 0; } }
+  @keyframes pulse { 0%,100% { opacity: .75; } 50% { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 </style>
 </head>
 <body>
+<div class="banner">
+  <canvas id="rain"></canvas>
+  <pre class="logo">⣿⣿⣿⣿⣟⠊⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠙⢿⣿         ███╗   ██╗  ██████╗  ██╗   ██╗  █████╗
+⣿⣿⣿⡏⠁⠀⠀⠀⠀⠀⠀⢀⣰⣶⣶⡄⠀⠀⠀⠀⠀⠀⢀⠀⠀⠈⢻        ████╗  ██║ ██╔═══██╗ ██║   ██║ ██╔══██╗
+⣿⣿⣿⠁⠄⠀⠀⠀⠀⠀⣤⣾⣿⣿⣿⣿⡂⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠽       ██╔██╗ ██║ ██║   ██║ ██║   ██║ ███████║
+⣿⣿⡏⣸⠀⠀⠀⠀⢀⣼⣿⣿⣿⣿⣿⣿⣿⡆⠀⠀⠈⠀⠀⠀⠀⠀⠀⠰      ██║╚██╗██║ ██║   ██║ ╚██╗ ██╔╝ ██╔══██║
+⣿⣿⡇⠁⠀⠀⠀⣤⣍⣙⣿⣿⣏⣠⠄⠲⠲⠦⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢻     ██║ ╚████║ ╚██████╔╝  ╚████╔╝  ██║  ██║
+⣿⣿⠁⠀⠀⠀⠀⠀⢤⠙⣿⣿⣿⣇⣀⡐⢂⣠⡄⠠⠀⠀⠀⠀⠀⠀⡀⢠⢸     ╚═╝  ╚═══╝  ╚═════╝    ╚═══╝   ╚═╝  ╚═╝
+⣿⣿⠀⠀⠐⠀⣶⣷⣷⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⠀⠀⠐⠈⠀⠀⠀⠉⠘⣼
+⣿⣿⠀⠈⠀⠀⣿⣿⣿⡿⣿⠿⢿⣿⣿⣿⣿⣿⣿⣧⡀⠀⢄⠲⠀⠀⠀⣱      ~ Five advisors. One question.
+⣿⣿⡆⠀⠀⠀⠈⣿⣿⣷⣶⣼⣾⣿⣿⣿⣿⣿⣿⣿⣷⠂⠀⠀⠂⢀⢲         Independent answers. One vote each.
+⣿⣿⣿⡆⠀⠀⠀⠙⣿⠋⠠⠄⢀⠉⣹⣿⣿⣿⣿⣿⣿⠀⠀⠀⠀⠀⣿          The majority decides.
+⣿⣿⣿⣿⣦⠀⠀⠀⠘⣿⣤⣤⣶⣿⣿⣿⣿⣿⠟⣛⡽⠀⠀⠀⠠⣸            ♥︎ NOVA ~
+⣿⣿⣿⣿⣿⣷⡀⠀⠀⠈⠻⣿⣿⣿⠿⠛⠋⠐⠚⠛⠃   ⣰⣿</pre>
+  <div class="bootline"><span class="ok">✓</span> <span id="boot"></span></div>
+</div>
 <header>
-  <div class="seal">⚖</div>
-  <div class="brand">
-    <h1>The Council</h1>
-    <span>Independent answers · Democratic vote · Majority rules</span>
-  </div>
-  <div class="spacer"></div>
+  <span class="mark">◆ NOVA COUNCIL</span>
+  <span class="mode">council</span>
+  <span id="run-badge" class="run-badge">● convening</span>
+  <span class="sid" id="sid"></span>
   <button id="new-thread" title="Clear the prior session and start fresh">⟲ New session</button>
 </header>
 <div id="bench"></div>
@@ -404,10 +336,20 @@ def _make_chat_html() -> str:
   </div>
 </div>
 <div id="input-area">
+  <span class="mode-badge">council</span>
+  <span class="prefix">&gt;</span>
   <textarea id="input" rows="1" placeholder="Pose a question to the council…" autofocus></textarea>
   <button id="send-btn">Convene</button>
 </div>
-<div id="status-bar">ready</div>
+<div id="status-bar">
+  <span id="conn" class="dot off">○ ready</span>
+  <span id="stat-run" class="dot off">○ idle</span>
+  <span class="spacer"></span>
+  <span class="hint">⏎ send · ⇧⏎ newline</span>
+  <span id="clock"></span>
+</div>
+<div class="scanlines"></div>
+<div class="vignette"></div>
 
 <script>
 const $ = id => document.getElementById(id);
@@ -415,14 +357,21 @@ const messages = $('messages');
 const input = $('input');
 const sendBtn = $('send-btn');
 const statusBar = $('status-bar');
-
 const bench = $('bench');
 let es = null;
+
 const agentEls = {};    // id -> {wrap, body, buf}
 const benchSeats = {};  // id -> {seat, badge, votes}
 let agentMeta = {};     // id -> {name, avatar, color}
 
+const REDUCED = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
 function setStatus(m) { statusBar.textContent = m; }
+function setRun(on) {
+  $('run-badge').classList.toggle('show', on);
+  $('stat-run').textContent = on ? '● running' : '○ idle';
+  $('stat-run').className = 'dot ' + (on ? 'on' : 'off');
+}
 function atBottom() { return messages.scrollHeight - messages.scrollTop - messages.clientHeight < 100; }
 function scrollDown(force) { if (force || atBottom()) messages.scrollTop = messages.scrollHeight; }
 function dropWelcome() { const w = messages.querySelector('.welcome'); if (w) w.remove(); }
@@ -441,14 +390,69 @@ function addPhase(text, sub) {
   messages.appendChild(e); scrollDown(true);
 }
 
-// --- The bench: the row of advisor seats at the top of the chamber ---------
+/* --- matrix rain (theme-tinted, like the TUI home screen) --- */
+(function(){
+  const cv = document.getElementById('rain');
+  if (!cv || !cv.getContext || REDUCED) return;
+  const cx = cv.getContext('2d');
+  const KATA = 'ｱｲｳｴｵｶｷｸｹｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜｦﾝ';
+  const FS = 15;
+  let cols = 0, drops = [];
+  function resize(){
+    cv.width = cv.clientWidth; cv.height = cv.clientHeight;
+    cols = Math.max(1, Math.ceil(cv.width / FS));
+    drops = Array.from({length: cols}, () => Math.floor(Math.random() * -40));
+  }
+  function frame(){
+    cx.fillStyle = 'rgba(19,20,29,0.10)';
+    cx.fillRect(0, 0, cv.width, cv.height);
+    cx.font = FS + 'px "JetBrains Mono", monospace';
+    for (let i = 0; i < cols; i++){
+      const ch = KATA[Math.floor(Math.random() * KATA.length)];
+      const y = drops[i] * FS;
+      cx.fillStyle = 'rgba(122,162,247,0.9)';
+      cx.fillText(ch, i * FS, y);
+      cx.fillStyle = 'rgba(122,162,247,0.22)';
+      cx.fillText(ch, i * FS, y - FS);
+      if (y > cv.height + 40 && Math.random() > 0.975) drops[i] = Math.floor(Math.random() * -20);
+      drops[i]++;
+    }
+    requestAnimationFrame(frame);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+  frame();
+})();
+
+/* --- boot line typewriter --- */
+(function(){
+  const el = document.getElementById('boot');
+  if (!el) return;
+  const text = 'council chamber online · five advisors · one verdict';
+  if (REDUCED){ el.textContent = text; return; }
+  let i = 0;
+  (function type(){
+    el.textContent = text.slice(0, i);
+    if (i < text.length){ el.textContent += '▊'; i++; setTimeout(type, 16); }
+  })();
+})();
+
+/* --- clock --- */
+(function(){
+  const c = document.getElementById('clock');
+  if (!c) return;
+  function tick(){ c.textContent = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}); }
+  tick(); setInterval(tick, 10000);
+})();
+
+/* --- the bench: the row of advisor seats at the top of the chamber --- */
 function buildBench(agents) {
   bench.innerHTML = '';
   for (const k in benchSeats) delete benchSeats[k];
   agents.forEach(a => {
     agentMeta[a.id] = a;
     const seat = el('div', 'seat'); seat.dataset.state = 'idle';
-    seat.style.setProperty('--seat', a.color || 'var(--crimson)');
+    seat.style.setProperty('--seat', a.color || 'var(--primary)');
     const av = el('div', 'seat-av'); av.textContent = a.avatar || '•';
     const badge = el('div', 'seat-badge'); badge.textContent = '0'; badge.title = 'votes';
     av.appendChild(badge);
@@ -473,7 +477,7 @@ function bumpSeatVote(id) {
 function startAgent(meta) {
   dropWelcome();
   const wrap = el('div', 'agent streaming');
-  wrap.style.setProperty('--seat', meta.color || 'var(--crimson)');
+  wrap.style.setProperty('--seat', meta.color || 'var(--primary)');
   const who = el('div', 'who');
   const av = el('span', 'avatar'); av.textContent = meta.avatar || '•';
   const nm = el('span'); nm.textContent = meta.name || meta.id;
@@ -511,18 +515,18 @@ function agentSearch(id, query) {
   scrollDown();
 }
 
-// Each member casts ONE vote for the best (non-self) answer.
+/* Each member casts ONE vote for the best (non-self) answer. */
 function renderVote(ev) {
   const vm = agentMeta[ev.voter] || {};
   const cm = ev.choice ? (agentMeta[ev.choice] || {}) : {};
   const row = el('div', 'vote-row');
-  row.style.setProperty('--seat', vm.color || 'var(--crimson)');
+  row.style.setProperty('--seat', vm.color || 'var(--primary)');
   const voter = el('span', 'v-voter');
   voter.textContent = (vm.avatar ? vm.avatar + ' ' : '') + (ev.voter_name || ev.voter);
   const arrow = el('span', 'v-arrow'); arrow.textContent = '→';
   const choice = el('span', 'v-choice');
   if (ev.choice) {
-    choice.style.color = cm.color || 'var(--cream)';
+    choice.style.color = cm.color || 'var(--fg)';
     choice.textContent = (cm.avatar ? cm.avatar + ' ' : '') + (ev.choice_name || '');
     bumpSeatVote(ev.choice);
   } else {
@@ -538,7 +542,7 @@ function renderVote(ev) {
 function renderVerdict(ev) {
   const wm = agentMeta[ev.winner_id] || {};
   const card = el('div', 'verdict');
-  card.style.setProperty('--seat', wm.color || 'var(--crimson)');
+  card.style.setProperty('--seat', wm.color || 'var(--warning)');
   if (ev.winner_id && benchSeats[ev.winner_id]) {
     seatState(ev.winner_id, 'winner', 'chosen');
   }
@@ -554,14 +558,13 @@ function renderVerdict(ev) {
     ' of ' + (ev.votes || 0) + ' votes)';
   card.appendChild(sub);
 
-  // Tally bars by vote count.
   const tally = ev.tally || {};
   const max = Math.max(1, ...Object.values(tally));
   const board = el('div', 'leaderboard');
   Object.keys(tally).sort((a, b) => tally[b] - tally[a]).forEach(id => {
     const m = agentMeta[id] || {};
     const r = el('div', 'lb-row' + (id === ev.winner_id ? ' win' : ''));
-    r.style.setProperty('--seat', m.color || 'var(--crimson)');
+    r.style.setProperty('--seat', m.color || 'var(--primary)');
     const name = el('div', 'lb-name'); name.textContent = (m.avatar ? m.avatar + ' ' : '') + (m.name || id);
     const bar = el('div', 'lb-bar'); const fill = el('div', 'lb-fill');
     fill.style.width = Math.round((tally[id] / max) * 100) + '%';
@@ -585,6 +588,7 @@ function renderVerdict(ev) {
 function endRun() {
   if (es) { es.close(); es = null; }
   input.disabled = false; sendBtn.disabled = false; input.focus();
+  setRun(false);
 }
 
 function convene() {
@@ -592,8 +596,8 @@ function convene() {
   if (!topic || es) return;
   input.value = ''; input.style.height = 'auto';
   input.disabled = true; sendBtn.disabled = true;
+  setRun(true);
 
-  // fresh round
   for (const k in agentEls) delete agentEls[k];
   agentMeta = {};
 
@@ -627,7 +631,7 @@ function convene() {
   es.addEventListener('council_error', e => {
     let m = 'The council failed.';
     try { m = JSON.parse(e.data).message || m; } catch (_) {}
-    addError(m); setStatus('error');
+    addError(m); setStatus('error'); setRun(false);
   });
   es.addEventListener('done', e => { setStatus('the council has spoken'); endRun(); });
   es.onerror = () => {
@@ -659,7 +663,7 @@ function newThread() {
   w.innerHTML = '<h2>Fresh Council</h2><div class="divider"></div>' +
     '<p>Prior session cleared. Pose a new question to convene the council.</p>';
   messages.appendChild(w);
-  setStatus('ready');
+  setStatus('ready'); setRun(false);
   input.focus();
 }
 newThreadBtn.addEventListener('click', newThread);
@@ -797,6 +801,13 @@ class _ChatHandler(BaseHTTPRequestHandler):
                     _council_history.append(
                         {"topic": topic, "transcript": transcript, "winner": winner_name}
                     )
+                    # Bounded: the prompt only carries the last few rounds
+                    # (council._MAX_HISTORY_ROUNDS), but the list itself grew
+                    # forever — a long-lived server accumulated every full
+                    # transcript it had ever produced. Keep a small margin over
+                    # what the prompt uses and drop the rest.
+                    if len(_council_history) > _MAX_KEPT_ROUNDS:
+                        del _council_history[:-_MAX_KEPT_ROUNDS]
                 self._sse("done", {})
                 break
 

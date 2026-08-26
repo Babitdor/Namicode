@@ -348,3 +348,96 @@ def test_sse_run_records_and_resets_history(council_server):
     ) as resp:
         assert resp.status == 204
     assert ch._council_history == []
+
+
+# ── production hardening ─────────────────────────────────────────────────────
+
+
+class _OneFailsModel(FakeModel):
+    """Second persona's stream raises, as a provider hiccup would."""
+
+    def __init__(self):
+        self.calls = 0
+
+    async def astream(self, messages):
+        self.calls += 1
+        if self.calls == 2:
+            raise RuntimeError("provider 503")
+        async for c in super().astream(messages):
+            yield c
+
+
+async def test_a_failing_member_does_not_kill_the_council():
+    """One member failing used to propagate out and end the whole run.
+
+    The user lost the answers already streamed and got nothing. That member is
+    now dropped from the round; the rest still answer, vote, and reach a
+    verdict.
+    """
+    events = [e async for e in council.run_council("topic", _OneFailsModel())]
+    types = [e["type"] for e in events]
+
+    assert types[-1] == "done", types
+    failed = [e for e in events if e["type"] == "agent_failed"]
+    assert len(failed) == 1, "the failure should be reported, not swallowed"
+
+    verdict = next(e for e in events if e["type"] == "verdict")
+    assert verdict["winner_name"], "still reached a verdict"
+    # The failed member is not votable — nobody read an answer from it.
+    assert failed[0]["id"] not in verdict["tally"]
+
+
+async def test_a_failed_member_is_not_on_the_ballot():
+    """Its name must not appear in any ballot, or votes could land on nothing."""
+    events = [e async for e in council.run_council("topic", _OneFailsModel())]
+    failed_id = next(e["id"] for e in events if e["type"] == "agent_failed")
+    for e in events:
+        if e["type"] == "vote":
+            assert e["choice"] != failed_id
+            assert e["voter"] != failed_id, "a failed member cannot vote either"
+
+
+async def test_ballots_run_concurrently():
+    """Voting was 5 sequential model calls purely because it was a loop."""
+    import time
+
+    class _SlowVotes(FakeModel):
+        async def ainvoke(self, messages):
+            await asyncio.sleep(0.2)
+            return await super().ainvoke(messages)
+
+    t0 = time.perf_counter()
+    _ = [e async for e in council.run_council("topic", _SlowVotes())]
+    elapsed = time.perf_counter() - t0
+    # 5 ballots x 200ms: ~1.0s serial, ~0.2s concurrent.
+    assert elapsed < 0.7, f"ballots still look serial ({elapsed:.2f}s)"
+
+
+async def test_verdict_reports_a_tie():
+    """A tie broken by council order must not read as a clear majority."""
+
+    class _SplitVote(FakeModel):
+        """Each voter picks a different advisor, so nobody gets a majority."""
+
+        def __init__(self):
+            self.n = 0
+
+        async def ainvoke(self, messages):
+            self.n += 1
+            names = ["The Architect", "The Pragmatist", "The Skeptic",
+                     "The Innovator", "The Minimalist"]
+            return _Chunk(json.dumps({"choice": names[self.n % len(names)],
+                                      "reason": "r"}))
+
+    events = [e async for e in council.run_council("topic", _SplitVote())]
+    verdict = next(e for e in events if e["type"] == "verdict")
+    assert verdict["tied"] is True
+    assert verdict["winner_name"], "a tie still resolves to a winner"
+
+
+def test_history_is_bounded():
+    """The prompt trims history, but the list itself grew forever."""
+    assert ch._MAX_KEPT_ROUNDS > council._MAX_HISTORY_ROUNDS, (
+        "keep at least what the prompt reads"
+    )
+    assert ch._MAX_KEPT_ROUNDS <= 50, "but still bounded"
