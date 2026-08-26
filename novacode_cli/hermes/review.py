@@ -298,6 +298,43 @@ class ReviewRunner:
             else:
                 logger.exception("Nova out-of-band review failed")
 
+    async def should_consolidate(self) -> bool:
+        """Is there un-reviewed substantive work worth distilling before exit?
+
+        The periodic trigger fires on tool-call *count* (``should_review``), so a
+        session that does real work and ends below the threshold — six edits and
+        quit — never reviews, and everything it learned is lost. This is the
+        session-end catch: it asks only whether the current window contains real
+        work that has not been reviewed yet, with no threshold at all.
+
+        Deliberately narrower than ``should_review``: no failure-burst or
+        hard-cap paths (those already fired mid-session if they applied), and a
+        review that just completed means there is nothing left to distill.
+        """
+        if not self._enabled:
+            return False
+
+        count = await self._tracker.get_call_count()
+        if count <= 0:
+            return False  # nothing since the last review
+
+        try:
+            window = await self._tracker.get_tool_history(limit=count)
+        except Exception:  # noqa: BLE001
+            window = []
+
+        # Same definition of "real work" the periodic trigger uses. An unknown
+        # window (history unavailable) counts as substantive, matching
+        # should_review's bias toward reviewing rather than silently skipping.
+        substantive = (not window) or any(
+            (h.get("tool") in _SUBSTANTIVE_TOOLS) or (h.get("tool") not in _TRIVIAL_BUILTINS)
+            for h in window
+        )
+        if not substantive:
+            return False
+
+        return not await self._get_review_just_completed()
+
     async def run_review_task(self, request: ModelRequest) -> None:
         """Background wrapper around :meth:`run_review`.
 

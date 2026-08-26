@@ -3861,7 +3861,29 @@ class NovaApp(App):
             with contextlib.suppress(Exception):
                 await sup.close_all(timeout=5.0)
         await self._save_session()
+        await self._consolidate_learning()
         self.exit()
+
+    async def _consolidate_learning(self) -> None:
+        """Distil this session's un-reviewed work into memory before it ends.
+
+        Hermes reviews on a tool-call threshold, so a session that does real
+        work and stops short of it (a handful of edits, then quit) learned
+        nothing durable. This runs the same review once on the way out. Purely
+        best-effort — exiting must never hang or fail on it.
+        """
+        try:
+            from novacode_cli.hermes.middleware import get_active_learning_middleware
+
+            # LangGraph compiles middleware into the graph and does not expose
+            # the instances, so the module publishes the live one.
+            mw = get_active_learning_middleware()
+            if mw is None:
+                return
+            if await mw.consolidate_session():
+                self._log(Text("✓ Session learnings consolidated.", style="dim"))
+        except Exception:  # noqa: BLE001 — never block exit on learning
+            pass
 
     async def _save_session(self, *, cleared: bool = False) -> None:
         """Save the conversation to disk via the session manager (best effort).
@@ -6506,6 +6528,8 @@ class NovaApp(App):
         # Preserve the current conversation under its existing id, but mark it
         # cleared so neither --continue nor the --resume picker brings it back.
         await self._save_session(cleared=True)
+        # Distil this conversation's un-reviewed work before it's gone.
+        await self._consolidate_learning()
         # Belt-and-suspenders: explicitly mark the session cleared even if the
         # save above early-returned (e.g. the checkpointer read timed out or had
         # no messages) but a prior /save had already written it as not-cleared.

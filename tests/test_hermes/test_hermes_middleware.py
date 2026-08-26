@@ -319,3 +319,116 @@ class TestSyncModelCallHook:
 
         assert result is response
         handler.assert_called_once_with(request)
+
+
+class TestSessionConsolidation:
+    """Session-end consolidation — distil un-reviewed work on quit/clear."""
+
+    def _stateful_store(self, state: dict):
+        """A store whose aget/aput read/write a plain dict (namespace→key→value)."""
+        store = MagicMock()
+
+        async def aget(namespace, key):
+            entry = state.get(namespace, {}).get(key)
+            if entry is None:
+                return None
+            return MagicMock(value=dict(entry))
+
+        async def aput(namespace, key, value):
+            state.setdefault(namespace, {})[key] = dict(value)
+
+        store.aget.side_effect = aget
+        store.aput.side_effect = aput
+        return store
+
+    def _request(self):
+        """A ModelRequest whose model returns a review lesson."""
+        review_ai = MagicMock()
+        review_ai.content = '<lesson topic="testing">- learned X</lesson>'
+        request = MagicMock()
+        request.messages = []
+        request.model = MagicMock()
+        request.model.ainvoke = AsyncMock(return_value=review_ai)
+        return request
+
+    async def test_skips_without_live_request(self, mock_store):
+        """No turn happened this session → nothing to consolidate, no model call."""
+        mw = NovaLearningMiddleware(store=mock_store, enabled=True)
+        assert await mw.consolidate_session() is False
+        mock_store.aput.assert_not_awaited()
+
+    async def test_skips_when_only_trivial_work(self):
+        """Read-only browsing is not worth distilling into memory."""
+        state = {
+            ("nova", "tool_counter"): {"counter": {"count": 4}},
+            ("nova", "tool_history"): {
+                "history": {
+                    "entries": [
+                        {"tool": "read_file", "success": True, "timestamp": 1.0},
+                        {"tool": "grep", "success": True, "timestamp": 2.0},
+                        {"tool": "think", "success": True, "timestamp": 3.0},
+                        {"tool": "web_search", "success": True, "timestamp": 4.0},
+                    ]
+                }
+            },
+            ("nova", "meta"): {"review_just_completed": {"value": False}},
+        }
+        store = self._stateful_store(state)
+        mw = NovaLearningMiddleware(store=store, enabled=True)
+        mw._last_request = self._request()
+
+        assert await mw.consolidate_session() is False
+        # No review model call was issued.
+        mw._last_request.model.ainvoke.assert_not_awaited()
+
+    async def test_skips_after_just_completed_review(self):
+        """A review that just ran means there is nothing left to distill."""
+        state = {
+            ("nova", "tool_counter"): {"counter": {"count": 2}},
+            ("nova", "tool_history"): {
+                "history": {
+                    "entries": [
+                        {"tool": "edit_file", "success": True, "timestamp": 1.0},
+                        {"tool": "execute", "success": True, "timestamp": 2.0},
+                    ]
+                }
+            },
+            ("nova", "meta"): {"review_just_completed": {"value": True}},
+        }
+        store = self._stateful_store(state)
+        mw = NovaLearningMiddleware(store=store, enabled=True)
+        mw._last_request = self._request()
+
+        assert await mw.consolidate_session() is False
+        mw._last_request.model.ainvoke.assert_not_awaited()
+
+    async def test_runs_review_on_substantive_work(self):
+        """Real edits below the threshold get distilled on the way out."""
+        state = {
+            ("nova", "tool_counter"): {"counter": {"count": 2}},
+            ("nova", "tool_history"): {
+                "history": {
+                    "entries": [
+                        {"tool": "edit_file", "success": True, "timestamp": 1.0},
+                        {"tool": "execute", "success": True, "timestamp": 2.0},
+                    ]
+                }
+            },
+            ("nova", "meta"): {"review_just_completed": {"value": False}},
+        }
+        store = self._stateful_store(state)
+        mw = NovaLearningMiddleware(store=store, enabled=True)
+        mw._last_request = self._request()
+
+        assert await mw.consolidate_session() is True
+        # The review ran as an out-of-band model call.
+        mw._last_request.model.ainvoke.assert_awaited_once()
+        # The counter was reset so the next session starts clean.
+        assert state[("nova", "tool_counter")]["counter"]["count"] == 0
+
+    async def test_disabled_is_noop(self, mock_store):
+        """Disabled middleware never consolidates."""
+        mw = NovaLearningMiddleware(store=mock_store, enabled=False)
+        mw._last_request = self._request()
+        assert await mw.consolidate_session() is False
+        mock_store.aput.assert_not_awaited()

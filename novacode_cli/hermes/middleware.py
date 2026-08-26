@@ -120,6 +120,19 @@ class NovaState(AgentState):
     """Preview of the last review content."""
 
 
+# The live middleware instance, so callers outside the graph can reach it.
+# LangGraph compiles middleware into the graph and does not expose the
+# instances, but session-end consolidation has to call the same object that
+# holds this session's tracker and last request. Mirrors the
+# get_shared_mcp_middleware() pattern in novacode_cli/mcp/__init__.py.
+_active_middleware: "NovaLearningMiddleware | None" = None
+
+
+def get_active_learning_middleware() -> "NovaLearningMiddleware | None":
+    """The learning middleware for the current agent, if one was built."""
+    return _active_middleware
+
+
 class NovaLearningMiddleware(AgentMiddleware[NovaState]):
     """Track tool usage, trigger periodic reviews, and manage learning state.
 
@@ -191,6 +204,16 @@ class NovaLearningMiddleware(AgentMiddleware[NovaState]):
         # Start time of the current task (set in abefore_agent), used to slice
         # the task's episodic window in aafter_agent.
         self._task_start_ts: float | None = None
+        # Last ModelRequest seen, retained so a session-end consolidation can
+        # run a review without a live turn to hang off (see
+        # consolidate_session). run_review only needs .messages and .model.
+        self._last_request: Any = None
+
+        # Publish for get_active_learning_middleware(). The graph owns the
+        # instance once compiled, so /quit and /clear have no other way to
+        # reach this session's tracker.
+        global _active_middleware
+        _active_middleware = self
 
     @property
     def _refinement_tasks(self) -> set[asyncio.Task]:
@@ -298,6 +321,50 @@ class NovaLearningMiddleware(AgentMiddleware[NovaState]):
     def after_agent(self, state: AgentState, runtime: Any = None) -> None:  # noqa: ARG002
         """Synchronous hook — pass-through (evolution runs async)."""
 
+    async def consolidate_session(self, *, timeout: float = 45.0) -> bool:
+        """Distil un-reviewed work into durable memory before the session ends.
+
+        Nova's learning is event-driven: a review fires on tool-call count or a
+        failure burst. A session that finishes real work *below* that threshold
+        — six edits and quit — never reviews, so its lessons are lost at exit.
+        This is the missing session-end trigger; it reuses the normal review
+        path (and therefore the normal ``record_lesson`` /
+        ``update_user_model`` writes) rather than adding a second learning
+        surface.
+
+        Called from ``/quit`` and ``/clear``. Bounded by *timeout* and never
+        raises: exiting must not hang or fail on a consolidation.
+
+        Returns:
+            True if a consolidation review actually ran.
+        """
+        if not self._enabled or self._last_request is None:
+            return False
+
+        try:
+            if not await self._review.should_consolidate():
+                return False
+        except Exception:  # noqa: BLE001 - never block exit on the check
+            logger.debug("consolidation check failed", exc_info=True)
+            return False
+
+        try:
+            await asyncio.wait_for(
+                self._review.run_review(self._last_request), timeout=timeout
+            )
+        except (TimeoutError, asyncio.TimeoutError):
+            logger.debug("session consolidation timed out after %.0fs", timeout)
+            return False
+        except Exception:  # noqa: BLE001 - a failed consolidation must not break exit
+            logger.debug("session consolidation failed", exc_info=True)
+            return False
+
+        try:
+            await self._tracker.reset_counter()
+        except Exception:  # noqa: BLE001
+            pass
+        return True
+
     async def aafter_agent(self, state: AgentState, runtime: Any = None) -> None:  # noqa: ARG002
         """At task completion, maybe evolve a skill from a complex task.
 
@@ -390,6 +457,9 @@ class NovaLearningMiddleware(AgentMiddleware[NovaState]):
         """
         if not self._enabled:
             return await handler(request)
+
+        # Retained for consolidate_session (session end has no live request).
+        self._last_request = request
 
         should_review = await self._review.should_review()
         response = await handler(request)
