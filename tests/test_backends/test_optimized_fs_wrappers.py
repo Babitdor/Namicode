@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
+import novacode_cli.backends.filesystem as fs_mod
 from novacode_cli.backends.filesystem import OptimizedFilesystemBackend
 
 
@@ -90,6 +92,67 @@ def test_glob_prunes_vendored_dirs_and_sorts_newest_first(
     assert names.index("new.py") < names.index("old.py")  # newest first
 
 
+
+
+def test_glob_never_descends_into_vendored_dirs(
+    backend: OptimizedFilesystemBackend, tmp_path: Path
+) -> None:
+    """The prune must happen DURING the walk, not after it.
+
+    Filtering vendored hits out of the finished result gives the right answer
+    but still pays to walk and ``stat()`` every one of them — on a repo with a
+    real ``.venv`` that is tens of thousands of files, and glob blew deepagents'
+    20s ``GLOB_TIMEOUT``. Both implementations return the same matches, so
+    assert on the *cost*: count stats taken inside the pruned subtree. Timing
+    would be flaky on CI; this is exact.
+    """
+    vendored = tmp_path / "node_modules" / "pkg"
+    vendored.mkdir(parents=True)
+    for i in range(20):
+        (vendored / f"junk{i}.py").write_text("x")
+    (tmp_path / "real.py").write_text("x")
+
+    touched: list[str] = []
+    real_stat = Path.stat
+
+    def spy(self, *a, **kw):
+        touched.append(str(self))
+        return real_stat(self, *a, **kw)
+
+    with mock.patch.object(Path, "stat", spy):
+        result = backend.glob("**/*.py")
+
+    names = [Path(m["path"]).name for m in (result.matches or [])]
+    assert names == ["real.py"]
+    inside = [t for t in touched if "node_modules" in t]
+    assert not inside, f"stat'd {len(inside)} paths inside a pruned dir"
+
+
+def test_glob_matches_at_any_depth_like_rglob(
+    backend: OptimizedFilesystemBackend, tmp_path: Path
+) -> None:
+    """A bare pattern must still match at any depth (rglob semantics)."""
+    (tmp_path / "pkg" / "sub").mkdir(parents=True)
+    (tmp_path / "top.py").write_text("x")
+    (tmp_path / "pkg" / "mid.py").write_text("x")
+    (tmp_path / "pkg" / "sub" / "deep.py").write_text("x")
+    (tmp_path / "pkg" / "notes.txt").write_text("x")
+
+    names = {Path(m["path"]).name for m in (backend.glob("*.py").matches or [])}
+    assert names == {"top.py", "mid.py", "deep.py"}, names
+
+
+def test_glob_scopes_to_path_argument(
+    backend: OptimizedFilesystemBackend, tmp_path: Path
+) -> None:
+    """path= restricts the walk to that subtree."""
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    (tmp_path / "a" / "in.py").write_text("x")
+    (tmp_path / "b" / "out.py").write_text("x")
+
+    names = {Path(m["path"]).name for m in (backend.glob("*.py", path="a").matches or [])}
+    assert names == {"in.py"}
 # -- grep: smart-case ---------------------------------------------------------
 
 

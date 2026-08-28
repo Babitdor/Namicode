@@ -677,34 +677,83 @@ class OptimizedFilesystemBackend(FilesystemBackend):
                 )
         return None
 
-    # -- glob: prune noise + newest-first ------------------------------------
+    # -- glob: prune noise during the walk + newest-first ---------------------
 
     def glob(self, pattern: str, path: str | None = None) -> GlobResult:
-        """Glob, then drop vendored-dir noise and order newest-first.
+        """Glob with vendored dirs pruned *during* the walk, newest-first.
 
-        Bare ``glob`` over a repo with a vendored ``.venv`` / ``node_modules``
-        returns thousands of irrelevant hits in arbitrary order. We filter out
-        the same :data:`_SKIP_DIRS` the grep fallback prunes and sort by mtime so
+        Upstream calls ``search_path.rglob(pattern)``, which descends into every
+        subtree and ``stat()``s every hit before anything can be filtered. On a
+        repo with a vendored ``.venv`` / ``node_modules`` that is tens of
+        thousands of files (26k here vs 1.8k real ones), which blows the 20s
+        ``GLOB_TIMEOUT`` in deepagents' glob tool.
+
+        Filtering afterwards, as this method used to, still paid the full cost.
+        We walk with ``os.walk`` and prune :data:`_SKIP_DIRS` from ``dirnames``
+        in place, so those subtrees are never descended into — the same fix
+        :meth:`_py_impl` already applies to grep. Results are ordered by mtime so
         the files the user is likely working on come first.
         """
-        result = super().glob(pattern, path)
-        if result.error or not result.matches:
-            return result
-        pruned = [m for m in result.matches if not self._under_skip_dir(m.get("path", ""))]
-        pruned.sort(key=lambda m: self._best_effort_mtime(m.get("path", "")), reverse=True)
-        return GlobResult(matches=pruned)
+        if self.virtual_mode and ".." in Path(pattern).parts:
+            msg = "Path traversal not allowed in glob pattern"
+            raise ValueError(msg)
 
-    @staticmethod
-    def _under_skip_dir(path_str: str) -> bool:
-        """True if any path segment is a pruned vendored directory."""
-        return any(part in _SKIP_DIRS for part in Path(path_str.replace("\\", "/")).parts)
-
-    def _best_effort_mtime(self, path_str: str) -> float:
-        """Modification time of ``path_str`` (real/virtual), ``0.0`` if unstattable."""
         try:
-            return self._resolve_path(path_str).stat().st_mtime
-        except (OSError, RuntimeError, ValueError):
-            return 0.0
+            search_path = self.cwd if path in (None, "/") else self._resolve_path(path)
+            if not search_path.exists() or not search_path.is_dir():
+                return GlobResult(matches=[])
+        except (OSError, RuntimeError, ValueError) as e:
+            return GlobResult(error=f"Error globbing path '{path}': {e}", matches=[])
+
+        # rglob(p) matches p at any depth; wcglob needs that spelled out.
+        match_pat = pattern.lstrip("/")
+        if not match_pat.startswith("**/"):
+            match_pat = "**/" + match_pat
+        flags = wcglob.BRACE | wcglob.GLOBSTAR
+
+        matches: list[dict] = []
+        try:
+            for dirpath, dirnames, filenames in os.walk(str(search_path)):
+                dirnames[:] = [
+                    d for d in dirnames if d not in _SKIP_DIRS and not d.endswith(".egg-info")
+                ]
+                for name in filenames:
+                    full = Path(dirpath) / name
+                    try:
+                        rel = full.relative_to(search_path).as_posix()
+                    except ValueError:
+                        continue
+                    if not wcglob.globmatch(rel, match_pat, flags=flags):
+                        continue
+                    if self.virtual_mode:
+                        try:
+                            out_path = self._to_virtual_path(full)
+                        except (OSError, RuntimeError, ValueError):
+                            continue
+                    else:
+                        out_path = str(full)
+                    try:
+                        st = full.stat()
+                        matches.append(
+                            {
+                                "path": out_path,
+                                "is_dir": False,
+                                "size": int(st.st_size),
+                                "_mtime": st.st_mtime,
+                            }
+                        )
+                    except OSError:
+                        matches.append({"path": out_path, "is_dir": False, "_mtime": 0.0})
+        except (OSError, RuntimeError, ValueError) as e:
+            return GlobResult(
+                error=f"Glob of '{path}' aborted partway: {e}",
+                matches=[{k: v for k, v in m.items() if k != "_mtime"} for m in matches],
+            )
+
+        matches.sort(key=lambda m: m["_mtime"], reverse=True)
+        for m in matches:
+            del m["_mtime"]
+        return GlobResult(matches=matches)
 
 
 class ConversationHistoryBackend(FilesystemBackend):
