@@ -761,6 +761,76 @@ def test_user_rejection_does_not_trip_the_guard():
     assert agent.calls == _ROUNDS + 1
 
 
+# -- library auto-summarization backstop --------------------------------------
+
+
+class _SummarizedMsg:
+    """A message tagged the way SummarizationMiddleware tags its output."""
+
+    id = "sum1"
+    additional_kwargs = {"lc_source": "summarization"}
+
+
+def _summarizing_agent(text: str):
+    """Agent that summarizes mid-turn, then streams *text* as assistant prose."""
+
+    class Agent:
+        async def aget_state(self, config):
+            return _State([])
+
+        async def astream(self, inp, **kw):
+            # SummarizationMiddleware rewrote history mid-turn.
+            yield ((), "updates", {"model": {"messages": [_SummarizedMsg()]}})
+            # Its summary streams back as ordinary assistant tokens.
+            yield ((), "messages", (_Chunk("m1", [{"type": "text", "text": text}]), {}))
+
+        async def aupdate_state(self, **kw):
+            pass
+
+    return Agent()
+
+
+def test_auto_compaction_is_announced_not_silent():
+    """The library backstop's summary is dropped, but must leave a trace.
+
+    Its "## SESSION INTENT" block streams as normal prose, so the user watches
+    text appear and then vanish. Dropping it silently gave no explanation —
+    unlike Nova's own /compact, which reports what it did.
+    """
+    evts = _collect(_summarizing_agent("## SESSION INTENT" + chr(10) * 2 + "Build the thing"))
+
+    # The summary itself never becomes an assistant message.
+    assert not any(isinstance(e, ev.AssistantMessage) for e in evts)
+    # The live preview is retracted...
+    assert any(isinstance(e, ev.TextDiscard) for e in evts)
+    # ...and the retraction is explained.
+    notices = [
+        e
+        for e in evts
+        if isinstance(e, ev.ContextMessage) and e.event_type == "nova_auto_compact"
+    ]
+    assert len(notices) == 1, [type(e).__name__ for e in evts]
+    assert "compact" in notices[0].message.lower()
+
+
+def test_normal_prose_after_summarization_is_kept_and_unannounced():
+    """Only the summary block is suppressed — a real answer still commits.
+
+    Guards the obvious over-reach: announcing (or dropping) every message that
+    happens to follow a summarization event.
+    """
+    evts = _collect(_summarizing_agent("Here is the actual answer."))
+
+    assert any(
+        isinstance(e, ev.AssistantMessage) and e.text == "Here is the actual answer."
+        for e in evts
+    )
+    assert not any(
+        isinstance(e, ev.ContextMessage) and e.event_type == "nova_auto_compact"
+        for e in evts
+    )
+
+
 if __name__ == "__main__":
     test_happy_path_text_tool_todo()
     test_question_interrupt_resumes()

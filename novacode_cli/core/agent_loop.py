@@ -235,17 +235,29 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
 
         Returns ``[AssistantMessage]`` to commit, ``[TextDiscard]`` to drop a
         live preview that was suppressed (internal context / dedup), or ``[]``.
+        A suppressed library-summarization block also appends a
+        ``ContextMessage`` so the retraction is not silent.
         """
         nonlocal pending_text, current_ai_message_id, _post_summarization
         nonlocal has_responded, _streamed_pending
 
-        def _discard() -> list:
+        def _discard(notice: str | None = None) -> list:
             nonlocal pending_text, current_ai_message_id, _streamed_pending
             pending_text = ""
             current_ai_message_id = None
             had = _streamed_pending
             _streamed_pending = False
-            return [ev.TextDiscard()] if had else []
+            out: list = [ev.TextDiscard()] if had else []
+            if notice:
+                out.append(
+                    ev.ContextMessage(
+                        message=notice,
+                        event_type="nova_auto_compact",
+                        icon="✓",
+                        color="dim",
+                    )
+                )
+            return out
 
         if not pending_text.strip():
             return _discard()
@@ -253,7 +265,12 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
         if _post_summarization:
             _post_summarization = False
             if is_internal_context_text(pending_text):
-                return _discard()
+                # deepagents' SummarizationMiddleware backstop fired mid-turn and
+                # streamed its "## SESSION INTENT" block as ordinary assistant
+                # prose. Dropping it silently left the user watching text appear
+                # and vanish with no explanation — unlike Nova's own /compact,
+                # which reports what it did. Leave a trace.
+                return _discard("Context auto-compacted to fit the window")
 
         if is_internal_context_text(pending_text):
             # Internal context echo — never shown to the user.
@@ -861,8 +878,14 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
         # Recognised provider failures (usage/rate limit, auth, connectivity)
         # get a clean, actionable notice instead of a raw SDK string/traceback —
         # surfaced identically in both front-ends.
-        from novacode_cli.errors import friendly_model_error
+        from novacode_cli.errors import friendly_model_error, is_context_overflow
 
+        # Context-window overflow is recoverable: emit a dedicated event so the
+        # TUI can compact and retry once instead of just showing the error.
+        if is_context_overflow(e):
+            friendly = friendly_model_error(e) or str(e)
+            yield ev.ContextOverflow(friendly, exception=e)
+            return
         friendly = friendly_model_error(e)
         if friendly is not None:
             yield ev.Error(friendly, exception=e, is_provider_notice=True)
