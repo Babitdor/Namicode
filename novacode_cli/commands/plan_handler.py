@@ -56,6 +56,7 @@ async def handle_plan_command(
         /plan <prompt>           - Enable plan mode and send prompt to agent
         /plan status             - Show current plan mode status
         /plan off                - Disable plan mode (with approval)
+        /plan list               - List archived plans across all projects
 
     Args:
         agent: The current agent (Nova Agent for execution).
@@ -81,6 +82,10 @@ async def handle_plan_command(
 
     if arg == "off":
         return await _disable_plan_mode(agent, session_state)
+
+    if arg in ("list", "ls"):
+        _show_plan_archive()
+        return True
 
     # Treat it as a prompt for the plan agent
     return await _start_plan_mode(agent, session_state, args)
@@ -351,6 +356,55 @@ __all__ = [
     "PLAN_AGENT_TOOLS",
     "EXECUTION_AGENT_TOOLS",
 ]
+
+
+def _show_plan_archive(limit: int = 30) -> None:
+    """Print every archived plan, newest first, grouped by origin project.
+
+    Plans live with their project; the archive under ``~/.nova/plans/`` mirrors
+    them so they can be browsed across checkouts. Plans written before the
+    archive existed are backfilled on first listing.
+    """
+    from rich.table import Table
+
+    from novacode_cli.plan_archive import backfill_from_project, list_archived_plans
+
+    # Plans saved before the archive existed are otherwise invisible to it.
+    try:
+        backfill_from_project(settings.get_workspace_root())
+    except Exception:  # noqa: BLE001 - listing must work even if this fails
+        pass
+
+    plans = list_archived_plans(limit=limit)
+    console.print()
+    if not plans:
+        console.print("[dim]No archived plans yet.[/dim]")
+        console.print("[dim]Plans are archived when you approve them via plan mode.[/dim]")
+        console.print()
+        return
+
+    from datetime import datetime
+
+    current = str(settings.get_workspace_root())
+    table = Table(show_header=True, header_style="bold", box=None, padding=(0, 1))
+    table.add_column("Plan")
+    table.add_column("Project")
+    table.add_column("Saved", style="dim")
+
+    for p in plans:
+        # Mark the project in play so the list is scannable at a glance.
+        here = p.project == current
+        project = Path(p.project).name + (" [cyan](here)[/cyan]" if here else "")
+        table.add_row(
+            p.title,
+            project,
+            datetime.fromtimestamp(p.modified).strftime("%Y-%m-%d %H:%M"),
+        )
+
+    console.print(table)
+    console.print()
+    console.print(f"[dim]{len(plans)} plan(s) — archive: {settings.nova_dir / 'plans'}[/dim]")
+    console.print()
 
 
 # ---------------------------------------------------------------------------

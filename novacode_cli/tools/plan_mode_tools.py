@@ -121,6 +121,21 @@ def enter_plan_mode(reason: str = "") -> str:
 # ---------------------------------------------------------------------------
 
 
+def _mirror_to_global_archive(plan_path: "Path", project_root: "Path") -> None:
+    """Copy the saved plan into ``~/.nova/plans/<project>/`` (best-effort).
+
+    Plans live with their project, which makes browsing across checkouts
+    impossible. The archive is a read-only mirror for that; the project copy
+    stays authoritative, so a failure here must never affect approval.
+    """
+    try:
+        from novacode_cli.plan_archive import mirror_plan
+
+        mirror_plan(plan_path, project_root)
+    except Exception:  # noqa: BLE001 - archiving must never fail an approval
+        pass
+
+
 def _persist_approved_plan(plan: str) -> str | None:
     """Save an approved plan to ``.nova/plans/`` named after its title.
 
@@ -149,6 +164,7 @@ def _persist_approved_plan(plan: str) -> str | None:
     if path.exists():
         path = plans_dir / f"plan-{slug}-{stamp}.md"
     path.write_text(plan, encoding="utf-8")
+    _mirror_to_global_archive(path, root)
     return str(path.relative_to(root)) if path.is_relative_to(root) else str(path)
 
 
