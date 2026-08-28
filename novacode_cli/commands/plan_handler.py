@@ -219,7 +219,8 @@ async def _disable_plan_mode(
         plan_content = session_state.plan_content
     else:
         # Priority 2: Read from latest plan file as fallback (may be stale from previous session)
-        plans_dir = Path(settings.project_root or Path.cwd()) / ".nova" / "plans"
+        # Same root exit_plan_mode writes to (see _persist_approved_plan).
+        plans_dir = settings.get_workspace_root() / ".nova" / "plans"
         plan_path = find_latest_plan_file(plans_dir, backend=backend)
         if plan_path:
             # Try reading through backend first, fall back to filesystem.

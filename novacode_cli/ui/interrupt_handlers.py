@@ -82,7 +82,15 @@ def resolve_plan_content(
     if inline_plan:
         return inline_plan, None
 
-    plans_dir = Path.cwd() / ".nova" / "plans"
+    # Same root exit_plan_mode writes to (settings.get_workspace_root()).
+    # A bare Path.cwd() here silently missed every saved plan whenever Nova
+    # was launched from outside the project root.
+    from novacode_cli.config.config import settings
+
+    try:
+        plans_dir = settings.get_workspace_root() / ".nova" / "plans"
+    except Exception:  # noqa: BLE001
+        plans_dir = Path.cwd() / ".nova" / "plans"
     if not plans_dir.exists():
         return None, None
 
