@@ -34,6 +34,7 @@ class SkillInvocation:
     description: str
     args: str | None = None
     supporting_files: list[str] = field(default_factory=list)
+    executable: str | None = None  # human-readable description if the skill is runnable
 
 # File extensions to skip when scanning for supporting files
 _SKIP_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".pdf", ".zip",
@@ -134,6 +135,22 @@ async def _try_skill_invocation(
     skill_dir = _find_skill_dir(matched_skill, user_skills_dir, project_skills_dir, claude_skills_dir)
     supporting_files = _get_supporting_files(skill_dir) if skill_dir else {}
 
+    # Detect a runnable executable (skill.py / package/ / pyproject entrypoint).
+    executable_desc: str | None = None
+    if skill_dir is not None:
+        from novacode_cli.skills.executable import find_executable
+
+        exe = find_executable(skill_dir)
+        if exe is not None:
+            executable_desc = exe.describe()
+
+    # ``--run`` executes the skill's executable directly and returns its output
+    # as the prompt, instead of feeding the markdown to the agent.
+    if executable_desc is not None and cmd_args and cmd_args.strip().startswith("--run"):
+        return _run_skill_executable(
+            skill_dir, cmd_args, skill_name, source_label, description_short, executable_desc
+        )
+
     prompt_parts = [
         "Follow the instructions in the skill below.\n\n",
         f"--- SKILL: {skill_name} ---\n\n",
@@ -167,6 +184,47 @@ async def _try_skill_invocation(
         description=description_short,
         args=cmd_args,
         supporting_files=sorted(supporting_files.keys()),
+        executable=executable_desc,
+    )
+
+
+def _run_skill_executable(
+    skill_dir: Path,
+    cmd_args: str,
+    skill_name: str,
+    source_label: str,
+    description_short: str,
+    executable_desc: str,
+) -> SkillInvocation:
+    """Run a skill's executable for ``/skill:<name> --run`` and return its output.
+
+    The executable's stdout/stderr becomes the ``prompt`` so the agent sees the
+    result directly, instead of being asked to follow the markdown.
+    """
+    from novacode_cli.skills.executable import run_executable
+
+    run_args = cmd_args.strip()[len("--run"):].strip().split()
+    result = run_executable(skill_dir, run_args)
+    if result["ok"]:
+        run_prompt = (
+            f"The skill '{skill_name}' was executed directly.\n\n"
+            f"Command: {' '.join(result['command'])}\n\n"
+            f"Output:\n{result['output']}"
+        )
+    else:
+        run_prompt = (
+            f"The skill '{skill_name}' executable failed.\n\n"
+            f"Command: {' '.join(result['command'])}\n\n"
+            f"Error: {result['error']}\n\n"
+            f"Output:\n{result['output']}"
+        )
+    return SkillInvocation(
+        prompt=run_prompt,
+        name=skill_name,
+        source=source_label,
+        description=description_short,
+        args=cmd_args,
+        executable=executable_desc,
     )
 
 

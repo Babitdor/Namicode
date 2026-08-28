@@ -96,6 +96,9 @@ dmypy.json
 *.log
 *.local
 
+# Playwright MCP runtime logs
+.playwright-mcp/
+
 # Temporary files
 *.tmp
 *.temp

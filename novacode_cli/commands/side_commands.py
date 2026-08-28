@@ -20,13 +20,50 @@ from dataclasses import dataclass
 from typing import Any
 
 __all__ = [
+    "DEFAULT_GOAL_MAX_TURNS",
     "GoalCommandResult",
+    "build_goal_followup",
     "build_goal_kickoff",
+    "goal_achieved",
     "handle_goal_command",
     "run_btw_question",
 ]
 
 _GOAL_CLEAR_WORDS = frozenset({"clear", "off", "done", "stop"})
+
+#: Default cap on autonomous goal-mode turns before the run stops.
+DEFAULT_GOAL_MAX_TURNS = 5
+
+#: Marker the agent emits when it believes the goal is fully achieved.
+_GOAL_ACHIEVED_MARKER = "GOAL ACHIEVED"
+
+
+def goal_achieved(agent_output: str) -> bool:
+    """Return True if the agent's output declares the goal achieved.
+
+    The agent is instructed (in :func:`build_goal_kickoff`) to say
+    ``**GOAL ACHIEVED**`` when it verifiably completes the goal. This checks for
+    that marker, case-insensitively, so a run can stop early instead of burning
+    the whole turn budget.
+    """
+    return _GOAL_ACHIEVED_MARKER in (agent_output or "").upper()
+
+
+def build_goal_followup(goal: str, turn: int, limit: int) -> str:
+    """Build the continuation prompt for an autonomous goal turn after the first.
+
+    The agent has already run one turn toward *goal*; this asks it to keep going,
+    reminding it of the goal, the turn budget (with how many turns remain), and the
+    achievement marker.
+    """
+    remaining = max(0, limit - turn)
+    return (
+        f"[GOAL CONTINUATION] Turn {turn}/{limit} — {remaining} turn(s) remaining.\n"
+        f"[GOAL] {goal}\n\n"
+        "Keep working autonomously. Verify your progress against the goal after "
+        "each step. When the goal is fully and verifiably achieved, say "
+        "**GOAL ACHIEVED** and summarise what was done."
+    )
 
 
 def build_goal_kickoff(goal: str) -> str:

@@ -69,6 +69,8 @@ dependencies = [
     "discord.py>=2.3.0",
     "python-telegram-bot>=21.0.0",
     "langchain-quickjs>=0.2.0",
+    # Persistent Python kernel snapshots (pickle superset: lambdas, classes).
+    "dill>=0.3.8",
 ]
 
 [project.optional-dependencies]
