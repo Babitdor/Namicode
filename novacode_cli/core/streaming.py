@@ -8,6 +8,7 @@ This module contains:
 Shared between the TUI, headless mode, and server mode.
 """
 
+import re
 from pathlib import Path
 
 
@@ -242,16 +243,46 @@ def get_tool_category(tool_name: str) -> str:
     return TOOL_CATEGORIES.get(tool_name, "other")
 
 
+# Section headings of the summary emitted by langchain's SummarizationMiddleware
+# (DEFAULT_SUMMARY_PROMPT). Its output is ordinary assistant prose, so the only
+# way to recognize it is by this structure.
+# "Session Intent" is the tell: no real answer opens a section with it, whereas
+# "Summary" / "Artifacts" / "Next steps" are all headings a genuine answer uses
+# (an answer with BOTH "## Summary" and "## Next steps" is ordinary, and keying
+# on section-count alone silently swallowed it).
+_REQUIRED_SUMMARY_SECTION = "session intent"
+_HEADING_RE = re.compile(r"^\s{0,3}(?:#{1,6}|\*\*|__)\s*([^\n#*_]{1,60})", re.MULTILINE)
+
+
+def looks_like_summarization_output(text: str) -> bool:
+    """True if *text* is a SummarizationMiddleware summary.
+
+    Matches on the section structure ANYWHERE in the text, not just as a
+    prefix: models routinely precede the block with a lead-in ("Here is the
+    extracted context:"), wrap it in a code fence, or emit the sections out of
+    order, and a prefix-only check let every one of those through to the
+    transcript.
+    """
+    for m in _HEADING_RE.finditer(text):
+        head = m.group(1).strip().rstrip(":").lower()
+        if head == _REQUIRED_SUMMARY_SECTION:
+            return True
+    return False
+
+
 def is_internal_context_text(text: str) -> bool:
     """Check if text is internal context/scratchpad content.
 
     Normalizes by stripping leading markdown heading markers (# / ## / ###) and
     bold markers (** / __) and whitespace, then checks case-insensitively against
-    known internal keywords.
+    known internal keywords. Also matches a summarization block appearing after
+    a lead-in or fence (see :func:`looks_like_summarization_output`).
     """
     stripped = text.lstrip()
     heading_stripped = stripped.lstrip("#*_").lstrip()
-    return any(
+    if any(
         heading_stripped.lower().startswith(kw)
         for kw in INTERNAL_CONTEXT_KEYWORDS
-    )
+    ):
+        return True
+    return looks_like_summarization_output(text)

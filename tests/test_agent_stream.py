@@ -831,6 +831,64 @@ def test_normal_prose_after_summarization_is_kept_and_unannounced():
     )
 
 
+def _plain_agent(text: str):
+    """Agent that streams *text* with NO preceding summarization update event."""
+
+    class Agent:
+        async def aget_state(self, config):
+            return _State([])
+
+        async def astream(self, inp, **kw):
+            yield ((), "messages", (_Chunk("m1", [{"type": "text", "text": text}]), {}))
+
+        async def aupdate_state(self, **kw):
+            pass
+
+    return Agent()
+
+
+def test_summary_suppressed_without_a_preceding_update_event():
+    """The reported bug: SESSION INTENT rendered anyway.
+
+    _post_summarization is set only from a main-agent `updates` chunk carrying
+    an lc_source="summarization" message. That chunk does not reliably arrive
+    before the summary streams, and when it didn't the block fell through to
+    the transcript. Detection now keys off the text itself.
+    """
+    evts = _collect(_plain_agent("## SESSION INTENT" + chr(10) * 2 + "Build the thing"))
+
+    assert not any(isinstance(e, ev.AssistantMessage) for e in evts)
+    assert any(
+        isinstance(e, ev.ContextMessage) and e.event_type == "nova_auto_compact"
+        for e in evts
+    )
+
+
+def test_summary_suppressed_after_a_lead_in_sentence():
+    """Models precede the block with prose; a prefix-only check missed those."""
+    body = "Here is the extracted context:" + chr(10) * 2 + "## SESSION INTENT" + chr(10) * 2 + "X"
+    evts = _collect(_plain_agent(body))
+    assert not any(isinstance(e, ev.AssistantMessage) for e in evts)
+
+
+def test_real_answer_with_summary_and_next_steps_is_kept():
+    """Guard the over-reach: those headings alone are ordinary answer sections.
+
+    Keying on "two known section headings" swallowed genuine answers that had
+    both '## Summary' and '## Next steps', which is worse than the bug.
+    """
+    body = (
+        "I refactored the module." + chr(10) * 2
+        + "## Summary" + chr(10) * 2 + "Pruning happens during the walk." + chr(10) * 2
+        + "## Next steps" + chr(10) * 2 + "- review the diff"
+    )
+    evts = _collect(_plain_agent(body))
+    assert any(
+        isinstance(e, ev.AssistantMessage) and "refactored the module" in e.text
+        for e in evts
+    ), [type(e).__name__ for e in evts]
+
+
 if __name__ == "__main__":
     test_happy_path_text_tool_todo()
     test_question_interrupt_resumes()

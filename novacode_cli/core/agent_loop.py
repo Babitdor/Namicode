@@ -42,8 +42,10 @@ from novacode_cli.core.streaming import (
     TOOL_ICONS,
     format_condensed_activity,
     is_internal_context_text,
+    looks_like_summarization_output,
 )
 from novacode_cli.tracking.loop_guard import TextRepetitionGuard
+from novacode_cli.tracking.usage_tree import scoped_stream
 from novacode_cli.core.subagent_tracking import (
     SubagentTracker,
     get_status_icon,
@@ -262,15 +264,22 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
         if not pending_text.strip():
             return _discard()
 
+        # A summarization block is recognizable on its own (it carries a
+        # "Session Intent" section), so key off the TEXT rather than the
+        # _post_summarization flag: that flag is only set from a main-agent
+        # `updates` chunk, which does not always arrive before the summary
+        # streams — and when it didn't, the block was announced as a plain
+        # discard or shown outright.
+        if looks_like_summarization_output(pending_text):
+            _post_summarization = False
+            # deepagents' SummarizationMiddleware streamed its summary as
+            # ordinary assistant prose. Dropping it silently left the user
+            # watching text appear and vanish with no explanation — unlike
+            # Nova's own /compact, which reports what it did.
+            return _discard("Context auto-compacted to fit the window")
+
         if _post_summarization:
             _post_summarization = False
-            if is_internal_context_text(pending_text):
-                # deepagents' SummarizationMiddleware backstop fired mid-turn and
-                # streamed its "## SESSION INTENT" block as ordinary assistant
-                # prose. Dropping it silently left the user watching text appear
-                # and vanish with no explanation — unlike Nova's own /compact,
-                # which reports what it did. Leave a trace.
-                return _discard("Context auto-compacted to fit the window")
 
         if is_internal_context_text(pending_text):
             # Internal context echo — never shown to the user.
@@ -337,12 +346,15 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
             subagent_tracker.clear()
             current_ai_message_id = None
 
-            _current_stream_gen = agent.astream(
-                stream_input,
-                stream_mode=["updates", "messages"],
-                subgraphs=True,
-                config=config,
-                durability="exit",
+            _current_stream_gen = scoped_stream(
+                agent.astream(
+                    stream_input,
+                    stream_mode=["updates", "messages"],
+                    subgraphs=True,
+                    config=config,
+                    durability="exit",
+                ),
+                "main",
             )
 
             async for chunk in _safe_stream(_current_stream_gen):
