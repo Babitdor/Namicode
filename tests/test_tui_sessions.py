@@ -599,12 +599,14 @@ def test_fresh_state_clears_every_widget_reference():
         "_reason_msg",
         "_tool_group",
         "_tool_group_body",
-        "_todo_widget",
         "_last_tool",
         "_home_banner",
     ):
         assert state[name] is None, f"{name} must not carry over"
     assert state["_tool_components"] == {}
+    # Todos are docked chrome now: the DATA is per-pane, not a widget ref.
+    assert state["_todos"] == []
+    assert state["_todos_agent"] is None
     assert state["_subagent_widgets"] == {}
     assert state["_seen"] == set()
     assert state["_turn_active"] is False

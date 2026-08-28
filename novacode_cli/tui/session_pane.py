@@ -53,7 +53,8 @@ STATEFUL_ATTRS: tuple[str, ...] = (
     "_subagent_widgets",
     "_subagent_count",
     "_subagent_tool_to_task",
-    "_todo_widget",
+    "_todos",
+    "_todos_agent",
     # turn / activity
     "_turn_active",
     "_turn_start",
@@ -123,7 +124,8 @@ def fresh_state(
         "_subagent_widgets": {},
         "_subagent_count": 0,
         "_subagent_tool_to_task": {},
-        "_todo_widget": None,
+        "_todos": [],
+        "_todos_agent": None,
         # turn / activity
         "_turn_active": False,
         "_turn_start": 0.0,

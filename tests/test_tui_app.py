@@ -1922,7 +1922,11 @@ def test_tui_diff_component():
 
 
 async def _drive_native_todos():
-    """Todos render natively and update a single widget in place (no pile-up)."""
+    """Todos render into the docked panel and update in place (no pile-up).
+
+    The checklist is docked (#todo-dock) rather than mounted into the
+    transcript, so it stays on screen instead of scrolling away mid-task.
+    """
     import novacode_cli.ui_events as ev
 
     from novacode_cli.tui.app import NovaApp, NovaStatusBar
@@ -1947,13 +1951,25 @@ async def _drive_native_todos():
                 agent_name=None,
             )
         )
-        assert app._todo_widget is not None
-        assert len(app.query(".todos")) == 1
-        # a second update reuses the same widget
+        from textual.widgets import Static as _Static
+
+        dock = app.query_one("#todo-dock", _Static)
+        assert app._todos, "todo data should be held per-pane"
+        assert dock.has_class("active"), "dock should be visible once there are todos"
+        assert "y" in str(dock.render())
+        # It is chrome, not transcript content — nothing was mounted into the log.
+        assert len(app.query(".todos")) == 0
+
+        # A second update repaints the same widget rather than piling up.
         await app._render(
             ev.TodoUpdate(todos=[{"content": "x", "status": "completed"}], agent_name=None)
         )
-        assert len(app.query(".todos")) == 1
+        assert len(app.query("#todo-dock")) == 1
+        assert "y" not in str(dock.render()), "stale item should be gone"
+
+        # An empty list hides the dock so it costs no rows when unused.
+        await app._render(ev.TodoUpdate(todos=[], agent_name=None))
+        assert not dock.has_class("active")
 
 
 def test_tui_remote_screen():
@@ -1997,6 +2013,98 @@ async def _drive_init_routes_native():
         )
         assert "isn't available" not in texts, texts
         assert "requires a project" in texts or "Initializing NOVA.md" in texts, texts
+
+
+async def _drive_todos_survive_a_turn():
+    """The dock must NOT clear at a turn boundary — that is the point of docking.
+
+    _reset_streaming() runs at the start of every turn; clearing the checklist
+    there would wipe it on each new prompt.
+    """
+    import novacode_cli.ui_events as ev
+
+    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.ui.ui_elements import TokenTracker
+
+    app = NovaApp(
+        agent=_FakeAgent(),
+        assistant_id="nova-agent",
+        session_state=_SS(),
+        backend=None,
+        token_tracker=TokenTracker(),
+        image_tracker=None,
+        model_name="m",
+    )
+    async with app.run_test() as pilot:
+        from textual.widgets import Static as _Static
+
+        await app._render(
+            ev.TodoUpdate(todos=[{"content": "keep me", "status": "pending"}], agent_name=None)
+        )
+        dock = app.query_one("#todo-dock", _Static)
+        assert dock.has_class("active")
+
+        app._reset_streaming()  # what the start of every turn does
+        await pilot.pause()
+        assert dock.has_class("active"), "checklist vanished at a turn boundary"
+        assert "keep me" in str(dock.render())
+
+
+async def _drive_todos_are_per_pane():
+    """The dock is app-global but the data is per-pane; a switch must repaint.
+
+    Otherwise the previous session's checklist sits under the pane you are
+    looking at.
+    """
+    import novacode_cli.ui_events as ev
+
+    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.ui.ui_elements import TokenTracker
+
+    app = NovaApp(
+        agent=_FakeAgent(),
+        assistant_id="nova-agent",
+        session_state=_SS(),
+        backend=None,
+        token_tracker=TokenTracker(),
+        image_tracker=None,
+        model_name="m",
+    )
+    async with app.run_test() as pilot:
+        from textual.widgets import Static as _Static
+
+        await app._render(
+            ev.TodoUpdate(todos=[{"content": "pane one item", "status": "pending"}],
+                          agent_name=None)
+        )
+        dock = app.query_one("#todo-dock", _Static)
+        assert "pane one item" in str(dock.render())
+
+        # _todos/_todos_agent must travel with the pane, not the app.
+        from novacode_cli.tui.session_pane import STATEFUL_ATTRS
+
+        assert "_todos" in STATEFUL_ATTRS
+        assert "_todos_agent" in STATEFUL_ATTRS
+
+        # A pane whose saved state has no todos repaints to empty.
+        app._todos = []
+        app._todos_agent = None
+        app._paint_todos(app._todos, app._todos_agent)
+        await pilot.pause()
+        assert not dock.has_class("active")
+        assert "pane one item" not in str(dock.render())
+
+
+def test_tui_todos_survive_a_turn():
+    if not _HAS_TEXTUAL:
+        return
+    asyncio.run(_drive_todos_survive_a_turn())
+
+
+def test_tui_todos_are_per_pane():
+    if not _HAS_TEXTUAL:
+        return
+    asyncio.run(_drive_todos_are_per_pane())
 
 
 def test_tui_native_todos():

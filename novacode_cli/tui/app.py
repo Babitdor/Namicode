@@ -368,10 +368,6 @@ class NovaApp(App):
     #tool-group-log.active, #subagent-log.active {
         display: block;
     }
-    #transcript > .todos {
-        border-left: thick $secondary; padding: 0 2;
-        margin: 1 0; background: $surface;
-    }
     #transcript > .logline {
         height: auto; padding: 0 2;
         background: $surface; margin: 1 0;
@@ -492,6 +488,20 @@ class NovaApp(App):
         padding: 0 1;
         background: $background;
     }
+    /* Docked todo checklist: sits above the prompt so it stays on screen.
+       Auto-height so a short list costs a few rows; max-height clamps a
+       long one (real lists run 2-14 items) and scrolls inside itself. */
+    #todo-dock {
+        dock: bottom;
+        display: none;
+        height: auto;
+        max-height: 12;
+        overflow-y: auto;
+        padding: 0 2;
+        background: $surface;
+        border-left: thick $secondary;
+    }
+    #todo-dock.active { display: block; }
     #tasks-bar {
         display: none;
         height: 1;
@@ -739,7 +749,10 @@ class NovaApp(App):
         # 1s timer that ticks the ⚙ tasks-bar runtime; only runs while tasks are
         # active (see _refresh_tasks_bar) so it never interferes when idle.
         self._tasks_timer: Any = None
-        self._todo_widget: Static | None = None  # updated in place per turn
+        # Todo data for the docked checklist (#todo-dock). Per-pane, because
+        # the dock widget is app-global: a session switch repaints from these.
+        self._todos: list = []
+        self._todos_agent: str | None = None
         # _init_widget and _init_steps removed — /init progress is now _log-only
         # Live per-iteration Ralph cards, keyed by iteration number, so an
         # IterationFinished event can update the card mounted at its start.
@@ -809,6 +822,9 @@ class NovaApp(App):
         with ContentSwitcher(initial="transcript", id="panes"):
             yield VerticalScroll(id="transcript")
         yield OptionList(id="cmdpalette")
+        # Todos are docked rather than mounted into the transcript so the
+        # checklist stays visible instead of scrolling away mid-task.
+        yield Static("", id="todo-dock")
         with Vertical(id="prompt-dock"):
             yield Static("", id="prompt-hint-bar")
             with Horizontal(id="prompt-row"):
@@ -1154,6 +1170,10 @@ class NovaApp(App):
             await self._render(pane.buffer.popleft())
         pane.unread = 0
 
+        # The todo dock is app-global but its data is per-pane, so repaint
+        # it for the pane now on screen — otherwise the previous session's
+        # checklist sits under this one.
+        self._paint_todos(getattr(self, "_todos", None), getattr(self, "_todos_agent", None))
         self._refresh_status()
         self._update_mode_badge()
         self._scroll_end()
@@ -1606,7 +1626,6 @@ class NovaApp(App):
             for w in (
                 self._stream_msg,
                 self._reason_msg,
-                self._todo_widget,
                 self._tool_group,
                 *(t[0] for t in self._tool_components.values()),
                 *(s[0] for s in self._subagent_widgets.values()),
@@ -1970,7 +1989,9 @@ class NovaApp(App):
         self._subagent_widgets.clear()
         self._subagent_count = 0
         self._subagent_tool_to_task.clear()
-        self._todo_widget = None  # next turn starts a fresh todo block
+        # NB: the docked checklist is deliberately NOT cleared here — this
+        # runs at the start of every turn, and the point of docking is that
+        # the list survives. /clear and /resume clear it explicitly.
         self._current_assistant_id = None
         self._accumulated_reply = ""
 
@@ -2028,6 +2049,28 @@ class NovaApp(App):
                 style="strike dim" if status == "completed" else "",
             )
         return t
+
+    def _paint_todos(self, todos: list | None, agent_name: str | None = None) -> None:
+        """Repaint the docked checklist, or hide it when there is nothing to show.
+
+        The single place the dock is written. Called on TodoUpdate, on session
+        switch (the widget is app-global but ``_todos`` is per-pane, so a switch
+        must repaint or pane A's list would sit under pane B), and on resume.
+        """
+        try:
+            dock = self._w("#todo-dock", Static)
+        except NoMatches:
+            return
+        if not todos:
+            dock.remove_class("active")
+            dock.update("")
+            return
+        # rstrip: every row ends in a newline, which would leave a blank line
+        # inside a dock sized to its content.
+        text = self._render_todos(todos, agent_name)
+        text.rstrip()
+        dock.update(text)
+        dock.add_class("active")
 
     def _pop_tool(self, call_id: str | None) -> "tuple[Collapsible, Static, str] | None":
         """Find (and stop tracking) the tool component for a result."""
@@ -5753,6 +5796,12 @@ class NovaApp(App):
         await self._transcript().remove_children()
         self._restored_messages = list(recent_messages or [])
         self._replay_history()
+        # Paint the resumed checklist. Previously the restored todos only
+        # reached session_state and nothing rendered them, so a resumed
+        # session showed no todos until the agent next emitted an update.
+        self._todos = list(resumed_todos or [])
+        self._todos_agent = None
+        self._paint_todos(self._todos)
         self._update_mode_badge()
         self._refresh_status()
 
@@ -6558,6 +6607,9 @@ class NovaApp(App):
         # Drop per-conversation UI/tracking state.
         self._reset_streaming()
         self._clear_live_steers()
+        self._todos = []
+        self._todos_agent = None
+        self._paint_todos(None)
         self._seen.clear()
         self._restored_messages = []
         # Discard anything queued for the (now-cleared) conversation.
@@ -8219,13 +8271,11 @@ class NovaApp(App):
                 )
             self._scroll_end()
         elif isinstance(e, ev.TodoUpdate):
-            todo_text = self._render_todos(e.todos, e.agent_name)
-            if self._todo_widget is None:
-                self._todo_widget = Static(todo_text, classes="todos")
-                await self._mount(self._todo_widget)
-            else:
-                self._todo_widget.update(todo_text)
-                self._scroll_end()
+            # Held in per-pane state so a session switch can repaint the
+            # app-global dock with the pane the user is actually looking at.
+            self._todos = list(e.todos or [])
+            self._todos_agent = e.agent_name
+            self._paint_todos(self._todos, e.agent_name)
             # Mirror the plan into the remote status line (one message edited in
             # place, throttled) so the remote user watches the checklist update.
             if self._remote_status is not None:
