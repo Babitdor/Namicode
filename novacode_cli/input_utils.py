@@ -204,14 +204,25 @@ def format_paste_placeholder(paste_id: str, text: str) -> str:
         text: The full pasted text
 
     Returns:
-        A placeholder string like "[paste 1 +127 lines]"
+        A placeholder like "[paste #1 +127 lines]" or, for a single-line
+        paste, "[paste #1 1.2k chars]".
+
+    A line count alone is misleading: a 100k-character single-line paste
+    rendered as "+0 lines", which reads as though nothing was pasted.
     """
     num = paste_id.split("-")[1]
     line_count = text.count("\n")
-    return f"[paste #{num} +{line_count} lines]"
+    if line_count:
+        return f"[paste #{num} +{line_count} lines]"
+    size = len(text)
+    shown = f"{size / 1000:.1f}k" if size >= 1000 else str(size)
+    return f"[paste #{num} {shown} chars]"
 
 
-_PASTE_PLACEHOLDER_RE = re.compile(r"\[paste #(\d+) \+\d+ lines\]")
+# Matches both placeholder shapes: "+N lines" and "N chars" / "N.Nk chars".
+_PASTE_PLACEHOLDER_RE = re.compile(
+    r"\[paste #(\d+) (?:\+\d+ lines|[\d.]+k? chars)\]"
+)
 
 
 def resolve_paste_placeholders(text: str, paste_tracker: PasteTracker) -> str:
