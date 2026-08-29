@@ -302,9 +302,13 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
 
     # Seed dedup set with pre-existing messages.
     pre_stream_msg_count: int | None = None
+    # A summarization event already present before this turn is not news; only a
+    # NEW one means the library compacted during it (see compaction detection).
+    _pre_summarization_event = False
     try:
         _pre_state = await agent.aget_state(config)
         _pre_msgs = _pre_state.values.get("messages", [])
+        _pre_summarization_event = bool(_pre_state.values.get("_summarization_event"))
         pre_stream_msg_count = len(_pre_msgs)
         for _m in _pre_msgs:
             _mid = getattr(_m, "id", None)
@@ -806,13 +810,27 @@ async def iterate_agent_events(  # noqa: C901, PLR0912, PLR0915
 
             break
 
-        # Compaction detection
+        # Compaction detection.
+        #
+        # Two shapes, and only one shrinks the message list:
+        #   - Nova's own /compact REPLACES history with a summary (count drops).
+        #   - deepagents' SummarizationMiddleware does NOT delete messages; it
+        #     records a `_summarization_event` carrying a cutoff_index and
+        #     rebuilds the effective list from it. The count is unchanged.
+        # Detecting only the count drop meant a library compaction never emitted
+        # CompactionNotice, so the tracker kept the turn's PRE-compaction
+        # API total (its peak) and reported e.g. 85% when the real context was
+        # ~10% — and Nova then auto-compacted an already-compacted conversation.
         try:
             if pre_stream_msg_count is not None:
                 _post_state = await agent.aget_state(config)
                 if _post_state is not None:
-                    post_count = len(_post_state.values.get("messages", []))
-                    if post_count < pre_stream_msg_count - 2:
+                    _vals = _post_state.values
+                    post_count = len(_vals.get("messages", []))
+                    _summarized = bool(_vals.get("_summarization_event"))
+                    if _summarized and not _pre_summarization_event:
+                        yield ev.CompactionNotice()
+                    elif post_count < pre_stream_msg_count - 2:
                         yield ev.CompactionNotice()
         except Exception:
             pass
