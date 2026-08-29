@@ -254,6 +254,37 @@ _REQUIRED_SUMMARY_SECTION = "session intent"
 _HEADING_RE = re.compile(r"^\s{0,3}(?:#{1,6}|\*\*|__)\s*([^\n#*_]{1,60})", re.MULTILINE)
 
 
+# Headings unique to the resume briefing that build_continuation_prompt puts in
+# the system message (see novacode_cli/session/session_prompt_builder.py). A
+# model on a resumed session sometimes recites that briefing back as its first
+# reply, which reads as the assistant dumping its own system prompt. None of
+# these is a heading a genuine answer would write, so any ONE is conclusive —
+# unlike "Summary"/"Next steps", which real answers legitimately use.
+_CONTINUATION_SECTIONS = frozenset(
+    {
+        "continuation mode",
+        "current workspace state",
+        "session memory",
+        "task state",
+    }
+)
+
+
+def looks_like_continuation_briefing(text: str) -> bool:
+    """True if *text* is the resume briefing echoed back at the user.
+
+    The briefing is a SystemMessage and is never replayed into the transcript
+    directly; this catches the model *reproducing* it as assistant prose.
+    """
+    if text.lstrip().startswith("<identity>"):
+        return True
+    for m in _HEADING_RE.finditer(text):
+        head = m.group(1).strip().rstrip(":").lower()
+        if head in _CONTINUATION_SECTIONS:
+            return True
+    return False
+
+
 def looks_like_summarization_output(text: str) -> bool:
     """True if *text* is a SummarizationMiddleware summary.
 
@@ -276,7 +307,8 @@ def is_internal_context_text(text: str) -> bool:
     Normalizes by stripping leading markdown heading markers (# / ## / ###) and
     bold markers (** / __) and whitespace, then checks case-insensitively against
     known internal keywords. Also matches a summarization block appearing after
-    a lead-in or fence (see :func:`looks_like_summarization_output`).
+    a lead-in or fence (see :func:`looks_like_summarization_output`) and the
+    resume briefing echoed back (see :func:`looks_like_continuation_briefing`).
     """
     stripped = text.lstrip()
     heading_stripped = stripped.lstrip("#*_").lstrip()
@@ -285,4 +317,4 @@ def is_internal_context_text(text: str) -> bool:
         for kw in INTERNAL_CONTEXT_KEYWORDS
     ):
         return True
-    return looks_like_summarization_output(text)
+    return looks_like_summarization_output(text) or looks_like_continuation_briefing(text)
