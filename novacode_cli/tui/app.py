@@ -503,6 +503,7 @@ class NovaApp(App):
         border-left: thick $secondary;
     }
     #todo-dock.active { display: block; }
+    #todo-dock:hover { background: $boost; }
     /* Collapsed: just the one-line summary header. */
     #todo-dock.collapsed { max-height: 1; overflow-y: hidden; }
     #tasks-bar {
@@ -2060,7 +2061,7 @@ class NovaApp(App):
             f"{done}/{len(items)}",
             style="green" if items and done == len(items) else "dim",
         )
-        t.append("  alt+t", style="dim")
+        t.append("  click to collapse" if not collapsed else "  click to expand", style="dim")
         t.append("\n")
         if collapsed:
             return t
@@ -2111,7 +2112,7 @@ class NovaApp(App):
         dock.add_class("active")
 
     def action_toggle_todos(self) -> None:
-        """Collapse/expand the todo checklist (alt+t)."""
+        """Collapse/expand the todo checklist (click the dock, or alt+t)."""
         self._todos_collapsed = not getattr(self, "_todos_collapsed", False)
         self._paint_todos(
             getattr(self, "_todos", None), getattr(self, "_todos_agent", None)
@@ -3896,8 +3897,11 @@ class NovaApp(App):
             self._log(Text(f"◈ Opening {arts[idx].title} → {url}", style="#7aa2f7"))
 
     def on_click(self, event: Any) -> None:
-        """Open the artifacts list or the background-tasks panel when their
-        persistent footer components are clicked."""
+        """Handle clicks on the persistent footer components.
+
+        Artifacts list, background-tasks panel, and the todo checklist
+        (click anywhere on it to collapse/expand).
+        """
         try:
             w = getattr(event, "widget", None)
             while w is not None:
@@ -3907,6 +3911,9 @@ class NovaApp(App):
                     return
                 if wid == "tasks-bar":
                     self._open_tasks_panel()
+                    return
+                if wid == "todo-dock":
+                    self.action_toggle_todos()
                     return
                 w = getattr(w, "parent", None)
         except Exception:  # noqa: BLE001

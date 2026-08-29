@@ -2148,7 +2148,7 @@ async def _drive_todo_dock_does_not_cover_the_prompt():
 
 
 async def _drive_todo_dock_collapses():
-    """alt+t collapses to a one-line header and expands back."""
+    """Clicking the dock collapses it to a one-line header, and expands it back."""
     import novacode_cli.ui_events as ev
 
     from novacode_cli.tui.app import NovaApp
@@ -2169,19 +2169,25 @@ async def _drive_todo_dock_collapses():
         expanded = dock.size.height
         assert expanded > 1
 
-        app.action_toggle_todos()
+        await pilot.click("#todo-dock")
         for _ in range(3):
             await pilot.pause()
-        assert dock.has_class("collapsed")
+        assert dock.has_class("collapsed"), "clicking the dock should collapse it"
         assert dock.size.height == 1, f"collapsed to {dock.size.height} rows"
         # The summary must survive collapsing — it is the only row left.
         assert "1/5" in str(dock.render())
 
-        app.action_toggle_todos()
+        await pilot.click("#todo-dock")
         for _ in range(3):
             await pilot.pause()
-        assert not dock.has_class("collapsed")
+        assert not dock.has_class("collapsed"), "clicking again should expand it"
         assert dock.size.height == expanded
+
+        # A click elsewhere must not toggle the checklist.
+        await pilot.click("#prompt")
+        for _ in range(3):
+            await pilot.pause()
+        assert not dock.has_class("collapsed"), "unrelated click toggled the dock"
 
 
 async def _drive_todo_dock_dismisses_when_all_done():
