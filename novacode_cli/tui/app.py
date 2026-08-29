@@ -1960,12 +1960,20 @@ class NovaApp(App):
         msgs = self._restored_messages
         if not msgs:
             return
+        from novacode_cli.compaction import is_compaction_summary
+        from novacode_cli.core.streaming import is_internal_context_text
+
         # Only render real conversation turns, oldest first.
         shown = 0
         for m in msgs:
             role = getattr(m, "type", "") or ""
             text = self._message_text(m).strip()
             if not text:
+                continue
+            # /compact rewrites history into a single synthetic HumanMessage
+            # holding the summary (compaction.py). Replaying it verbatim shows
+            # the whole summarized context as though the USER had typed it.
+            if is_compaction_summary(text) or is_internal_context_text(text):
                 continue
             if role == "human":
                 await self._add_message(Text("You", style="bold cyan"), "user", Markdown(text))

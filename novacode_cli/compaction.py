@@ -16,6 +16,18 @@ from novacode_cli.prompts import render_template
 # Summarization prompt template (loaded from Jinja)
 # Template file: NovaCode_cli/prompts/summarization.jinja
 
+# Compaction rewrites the whole conversation into ONE synthetic HumanMessage
+# carrying the summary (see compact_conversation). It has to be a HumanMessage
+# for the provider's turn ordering, but it is not something the user said — so
+# any surface that renders history must skip it, or the entire summarized
+# context appears in the transcript as a message the user supposedly typed.
+COMPACTION_SUMMARY_MARKER = "[Conversation context — previous session summarized]"
+
+
+def is_compaction_summary(text: str) -> bool:
+    """True if *text* is the synthetic message compaction injects."""
+    return text.lstrip().startswith(COMPACTION_SUMMARY_MARKER)
+
 
 def _format_message_content(content: Any) -> str:
     """Format message content to a string.
@@ -342,7 +354,7 @@ async def compact_conversation(
         # through an invalid intermediate (e.g. ToolMessages with no AIMessage),
         # which would cause langchain's _fetch_last_ai_and_tool_messages to crash.
         summary_message = HumanMessage(
-            content=f"[Conversation context — previous session summarized]\n\n{summary}"
+            content=f"{COMPACTION_SUMMARY_MARKER}\n\n{summary}"
         )
         remove_ops = [RemoveMessage(id=msg.id) for msg in messages if msg.id]
         # Also clear any prior auto-summarization event. deepagents'
