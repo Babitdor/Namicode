@@ -17,7 +17,7 @@ class _FakeVerifier:
         self.graded: tuple | None = None
         self.logged = False
 
-    async def grade(self, user_input, agent_output, file_ops):
+    async def grade(self, user_input, agent_output, file_ops, **kwargs):
         self.graded = (user_input, agent_output, list(file_ops))
         return SimpleNamespace(passed=True, feedback="")
 
@@ -99,9 +99,7 @@ async def test_no_grading_when_learning_disabled(monkeypatch):
 async def test_noop_turn_is_not_graded(monkeypatch):
     fake = _FakeVerifier()
     monkeypatch.setattr(A, "_maybe_verifier", lambda: fake)
-    monkeypatch.setattr(
-        A, "run_with_goal", _fake_iterate_factory([ev.Done(had_response=False)])
-    )
+    monkeypatch.setattr(A, "run_with_goal", _fake_iterate_factory([ev.Done(had_response=False)]))
     await _drain(A.run_agent_stream("", object(), "nova-agent", SimpleNamespace(thread_id="t3")))
     for task in list(A._verification_tasks):
         await task

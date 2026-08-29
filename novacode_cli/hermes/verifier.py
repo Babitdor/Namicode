@@ -23,6 +23,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from langchain_core.messages import HumanMessage
@@ -79,14 +80,57 @@ class InlineVerifier:
         self.max_retries = max_retries
         self.enabled = enabled
 
-    async def grade(self, task: str, agent_output: str, file_ops: list[Any]) -> VerifierVerdict:
-        """Score one attempt; returns a passing verdict on any failure (fail-open)."""
+    async def grade(
+        self,
+        task: str,
+        agent_output: str,
+        file_ops: list[Any],
+        *,
+        test_evidence: list[str] | None = None,
+        diffs: list[str] | None = None,
+    ) -> VerifierVerdict:
+        """Score one attempt; returns a passing verdict on any failure (fail-open).
+
+        Args:
+            task: The user's original request.
+            agent_output: The agent's final textual response.
+            file_ops: File-operation records from the turn.
+            test_evidence: Raw outputs of any test runs the agent performed, so
+                the rubric can grade ``tests_pass`` against real outcomes rather
+                than the agent's claims.
+            diffs: Unified diffs of the files the agent changed, so the rubric
+                can detect reward hacking (edits that weaken tests).
+        """
+        try:
+            from novacode_cli.hermes.test_gaming import detect_test_gaming
+
+            gaming_summary = detect_test_gaming(diffs or []).summarize()
+        except Exception:
+            logger.exception("Test-gaming detection failed; continuing without it")
+            gaming_summary = ""
+
+        # Load the repo's recent failure history so the rubric pays extra
+        # attention to recurring patterns ("Verification that Learns").
+        repo_root = _derive_repo_root(file_ops)
+        memory_summary = ""
+        if self._store is not None:
+            try:
+                from novacode_cli.hermes.verification_memory import load_verification_memory
+
+                memory_summary = await load_verification_memory(self._store, repo_root=repo_root)
+            except Exception:
+                logger.exception("Failed to load verification memory")
+
         try:
             prompt = render_template(
                 "nova_verify.jinja",
                 task=task,
                 agent_output=agent_output,
                 file_ops=_summarize_file_ops(file_ops),
+                test_evidence=test_evidence or [],
+                diffs=diffs or [],
+                test_gaming=gaming_summary,
+                verification_memory=memory_summary,
             )
             model = self._model
             if model is None:
@@ -104,12 +148,32 @@ class InlineVerifier:
             )
             raw = getattr(resp, "content", "")
             content = raw if isinstance(raw, str) else str(raw)
-            return _parse_verdict(content)
+            verdict = _parse_verdict(content)
         except Exception:
             logger.exception("Inline verification grading failed; passing through")
             return VerifierVerdict(
                 passed=True, score=1.0, feedback="", checks=["verification-unavailable"]
             )
+
+        # Record a failing verdict into the repo's verification memory so future
+        # grades learn from it. Best-effort; never breaks the turn.
+        if not verdict.passed and self._store is not None:
+            try:
+                from novacode_cli.hermes.verification_memory import (
+                    record_verification_failure,
+                )
+
+                await record_verification_failure(
+                    self._store,
+                    repo_root=repo_root,
+                    failed_checks=verdict.checks,
+                    files=_file_paths(file_ops),
+                    feedback=verdict.feedback,
+                )
+            except Exception:
+                logger.exception("Failed to record verification failure")
+
+        return verdict
 
     async def log_outcome(self, thread_id: str, verdict: VerifierVerdict, attempt: int) -> None:
         """Persist a verdict to the verification log (best-effort, never raises)."""
@@ -145,6 +209,49 @@ def _summarize_file_ops(file_ops: list[Any]) -> list[str]:
             line += f" — error: {str(err)[:_FILE_OP_ERROR_CHARS]}"
         out.append(line)
     return out
+
+
+def _file_paths(file_ops: list[Any]) -> list[str]:
+    """Collect the display paths of the turn's file operations."""
+    paths: list[str] = []
+    for rec in file_ops or []:
+        path = getattr(rec, "display_path", None)
+        if path:
+            paths.append(str(path))
+    return paths
+
+
+def _derive_repo_root(file_ops: list[Any]) -> str | None:
+    """Best-effort derive the repo root from the turn's file-op physical paths.
+
+    Walks up from the first usable absolute file path looking for a ``.git``
+    directory (the repo root); falls back to the current working directory.
+    Used only to key per-repo verification memory.
+    """
+    for rec in file_ops or []:
+        phys = getattr(rec, "physical_path", None)
+        if phys is None:
+            continue
+        path = _resolve_safe(phys)
+        if path is None or not path.is_absolute():
+            continue
+        # Walk up to find the git root.
+        for parent in (path if path.is_dir() else path.parent).parents:
+            if (parent / ".git").exists():
+                return str(parent)
+        return str(path.anchor)  # drive root as a last resort
+    try:
+        return str(Path.cwd())
+    except Exception:  # noqa: BLE001 — best-effort; never break grading
+        return None
+
+
+def _resolve_safe(path: Path) -> Path | None:
+    """Resolve a path without raising; returns ``None`` on failure."""
+    try:
+        return path.resolve()
+    except Exception:  # noqa: BLE001 — best-effort; a bad path is skipped
+        return None
 
 
 def _parse_verdict(content: str) -> VerifierVerdict:

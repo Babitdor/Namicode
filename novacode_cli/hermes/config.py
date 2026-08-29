@@ -113,3 +113,8 @@ WEBHOOK_CONFIG_NS: Final[tuple[str, str]] = ("nova", "webhook_config")
 
 #: Inline-verifier retry outcomes — also the quality signal for prompt A/B.
 VERIFICATION_LOG_NS: Final[tuple[str, str]] = ("nova", "verification_log")
+
+#: Per-repo verification memory — which checks fail, which files are high-risk,
+#: and which failure patterns recur. Keyed by repo so the verifier gets smarter
+#: per-project over time ("Verification that Learns").
+VERIFICATION_MEMORY_NS: Final[tuple[str, str]] = ("nova", "verification_memory")

@@ -66,7 +66,12 @@ def _maybe_verifier() -> Any | None:
 
 
 def _spawn_verification_signal(
-    verifier: Any, user_input: str, agent_output: str, file_ops: list, session_state: Any
+    verifier: Any,
+    user_input: str,
+    agent_output: str,
+    file_ops: list,
+    session_state: Any,
+    tool_results: list | None = None,
 ) -> None:
     """Grade the finished turn and log the verdict (verification_log + prompt A/B).
 
@@ -78,9 +83,21 @@ def _spawn_verification_signal(
 
     async def _grade() -> None:
         try:
-            from novacode_cli.core.verification_loop import _record_prompt_ab_outcome
+            from novacode_cli.core.verification_loop import (
+                _extract_diffs,
+                _extract_test_evidence,
+                _record_prompt_ab_outcome,
+            )
 
-            verdict = await verifier.grade(user_input, agent_output, file_ops)
+            test_evidence = _extract_test_evidence(tool_results or [])
+            diffs = _extract_diffs(file_ops)
+            verdict = await verifier.grade(
+                user_input,
+                agent_output,
+                file_ops,
+                test_evidence=test_evidence,
+                diffs=diffs,
+            )
             await verifier.log_outcome(getattr(session_state, "thread_id", ""), verdict, 0)
             # Feed prompt-evolution (Enhancement 2) its quality signal.
             await _record_prompt_ab_outcome(passed=verdict.passed)
@@ -119,6 +136,7 @@ async def run_agent_stream(
     verifier = _maybe_verifier()
     texts: list[str] = []
     file_ops: list[Any] = []
+    tool_results: list[Any] = []
 
     thread_id = getattr(session_state, "thread_id", None) or getattr(
         session_state, "session_id", None
@@ -145,8 +163,12 @@ async def run_agent_stream(
                     texts.append(event.text)
                 elif isinstance(event, ev.FileOp) and getattr(event, "record", None) is not None:
                     file_ops.append(event.record)
+                elif isinstance(event, ev.ToolResult):
+                    tool_results.append(event)
             yield event
 
     if verifier is not None:
         agent_output = "\n\n".join(t for t in texts if t).strip()
-        _spawn_verification_signal(verifier, user_input, agent_output, file_ops, session_state)
+        _spawn_verification_signal(
+            verifier, user_input, agent_output, file_ops, session_state, tool_results
+        )

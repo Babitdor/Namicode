@@ -17,6 +17,7 @@ and keeps ``iterate_agent_events`` (and therefore both front-ends) untouched.
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING, Any
 
 from novacode_cli import ui_events as ev
@@ -37,6 +38,100 @@ _GENERIC_FEEDBACK = (
     "The previous attempt did not fully satisfy the request. Re-examine the task "
     "and complete any missing or incorrect parts."
 )
+
+#: Cap on how much raw tool output we retain as test evidence per turn. Keeps the
+#: rubric prompt bounded even when the agent runs a huge suite.
+_MAX_TEST_EVIDENCE_CHARS = 4000
+#: Cap on how many distinct tool outputs we keep as test evidence.
+_MAX_TEST_EVIDENCE_BLOCKS = 6
+#: Minimum number of test markers in short output before it counts as a test run.
+_MIN_TEST_MARKERS = 2
+
+#: Content markers that indicate a tool result is a test run. We match on the
+#: *output* (not the tool name) so this is robust to tool-name variations across
+#: backends (shell, python kernel, sandbox exec, etc.).
+_TEST_RUN_MARKERS = (
+    "pytest",
+    "Ran ",
+    " tests",
+    "passed",
+    "failed",
+    "FAILED",
+    "OK",
+    "Traceback",
+    "AssertionError",
+    "exit code",
+    "Exit code",
+    "test session",
+    "tests collected",
+    "no tests ran",
+    "no tests ran",
+    "1 failed",
+    "1 passed",
+)
+
+#: Regexes that strongly indicate a test run, used to avoid false positives on
+#: ordinary prose that merely contains a marker word like "passed".
+_TEST_RUN_STRONG_RE = re.compile(
+    r"(pytest|test session|tests collected|Ran \d+ tests|"
+    r"\d+ passed|\d+ failed|\d+ errors?|AssertionError|"
+    r"FAILED|OK\s*$|no tests ran)",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_test_run(output: str) -> bool:
+    """Heuristically decide whether a tool result is a test run.
+
+    Uses a strong regex first (test-framework signatures); falls back to a
+    marker-word scan only when the output is short and dense with markers, to
+    avoid flagging ordinary prose.
+    """
+    if not output:
+        return False
+    if _TEST_RUN_STRONG_RE.search(output):
+        return True
+    # Short output with several markers is likely a test summary.
+    if len(output) <= _MAX_TEST_EVIDENCE_CHARS:
+        hits = sum(1 for m in _TEST_RUN_MARKERS if m in output)
+        return hits >= _MIN_TEST_MARKERS
+    return False
+
+
+def _extract_test_evidence(tool_results: list[Any]) -> list[str]:
+    """Collect test-run outputs from the turn's tool results.
+
+    Returns a bounded list of truncated outputs that look like test runs, so the
+    verifier can grade ``tests_pass`` against real evidence rather than the
+    agent's claims.
+    """
+    evidence: list[str] = []
+    for result in tool_results:
+        output = getattr(result, "full_output", "") or ""
+        if not _looks_like_test_run(output):
+            continue
+        block = output.strip()
+        if len(block) > _MAX_TEST_EVIDENCE_CHARS:
+            block = block[:_MAX_TEST_EVIDENCE_CHARS] + "\n...[truncated]"
+        evidence.append(block)
+        if len(evidence) >= _MAX_TEST_EVIDENCE_BLOCKS:
+            break
+    return evidence
+
+
+def _extract_diffs(file_ops: list[Any]) -> list[str]:
+    """Collect unified diffs from the turn's file-op records.
+
+    Each :class:`~novacode_cli.file_ops.FileOperationRecord` already carries a
+    ``diff`` field; we surface the non-empty ones so the verifier can detect
+    reward hacking (e.g. edits that weaken tests).
+    """
+    diffs: list[str] = []
+    for rec in file_ops or []:
+        diff = getattr(rec, "diff", None)
+        if diff:
+            diffs.append(diff)
+    return diffs
 
 
 def _plural(n: int) -> str:
@@ -85,6 +180,7 @@ async def run_with_verification(  # noqa: PLR0912
     while True:
         assistant_texts: list[str] = []
         file_ops: list[Any] = []
+        tool_results: list[Any] = []
         done_event: ev.Done | None = None
 
         async for event in iterate_agent_events(
@@ -103,6 +199,9 @@ async def run_with_verification(  # noqa: PLR0912
             elif isinstance(event, ev.FileOp):
                 if getattr(event, "record", None) is not None:
                     file_ops.append(event.record)
+                yield event
+            elif isinstance(event, ev.ToolResult):
+                tool_results.append(event)
                 yield event
             elif isinstance(event, ev.Done):
                 done_event = event  # held back pending the verdict
@@ -124,7 +223,15 @@ async def run_with_verification(  # noqa: PLR0912
             yield done_event
             return
 
-        verdict = await verifier.grade(user_input, agent_output, file_ops)
+        test_evidence = _extract_test_evidence(tool_results)
+        diffs = _extract_diffs(file_ops)
+        verdict = await verifier.grade(
+            user_input,
+            agent_output,
+            file_ops,
+            test_evidence=test_evidence,
+            diffs=diffs,
+        )
         await verifier.log_outcome(getattr(session_state, "thread_id", ""), verdict, retries)
         # Feed the verdict to prompt A/B testing (Enhancement 2) as the quality
         # signal for any template under test. Best-effort; never breaks the turn.

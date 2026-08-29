@@ -74,7 +74,7 @@ class FakeVerifier:
         self.graded: list = []
         self.logged: list = []
 
-    async def grade(self, task, agent_output, file_ops):
+    async def grade(self, task, agent_output, file_ops, **kwargs):
         self.graded.append((task, agent_output, list(file_ops)))
         return self._verdicts.pop(0)
 
