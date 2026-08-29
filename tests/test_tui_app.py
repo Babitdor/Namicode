@@ -403,6 +403,7 @@ def test_tui_sessions_screen():
 async def _drive_autocomplete():
     """Typing '/mo' shows a filtered command palette; Enter accepts '/model '."""
     from textual.widgets import Input, OptionList
+    from novacode_cli.tui.widgets import PromptInput
 
     from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
@@ -417,7 +418,7 @@ async def _drive_autocomplete():
         model_name="m",
     )
     async with app.run_test() as pilot:
-        app.query_one("#prompt", Input).focus()
+        app.query_one("#prompt", PromptInput).focus()
         pal = app.query_one("#cmdpalette", OptionList)
         await pilot.press("/")
         await pilot.press("m")
@@ -445,15 +446,16 @@ async def _drive_autocomplete():
         assert "/model" in opts, opts
         await pilot.press("enter")
         await _wait_until(
-            pilot, lambda: app.query_one("#prompt", Input).value.strip() == "/model"
+            pilot, lambda: app.query_one("#prompt", PromptInput).value.strip() == "/model"
         )
-        assert app.query_one("#prompt", Input).value.strip() == "/model"
+        assert app.query_one("#prompt", PromptInput).value.strip() == "/model"
         assert not pal.display
 
 
 async def _drive_agents_skills():
     """/agents, /skills, /servers, and /hooks open interactive list screens."""
     from textual.widgets import Button, Input
+    from novacode_cli.tui.widgets import PromptInput
 
     from novacode_cli.tui.app import AgentsScreen, HooksScreen, NovaApp, ServersScreen, SkillsScreen, WikiScreen
     from novacode_cli.ui.ui_elements import TokenTracker
@@ -474,7 +476,7 @@ async def _drive_agents_skills():
         # passed only when an earlier test had already set that up). WikiScreen
         # has dedicated, fully-stubbed coverage in test_tui_wiki_screen.
         for cmd in ("/agents", "/skills", "/servers", "/hooks"):
-            inp = app.query_one("#prompt", Input)
+            inp = app.query_one("#prompt", PromptInput)
             inp.value = cmd
             inp.focus()
             await pilot.pause()
@@ -509,6 +511,7 @@ def test_tui_autocomplete():
 async def _drive_skill_agent_autocomplete():
     """'/skill:' lists skills and '@' lists agents in the palette."""
     from textual.widgets import Input, OptionList
+    from novacode_cli.tui.widgets import PromptInput
 
     from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
@@ -525,7 +528,7 @@ async def _drive_skill_agent_autocomplete():
     app._skill_names_cache = ["api-testing", "code-review", "graphify"]
     app._agent_names_cache = ["researcher", "critic"]
     async with app.run_test() as pilot:
-        inp = app.query_one("#prompt", Input)
+        inp = app.query_one("#prompt", PromptInput)
         inp.focus()
         pal = app.query_one("#cmdpalette", OptionList)
 
@@ -618,6 +621,7 @@ def test_tui_agents_skills_screens():
 async def _drive_create_agent_and_skill(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     from textual.widgets import Button, Input
+    from novacode_cli.tui.widgets import PromptInput
     from novacode_cli.tui.app import NovaApp, AgentsScreen, AgentCreateModal, SkillsScreen, SkillCreateModal
     from novacode_cli.ui.ui_elements import TokenTracker
 
@@ -650,7 +654,7 @@ async def _drive_create_agent_and_skill(tmp_path, monkeypatch):
         monkeypatch.setattr(sc, "_generate_skill", mock_gen_skill)
 
         # 1. Test Agent creation
-        inp = app.query_one("#prompt", Input)
+        inp = app.query_one("#prompt", PromptInput)
         inp.value = "/agents"
         inp.focus()
         await pilot.press("enter")
@@ -676,7 +680,7 @@ async def _drive_create_agent_and_skill(tmp_path, monkeypatch):
         assert app.screen == app.screen_stack[0] # back to main screen
 
         # 2. Test Skill creation
-        inp = app.query_one("#prompt", Input)
+        inp = app.query_one("#prompt", PromptInput)
         inp.value = "/skills"
         inp.focus()
         await pilot.press("enter")
@@ -1372,6 +1376,7 @@ def test_tui_context_warning():
 async def _drive_live_steering():
     """Typing while the agent works injects a transient steer, cleared after."""
     from textual.widgets import Input, Static
+    from novacode_cli.tui.widgets import PromptInput
 
     from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
@@ -1389,7 +1394,7 @@ async def _drive_live_steering():
     )
     async with app.run_test() as pilot:
         app._turn_active = True  # simulate an in-flight turn
-        inp = app.query_one("#prompt", Input)
+        inp = app.query_one("#prompt", PromptInput)
         inp.value = "focus on error handling"
         inp.focus()
         await pilot.press("enter")
@@ -2240,6 +2245,88 @@ def test_tui_todo_dock_dismisses_when_all_done():
     asyncio.run(_drive_todo_dock_dismisses_when_all_done())
 
 
+async def _drive_prompt_grows_and_takes_newlines():
+    """The prompt is multi-line: it grows with content and accepts newlines.
+
+    It used to be a single-line Input with a fixed min-height, so pasting or
+    composing multi-line text neither expanded the box nor was even possible
+    to type — there was no key that inserted a newline.
+    """
+    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.widgets import PromptInput
+    from novacode_cli.ui.ui_elements import TokenTracker
+
+    app = NovaApp(
+        agent=_FakeAgent(), assistant_id="nova-agent", session_state=_SS(),
+        backend=None, token_tracker=TokenTracker(), image_tracker=None,
+        model_name="m",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        p = app.query_one("#prompt", PromptInput)
+        p.focus()
+
+        async def settle():
+            for _ in range(3):
+                await pilot.pause()
+
+        await settle()
+        one_line = p.size.height
+
+        p.text = "\n".join(f"line {i}" for i in range(6))
+        await settle()
+        assert p.size.height > one_line, "prompt did not grow for multi-line text"
+
+        # A very long list must clamp rather than swallow the screen.
+        p.text = "\n".join(f"line {i}" for i in range(200))
+        await settle()
+        assert p.size.height <= 15, f"prompt grew to {p.size.height} rows"
+
+        # shift+enter inserts a newline instead of submitting.
+        p.text = "abc"
+        p.move_cursor(p.document.end)
+        await settle()
+        await pilot.press("shift+enter")
+        await settle()
+        assert p.text == "abc\n", repr(p.text)
+
+
+async def _drive_prompt_enter_still_submits():
+    """enter must still send — TextArea would otherwise insert a newline."""
+    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.tui.widgets import PromptInput
+    from novacode_cli.ui.ui_elements import TokenTracker
+
+    app = NovaApp(
+        agent=_FakeAgent(), assistant_id="nova-agent", session_state=_SS(),
+        backend=None, token_tracker=TokenTracker(), image_tracker=None,
+        model_name="m",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        p = app.query_one("#prompt", PromptInput)
+        p.focus()
+        p.text = "hello nova"
+        for _ in range(2):
+            await pilot.pause()
+        await pilot.press("enter")
+        await app.workers.wait_for_complete()
+        for _ in range(3):
+            await pilot.pause()
+        assert p.text == "", "enter did not submit (prompt still holds text)"
+        assert len(app.query_one("#transcript").children) > 0
+
+
+def test_tui_prompt_grows_and_takes_newlines():
+    if not _HAS_TEXTUAL:
+        return
+    asyncio.run(_drive_prompt_grows_and_takes_newlines())
+
+
+def test_tui_prompt_enter_still_submits():
+    if not _HAS_TEXTUAL:
+        return
+    asyncio.run(_drive_prompt_enter_still_submits())
+
+
 def test_tui_native_todos():
     if not _HAS_TEXTUAL:
         return
@@ -2292,6 +2379,7 @@ async def _drive_native_diff_body():
 async def _drive_native_bash():
     """! commands run natively (subprocess) by suspending the TUI app."""
     from textual.widgets import Input, Static
+    from novacode_cli.tui.widgets import PromptInput
 
     from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
@@ -2306,7 +2394,7 @@ async def _drive_native_bash():
         model_name="m",
     )
     async with app.run_test() as pilot:
-        inp = app.query_one("#prompt", Input)
+        inp = app.query_one("#prompt", PromptInput)
         inp.value = "!echo hi-from-shell"
         inp.focus()
         await pilot.press("enter")
@@ -2340,6 +2428,7 @@ def test_tui_init_routes_native():
 async def _drive_trace_log_plan_native():
     """/trace, /log, /plan render natively (not the 'unavailable' fallback)."""
     from textual.widgets import Input, Static
+    from novacode_cli.tui.widgets import PromptInput
 
     from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
@@ -2363,7 +2452,7 @@ async def _drive_trace_log_plan_native():
     )
 
     async def submit(pilot, t):
-        inp = app.query_one("#prompt", Input)
+        inp = app.query_one("#prompt", PromptInput)
         inp.value = t
         inp.focus()
         await pilot.press("enter")
@@ -2392,6 +2481,7 @@ async def _drive_trace_log_plan_native():
 async def _drive_steer_save_native():
     """/steer (add/list/clear) and /save render natively (no fallback)."""
     from textual.widgets import Input, Static
+    from novacode_cli.tui.widgets import PromptInput
 
     from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
@@ -2412,7 +2502,7 @@ async def _drive_steer_save_native():
     )
 
     async def submit(pilot, t):
-        inp = app.query_one("#prompt", Input)
+        inp = app.query_one("#prompt", PromptInput)
         inp.value = t
         inp.focus()
         await pilot.press("enter")
@@ -2434,6 +2524,7 @@ async def _drive_steer_save_native():
 async def _drive_research_dream_native():
     """/research streams natively via execute_fn; /dream renders natively."""
     from textual.widgets import Input, Static
+    from novacode_cli.tui.widgets import PromptInput
 
     from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
@@ -2450,7 +2541,7 @@ async def _drive_research_dream_native():
     )
 
     async def submit(pilot, t):
-        inp = app.query_one("#prompt", Input)
+        inp = app.query_one("#prompt", PromptInput)
         inp.value = t
         inp.focus()
         await pilot.press("enter")
@@ -2477,6 +2568,7 @@ def test_tui_research_dream_native():
 async def _drive_images_native():
     """/images list/remove/clear render natively against a fake tracker."""
     from textual.widgets import Input, Static
+    from novacode_cli.tui.widgets import PromptInput
 
     from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
@@ -2520,7 +2612,7 @@ async def _drive_images_native():
     )
 
     async def submit(pilot, t):
-        inp = app.query_one("#prompt", Input)
+        inp = app.query_one("#prompt", PromptInput)
         inp.value = t
         inp.focus()
         await pilot.press("enter")
@@ -2548,6 +2640,7 @@ def test_tui_images_native():
 async def _drive_menus_native():
     """/files, /hooks, /kill, /restore render natively (empty-state, no modal)."""
     from textual.widgets import Input, Static
+    from novacode_cli.tui.widgets import PromptInput
 
     from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
@@ -2564,7 +2657,7 @@ async def _drive_menus_native():
     )
 
     async def submit(pilot, t):
-        inp = app.query_one("#prompt", Input)
+        inp = app.query_one("#prompt", PromptInput)
         inp.value = t
         inp.focus()
         await pilot.press("enter")
@@ -2592,6 +2685,7 @@ def test_tui_menus_native():
 async def _drive_input_mode_styles():
     """The prompt input gets distinct CSS classes for bash vs plan mode."""
     from textual.widgets import Input
+    from novacode_cli.tui.widgets import PromptInput
 
     from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
@@ -2612,7 +2706,7 @@ async def _drive_input_mode_styles():
     )
 
     async with app.run_test() as pilot:
-        prompt = app.query_one("#prompt", Input)
+        prompt = app.query_one("#prompt", PromptInput)
 
         # Bash mode: typing "!" flips on bash-mode (not plan-mode).
         app._update_mode_badge("!ls -la")
@@ -2650,6 +2744,7 @@ async def _drive_theme_native():
     """/theme lists themes (incl. registered tokyo-night) and switching applies."""
     import novacode_cli.config.nova_config as ncfg
     from textual.widgets import Button, Input, OptionList
+    from novacode_cli.tui.widgets import PromptInput
 
     from novacode_cli.tui.app import NovaApp, NovaStatusBar, ThemeScreen
     from novacode_cli.ui.ui_elements import TokenTracker
@@ -2672,7 +2767,7 @@ async def _drive_theme_native():
             # Nova's palette is registered as a real theme.
             assert "tokyo-night" in app.available_themes
 
-            inp = app.query_one("#prompt", Input)
+            inp = app.query_one("#prompt", PromptInput)
             inp.value = "/theme"
             inp.focus()
             await pilot.press("enter")
@@ -2714,6 +2809,7 @@ def test_tui_theme_native():
 async def _drive_notifications_native():
     """Notifications show a status badge and /notifications lists/dismisses them."""
     from textual.widgets import Input, Static
+    from novacode_cli.tui.widgets import PromptInput
 
     from novacode_cli.states.Session import SessionState
     from novacode_cli.tui.app import NovaApp, NovaStatusBar
@@ -2732,7 +2828,7 @@ async def _drive_notifications_native():
     )
 
     async def submit(pilot, t):
-        inp = app.query_one("#prompt", Input)
+        inp = app.query_one("#prompt", PromptInput)
         inp.value = t
         inp.focus()
         await pilot.press("enter")
@@ -2820,6 +2916,7 @@ def test_tui_resume_replay():
 async def _drive_clear_resets_chat():
     """/clear starts a fresh chat: new thread_id, cleared seen-ids + transcript."""
     from textual.widgets import Input, Static
+    from novacode_cli.tui.widgets import PromptInput
 
     from novacode_cli.tui.app import NovaApp, NovaStatusBar
     from novacode_cli.ui.ui_elements import TokenTracker
@@ -2838,7 +2935,7 @@ async def _drive_clear_resets_chat():
     )
 
     async def submit(pilot, t):
-        inp = app.query_one("#prompt", Input)
+        inp = app.query_one("#prompt", PromptInput)
         inp.value = t
         inp.focus()
         await pilot.press("enter")
@@ -3390,6 +3487,7 @@ def test_tui_wiki_screen():
 
 async def _drive_wiki_screen():
     from textual.widgets import Button, Input, Static, OptionList
+    from novacode_cli.tui.widgets import PromptInput
     from novacode_cli.tui.app import NovaApp, WikiScreen
     from novacode_cli.ui.ui_elements import TokenTracker
     from novacode_cli.wiki.manager import WikiManager
@@ -3436,7 +3534,7 @@ async def _drive_wiki_screen():
     try:
         async with app.run_test() as pilot:
             # Open wiki screen
-            inp = app.query_one("#prompt", Input)
+            inp = app.query_one("#prompt", PromptInput)
             inp.value = "/wiki"
             inp.focus()
             await pilot.pause()

@@ -14,6 +14,7 @@ class _FakeAgent:
 
 async def _drive() -> None:
     from textual.widgets import Input, OptionList
+    from novacode_cli.tui.widgets import PromptInput
 
     from novacode_cli.states.Session import SessionState
     from novacode_cli.tui.app import NovaApp
@@ -35,7 +36,7 @@ async def _drive() -> None:
     bash_calls: list[str] = []
 
     async with app.run_test() as pilot:
-        inp = app.query_one("#prompt", Input)
+        inp = app.query_one("#prompt", PromptInput)
         app.query_one("#cmdpalette", OptionList).display = False  # avoid palette interception
         app._turn_active = True  # simulate the agent being busy
 

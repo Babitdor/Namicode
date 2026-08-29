@@ -429,7 +429,10 @@ class NovaApp(App):
     #prompt {
         width: 1fr;
         background: $panel; color: $text;
-        padding: 0 2; min-height: 3;
+        padding: 0 2;
+        /* Grows with the text (multi-line composing, wrapped long lines)
+           and stops before it eats the transcript. */
+        height: auto; min-height: 3; max-height: 15;
         border: none;
         /* Smooth fade when switching into/out of a mode. */
         transition: background 300ms in_out_cubic;
@@ -838,7 +841,7 @@ class NovaApp(App):
             with Horizontal(id="prompt-row"):
                 yield Static("> ", id="prompt-prefix")
                 yield PromptInput(
-                    placeholder="Type your message or @path/to/file",
+                    placeholder="Type your message or @path/to/file  (shift+enter for a new line)",
                     id="prompt",
                     paste_tracker=self.paste_tracker,
                     on_large_paste=self._on_large_paste,
@@ -900,7 +903,7 @@ class NovaApp(App):
         # keystrokes) skip the query_one DOM walk. See _w().
         for _sel, _kind in (
             ("#transcript", VerticalScroll),
-            ("#prompt", Input),
+            ("#prompt", PromptInput),
             ("#mode-badge", Static),
             ("#cmdpalette", OptionList),
             ("#prompt-hint-bar", Static),
@@ -960,7 +963,7 @@ class NovaApp(App):
         self._load_plugin_commands()
         # Animate the live status (~5 fps) while a turn is active.
         self.set_interval(0.05, self._tick)
-        self.query_one("#prompt", Input).focus()
+        self.query_one("#prompt", PromptInput).focus()
         # Show ASCII art banner on home screen
         self._show_home_banner()
         # Native startup panel (model / cwd / sandbox / memory / web-search).
@@ -2876,7 +2879,7 @@ class NovaApp(App):
         self._last_mode_state = (plan, bash, bool(goal))
         try:
             badge = self._w("#mode-badge", Static)
-            prompt = self._w("#prompt", Input)
+            prompt = self._w("#prompt", PromptInput)
         except NoMatches:
             return
 
@@ -2938,7 +2941,7 @@ class NovaApp(App):
             self._input_pulse_timer = None
 
         try:
-            prompt = self.query_one("#prompt", Input)
+            prompt = self.query_one("#prompt", PromptInput)
         except Exception:  # noqa: BLE001
             return
 
@@ -2975,6 +2978,23 @@ class NovaApp(App):
             return
         self._update_palette(event.value, event.input.cursor_position)
         self._update_mode_badge(event.value)
+
+    def on_text_area_changed(self, event: Any) -> None:
+        """The prompt is a TextArea, which posts Changed instead of
+        Input.Changed. Feed the palette/mode badge the same way."""
+        area = getattr(event, "text_area", None)
+        if area is None or getattr(area, "id", None) != "prompt":
+            return
+        text = area.text
+        # Palette completion is line-oriented; give it the offset within
+        # the cursor's own line so "@" detection behaves as before.
+        try:
+            row, col = area.cursor_location
+            line = text.split("\n")[row]
+        except Exception:  # noqa: BLE001
+            line, col = text, len(text)
+        self._update_palette(line, col)
+        self._update_mode_badge(text)
 
     def _active_at_fragment(self, value: str, cursor: int) -> tuple[int, str] | None:
         """The ``@token`` ending at the cursor, anywhere in the line.
@@ -3206,7 +3226,7 @@ class NovaApp(App):
         palette.display = False
 
     def _accept_palette(self, command: str) -> None:
-        inp = self.query_one("#prompt", Input)
+        inp = self.query_one("#prompt", PromptInput)
         value = inp.value
         cursor = inp.cursor_position
         frag = self._active_at_fragment(value, cursor)
@@ -3251,6 +3271,10 @@ class NovaApp(App):
     def _on_large_paste(self, placeholder: str, char_count: int) -> None:
         """Notify the transcript that a large paste was collapsed."""
         self._log(Text(f"{placeholder} ({char_count:,} chars)", style="dim"))
+
+    def on_prompt_input_submitted(self, event: Any) -> None:
+        """The prompt (a TextArea) posts its own Submitted on enter."""
+        self.on_input_submitted(event)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         # Only react to the main prompt (modals have their own inputs).
@@ -3609,7 +3633,7 @@ class NovaApp(App):
           auto-approved tools so it never blocks waiting for user input).
         """
         try:
-            prompt_widget = self._w("#prompt", Input)
+            prompt_widget = self._w("#prompt", PromptInput)
         except NoMatches:
             return
         raw = prompt_widget.value.strip()

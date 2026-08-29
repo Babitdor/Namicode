@@ -18,7 +18,8 @@ from textual.containers import Horizontal, Vertical
 from textual.css.query import NoMatches
 from textual.theme import Theme
 from textual.widget import Widget
-from textual.widgets import Input, Static
+from textual.message import Message
+from textual.widgets import Input, Static, TextArea
 
 from novacode_cli.input_utils import (
     PASTE_MIN_CHARS,
@@ -553,7 +554,7 @@ class ChatMessage(Vertical):
 
 
 
-class PromptInput(Input):
+class PromptInput(TextArea):
     """Main prompt input that collapses large pastes into a compact placeholder.
 
     Textual's single-line ``Input`` keeps only the *first line* of a paste, so a
@@ -596,7 +597,67 @@ class PromptInput(Input):
         self._active_paste_ph: str = ""
         self._merge_timer: Any = None
 
+    class Submitted(Message):
+        """Posted when the user presses enter to send the prompt.
+
+        ``TextArea`` has no Submitted message of its own (enter inserts a
+        newline there), so the prompt defines one to keep the app-side
+        contract identical to the old ``Input``-based widget.
+        """
+
+        def __init__(self, prompt_input: "PromptInput", value: str) -> None:
+            self.input = prompt_input
+            self.value = value
+            super().__init__()
+
+    @property
+    def value(self) -> str:
+        """Alias of ``text`` so callers written against ``Input`` still work."""
+        return self.text
+
+    @value.setter
+    def value(self, new: str) -> None:
+        self.text = new
+
+    @property
+    def cursor_position(self) -> int:
+        """Cursor offset into ``text`` (``Input``-compatible).
+
+        ``TextArea`` exposes a (row, column) ``cursor_location``; the palette
+        and @-completion were written against a flat offset, so translate.
+        """
+        try:
+            row, col = self.cursor_location
+        except Exception:  # noqa: BLE001
+            return len(self.text)
+        lines = self.text.split("\n")[:row]
+        return sum(len(line) + 1 for line in lines) + col
+
+    @cursor_position.setter
+    def cursor_position(self, offset: int) -> None:
+        text = self.text
+        offset = max(0, min(offset, len(text)))
+        before = text[:offset]
+        row = before.count("\n")
+        col = offset - (before.rfind("\n") + 1)
+        self.move_cursor((row, col))
+
     async def _on_key(self, event: events.Key) -> None:
+        # enter sends; shift+enter (and ctrl+j, which some terminals send
+        # instead) inserts a real newline. TextArea does the opposite by
+        # default, and a chat prompt wants enter to mean "send".
+        if event.key == "enter":
+            event.prevent_default()
+            event.stop()
+            self._end_paste_merge()
+            self.post_message(self.Submitted(self, self.text))
+            return
+        if event.key in ("shift+enter", "ctrl+j"):
+            event.prevent_default()
+            event.stop()
+            self._end_paste_merge()
+            self.insert("\n")
+            return
         # Drop ALL key events during the key-drop window. On Windows terminals,
         # pasting fires per-character keystrokes after the Paste event — the old
         # `len(event.key) == 1` filter was too narrow because some terminals send
@@ -630,9 +691,9 @@ class PromptInput(Input):
             tracker.extend_paste(self._active_paste_id, normalized)
             full = tracker.get_paste(self._active_paste_id) or normalized
             new_ph = format_paste_placeholder(self._active_paste_id, full)
-            if new_ph != old_ph and old_ph in self.value:
-                self.value = self.value.replace(old_ph, new_ph, 1)
-                self.cursor_position = len(self.value)
+            if new_ph != old_ph and old_ph in self.text:
+                self.text = self.text.replace(old_ph, new_ph, 1)
+                self.move_cursor(self.document.end)
             self._active_paste_ph = new_ph
         elif tracker is not None and (
             len(normalized) >= PASTE_MIN_CHARS or normalized.count("\n") >= PASTE_MIN_NEWLINES
@@ -641,12 +702,12 @@ class PromptInput(Input):
             # the merge window so any trailing fragments fold into this one.
             paste_id = tracker.add_paste(normalized)
             placeholder = format_paste_placeholder(paste_id, normalized)
-            self.insert_text_at_cursor(placeholder + " ")
+            self.insert(placeholder + " ")
             self._active_paste_id = paste_id
             self._active_paste_ph = placeholder
         else:
             # Small paste — won't fragment; insert literally, no merge needed.
-            self.insert_text_at_cursor(normalized)
+            self.insert(normalized)
 
         # Drop the echo keystrokes for a short moment after each fragment.
         self._paste_active = True
