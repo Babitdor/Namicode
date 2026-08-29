@@ -4133,6 +4133,9 @@ class NovaApp(App):
         Serialized on the shared remote lock so local and remote turns never
         interleave on the same checkpointer thread.
         """
+        # Remembered so a ContextOverflow can compact and re-send this exact
+        # prompt rather than losing the user's message.
+        self._last_user_prompt = text
         lock = getattr(self.session_state, "_remote_message_lock", None)
         self._reset_streaming()
         self._current_assistant_id = assistant_id
@@ -8435,6 +8438,42 @@ class NovaApp(App):
                 self._log(Text("⚙ Command moved to background — agent is idle.", style="cyan"))
             else:
                 self._log(Text("Interrupted.", style="yellow"))
+        elif isinstance(e, ev.ContextOverflow):
+            # The provider rejected the request for being too long. Unlike other
+            # provider errors this has one specific remedy — shrink the
+            # conversation — so compact and retry ONCE. A second overflow after
+            # compacting means the summary itself doesn't fit, and retrying
+            # again would just loop.
+            self._accumulated_reply = ""
+            if getattr(self, "_overflow_retried", False):
+                self._overflow_retried = False
+                self._log(
+                    Text(
+                        "⚠ Still over the context limit after compacting — the "
+                        "conversation can't be shrunk further. Use /clear to start "
+                        "fresh, or switch to a larger-context model.",
+                        style="bold #f7768e",
+                    )
+                )
+                for line in (e.message or "").splitlines():
+                    self._log(Text(line, style="yellow"))
+                return
+            self._overflow_retried = True
+            self._log(
+                Text("⚠ Context overflow — compacting and retrying…", style="bold #f7768e")
+            )
+            await self._run_compact("")
+            prompt = getattr(self, "_last_user_prompt", None)
+            if prompt:
+                await self._stream_prompt(prompt)
+            else:
+                self._log(
+                    Text(
+                        "Compacted. Re-send your message to continue.",
+                        style="dim",
+                    )
+                )
+            self._overflow_retried = False
         elif isinstance(e, ev.Error):
             self._accumulated_reply = ""
             # Provider failures (usage/rate limit, auth, connectivity) are

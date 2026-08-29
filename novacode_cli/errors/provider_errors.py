@@ -164,6 +164,46 @@ def friendly_model_error(exc: BaseException | None) -> str | None:
     return _NOTICES[category].format(text=str(exc).strip())
 
 
+#: Phrases providers use when the request exceeded the model's context window.
+#: Deliberately specific: a generic "too long" or a bare "context" would also
+#: match unrelated failures, and a false positive here triggers a needless
+#: compaction of the user's conversation.
+_OVERFLOW_MARKERS: tuple[str, ...] = (
+    "context length",
+    "context window",
+    "context_length_exceeded",
+    "maximum context",
+    "max_tokens",
+    "too many tokens",
+    "prompt is too long",
+    "input is too long",
+    "reduce the length of the messages",
+    "exceeds the maximum",
+    "request too large",
+)
+
+
+def is_context_overflow(exc: BaseException | None) -> bool:
+    """True if *exc* is the provider rejecting a request for being too long.
+
+    Distinct from :func:`is_retryable_model_error`: an overflow *is* recoverable,
+    but only by shrinking the conversation (compact, then retry) — plain backoff
+    would fail identically every time. The caller emits a dedicated event so the
+    TUI can compact and retry once instead of surfacing a dead-end error.
+    """
+    if exc is None:
+        return False
+    low = str(exc).strip().lower()
+    # A token-count phrase alone is ambiguous ("max_tokens must be positive"),
+    # so require it to read like a limit being exceeded.
+    if any(marker in low for marker in _OVERFLOW_MARKERS):
+        return any(
+            word in low
+            for word in ("exceed", "too long", "too large", "too many", "maximum", "limit")
+        )
+    return False
+
+
 def is_retryable_model_error(exc: BaseException) -> bool:
     """``retry_on`` predicate for ``ModelRetryMiddleware``.
 

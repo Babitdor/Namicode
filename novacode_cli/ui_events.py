@@ -202,6 +202,21 @@ class Cancelled:
 
 
 @dataclass
+class ContextOverflow:
+    """The provider rejected the request because the context was too long.
+
+    Distinct from :class:`Error` because it is *recoverable in one specific
+    way*: compact the conversation and retry. Plain backoff would fail
+    identically, so renderers that can compact (the TUI) should do that and
+    retry once; renderers that cannot should show ``message`` like any other
+    provider notice.
+    """
+
+    message: str
+    exception: BaseException | None = None
+
+
+@dataclass
 class Error:
     """The run failed with an error to surface.
 
