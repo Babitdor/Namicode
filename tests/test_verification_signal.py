@@ -53,7 +53,7 @@ async def test_turn_is_graded_when_learning_enabled(monkeypatch):
     monkeypatch.setattr(A, "_maybe_verifier", lambda: fake)
     monkeypatch.setattr(
         A,
-        "iterate_agent_events",
+        "run_with_goal",
         _fake_iterate_factory(
             [
                 ev.AssistantMessage(text="the answer is 42", agent_name="Nova", agent_color="cyan"),
@@ -87,7 +87,7 @@ async def test_no_grading_when_learning_disabled(monkeypatch):
 
         return _it
 
-    monkeypatch.setattr(A, "iterate_agent_events", _factory())
+    monkeypatch.setattr(A, "run_with_goal", _factory())
     events = await _drain(
         A.run_agent_stream("hi", object(), "nova-agent", SimpleNamespace(thread_id="t2"))
     )
@@ -100,7 +100,7 @@ async def test_noop_turn_is_not_graded(monkeypatch):
     fake = _FakeVerifier()
     monkeypatch.setattr(A, "_maybe_verifier", lambda: fake)
     monkeypatch.setattr(
-        A, "iterate_agent_events", _fake_iterate_factory([ev.Done(had_response=False)])
+        A, "run_with_goal", _fake_iterate_factory([ev.Done(had_response=False)])
     )
     await _drain(A.run_agent_stream("", object(), "nova-agent", SimpleNamespace(thread_id="t3")))
     for task in list(A._verification_tasks):

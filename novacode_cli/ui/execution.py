@@ -17,10 +17,8 @@ from rich.text import Text
 
 from novacode_cli import ui_events as ev
 from novacode_cli.config.config import COLORS, console, get_agent_color
-from novacode_cli.core.agent_loop import (
-    default_interrupt_response,
-    iterate_agent_events,
-)
+from novacode_cli.core.agent_loop import default_interrupt_response
+from novacode_cli.core.autonomous_loop import run_with_goal
 from novacode_cli.file_ops import get_session_file_op_tracker
 from novacode_cli.input_utils import ImageTracker
 from novacode_cli.core.input_preparation import (
@@ -349,7 +347,7 @@ async def execute_task(  # type: ignore
 
     else:
 
-        _event_source = iterate_agent_events(
+        _event_source = run_with_goal(
 
             user_input,
 

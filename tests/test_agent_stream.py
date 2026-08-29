@@ -889,6 +889,108 @@ def test_real_answer_with_summary_and_next_steps_is_kept():
     ), [type(e).__name__ for e in evts]
 
 
+def _counting_agent(reply: str):
+    """Agent that records how many turns it was driven for."""
+
+    class Agent:
+        turns = 0
+
+        async def aget_state(self, config):
+            return _State([])
+
+        async def astream(self, inp, **kw):
+            Agent.turns += 1
+            yield ((), "messages", (_Chunk(f"m{Agent.turns}", [{"type": "text", "text": reply}]), {}))
+
+        async def aupdate_state(self, **kw):
+            pass
+
+    return Agent()
+
+
+def _drive_stream(agent, session_state):
+    async def _run():
+        return [
+            e
+            async for e in agent_stream_mod().run_agent_stream(
+                "hi", agent, "nova-agent", session_state
+            )
+        ]
+
+    return asyncio.run(_run())
+
+
+def agent_stream_mod():
+    import novacode_cli.agent_stream as m
+
+    return m
+
+
+def test_goal_mode_actually_loops_through_the_tui_entry_point():
+    """A goal must drive MULTIPLE turns via run_agent_stream, not just one.
+
+    Stubbing run_with_goal only proves an import is wired; it cannot catch the
+    loop failing to continue. Drive the real autonomous loop and count turns.
+    """
+
+    class _GoalState(_SessionState):
+        active_goal = "build a CSV parser"
+        auto_approve = True
+
+    agent = _counting_agent("still working")
+    evts = _drive_stream(agent, _GoalState())
+
+    assert type(agent).turns > 1, (
+        f"goal mode ran only {type(agent).turns} turn(s) — the loop did not continue"
+    )
+    assert isinstance(evts[-1], ev.Done)
+
+
+def test_goal_achieved_stops_the_loop():
+    """The loop must stop early when the agent reports GOAL ACHIEVED."""
+
+    class _GoalState(_SessionState):
+        active_goal = "build a CSV parser"
+        auto_approve = True
+
+    agent = _counting_agent("All done. GOAL ACHIEVED")
+    _drive_stream(agent, _GoalState())
+    assert type(agent).turns == 1, (
+        f"GOAL ACHIEVED should end the run, but it ran {type(agent).turns} turns"
+    )
+
+
+def test_no_goal_runs_exactly_one_turn():
+    """Without a goal the entry point stays a single-turn passthrough."""
+    agent = _counting_agent("done")
+    evts = _drive_stream(agent, _SessionState())
+    assert type(agent).turns == 1, f"expected 1 turn, got {type(agent).turns}"
+    assert isinstance(evts[-1], ev.Done)
+
+
+def test_a_held_lease_does_not_block_the_turn():
+    """The session lease is best-effort: a conflict must not stall a TUI turn."""
+    from novacode_cli.sessions.lease import lease_session
+
+    class _State2(_SessionState):
+        thread_id = "t-contended-regression"
+        auto_approve = True
+
+    agent = _counting_agent("done")
+
+    async def _run():
+        async with lease_session("t-contended-regression", "pid:other:tui"):
+            return [
+                e
+                async for e in agent_stream_mod().run_agent_stream(
+                    "hi", agent, "nova-agent", _State2()
+                )
+            ]
+
+    evts = asyncio.run(_run())
+    assert isinstance(evts[-1], ev.Done), "turn did not complete while the lease was held"
+
+
 if __name__ == "__main__":
     test_happy_path_text_tool_todo()
     test_question_interrupt_resumes()

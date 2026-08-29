@@ -24,10 +24,25 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from novacode_cli import ui_events as ev
-from novacode_cli.core.agent_loop import iterate_agent_events
+from novacode_cli.core.autonomous_loop import run_with_goal
+from novacode_cli.sessions.lease import lease_holder, lease_session
 
 # Hold references to in-flight grade tasks so they aren't GC'd mid-run.
 _verification_tasks: set[asyncio.Task] = set()
+
+
+class _NullAsyncCM:
+    """A no-op async context manager (used when there is no thread to lease)."""
+
+    async def __aenter__(self) -> None:
+        return None
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
+
+
+def _null_async_cm() -> _NullAsyncCM:
+    return _NullAsyncCM()
 
 
 def _maybe_verifier() -> Any | None:
@@ -90,32 +105,47 @@ async def run_agent_stream(
 ) -> AsyncIterator[Any]:
     """Run the agent and yield UI events.
 
-    Delegates to :func:`~novacode_cli.core.agent_loop.iterate_agent_events`.
-    Yields instances from :mod:`novacode_cli.ui_events`. Terminates with a
+    Delegates to :func:`~novacode_cli.core.agent_loop.iterate_agent_events` (or
+    :func:`~novacode_cli.core.autonomous_loop.run_with_goal` when a goal is
+    active, so goal mode works from the TUI). Yields instances from
+    :mod:`novacode_cli.ui_events`. Terminates with a
     :class:`~novacode_cli.ui_events.Done`, :class:`~novacode_cli.ui_events.Cancelled`,
     or :class:`~novacode_cli.ui_events.Error` event. When learning is enabled,
     grades the completed turn out-of-band (see module docstring).
+
+    The turn runs under a best-effort cross-process session lease (never blocks;
+    proceeds unleased on conflict).
     """
     verifier = _maybe_verifier()
     texts: list[str] = []
     file_ops: list[Any] = []
 
-    async for event in iterate_agent_events(
-        user_input,
-        agent,
-        assistant_id,
-        session_state,
-        backend=backend,
-        image_tracker=image_tracker,
-        seen_message_ids=seen_message_ids,
-        skip_file_mentions=skip_file_mentions,
-    ):
-        if verifier is not None:
-            if isinstance(event, ev.AssistantMessage):
-                texts.append(event.text)
-            elif isinstance(event, ev.FileOp) and getattr(event, "record", None) is not None:
-                file_ops.append(event.record)
-        yield event
+    thread_id = getattr(session_state, "thread_id", None) or getattr(
+        session_state, "session_id", None
+    )
+    holder = lease_holder("tui")
+
+    # Best-effort cross-process lease. Only acquired when we have a real
+    # thread_id; never blocks (proceeds unleased on conflict).
+    _lease_cm = lease_session(thread_id, holder) if thread_id else _null_async_cm()
+
+    async with _lease_cm:
+        async for event in run_with_goal(
+            user_input,
+            agent,
+            assistant_id,
+            session_state,
+            backend=backend,
+            image_tracker=image_tracker,
+            seen_message_ids=seen_message_ids,
+            skip_file_mentions=skip_file_mentions,
+        ):
+            if verifier is not None:
+                if isinstance(event, ev.AssistantMessage):
+                    texts.append(event.text)
+                elif isinstance(event, ev.FileOp) and getattr(event, "record", None) is not None:
+                    file_ops.append(event.record)
+            yield event
 
     if verifier is not None:
         agent_output = "\n\n".join(t for t in texts if t).strip()

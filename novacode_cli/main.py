@@ -726,6 +726,15 @@ async def _run_agent_session(
 
     tools.extend([create_artifact, update_artifact, list_artifacts])
 
+    # Persistent Python kernel + detached daemon tools. Both are agent-facing
+    # tools that must NEVER console.print (they run inside the live agent loop /
+    # TUI). The kernel keeps a namespace across calls; the daemon tool launches
+    # long-lived background processes tracked in ~/.nova/daemons/.
+    from novacode_cli.tools.daemon_tool import daemon
+    from novacode_cli.tools.python_kernel_tool import python_kernel
+
+    tools.extend([python_kernel, daemon])
+
     # Heavy initialization with live animated boot status.
     # The BootAnimation context wraps all boot_status() calls from agent
     # creation, MCP discovery, session restore, and token calculation.
