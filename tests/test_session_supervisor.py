@@ -267,6 +267,48 @@ async def test_crash_is_reported_with_stderr(sup_and_child, tmp_path):
 
 
 @pytest.mark.timeout(60)
+async def test_a_finished_child_is_reaped(sup_and_child, tmp_path):
+    """A child that exits on its own must not stay tracked forever.
+
+    Only close() popped from ``_children``, so a child that crashed on start,
+    was killed externally, or simply finished stayed in the dict for the life
+    of the parent — holding its process handle, reader tasks and stderr tail.
+    at_capacity() filters on ``.alive``, so new spawns were still allowed and
+    the leak was silent: sessions accumulated across a long run.
+    """
+    sup, coll = sup_and_child()
+    for i in range(3):
+        await sup.spawn(
+            session_id=f"s{i}", name=f"n{i}", worktree=tmp_path,
+            argv=_argv(_CRASH_CHILD),
+        )
+
+    assert await _wait_for(lambda: len(coll.of("exited")) == 3)
+    # The exits were reported (the UI has what it needs) ...
+    assert len(coll.of("exited")) == 3
+    # ... and nothing dead is still held.
+    assert await _wait_for(lambda: sup.list() == []), (
+        f"{len(sup.list())} dead child(ren) still tracked"
+    )
+
+
+@pytest.mark.timeout(60)
+async def test_reaping_frees_capacity_for_new_sessions(sup_and_child, tmp_path):
+    """Dead children must not consume the MAX_SESSIONS budget."""
+    from novacode_cli.sessions.supervisor import MAX_SESSIONS
+
+    sup, coll = sup_and_child()
+    for i in range(MAX_SESSIONS):
+        await sup.spawn(
+            session_id=f"c{i}", name=f"c{i}", worktree=tmp_path,
+            argv=_argv(_CRASH_CHILD),
+        )
+    assert await _wait_for(lambda: len(coll.of("exited")) == MAX_SESSIONS)
+    assert not sup.at_capacity(), "dead children still counted against capacity"
+    assert await _wait_for(lambda: sup.list() == [])
+
+
+@pytest.mark.timeout(60)
 async def test_crash_resolves_pending_approvals(sup_and_child, tmp_path):
     """A dead child must never leave the parent awaiting a decision forever."""
     # The child holds briefly after raising the interrupt so the parent can

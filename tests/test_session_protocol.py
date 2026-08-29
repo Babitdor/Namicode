@@ -57,6 +57,7 @@ def _sample(name: str):
             todos=[{"content": "a", "status": "pending"}], agent_name="nova"
         ),
         "ErrorOutput": lambda: ev.ErrorOutput(text="boom"),
+        "ContextOverflow": lambda: ev.ContextOverflow(message="prompt is too long"),
         "SubagentActivity": lambda: ev.SubagentActivity(
             kind="dispatched", subagent_type="code-explorer",
             message="m", detail="d", color="green", call_id="t9",

@@ -270,6 +270,27 @@ class SessionSupervisor:
                 {"t": "exited", "code": child.exit_code, "crashed": crashed},
             )
 
+        # Drop the dead child. Only close() used to pop from _children, so a
+        # child that exited on its own — crashed on startup, killed externally,
+        # or simply finished — stayed in the dict for the life of the parent,
+        # holding its process handle, reader tasks and stderr tail. The status
+        # has already been reported above, so nothing needs the object after
+        # this. at_capacity() filtered on .alive and so still allowed new
+        # spawns, which is why this leaked quietly instead of blocking.
+        self._reap(child)
+
+    def _reap(self, child: ChildSession) -> None:
+        """Forget a finished child and release what it held.
+
+        Does NOT cancel ``child.tasks``: this runs from the stdout reader's own
+        ``finally``, so cancelling that set would cancel the caller mid-cleanup.
+        Both readers exit on their own once the pipes close; dropping the
+        reference is enough for them to be collected.
+        """
+        self._children.pop(child.session_id, None)
+        _live.discard(child)
+        child.tasks = []
+
     # ── sending ──────────────────────────────────────────────────────────
 
     async def _send(self, child: ChildSession, msg: dict) -> bool:
