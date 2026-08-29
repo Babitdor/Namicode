@@ -6611,9 +6611,11 @@ class NovaApp(App):
             t.append(f"  tokens saved: ~{result.tokens_saved:,}\n", style="dim")
             learnings = getattr(result, "learnings", "") or ""
             if learnings:
-                n = learnings.count("\n") + 1
+                # `learnings` is the summary text itself, written as ONE memory
+                # entry — counting its newlines reported "42 learnings" for a
+                # 42-line summary, which overstated what was saved.
                 t.append(
-                    f"  🧠 {n} learning{'s' if n != 1 else ''} preserved to memory\n",
+                    "  🧠 summary preserved to memory\n",
                     style="green",
                 )
             summary = getattr(result, "summary", "") or ""
