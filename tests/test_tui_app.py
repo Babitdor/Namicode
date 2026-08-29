@@ -2107,6 +2107,133 @@ def test_tui_todos_are_per_pane():
     asyncio.run(_drive_todos_are_per_pane())
 
 
+def _mk_todos(n_done, n_total):
+    return [
+        {"content": f"task {i}", "status": "completed" if i < n_done else "pending"}
+        for i in range(n_total)
+    ]
+
+
+async def _drive_todo_dock_does_not_cover_the_prompt():
+    """The dock must take its OWN rows, not paint over the input.
+
+    It was a second dock:bottom sibling of #prompt-dock, so both claimed the
+    same rows: the checklist rendered on top of the input and only showed up
+    after a terminal resize forced a reflow.
+    """
+    import novacode_cli.ui_events as ev
+
+    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.ui.ui_elements import TokenTracker
+
+    app = NovaApp(
+        agent=_FakeAgent(), assistant_id="nova-agent", session_state=_SS(),
+        backend=None, token_tracker=TokenTracker(), image_tracker=None,
+        model_name="m",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        from textual.widgets import Static as _Static
+
+        await app._render(ev.TodoUpdate(todos=_mk_todos(1, 5), agent_name=None))
+        for _ in range(3):
+            await pilot.pause()
+
+        dock = app.query_one("#todo-dock", _Static).region
+        row = app.query_one("#prompt-row").region
+        assert dock.height > 0, "dock rendered with no height"
+        overlap = set(range(dock.y, dock.y + dock.height)) & set(
+            range(row.y, row.y + row.height)
+        )
+        assert not overlap, f"todo dock is painting over the input rows: {sorted(overlap)}"
+
+
+async def _drive_todo_dock_collapses():
+    """alt+t collapses to a one-line header and expands back."""
+    import novacode_cli.ui_events as ev
+
+    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.ui.ui_elements import TokenTracker
+
+    app = NovaApp(
+        agent=_FakeAgent(), assistant_id="nova-agent", session_state=_SS(),
+        backend=None, token_tracker=TokenTracker(), image_tracker=None,
+        model_name="m",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        from textual.widgets import Static as _Static
+
+        await app._render(ev.TodoUpdate(todos=_mk_todos(1, 5), agent_name=None))
+        for _ in range(3):
+            await pilot.pause()
+        dock = app.query_one("#todo-dock", _Static)
+        expanded = dock.size.height
+        assert expanded > 1
+
+        app.action_toggle_todos()
+        for _ in range(3):
+            await pilot.pause()
+        assert dock.has_class("collapsed")
+        assert dock.size.height == 1, f"collapsed to {dock.size.height} rows"
+        # The summary must survive collapsing — it is the only row left.
+        assert "1/5" in str(dock.render())
+
+        app.action_toggle_todos()
+        for _ in range(3):
+            await pilot.pause()
+        assert not dock.has_class("collapsed")
+        assert dock.size.height == expanded
+
+
+async def _drive_todo_dock_dismisses_when_all_done():
+    """A fully-checked list dismisses itself and gives the rows back."""
+    import novacode_cli.ui_events as ev
+
+    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.ui.ui_elements import TokenTracker
+
+    app = NovaApp(
+        agent=_FakeAgent(), assistant_id="nova-agent", session_state=_SS(),
+        backend=None, token_tracker=TokenTracker(), image_tracker=None,
+        model_name="m",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        from textual.widgets import Static as _Static
+
+        await app._render(ev.TodoUpdate(todos=_mk_todos(2, 3), agent_name=None))
+        for _ in range(3):
+            await pilot.pause()
+        dock = app.query_one("#todo-dock", _Static)
+        assert dock.has_class("active"), "partial list should be shown"
+        with_todos = app.query_one("#transcript").region.height
+
+        await app._render(ev.TodoUpdate(todos=_mk_todos(3, 3), agent_name=None))
+        for _ in range(3):
+            await pilot.pause()
+        assert not dock.has_class("active"), "all-complete list should dismiss"
+        assert dock.size.height == 0
+        assert app.query_one("#transcript").region.height > with_todos, (
+            "transcript should reclaim the dismissed rows"
+        )
+
+
+def test_tui_todo_dock_does_not_cover_the_prompt():
+    if not _HAS_TEXTUAL:
+        return
+    asyncio.run(_drive_todo_dock_does_not_cover_the_prompt())
+
+
+def test_tui_todo_dock_collapses():
+    if not _HAS_TEXTUAL:
+        return
+    asyncio.run(_drive_todo_dock_collapses())
+
+
+def test_tui_todo_dock_dismisses_when_all_done():
+    if not _HAS_TEXTUAL:
+        return
+    asyncio.run(_drive_todo_dock_dismisses_when_all_done())
+
+
 def test_tui_native_todos():
     if not _HAS_TEXTUAL:
         return

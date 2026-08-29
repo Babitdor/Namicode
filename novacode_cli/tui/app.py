@@ -491,8 +491,9 @@ class NovaApp(App):
     /* Docked todo checklist: sits above the prompt so it stays on screen.
        Auto-height so a short list costs a few rows; max-height clamps a
        long one (real lists run 2-14 items) and scrolls inside itself. */
+    /* Inside #prompt-dock (a Vertical), so it takes its own rows above the
+       input instead of fighting it for the same bottom-docked rows. */
     #todo-dock {
-        dock: bottom;
         display: none;
         height: auto;
         max-height: 12;
@@ -502,6 +503,8 @@ class NovaApp(App):
         border-left: thick $secondary;
     }
     #todo-dock.active { display: block; }
+    /* Collapsed: just the one-line summary header. */
+    #todo-dock.collapsed { max-height: 1; overflow-y: hidden; }
     #tasks-bar {
         display: none;
         height: 1;
@@ -648,6 +651,7 @@ class NovaApp(App):
         # Parallel sessions. alt+… chords are used because ctrl+a/e/k/u/w are
         # shadowed by Textual's Input editing bindings while #prompt has focus
         # (the normal state).
+        ("alt+t", "toggle_todos", "Todos"),
         ("ctrl+n", "new_session", "New session"),
         ("alt+right", "next_session", "Next session"),
         ("alt+left", "prev_session", "Prev session"),
@@ -753,6 +757,7 @@ class NovaApp(App):
         # the dock widget is app-global: a session switch repaints from these.
         self._todos: list = []
         self._todos_agent: str | None = None
+        self._todos_collapsed: bool = False
         # _init_widget and _init_steps removed — /init progress is now _log-only
         # Live per-iteration Ralph cards, keyed by iteration number, so an
         # IterationFinished event can update the card mounted at its start.
@@ -822,10 +827,12 @@ class NovaApp(App):
         with ContentSwitcher(initial="transcript", id="panes"):
             yield VerticalScroll(id="transcript")
         yield OptionList(id="cmdpalette")
-        # Todos are docked rather than mounted into the transcript so the
-        # checklist stays visible instead of scrolling away mid-task.
-        yield Static("", id="todo-dock")
         with Vertical(id="prompt-dock"):
+            # Todos live INSIDE the prompt dock, not as a second
+            # dock:bottom sibling: two bottom-docked siblings both claim the
+            # same rows, so the checklist rendered on top of the input and
+            # only appeared after a resize forced a reflow.
+            yield Static("", id="todo-dock")
             yield Static("", id="prompt-hint-bar")
             with Horizontal(id="prompt-row"):
                 yield Static("> ", id="prompt-prefix")
@@ -2026,16 +2033,37 @@ class NovaApp(App):
         self.set_timer(0.1, self._flush_stream)
 
     @staticmethod
-    def _render_todos(todos: list, agent_name: str | None) -> Text:
-        """Native todo list: status glyphs + content (no legacy panel)."""
+    def _render_todos(
+        todos: list, agent_name: str | None, *, collapsed: bool = False
+    ) -> Text:
+        """Native todo list: status glyphs + content (no legacy panel).
+
+        The header carries the done/total count and a collapse affordance,
+        because when collapsed it is the only row on screen.
+        """
         glyphs = {
             "completed": ("☑", "green"),
             "in_progress": ("▶", "yellow"),
             "pending": ("☐", "dim"),
         }
+        items = todos or []
+        done = sum(
+            1
+            for td in items
+            if isinstance(td, dict) and td.get("status") == "completed"
+        )
         t = Text()
-        header = f"{agent_name} · Todos" if agent_name else "Todos"
-        t.append(f"{header}\n", style="bold")
+        name = f"{agent_name} · Todos" if agent_name else "Todos"
+        caret = "▸" if collapsed else "▾"
+        t.append(f"{caret} {name} ", style="bold")
+        t.append(
+            f"{done}/{len(items)}",
+            style="green" if items and done == len(items) else "dim",
+        )
+        t.append("  alt+t", style="dim")
+        t.append("\n")
+        if collapsed:
+            return t
         for td in todos or []:
             if isinstance(td, dict):
                 content = td.get("content", "")
@@ -2056,21 +2084,38 @@ class NovaApp(App):
         The single place the dock is written. Called on TodoUpdate, on session
         switch (the widget is app-global but ``_todos`` is per-pane, so a switch
         must repaint or pane A's list would sit under pane B), and on resume.
+
+        A fully-completed list is dismissed automatically: the checklist has
+        served its purpose and should not keep costing rows above the prompt.
         """
         try:
             dock = self._w("#todo-dock", Static)
         except NoMatches:
             return
-        if not todos:
+        items = todos or []
+        # Everything checked off -> dismiss. Nothing to track any more, and a
+        # stale all-green list is pure noise above the input.
+        if not items or all(
+            isinstance(td, dict) and td.get("status") == "completed" for td in items
+        ):
             dock.remove_class("active")
             dock.update("")
             return
+        collapsed = getattr(self, "_todos_collapsed", False)
         # rstrip: every row ends in a newline, which would leave a blank line
         # inside a dock sized to its content.
-        text = self._render_todos(todos, agent_name)
+        text = self._render_todos(items, agent_name, collapsed=collapsed)
         text.rstrip()
         dock.update(text)
+        dock.set_class(collapsed, "collapsed")
         dock.add_class("active")
+
+    def action_toggle_todos(self) -> None:
+        """Collapse/expand the todo checklist (alt+t)."""
+        self._todos_collapsed = not getattr(self, "_todos_collapsed", False)
+        self._paint_todos(
+            getattr(self, "_todos", None), getattr(self, "_todos_agent", None)
+        )
 
     def _pop_tool(self, call_id: str | None) -> "tuple[Collapsible, Static, str] | None":
         """Find (and stop tracking) the tool component for a result."""
