@@ -199,7 +199,17 @@ async def _action_switch_provider(
                     )
 
                     try:
-                        model_manager.set_provider(provider_id, model_name)
+                        # Preserve any custom endpoint already configured for
+                        # this provider — set_provider rewrites the whole model
+                        # entry, so passing nothing here would silently drop it.
+                        _kept_base_url = None
+                        try:
+                            from novacode_cli.config.nova_config import NovaConfig
+
+                            _kept_base_url = NovaConfig().get_model_base_url()
+                        except Exception:  # noqa: BLE001
+                            _kept_base_url = None
+                        model_manager.set_provider(provider_id, model_name, _kept_base_url)
                         console.print()
                         console.print(
                             "[green]✓ Configuration saved to ~/.nova/Nova.config.json[/green]"

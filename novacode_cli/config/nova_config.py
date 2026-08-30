@@ -62,18 +62,32 @@ class NovaConfig:
         """
         return self._config.get("model")
 
-    def set_model_config(self, provider: str, model: str) -> None:
+    def set_model_config(
+        self, provider: str, model: str, base_url: str | None = None
+    ) -> None:
         """Save model provider configuration.
 
         Args:
             provider: Provider ID (openai, anthropic, ollama, google)
             model: Model name
+            base_url: Optional OpenAI-compatible endpoint override (Azure,
+                LM Studio, vLLM, a LiteLLM proxy…). Omitted from the saved
+                config when blank, so the default endpoint is used.
         """
-        self._config["model"] = {
-            "provider": provider,
-            "model": model,
-        }
+        entry: dict[str, str] = {"provider": provider, "model": model}
+        if base_url:
+            entry["base_url"] = base_url
+        self._config["model"] = entry
         self._save()
+
+    def get_model_base_url(self) -> str | None:
+        """The saved endpoint override for the current provider, if any."""
+        model_cfg = self._config.get("model")
+        if isinstance(model_cfg, dict):
+            url = model_cfg.get("base_url")
+            if isinstance(url, str) and url.strip():
+                return url.strip()
+        return None
 
     def clear_model_config(self) -> None:
         """Clear saved model configuration."""

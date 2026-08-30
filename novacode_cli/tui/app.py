@@ -5689,7 +5689,17 @@ class NovaApp(App):
         configured = {pid for pid, _ in mm.get_available_providers()}
         current_id = mm.get_current_provider_id()
 
-        result = await self.push_screen_wait(ModelScreen(current_id, configured))
+        saved_base_url = None
+        try:
+            from novacode_cli.config.nova_config import NovaConfig
+
+            saved_base_url = NovaConfig().get_model_base_url()
+        except Exception:  # noqa: BLE001 — prefill is a convenience
+            saved_base_url = None
+
+        result = await self.push_screen_wait(
+            ModelScreen(current_id, configured, current_base_url=saved_base_url)
+        )
         if not result:
             return
 
@@ -5697,6 +5707,7 @@ class NovaApp(App):
         preset = MODEL_PRESETS[provider]
         model = result["model"] or preset["default_model"]
         key = result["api_key"]
+        base_url = (result.get("base_url") or "").strip()
 
         # Ensure the API key is present in the environment (model creation reads
         # os.environ). Store a newly entered key in the keychain.
@@ -5706,12 +5717,14 @@ class NovaApp(App):
 
                 SecretManager().store_secret(preset["api_key_var"].lower(), key)
                 os.environ[preset["api_key_var"]] = key
-            elif not mm.resolve_api_key(provider):
+            elif not mm.resolve_api_key(provider) and not base_url:
                 # resolve_api_key exports a keychain/env key when it exists.
+                # A custom endpoint (LM Studio, vLLM, a local proxy) usually
+                # needs no key, so don't block the switch on one.
                 self._log(Text(f"{preset['name']} requires an API key.", style="red"))
                 return
 
-        mm.set_provider(provider, model)
+        mm.set_provider(provider, model, base_url or None)
         try:
             from novacode_cli.config.model_create import create_model
 

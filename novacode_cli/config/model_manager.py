@@ -313,7 +313,12 @@ class ModelManager:
 
         return build_chat_model(provider, model_name)  # type: ignore[arg-type]
 
-    def set_provider(self, provider: ProviderType, model_name: str | None = None) -> None:
+    def set_provider(
+        self,
+        provider: ProviderType,
+        model_name: str | None = None,
+        base_url: str | None = None,
+    ) -> None:
         """Set the current provider and model.
 
         Saves configuration to Nova.config.json for persistence across sessions.
@@ -321,6 +326,9 @@ class ModelManager:
         Args:
             provider: Provider to use
             model_name: Model name (optional)
+            base_url: Optional OpenAI-compatible endpoint override, for pointing
+                the ``openai`` provider at Azure, LM Studio, vLLM or a proxy.
+                Blank clears any previously saved override.
         """
         preset = MODEL_PRESETS.get(provider)
         if not preset:
@@ -331,7 +339,7 @@ class ModelManager:
             model_name = preset["default_model"]
 
         # Save to persistent configuration
-        self.nova_config.set_model_config(provider, model_name)
+        self.nova_config.set_model_config(provider, model_name, base_url)
 
         # Also set environment variables for immediate effect in current session
         if preset["env_var"]:

@@ -98,6 +98,21 @@ def build_chat_model(provider: str, model_name: str) -> BaseChatModel:
             openai_key = settings.openai_api_key or os.environ.get("OPENAI_API_KEY")
             if openai_key:
                 openai_kwargs["api_key"] = openai_key
+            # Custom OpenAI-compatible endpoint (Azure, LM Studio, vLLM, a
+            # LiteLLM proxy…). Saved by /model, overridable per-shell via
+            # OPENAI_BASE_URL. Without this, ChatOpenAI always went to
+            # api.openai.com and a self-hosted endpoint was unreachable.
+            base_url = None
+            try:
+                base_url = nova_config.get_model_base_url()
+            except Exception:  # noqa: BLE001 — config is best-effort here
+                base_url = None
+            base_url = base_url or os.environ.get("OPENAI_BASE_URL")
+            if base_url:
+                openai_kwargs["base_url"] = base_url
+                # A local endpoint usually ignores the key but the client still
+                # demands one; send a placeholder so it doesn't refuse to start.
+                openai_kwargs.setdefault("api_key", "not-needed")
 
         return ChatOpenAI(model=model_name, max_retries=5, **openai_kwargs)
 

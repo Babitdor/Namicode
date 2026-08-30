@@ -292,10 +292,21 @@ class ModelScreen(ModalScreen[dict | None]):
 
     BINDINGS = [("escape", "cancel", "Cancel")]
 
-    def __init__(self, current_provider: str | None, configured: set[str]) -> None:
+    #: Providers that accept a custom OpenAI-compatible endpoint. OpenRouter and
+    #: OpenCode are also OpenAI-compatible but pin their own base URL, so
+    #: offering a box there would only let the user break the gateway.
+    _ENDPOINT_PROVIDERS = frozenset({"openai"})
+
+    def __init__(
+        self,
+        current_provider: str | None,
+        configured: set[str],
+        current_base_url: str | None = None,
+    ) -> None:
         super().__init__()
         self._current = current_provider
         self._configured = configured
+        self._current_base_url = current_base_url or ""
 
     def compose(self) -> ComposeResult:
         from novacode_cli.config.model_manager import MODEL_PRESETS
@@ -314,6 +325,12 @@ class ModelScreen(ModalScreen[dict | None]):
             # Hidden for other providers (shown via _refresh_info).
             yield OptionList(id="modellist")
             yield Input(placeholder="API key (blank = use saved)", password=True, id="apikey")
+            # OpenAI-compatible endpoint override. Shown only for providers that
+            # accept one (see _ENDPOINT_PROVIDERS) — the gateways pin their own
+            # base URL, and Anthropic/Google/Ollama don't take one at all.
+            yield Input(
+                placeholder="Endpoint URL (blank = api.openai.com)", id="baseurl"
+            )
             yield Input(placeholder="Model (blank = default, or type any slug)", id="model")
             with Horizontal(id="modal-buttons"):
                 yield Button("Switch", id="switch", variant="success")
@@ -323,6 +340,9 @@ class ModelScreen(ModalScreen[dict | None]):
         animate_modal_screen(self)
         # List is shown only for Ollama; hide until a provider is chosen.
         self.query_one("#modellist", OptionList).display = False
+        # Endpoint box likewise: hidden until a provider that accepts one is
+        # selected, so the modal stays short for everyone else.
+        self.query_one("#baseurl", Input).display = False
         if self._current:
             self._refresh_info(self._current)
 
@@ -351,6 +371,17 @@ class ModelScreen(ModalScreen[dict | None]):
                 info.append("suggestions: " + ", ".join(models[:6]), style="dim")
             model_list.display = False
             model_list.clear_options()
+
+        base_input = self.query_one("#baseurl", Input)
+        show_endpoint = pid in self._ENDPOINT_PROVIDERS
+        base_input.display = show_endpoint
+        if show_endpoint:
+            # Prefill the saved endpoint so it is visible and editable rather
+            # than silently still in effect.
+            if not base_input.value:
+                base_input.value = self._current_base_url
+        else:
+            base_input.value = ""
 
         self.query_one("#modelinfo", Static).update(info)
         self.query_one("#model", Input).placeholder = f"Model (blank = {preset['default_model']})"
@@ -420,11 +451,20 @@ class ModelScreen(ModalScreen[dict | None]):
         if provider is Select.BLANK:
             self.dismiss(None)
             return
+        pid = str(provider)
+        # Only report an endpoint for providers that take one, so switching away
+        # from OpenAI can't carry a stale URL onto a gateway.
+        base_url = (
+            self.query_one("#baseurl", Input).value.strip()
+            if pid in self._ENDPOINT_PROVIDERS
+            else ""
+        )
         self.dismiss(
             {
-                "provider": str(provider),
+                "provider": pid,
                 "model": self.query_one("#model", Input).value.strip(),
                 "api_key": self.query_one("#apikey", Input).value.strip(),
+                "base_url": base_url,
             }
         )
 
