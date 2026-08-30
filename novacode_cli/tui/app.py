@@ -233,7 +233,10 @@ TUI_COMMANDS: dict[str, SlashCommand] = {
     "ralph": SlashCommand("_run_ralph_screen", "autonomous looping mode (/ralph <task>)"),
     "trello": SlashCommand("_run_trello", "kanban task board in the browser"),
     "create": SlashCommand("_run_create", "Skills & Agents web UI"),
-    "council": SlashCommand("_run_chat", "multi-model council deliberation"),
+    "council": SlashCommand(
+        "_run_council",
+        "plan a task with the council (view / approve N / revise / history)",
+    ),
     "clear": SlashCommand("_run_clear", "clear the transcript", wants_text=False),
     "tokens": SlashCommand("_run_token_view", "show token / context usage", wants_text=False),
     "context": SlashCommand("_run_token_view", "show context usage breakdown", wants_text=False),
@@ -8134,8 +8137,273 @@ class NovaApp(App):
         except Exception:
             pass  # Server stopped, loop ends
 
+    # ── /council — collaborative planning ───────────────────────────────────
+    #
+    # The council plans; it never edits. A run stops at "awaiting approval" and
+    # only an explicit `/council approve N` turns a plan into work for the
+    # coding agent. Approval reads the run back from its artifact rather than
+    # from memory, so a plan can still be approved after a restart.
+
+    def _council_store(self):
+        from novacode_cli.council_planner import CouncilArtifactStore
+
+        return CouncilArtifactStore(Path.cwd())
+
+    def _council_target(self, store):
+        """The run a bare /council subcommand acts on: this session's, else the
+        most recent on disk."""
+        run_id = getattr(self, "_council_run_id", None)
+        return store.load(run_id) if run_id else store.latest()
+
+    async def _run_council(self, text: str) -> None:
+        """Run /council — plan a task, or open the Council web UI."""
+        parts = text.split(maxsplit=2)
+        sub = parts[1].strip().lower() if len(parts) > 1 else ""
+        rest = parts[2].strip() if len(parts) > 2 else ""
+
+        # Preserved: a bare /council (and /council stop) is the web UI this
+        # command has always opened.
+        if sub in ("", "stop"):
+            await self._run_chat(text)
+            return
+        if sub in ("web", "open"):
+            await self._run_chat("/council")
+            return
+        if sub in ("view", "approve", "revise", "reject", "cancel", "history"):
+            await self._council_subcommand(sub, rest)
+            return
+
+        # Anything else is the task to plan.
+        self.run_worker(self._council_plan(text.split(maxsplit=1)[1].strip()))
+
+    async def _council_subcommand(self, sub: str, rest: str) -> None:
+        from novacode_cli import council_planner as cp
+
+        store = self._council_store()
+
+        if sub == "history":
+            ids = store.history()
+            if not ids:
+                self._log(Text("No council runs yet.", style="dim"))
+                return
+            for run_id in ids:
+                run = store.load(run_id)
+                if run is None:
+                    continue
+                self._log(
+                    Text.assemble(
+                        (f"{run_id}  ", "cyan"),
+                        (f"{run.status:<18}", "dim"),
+                        (run.prompt.splitlines()[0][:60] if run.prompt else "", ""),
+                    )
+                )
+            return
+
+        run = self._council_target(store)
+        if run is None:
+            self._log(Text("No council run to act on. Try /council <task>.", "yellow"))
+            return
+
+        if sub == "view":
+            if rest.isdigit():
+                await self._council_show_plan(run, int(rest))
+            else:
+                self._council_render_plans(run)
+            return
+
+        if sub in ("reject", "cancel"):
+            (cp.reject if sub == "reject" else cp.cancel)(run, store=store)
+            self._log(Text(f"Council run {run.id} {run.status}.", style="yellow"))
+            return
+
+        if sub == "revise":
+            if not rest:
+                self._log(Text("Say what to change: /council revise <notes>", "yellow"))
+                return
+            cp.request_revision(run, rest, store=store)
+            self._log(Text("↻ Replanning with your revisions…", style="cyan"))
+            self.run_worker(self._council_plan(run.prompt, run=run))
+            return
+
+        # approve
+        if not rest.split(" ")[0].isdigit():
+            self._log(Text("Which plan? /council approve 1", style="yellow"))
+            return
+        try:
+            plan = cp.approve(run, int(rest.split(" ")[0]), store=store)
+        except cp.CouncilApprovalError as exc:
+            self._log(Text(f"✗ {exc}", style="red"))
+            return
+        self._log(Text(f"✓ Plan approved — {run.approved_proposal_id}", "bold green"))
+        self._log(
+            Text(f"  saved to .nova/council/{run.id}/approved-plan.md", style="dim")
+        )
+        self._log(Text("Handing the approved plan to the coding agent…", "cyan"))
+        # The executor is told the plan carries the user's authorization, so it
+        # implements rather than re-opening the choice the council already made.
+        cp.mark_executing(run, store=store)
+        try:
+            await self._stream_prompt(
+                "The user reviewed and APPROVED the following implementation plan "
+                "from a planning council. Implement it. Do not redesign it or "
+                "propose alternatives; if a step turns out to be wrong, say so and "
+                "stop rather than silently substituting your own approach.\n\n"
+                + plan
+            )
+        finally:
+            # Even on an error, the run must not be left reading "executing"
+            # forever — /council history would then misreport it as in flight.
+            cp.mark_completed(run, store=store)
+
+    async def _council_plan(self, prompt: str, run: Any = None) -> None:
+        """Drive a planning council, logging each phase as it lands."""
+        from novacode_cli import council_planner as cp
+        from novacode_cli.council import get_council_model
+
+        try:
+            model = get_council_model()
+        except Exception as exc:  # noqa: BLE001 — no provider configured
+            self._log(Text(f"Council unavailable: {exc}", style="red"))
+            return
+
+        store = self._council_store()
+        from novacode_cli.council_planner import PLANNING_PERSONAS
+
+        self._log(Text("◈ Council convening — planning, not editing.", "bold cyan"))
+        # Said up front because this is genuinely slow: four phases of whole
+        # structured plans, and a hosted reasoning model can take minutes per
+        # call. Without this the user reads a quiet screen as a hang.
+        self._log(
+            Text(
+                f"  {len(PLANNING_PERSONAS)} agents · brainstorm → critique → vote "
+                "→ judge. This takes a few minutes.",
+                style="dim",
+            )
+        )
+        phase_label = {
+            cp.BRAINSTORMING: "Brainstorming independently",
+            cp.CRITIQUING: "Critiquing (anonymized)",
+            cp.VOTING: "Anonymous ranked vote",
+            cp.JUDGING: "Judge scoring against the rubric",
+        }
+        try:
+            async for event in cp.run_planning_council(
+                prompt,
+                model,
+                context=self._council_context(),
+                store=store,
+                run=run,
+            ):
+                self._council_run_id = event["run_id"]
+                name, payload = event["event"], event["payload"]
+                if name == "council.phase.started":
+                    label = phase_label.get(payload.get("phase", ""))
+                    if label:
+                        self._log(Text(f"  → {label}", style="cyan"))
+                elif name == "proposal.created":
+                    self._log(
+                        Text(f"    ✓ {payload['proposal_id']} — {payload['title']}", "dim")
+                    )
+                elif name == "agent.failed":
+                    # With the reason: "dropped out" alone leaves the user
+                    # unable to tell a slow model from an unreachable one.
+                    why = payload.get("reason") or "no reply"
+                    self._log(
+                        Text(f"    ✗ {payload['name']} — {why}", style="yellow")
+                    )
+                elif name == "vote.tallied":
+                    entropy = payload["tally"].get("entropy", 0.0)
+                    self._log(
+                        Text(f"    ballots in · disagreement {entropy:.2f}", "dim")
+                    )
+                elif name == "council.failed":
+                    self._log(Text(f"✗ {payload['reason']}", style="red"))
+                elif name == "plans.selected":
+                    latest = store.load(event["run_id"])
+                    if latest is not None:
+                        self._council_render_plans(latest)
+        except Exception as exc:  # noqa: BLE001 — a council must not kill the TUI
+            self._log(Text(f"Council failed: {exc}", style="red"))
+
+    def _council_context(self) -> str:
+        """Light repo context for the planners: the project's own NOVA.md.
+
+        Deliberately not a retrieval engine — the council plans an approach, and
+        the coding agent reads the actual files when it implements. Whatever
+        NOVA.md says about the project is the highest-value context per token.
+        """
+        try:
+            for name in ("NOVA.md", ".nova/NOVA.md"):
+                path = Path.cwd() / name
+                if path.is_file():
+                    return path.read_text(encoding="utf-8")[:4000]
+        except OSError:
+            pass
+        return ""
+
+    def _council_render_plans(self, run: Any) -> None:
+        """The top-3 cards, plus how to act on them."""
+        plans = run.ranked_plans()
+        if not plans:
+            self._log(Text("No plans were selected.", style="yellow"))
+            return
+        self._log(Text(f"◈ Council results — {len(plans)} plans", style="bold cyan"))
+        if run.judgment is not None and run.judgment.fell_back_to_vote:
+            self._log(
+                Text(
+                    "  ⚠ The judge was unreachable — this order is the council's "
+                    "vote, not a rubric verdict.",
+                    style="yellow",
+                )
+            )
+        elif run.tally.get("entropy", 0.0) >= 0.9:
+            self._log(
+                Text(
+                    "  ⚠ The council did not converge — this ranking is a "
+                    "judgement call, not a consensus.",
+                    style="yellow",
+                )
+            )
+        for plan in plans:
+            proposal = run.proposal(plan.proposal_id)
+            if proposal is None:
+                continue
+            head = "Recommended" if plan.rank == 1 else "Alternative"
+            self._log(
+                Text.assemble(
+                    (f"  #{plan.rank} ", "bold"),
+                    (f"{head} ", "green" if plan.rank == 1 else "dim"),
+                    (proposal.title, "bold"),
+                )
+            )
+            self._log(Text(f"     {proposal.summary}", style="dim"))
+            for pro in proposal.tradeoffs.get("pros", [])[:2]:
+                self._log(Text(f"     + {pro}", style="green"))
+            for con in proposal.tradeoffs.get("cons", [])[:2]:
+                self._log(Text(f"     - {con}", style="yellow"))
+        self._log(
+            Text(
+                "  /council view <n> · /council approve <n> · /council revise <notes>",
+                style="dim",
+            )
+        )
+
+    async def _council_show_plan(self, run: Any, index: int) -> None:
+        plans = run.ranked_plans()
+        if not 1 <= index <= len(plans):
+            self._log(Text(f"Pick a plan between 1 and {len(plans)}.", "yellow"))
+            return
+        from novacode_cli.council_planner import to_implementation_plan
+
+        selected = plans[index - 1]
+        proposal = run.proposal(selected.proposal_id)
+        if proposal is None:
+            self._log(Text("That plan is missing from the run.", style="red"))
+            return
+        self._log(Markdown(to_implementation_plan(run, proposal, selected)))
+
     async def _run_chat(self, text: str) -> None:
-        """Run /council — start or stop the Council web UI in the browser."""
+        """Run the Council web UI — start or stop it in the browser."""
         from novacode_cli.commands.chat_handler import (
             get_server_url,
             is_server_running,

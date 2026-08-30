@@ -275,6 +275,11 @@ mypy novacode_cli/
 | `/plan` | Invoke plan-mode agent for investigation & approval |
 | `/trace` | LangSmith tracing management (status, enable, projects) |
 | `/ralph` | Autonomous looping mode (background task execution) |
+| `/council <task>` | Plan a task with the council: agents propose independently, critique anonymously, vote, and a judge picks the top 3 for you to approve |
+| `/council view [n]` | Show the selected plans, or plan `n` in full |
+| `/council approve <n>` | Approve plan `n` and hand it to the coding agent (nothing is implemented before this) |
+| `/council revise <notes>` | Re-plan with your changes |
+| `/council history` | Past council runs (kept in `.nova/council/`) |
 | `/council` | Launch local Council web UI (multi-agent debate) |
 | `/chat` | Launch local browser-based chat UI |
 | `/trello` | Browser-based task board server |

@@ -145,13 +145,20 @@ MODEL_PRESETS: dict[str, dict[str, Any]] = {
         "env_var": "NVIDIA_MODEL",
         "api_key_var": "NVIDIA_API_KEY",
         "requires_api_key": True,
+        # Verified callable against a live NVIDIA account. Two catalog
+        # entries (llama-3.1-nemotron-70b-instruct, codestral-22b) were
+        # dropped: they are listed by /v1/models but return 404 'Function
+        # not found for account', so offering them only produces a
+        # confusing failure at first use.
+        #
+        # The deepseek reasoning models are slow — a single structured
+        # /council turn measured ~280s — so nemotron-3-super is the one
+        # to pick for anything latency-sensitive.
         "models": [
             "deepseek-ai/deepseek-v4-pro-0813",
             "deepseek-ai/deepseek-v4-flash-0731",
             "nvidia/nemotron-3-super-120b-a12b",
-            "nvidia/llama-3.1-nemotron-70b-instruct",
             "openai/gpt-oss-120b",
-            "mistralai/codestral-22b-instruct-v0.1",
         ],
     },
 }
