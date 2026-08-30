@@ -90,23 +90,29 @@ HTML_PAGE = r"""<!DOCTYPE html>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
   :root {
-    --bg-deep: #0c0b0a;
-    --bg-surface: #141210;
-    --bg-elevated: #1c1917;
-    --bg-hover: #231f1c;
-    --border-subtle: #2a2520;
-    --border-mid: #3d352e;
-    --text-primary: #e8e2da;
-    --text-secondary: #9c9185;
-    --text-muted: #635a52;
-    --amber: #d97706;
-    --amber-bright: #f59e0b;
-    --amber-glow: rgba(217, 119, 6, 0.25);
-    --copper: #b45309;
-    --copper-deep: #78350f;
-    --teal: #14b8a6;
-    --teal-dim: rgba(20, 184, 166, 0.12);
-    --teal-glow: rgba(20, 184, 166, 0.2);
+    /* ── Nova TUI (tokyo-night) palette ─────────────────────── */
+    --bg-deep: #13141d;        /* background */
+    --bg-surface: #1a1b26;     /* surface */
+    --bg-elevated: #24283b;    /* panel */
+    --bg-hover: #2f3346;       /* boost */
+    --border-subtle: #3b4261;  /* border */
+    --border-mid: #565f89;     /* text-muted */
+    --text-primary: #c0caf5;   /* foreground */
+    --text-secondary: #a9b1d6;
+    --text-muted: #565f89;
+    --primary: #7aa2f7;        /* blue */
+    --primary-dim: rgba(122, 162, 247, 0.12);
+    --primary-glow: rgba(122, 162, 247, 0.25);
+    --accent: #bb9af7;         /* purple */
+    --accent-dim: rgba(187, 154, 247, 0.12);
+    --accent-glow: rgba(187, 154, 247, 0.2);
+    --secondary: #9ece6a;      /* green */
+    --success: #73daca;        /* teal */
+    --success-dim: rgba(115, 218, 202, 0.12);
+    --success-glow: rgba(115, 218, 202, 0.2);
+    --warning: #e0af68;        /* orange */
+    --error: #f7768e;          /* red */
+    --error-dim: rgba(247, 118, 142, 0.12);
     --radius: 14px;
     --radius-sm: 8px;
     --radius-xs: 6px;
@@ -115,7 +121,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
   html, body { height: 100%; }
 
   body {
-    font-family: 'DM Sans', system-ui, sans-serif;
+    font-family: 'JetBrains Mono', 'DM Sans', system-ui, sans-serif;
     background: var(--bg-deep);
     color: var(--text-primary);
     display: flex;
@@ -124,28 +130,29 @@ HTML_PAGE = r"""<!DOCTYPE html>
     overflow: hidden;
   }
 
-  /* ── Background: warm charcoal with subtle radial flare ───── */
+  /* ── Background: tokyo-night navy with subtle blue/purple flares ── */
 
   body::before {
     content: '';
     position: fixed;
     inset: 0;
     background:
-      radial-gradient(ellipse 90% 50% at 55% -10%, rgba(217, 119, 6, 0.07), transparent 70%),
-      radial-gradient(ellipse 60% 40% at 30% 90%, rgba(20, 184, 166, 0.04), transparent 60%),
-      radial-gradient(ellipse 50% 50% at 80% 20%, rgba(180, 83, 9, 0.04), transparent 50%);
+      radial-gradient(ellipse 90% 50% at 55% -10%, rgba(122, 162, 247, 0.08), transparent 70%),
+      radial-gradient(ellipse 60% 40% at 30% 90%, rgba(115, 218, 202, 0.05), transparent 60%),
+      radial-gradient(ellipse 50% 50% at 80% 20%, rgba(187, 154, 247, 0.05), transparent 50%);
     pointer-events: none;
     z-index: 0;
   }
 
+  /* Matrix-rain grid — the TUI's signature, rendered as a faint falling grid */
   body::after {
     content: '';
     position: fixed;
     inset: 0;
     background-image:
-      linear-gradient(rgba(217, 119, 6, 0.02) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(217, 119, 6, 0.02) 1px, transparent 1px);
-    background-size: 56px 56px;
+      linear-gradient(rgba(122, 162, 247, 0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(122, 162, 247, 0.03) 1px, transparent 1px);
+    background-size: 48px 48px;
     pointer-events: none;
     z-index: 0;
   }
@@ -155,11 +162,11 @@ HTML_PAGE = r"""<!DOCTYPE html>
     inset: 0;
     pointer-events: none;
     z-index: 1;
-    opacity: 0.035;
+    opacity: 0.03;
     background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   }
 
-  /* ── Floating ambient particles ────────────────────────── */
+  /* ── Floating ambient particles (tinted tokyo-night) ──────── */
 
   .particle-field {
     position: fixed;
@@ -176,12 +183,12 @@ HTML_PAGE = r"""<!DOCTYPE html>
     animation: particle-float 12s ease-in-out infinite;
   }
 
-  .particle:nth-child(1) { width: 3px; height: 3px; background: var(--amber-bright); left: 12%; top: 20%; animation-delay: 0s; animation-duration: 14s; }
-  .particle:nth-child(2) { width: 2px; height: 2px; background: var(--teal); left: 28%; top: 65%; animation-delay: 2s; animation-duration: 11s; }
-  .particle:nth-child(3) { width: 4px; height: 4px; background: var(--copper); left: 55%; top: 15%; animation-delay: 4s; animation-duration: 16s; }
-  .particle:nth-child(4) { width: 2px; height: 2px; background: var(--amber-bright); left: 72%; top: 50%; animation-delay: 1s; animation-duration: 13s; }
-  .particle:nth-child(5) { width: 3px; height: 3px; background: var(--teal); left: 88%; top: 30%; animation-delay: 3s; animation-duration: 15s; }
-  .particle:nth-child(6) { width: 2px; height: 2px; background: var(--copper); left: 42%; top: 80%; animation-delay: 5s; animation-duration: 12s; }
+  .particle:nth-child(1) { width: 3px; height: 3px; background: var(--primary); left: 12%; top: 20%; animation-delay: 0s; animation-duration: 14s; }
+  .particle:nth-child(2) { width: 2px; height: 2px; background: var(--success); left: 28%; top: 65%; animation-delay: 2s; animation-duration: 11s; }
+  .particle:nth-child(3) { width: 4px; height: 4px; background: var(--accent); left: 55%; top: 15%; animation-delay: 4s; animation-duration: 16s; }
+  .particle:nth-child(4) { width: 2px; height: 2px; background: var(--primary); left: 72%; top: 50%; animation-delay: 1s; animation-duration: 13s; }
+  .particle:nth-child(5) { width: 3px; height: 3px; background: var(--success); left: 88%; top: 30%; animation-delay: 3s; animation-duration: 15s; }
+  .particle:nth-child(6) { width: 2px; height: 2px; background: var(--accent); left: 42%; top: 80%; animation-delay: 5s; animation-duration: 12s; }
 
   @keyframes particle-float {
     0% { opacity: 0; transform: translateY(0) scale(0); }
@@ -202,7 +209,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
     justify-content: space-between;
     flex-shrink: 0;
     border-bottom: 1px solid var(--border-subtle);
-    background: rgba(12, 11, 10, 0.7);
+    background: rgba(19, 20, 29, 0.7);
     backdrop-filter: blur(12px);
   }
 
@@ -211,11 +218,11 @@ HTML_PAGE = r"""<!DOCTYPE html>
   .logo-icon {
     width: 38px; height: 38px;
     border-radius: 12px;
-    background: linear-gradient(145deg, var(--copper), var(--amber));
+    background: linear-gradient(145deg, var(--accent), var(--primary));
     display: flex; align-items: center; justify-content: center;
-    font-family: 'Syne', sans-serif;
-    font-weight: 800; font-size: 20px; color: #0c0b0a;
-    box-shadow: 0 0 20px var(--amber-glow);
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 800; font-size: 20px; color: #13141d;
+    box-shadow: 0 0 20px var(--primary-glow);
     position: relative;
   }
 
@@ -224,12 +231,12 @@ HTML_PAGE = r"""<!DOCTYPE html>
     position: absolute;
     inset: -2px;
     border-radius: 14px;
-    background: linear-gradient(145deg, var(--amber-glow), transparent);
+    background: linear-gradient(145deg, var(--primary-glow), transparent);
     z-index: -1;
   }
 
   header h1 {
-    font-family: 'Syne', sans-serif;
+    font-family: 'JetBrains Mono', monospace;
     font-size: 20px;
     font-weight: 700;
     letter-spacing: -0.3px;
@@ -238,10 +245,10 @@ HTML_PAGE = r"""<!DOCTYPE html>
   }
 
   header h1::after {
-    content: '✦';
+    content: '▮';
     font-size: 10px;
     margin-left: 8px;
-    color: var(--amber-bright);
+    color: var(--primary);
     vertical-align: super;
     opacity: 0.6;
   }
@@ -261,9 +268,9 @@ HTML_PAGE = r"""<!DOCTYPE html>
     font-size: 10px; font-weight: 500;
     padding: 5px 12px;
     border-radius: 20px;
-    background: var(--teal-dim);
-    color: var(--teal);
-    border: 1px solid rgba(20, 184, 166, 0.15);
+    background: var(--success-dim);
+    color: var(--success);
+    border: 1px solid rgba(115, 218, 202, 0.15);
     letter-spacing: 0.5px;
     text-transform: uppercase;
     position: relative;
@@ -274,7 +281,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
     content: '';
     position: absolute;
     inset: 0;
-    background: linear-gradient(90deg, transparent, rgba(20, 184, 166, 0.05), transparent);
+    background: linear-gradient(90deg, transparent, rgba(115, 218, 202, 0.05), transparent);
     animation: badge-shimmer 3s ease-in-out infinite;
   }
 
@@ -286,8 +293,8 @@ HTML_PAGE = r"""<!DOCTYPE html>
   .live-dot {
     width: 6px; height: 6px;
     border-radius: 50%;
-    background: var(--teal);
-    box-shadow: 0 0 8px var(--teal-glow);
+    background: var(--success);
+    box-shadow: 0 0 8px var(--success-glow);
     animation: pulse-dot 1.5s ease-in-out infinite;
   }
 
@@ -313,7 +320,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
     min-width: 300px;
     display: flex;
     flex-direction: column;
-    background: rgba(20, 18, 16, 0.6);
+    background: rgba(26, 27, 38, 0.6);
     backdrop-filter: blur(4px);
     border-right: 1px solid var(--border-subtle);
   }
@@ -332,7 +339,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
     border-radius: var(--radius-xs) var(--radius-xs) 0 0;
     background: transparent;
     color: var(--text-muted);
-    font-family: 'Syne', sans-serif;
+    font-family: 'JetBrains Mono', monospace;
     font-size: 12px;
     font-weight: 600;
     cursor: pointer;
@@ -342,17 +349,17 @@ HTML_PAGE = r"""<!DOCTYPE html>
     position: relative;
   }
 
-  .tab-btn:hover { color: var(--text-secondary); background: rgba(28, 25, 23, 0.5); }
+  .tab-btn:hover { color: var(--text-secondary); background: rgba(36, 40, 59, 0.5); }
   .tab-btn.active {
-    color: var(--amber-bright);
-    background: rgba(28, 25, 23, 0.8);
+    color: var(--primary);
+    background: rgba(36, 40, 59, 0.8);
   }
   .tab-btn.active::after {
     content: '';
     position: absolute;
     bottom: 0; left: 15%; right: 15%;
     height: 2px;
-    background: linear-gradient(90deg, transparent, var(--amber), transparent);
+    background: linear-gradient(90deg, transparent, var(--primary), transparent);
     border-radius: 2px;
   }
 
@@ -368,8 +375,8 @@ HTML_PAGE = r"""<!DOCTYPE html>
   }
 
   .tab-btn.active .count {
-    background: rgba(217, 119, 6, 0.12);
-    color: var(--amber-bright);
+    background: var(--primary-dim);
+    color: var(--primary);
   }
 
   .sidebar-search {
@@ -384,15 +391,15 @@ HTML_PAGE = r"""<!DOCTYPE html>
     border-radius: var(--radius-xs);
     background: var(--bg-deep);
     color: var(--text-secondary);
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'JetBrains Mono', monospace;
     font-size: 12px;
     outline: none;
     transition: all 0.2s ease;
   }
 
   .sidebar-search input:focus {
-    border-color: var(--amber);
-    box-shadow: 0 0 0 2px var(--amber-glow);
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px var(--primary-glow);
     color: var(--text-primary);
   }
 
@@ -408,6 +415,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
   .item-list::-webkit-scrollbar-track { background: transparent; }
   .item-list::-webkit-scrollbar-thumb { background: var(--border-mid); border-radius: 3px; }
 
+  /* Accent-bar cards — the TUI's signature message-card style */
   .item-card {
     padding: 10px 12px;
     margin-bottom: 3px;
@@ -415,6 +423,8 @@ HTML_PAGE = r"""<!DOCTYPE html>
     cursor: pointer;
     transition: all 0.2s ease;
     border: 1px solid transparent;
+    border-left: 3px solid var(--border-subtle);
+    background: var(--bg-surface);
     opacity: 0;
     animation: card-slide-in 0.3s ease forwards;
   }
@@ -434,13 +444,15 @@ HTML_PAGE = r"""<!DOCTYPE html>
   .item-card:hover {
     background: var(--bg-hover);
     border-color: var(--border-subtle);
+    border-left-color: var(--primary);
     transform: translateX(2px);
   }
 
   .item-card.active {
-    background: linear-gradient(135deg, rgba(217, 119, 6, 0.06), rgba(20, 184, 166, 0.03));
-    border-color: rgba(217, 119, 6, 0.3);
-    box-shadow: 0 0 16px var(--amber-glow);
+    background: linear-gradient(135deg, var(--primary-dim), var(--accent-dim));
+    border-color: rgba(122, 162, 247, 0.3);
+    border-left-color: var(--primary);
+    box-shadow: 0 0 16px var(--primary-glow);
   }
 
   .item-card .item-name {
@@ -453,7 +465,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
     color: var(--text-primary);
   }
 
-  .item-card.active .item-name { color: var(--amber-bright); }
+  .item-card.active .item-name { color: var(--primary); }
 
   .item-card .item-desc {
     font-size: 11px;
@@ -476,19 +488,19 @@ HTML_PAGE = r"""<!DOCTYPE html>
   }
 
   .source-badge.global {
-    background: rgba(217, 119, 6, 0.1);
-    color: var(--amber-bright);
-    border: 1px solid rgba(217, 119, 6, 0.12);
+    background: var(--primary-dim);
+    color: var(--primary);
+    border: 1px solid rgba(122, 162, 247, 0.12);
   }
   .source-badge.project {
-    background: rgba(20, 184, 166, 0.1);
-    color: var(--teal);
-    border: 1px solid rgba(20, 184, 166, 0.12);
+    background: var(--success-dim);
+    color: var(--success);
+    border: 1px solid rgba(115, 218, 202, 0.12);
   }
   .source-badge.claude {
-    background: rgba(180, 83, 9, 0.15);
-    color: var(--copper);
-    border: 1px solid rgba(180, 83, 9, 0.15);
+    background: var(--accent-dim);
+    color: var(--accent);
+    border: 1px solid rgba(187, 154, 247, 0.15);
   }
 
   .empty-state {
@@ -513,7 +525,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
     display: flex;
     flex-direction: column;
     min-width: 0;
-    background: rgba(12, 11, 10, 0.3);
+    background: rgba(19, 20, 29, 0.3);
   }
 
   .pane-header {
@@ -523,19 +535,19 @@ HTML_PAGE = r"""<!DOCTYPE html>
     justify-content: space-between;
     flex-shrink: 0;
     border-bottom: 1px solid var(--border-subtle);
-    background: rgba(20, 18, 16, 0.4);
+    background: rgba(26, 27, 38, 0.4);
     backdrop-filter: blur(4px);
   }
 
   .pane-header h2 {
-    font-family: 'Syne', sans-serif;
+    font-family: 'JetBrains Mono', monospace;
     font-size: 16px;
     font-weight: 600;
     letter-spacing: -0.2px;
   }
 
   .pane-header h2 .pane-source {
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'JetBrains Mono', monospace;
     font-size: 10px;
     font-weight: 400;
     color: var(--text-muted);
@@ -549,7 +561,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
     padding: 7px 14px;
     border: none;
     border-radius: var(--radius-xs);
-    font-family: 'Syne', sans-serif;
+    font-family: 'JetBrains Mono', monospace;
     font-size: 11px;
     font-weight: 600;
     cursor: pointer;
@@ -569,11 +581,11 @@ HTML_PAGE = r"""<!DOCTYPE html>
   }
 
   .btn-primary {
-    background: linear-gradient(135deg, var(--copper), var(--amber));
-    color: #0c0b0a;
+    background: linear-gradient(135deg, var(--accent), var(--primary));
+    color: #13141d;
     font-weight: 700;
   }
-  .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 16px var(--amber-glow); }
+  .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 16px var(--primary-glow); }
 
   .btn-secondary {
     background: var(--bg-elevated);
@@ -583,17 +595,17 @@ HTML_PAGE = r"""<!DOCTYPE html>
   .btn-secondary:hover { background: var(--bg-hover); border-color: var(--text-muted); color: var(--text-primary); }
 
   .btn-danger {
-    background: rgba(180, 83, 9, 0.15);
-    color: var(--copper);
-    border: 1px solid rgba(180, 83, 9, 0.2);
+    background: var(--error-dim);
+    color: var(--error);
+    border: 1px solid rgba(247, 118, 142, 0.2);
   }
-  .btn-danger:hover { background: rgba(180, 83, 9, 0.25); }
+  .btn-danger:hover { background: rgba(247, 118, 142, 0.25); }
 
   .btn-success {
-    background: linear-gradient(135deg, #0d9488, var(--teal));
-    color: #fff;
+    background: linear-gradient(135deg, #0d9488, var(--success));
+    color: #13141d;
   }
-  .btn-success:hover { transform: translateY(-1px); box-shadow: 0 4px 16px var(--teal-glow); }
+  .btn-success:hover { transform: translateY(-1px); box-shadow: 0 4px 16px var(--success-glow); }
 
   .btn-sm {
     padding: 5px 10px;
@@ -626,17 +638,17 @@ HTML_PAGE = r"""<!DOCTYPE html>
   }
 
   .preview h1 {
-    font-family: 'Syne', sans-serif;
+    font-family: 'JetBrains Mono', monospace;
     font-size: 26px;
     font-weight: 700;
     margin: 0 0 16px;
-    color: var(--amber-bright);
+    color: var(--primary);
     letter-spacing: -0.5px;
     line-height: 1.2;
   }
 
   .preview h2 {
-    font-family: 'Syne', sans-serif;
+    font-family: 'JetBrains Mono', monospace;
     font-size: 18px;
     font-weight: 600;
     margin: 28px 0 12px;
@@ -652,21 +664,21 @@ HTML_PAGE = r"""<!DOCTYPE html>
   }
 
   .preview p { margin: 0 0 14px; }
-  .preview a { color: var(--teal); text-decoration: none; border-bottom: 1px solid rgba(20, 184, 166, 0.3); transition: border-color 0.2s; }
-  .preview a:hover { border-bottom-color: var(--teal); }
+  .preview a { color: var(--success); text-decoration: none; border-bottom: 1px solid rgba(115, 218, 202, 0.3); transition: border-color 0.2s; }
+  .preview a:hover { border-bottom-color: var(--success); }
 
   .preview code {
     font-family: 'JetBrains Mono', monospace;
     font-size: 13px;
-    background: rgba(28, 25, 23, 0.8);
+    background: rgba(36, 40, 59, 0.8);
     padding: 2px 7px;
     border-radius: 4px;
     border: 1px solid var(--border-subtle);
-    color: var(--amber-bright);
+    color: var(--primary);
   }
 
   .preview pre {
-    background: rgba(12, 11, 10, 0.8);
+    background: rgba(19, 20, 29, 0.8);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-sm);
     padding: 18px;
@@ -689,15 +701,15 @@ HTML_PAGE = r"""<!DOCTYPE html>
 
   .preview ul, .preview ol { margin: 0 0 14px; padding-left: 24px; }
   .preview li { margin-bottom: 4px; }
-  .preview li::marker { color: var(--amber); }
+  .preview li::marker { color: var(--primary); }
 
   .preview strong { color: var(--text-primary); font-weight: 600; }
   .preview hr { border: none; border-top: 1px solid var(--border-subtle); margin: 28px 0; }
   .preview blockquote {
-    border-left: 3px solid var(--amber);
+    border-left: 3px solid var(--accent);
     padding: 10px 18px;
     margin: 16px 0;
-    background: rgba(217, 119, 6, 0.04);
+    background: var(--accent-dim);
     border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
     color: var(--text-secondary);
     font-style: italic;
@@ -719,23 +731,23 @@ HTML_PAGE = r"""<!DOCTYPE html>
   }
 
   .preview th {
-    background: rgba(28, 25, 23, 0.8);
+    background: rgba(36, 40, 59, 0.8);
     font-weight: 600;
-    font-family: 'Syne', sans-serif;
+    font-family: 'JetBrains Mono', monospace;
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.3px;
     color: var(--text-secondary);
   }
 
-  .preview tr:hover td { background: rgba(28, 25, 23, 0.4); }
+  .preview tr:hover td { background: rgba(36, 40, 59, 0.4); }
 
   /* ── Editor ──────────────────────────────────────────── */
 
   .editor textarea {
     width: 100%;
     min-height: 400px;
-    background: rgba(12, 11, 10, 0.8);
+    background: rgba(19, 20, 29, 0.8);
     border: 1px solid var(--border-mid);
     border-radius: var(--radius-sm);
     color: var(--text-primary);
@@ -748,7 +760,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
     transition: border-color 0.2s ease, box-shadow 0.2s ease;
   }
 
-  .editor textarea:focus { border-color: var(--amber); box-shadow: 0 0 0 3px var(--amber-glow); }
+  .editor textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-glow); }
 
   .editor .editor-actions {
     display: flex;
@@ -764,7 +776,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
 
   .form-group label {
     display: block;
-    font-family: 'Syne', sans-serif;
+    font-family: 'JetBrains Mono', monospace;
     font-size: 11px;
     font-weight: 600;
     color: var(--text-muted);
@@ -776,19 +788,19 @@ HTML_PAGE = r"""<!DOCTYPE html>
   .form-group input, .form-group textarea, .form-group select {
     width: 100%;
     padding: 11px 14px;
-    background: rgba(12, 11, 10, 0.8);
+    background: rgba(19, 20, 29, 0.8);
     border: 1px solid var(--border-mid);
     border-radius: var(--radius-xs);
     color: var(--text-primary);
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'JetBrains Mono', monospace;
     font-size: 14px;
     outline: none;
     transition: border-color 0.2s ease, box-shadow 0.2s ease;
   }
 
   .form-group input:focus, .form-group textarea:focus, .form-group select:focus {
-    border-color: var(--amber);
-    box-shadow: 0 0 0 3px var(--amber-glow);
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px var(--primary-glow);
   }
 
   .form-group textarea {
@@ -801,7 +813,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
   .form-group select {
     cursor: pointer;
     appearance: none;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%239c9185' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23565f89' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
     background-position: right 14px center;
     padding-right: 36px;
@@ -823,19 +835,19 @@ HTML_PAGE = r"""<!DOCTYPE html>
     animation: toast-in 0.35s ease;
     max-width: 420px;
     backdrop-filter: blur(12px);
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'JetBrains Mono', monospace;
   }
 
   .toast.success {
-    background: rgba(20, 184, 166, 0.12);
-    color: var(--teal);
-    border: 1px solid rgba(20, 184, 166, 0.2);
+    background: var(--success-dim);
+    color: var(--success);
+    border: 1px solid rgba(115, 218, 202, 0.2);
     box-shadow: 0 4px 20px rgba(0,0,0,0.3);
   }
   .toast.error {
-    background: rgba(180, 83, 9, 0.12);
-    color: var(--copper);
-    border: 1px solid rgba(180, 83, 9, 0.2);
+    background: var(--error-dim);
+    color: var(--error);
+    border: 1px solid rgba(247, 118, 142, 0.2);
     box-shadow: 0 4px 20px rgba(0,0,0,0.3);
   }
 
@@ -861,7 +873,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
     width: 14px; height: 14px;
     margin-left: 10px;
     border: 2px solid var(--border-mid);
-    border-top-color: var(--amber);
+    border-top-color: var(--primary);
     border-radius: 50%;
     animation: spin 0.7s linear infinite;
   }
@@ -894,8 +906,8 @@ HTML_PAGE = r"""<!DOCTYPE html>
   <div class="header-left">
     <div class="logo-icon">N</div>
     <div>
-      <h1>Forge</h1>
-      <span class="subtitle">Craft skills &amp; agents from the workshop</span>
+      <h1>Nova</h1>
+      <span class="subtitle">Skills &amp; Agents &mdash; tokyo-night</span>
     </div>
   </div>
   <div class="header-right">
@@ -939,7 +951,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
     <div class="pane-content" id="pane-content">
       <div class="empty-state">
         <span class="empty-icon">◈</span>
-        <div>Choose a skill or agent from the sidebar to inspect its contents, or forge something new.</div>
+        <div>Choose a skill or agent from the sidebar to inspect its contents, or create something new.</div>
       </div>
     </div>
   </div>
@@ -1038,7 +1050,7 @@ function renderList() {
   if (items.length === 0) {
     const msg = searchQuery
       ? `<span class="empty-icon">◈</span><div>No ${currentTab} match "<strong>${escapeHtml(searchQuery)}</strong>"</div>`
-      : `<span class="empty-icon">◈</span><div>No ${currentTab} found. Click <strong>New</strong> to forge one.</div>`;
+      : `<span class="empty-icon">◈</span><div>No ${currentTab} found. Click <strong>New</strong> to create one.</div>`;
     el.innerHTML = `<div class="empty-state">${msg}</div>`;
     return;
   }
@@ -1080,7 +1092,7 @@ function renderPane() {
   if (!selectedItem) {
     titleEl.innerHTML = 'Select an item';
     actionsEl.innerHTML = '<button class="btn btn-primary" onclick="showCreateForm()">+ New</button>';
-    contentEl.innerHTML = '<div class="empty-state"><span class="empty-icon">◈</span><div>Choose a ' + currentTab.slice(0, -1) + ' from the sidebar to inspect its contents, or forge something new.</div></div>';
+    contentEl.innerHTML = '<div class="empty-state"><span class="empty-icon">◈</span><div>Choose a ' + currentTab.slice(0, -1) + ' from the sidebar to inspect its contents, or create something new.</div></div>';
     return;
   }
 
@@ -1192,7 +1204,7 @@ async function showCreateForm() {
   const actionsEl = document.getElementById('pane-actions');
   const contentEl = document.getElementById('pane-content');
 
-  titleEl.textContent = 'Forge New ' + (currentTab === 'skills' ? 'Skill' : 'Agent');
+  titleEl.textContent = 'Create New ' + (currentTab === 'skills' ? 'Skill' : 'Agent');
 
   actionsEl.innerHTML = `
     <button class="btn btn-secondary btn-sm" onclick="cancelCreate()">Cancel</button>
@@ -1254,7 +1266,7 @@ async function submitCreate() {
 
   try {
     await api('POST', `/api/${currentTab}`, { name, description, content, scope });
-    showToast(`${currentTab.slice(0, -1)} "${name}" forged`);
+    showToast(`${currentTab.slice(0, -1)} "${name}" created`);
     await loadData();
     await selectItem(name);
   } catch (e) {

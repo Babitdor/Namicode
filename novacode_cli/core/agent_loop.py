@@ -964,32 +964,9 @@ async def _handle_tool_message(
             tool_content and str(tool_content).lower().startswith("error")
         ):
             subagent_tracker.record_error(namespace, tool_name)
-
-        # Resolve subagent task's tool_call_id
-        subagent_cid = None
-        if namespace in subagent_tracker.lg_ns_to_tool_call_id:
-            subagent_cid = subagent_tracker.lg_ns_to_tool_call_id[namespace]
-        elif subagent_tracker.subagent_stack:
-            subagent_cid = subagent_tracker.subagent_stack[-1][0]
-            subagent_tracker.lg_ns_to_tool_call_id[namespace] = subagent_cid
-
-        if subagent_cid and tool_call_id:
-            subagent_type = None
-            if subagent_cid in subagent_tracker.active_subagents:
-                subagent_type = subagent_tracker.active_subagents[subagent_cid][0]
-            elapsed = None
-            start = subagent_tracker.tool_call_start_times.pop(tool_call_id, None)
-            if start is not None:
-                elapsed = time.time() - start
-            preview = format_tool_result_preview(tool_name, tool_content, tool_status, elapsed)
-            yield ev.SubagentActivity(
-                kind="tool_result",
-                subagent_type=subagent_type,
-                message=preview or f"Completed {tool_name}",
-                detail=tool_call_id,
-                call_id=subagent_cid,
-                color="#73daca" if tool_status == "success" else "#f7768e",
-            )
+        # No live SubagentActivity("tool_result") event is emitted here — per-tool
+        # cards clutter the UI. Errors are still recorded above for the completion
+        # summary, and the dispatched/completed events carry the overall status.
 
     # Completed subagent (task tool)
     if tool_name == "task" and tool_call_id and tool_call_id in subagent_tracker.active_subagents:
@@ -1154,6 +1131,9 @@ async def _handle_tool_call_chunk(
                 call_id=buffer_id,
             )
         elif namespace:
+            # Track the subagent's tool call for the completion summary, but do
+            # NOT emit a live SubagentActivity("tool_start") event — per-tool
+            # cards clutter the UI. The dispatched/completed events are enough.
             subagent_tracker.record_tool_call(
                 namespace,
                 subagent_type_for_ns,
@@ -1161,22 +1141,6 @@ async def _handle_tool_call_chunk(
                 parsed_args,
                 TOOL_CATEGORIES,
             )
-            # Resolve subagent task's tool_call_id
-            subagent_cid = None
-            if namespace in subagent_tracker.lg_ns_to_tool_call_id:
-                subagent_cid = subagent_tracker.lg_ns_to_tool_call_id[namespace]
-            elif subagent_tracker.subagent_stack:
-                subagent_cid = subagent_tracker.subagent_stack[-1][0]
-                subagent_tracker.lg_ns_to_tool_call_id[namespace] = subagent_cid
-
-            if subagent_cid and buffer_id:
-                yield ev.SubagentActivity(
-                    kind="tool_start",
-                    subagent_type=subagent_type_for_ns,
-                    message=f"{icon} {display_str}",
-                    detail=buffer_id,
-                    call_id=subagent_cid,
-                )
 
     if buffer_name == "task" and "subagent_type" in parsed_args:
         subagent_type = parsed_args["subagent_type"]
