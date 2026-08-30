@@ -121,7 +121,20 @@ def build_chat_model(provider: str, model_name: str) -> BaseChatModel:
         # NVIDIA NIM (build.nvidia.com). Its own client rather than ChatOpenAI:
         # ChatNVIDIA handles NIM's model-listing and payload quirks, and takes
         # NIM-specific options (chat_template_kwargs) that ChatOpenAI drops.
-        from langchain_nvidia_ai_endpoints import ChatNVIDIA
+        try:
+            from langchain_nvidia_ai_endpoints import ChatNVIDIA
+        except ImportError as exc:  # pragma: no cover - install-time path
+            # A bare ModuleNotFoundError here reads as a Nova bug rather
+            # than a missing package, and leaves the user with no next
+            # step. Nova installs pull this in; a pre-existing
+            # environment upgraded in place will not have it.
+            raise RuntimeError(
+                "The NVIDIA provider needs the langchain-nvidia-ai-endpoints "
+                "package, which is not installed in this environment. "
+                "Install it with:\n\n"
+                "    pip install langchain-nvidia-ai-endpoints\n\n"
+                "then run /model again."
+            ) from exc
 
         # Keyring-or-env, never a literal: same resolution as every other
         # provider here, so a key stored in the system keychain still reaches
