@@ -730,6 +730,10 @@ class NovaApp(App):
         self._tool_group_entries: list[dict] = []  # per-tool {base, mark, detail, error}
         self._tool_group_lines: dict[str, int] = {}  # call_id -> entry index
         self._tool_group_last_idx: int | None = None  # fallback for id-less results
+        # Coalescing state for tool-group repaints (see
+        # _schedule_tool_group_refresh): a burst of tool events paints once.
+        self._tool_group_refresh_scheduled: bool = False
+        self._tool_group_running: str | None = None
         # subagent tracking: call_id -> (collapsible, body Static, type, start_time)
         self._subagent_widgets: dict[str, tuple[Collapsible, Static, str, float]] = {}
         self._subagent_count: int = 0  # running total for display
@@ -2240,6 +2244,13 @@ class NovaApp(App):
 
     def _close_tool_group(self) -> None:
         """Detach the current tool group so the next burst starts fresh."""
+        # Paint any coalesced state BEFORE detaching: a pending timer would
+        # otherwise fire after _tool_group is None and drop the final result,
+        # leaving the last call showing as still-running.
+        if self._tool_group_refresh_scheduled:
+            self._tool_group_refresh_scheduled = False
+            self._refresh_tool_group(running=self._tool_group_running)
+        self._tool_group_running = None
         self._tool_group = None
         self._tool_group_body = None
         self._tool_group_entries = []
@@ -2260,6 +2271,30 @@ class NovaApp(App):
         if entry["detail"]:
             t.append(f"  — {entry['detail']}", style=body_style)
         return t
+
+    def _schedule_tool_group_refresh(self, *, running: str | None = None) -> None:
+        """Coalesce a burst of tool events into one repaint (~100ms), like
+        :meth:`_schedule_stream_flush` does for token deltas.
+
+        A tool-heavy turn fires two events per call (start + result), each of
+        which repainted the group immediately. Ten quick calls meant twenty
+        repaints of the same widget within a few hundred ms, and a repaint at
+        120 entries costs ~4 ms. Deferring collapses that to one paint per
+        window while the entries themselves stay updated synchronously, so no
+        state is lost — only redundant paints.
+        """
+        # Keep the most recent running label: the last event in the window is
+        # the one whose state the paint should show.
+        self._tool_group_running = running
+        if self._tool_group_refresh_scheduled:
+            return
+        self._tool_group_refresh_scheduled = True
+        self.set_timer(0.1, self._flush_tool_group_refresh)
+
+    def _flush_tool_group_refresh(self) -> None:
+        """Paint the coalesced tool-group state (see _schedule_tool_group_refresh)."""
+        self._tool_group_refresh_scheduled = False
+        self._refresh_tool_group(running=self._tool_group_running)
 
     def _refresh_tool_group(self, *, running: str | None = None) -> None:
         """Repaint the group body + title from the current entries.
@@ -2328,7 +2363,7 @@ class NovaApp(App):
             except Exception:
                 pass
 
-        self._refresh_tool_group(running=name)
+        self._schedule_tool_group_refresh(running=name)
 
     def _mark_tool_group_result(self, call_id: str | None, *, is_error: bool, detail: str) -> None:
         """Finalize the matching tool line with its status + a short result."""
@@ -2352,10 +2387,15 @@ class NovaApp(App):
         entry["error"] = is_error
         entry["detail"] = self._oneline(detail)
         entry["_line"] = None  # fields changed → drop the cached render
-        self._refresh_tool_group()
-        # Surface failures: pop the group open so the error isn't hidden.
+        # Surface failures: pop the group open so the error isn't hidden — and
+        # paint NOW rather than on the coalescing timer, or the group would
+        # expand to show content that is still up to 100 ms stale.
         if is_error and self._tool_group is not None:
             self._tool_group.collapsed = False
+            self._tool_group_refresh_scheduled = False
+            self._refresh_tool_group()
+        else:
+            self._schedule_tool_group_refresh()
 
     def _finalize_tool(
         self, call_id: str | None, preview: str, full_output: str, *, is_error: bool

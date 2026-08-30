@@ -2427,6 +2427,11 @@ async def _drive_tool_group_line_cache():
 
         await app._render(ev.ToolResult(
             preview="42 lines", is_error=False, full_output="x", call_id="c1"))
+        # The successful-result paint is coalesced on a ~100 ms timer
+        # (_schedule_tool_group_refresh), so wait past it before asserting.
+        for _ in range(4):
+            await pilot.pause()
+        await asyncio.sleep(0.15)
         for _ in range(2):
             await pilot.pause()
         txt = str(lst.render())
@@ -2442,6 +2447,82 @@ async def _drive_tool_group_line_cache():
         for _ in range(2):
             await pilot.pause()
         assert "✗" in str(lst.render()), "error mark missing"
+
+
+async def _drive_tool_group_coalescing():
+    """A burst of tool events paints once, but loses nothing.
+
+    Tool events fire twice per call (start + result) and each repainted the
+    group immediately — 10 quick calls meant 20 repaints of the same widget.
+    The paint is now coalesced on a ~100 ms timer, so these pin the three ways
+    that could go wrong: dropped content, a delayed error, and a pending paint
+    lost when the group closes.
+    """
+    import novacode_cli.ui_events as ev
+    from rich.text import Text as RText
+    from textual.widgets import Static as _Static
+
+    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.ui.ui_elements import TokenTracker
+
+    app = NovaApp(
+        agent=_FakeAgent(), assistant_id="nova-agent", session_state=_SS(),
+        backend=None, token_tracker=TokenTracker(), image_tracker=None,
+        model_name="m",
+    )
+
+    async def settle(pilot):
+        for _ in range(8):
+            await pilot.pause()
+        await asyncio.sleep(0.15)  # let the coalescing timer fire
+        for _ in range(3):
+            await pilot.pause()
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        for _ in range(3):
+            await pilot.pause()
+
+        for i in range(10):
+            await app._render(ev.ToolCall(
+                name="read_file", display_str=f"read f{i}.py", icon="*",
+                is_main_agent=True, args={}, call_id=f"b{i}"))
+            await app._render(ev.ToolResult(
+                preview=f"ok{i}", is_error=False, full_output="x", call_id=f"b{i}"))
+        await settle(pilot)
+        lst = app._tool_group_body.query_one("#tool-group-list", _Static)
+        txt = str(lst.render())
+        for i in range(10):
+            assert f"ok{i}" in txt, f"call {i} was dropped by coalescing"
+        assert "⏳" not in txt, "a call is still showing as running"
+
+        # An error must NOT wait for the timer: the group pops open, so stale
+        # content would be visible for up to 100 ms.
+        await app._render(ev.ToolCall(
+            name="shell", display_str="bad", icon="*",
+            is_main_agent=True, args={}, call_id="e1"))
+        await app._render(ev.ToolResult(
+            preview="boom", is_error=True, full_output="x", call_id="e1"))
+        await pilot.pause()  # ONE pause — deliberately no timer window
+        assert "✗" in str(lst.render()), "error did not paint immediately"
+
+        # Closing the group must flush a pending paint, or the last result is
+        # lost (the timer would fire after _tool_group is None).
+        await app._render(ev.ToolCall(
+            name="read_file", display_str="last one", icon="*",
+            is_main_agent=True, args={}, call_id="z1"))
+        await app._render(ev.ToolResult(
+            preview="finaldetail", is_error=False, full_output="x", call_id="z1"))
+        app._log(RText("something else"))  # closes the tool group
+        await settle(pilot)
+        assert "finaldetail" in str(lst.render()), (
+            "pending paint was lost when the group closed"
+        )
+
+
+def test_tui_tool_group_coalescing():
+    if not _HAS_TEXTUAL:
+        return
+    asyncio.run(_drive_tool_group_coalescing())
 
 
 def test_tui_tool_group_line_cache():
