@@ -101,8 +101,16 @@ from novacode_cli.tui.screens import (
 # Transcript is pruned from the top once it exceeds this many widgets, down to
 # _TRANSCRIPT_LOW_WATER — keeps Textual's layout/scroll/repaint fast in long
 # sessions (the DOM would otherwise grow without bound).
-_MAX_TRANSCRIPT_WIDGETS = 400
-_TRANSCRIPT_LOW_WATER = 320
+#
+# Sized from measured reflow cost, which is linear in widget count:
+#     50 widgets -> 3.7 ms      250 -> 9.5 ms
+#    150 widgets -> 5.6 ms      400 -> 13.8 ms
+# The spinner ticks at 20 Hz (a 50 ms frame budget), so at 400 widgets a single
+# layout pass ate ~28% of every frame — re-laying-out hundreds of widgets that
+# are scrolled far out of view. 200 halves that to ~7 ms while still holding
+# well over a screenful of scrollback (a full-height terminal shows ~40 rows).
+_MAX_TRANSCRIPT_WIDGETS = 200
+_TRANSCRIPT_LOW_WATER = 150
 
 # Responsive breakpoints (terminal columns/rows). Below _NARROW_WIDTH the info
 # bar sheds its widest columns and the status line drops its right-side counts;
@@ -1653,11 +1661,19 @@ class NovaApp(App):
                 break
             if id(w) not in protected:
                 to_remove.append(w)
-        for w in to_remove:
-            try:
-                w.remove()
-            except Exception:  # noqa: BLE001
-                pass
+        if not to_remove:
+            return
+        # ONE batched removal, not N individual ones. Widget.remove() returns an
+        # AwaitRemove and posts its own message; calling it in a loop queued one
+        # removal per widget, and since this method is sync none were awaited.
+        # Under a fast log burst the queue outran the event loop — the
+        # transcript reached 800+ widgets against a 400 cap, and Textual could
+        # not drain its pending messages. remove_children() does the whole batch
+        # in one operation (measured: an 800-line burst 7.4 s -> 2.9 s).
+        try:
+            tr.remove_children(to_remove)
+        except Exception:  # noqa: BLE001 — pruning must never break rendering
+            pass
 
     def _scroll_end(self) -> None:
         try:

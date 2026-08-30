@@ -2327,6 +2327,66 @@ def test_tui_prompt_enter_still_submits():
     asyncio.run(_drive_prompt_enter_still_submits())
 
 
+async def _drive_prune_keeps_up_during_a_burst():
+    """Pruning must keep the transcript bounded DURING a fast log burst.
+
+    _prune_transcript is sync, and Widget.remove() returns an AwaitRemove that
+    was never awaited — so a loop of N removals queued N messages the event
+    loop had no chance to drain. Under a burst the transcript grew to 800+
+    widgets against a 400 cap and every layout pass got proportionally slower.
+    remove_children() does the whole batch in one operation.
+    """
+    import novacode_cli.tui.app as appmod
+    from rich.text import Text as RText
+
+    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.ui.ui_elements import TokenTracker
+
+    app = NovaApp(
+        agent=_FakeAgent(), assistant_id="nova-agent", session_state=_SS(),
+        backend=None, token_tracker=TokenTracker(), image_tracker=None,
+        model_name="m",
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        for _ in range(2):
+            await pilot.pause()
+        cap = appmod._MAX_TRANSCRIPT_WIDGETS
+        # A burst with NO awaits between logs — a fast tool/output stream.
+        for i in range(cap * 3):
+            app._log(RText(f"burst {i}"))
+        for _ in range(10):
+            await pilot.pause()
+        n = len(app.query_one("#transcript").children)
+        assert n <= cap, f"transcript grew to {n} against a cap of {cap}"
+
+        # And the removal must be BATCHED. Per-widget remove() queued one
+        # message each; with the cap at 200 a burst issued ~1500 of them,
+        # which is what made the event loop fall behind. Count the calls.
+        tr = app._transcript()
+        calls = {"batch": 0}
+        real = tr.remove_children
+
+        def counting(widgets=None):
+            calls["batch"] += 1
+            return real(widgets) if widgets is not None else real()
+
+        tr.remove_children = counting  # type: ignore[assignment]
+        for i in range(cap):
+            app._log(RText(f"second {i}"))
+        for _ in range(10):
+            await pilot.pause()
+        assert calls["batch"] > 0, (
+            "pruning did not use remove_children — per-widget remove() queues "
+            "one message per widget and the event loop falls behind"
+        )
+
+
+def test_tui_prune_keeps_up_during_a_burst():
+    if not _HAS_TEXTUAL:
+        return
+    asyncio.run(_drive_prune_keeps_up_during_a_burst())
+
+
 def test_tui_native_todos():
     if not _HAS_TEXTUAL:
         return
