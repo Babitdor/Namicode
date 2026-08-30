@@ -2262,14 +2262,27 @@ class NovaApp(App):
         return t
 
     def _refresh_tool_group(self, *, running: str | None = None) -> None:
-        """Repaint the group body + title from the current entries."""
+        """Repaint the group body + title from the current entries.
+
+        Each line is rendered once and cached on its entry: this runs on EVERY
+        tool call and every tool result, and re-rendering all ~100 lines each
+        time made tool events O(n) — measured at 4.4 ms per call at 20 calls
+        rising to 10.1 ms at 120, the dominant per-event cost on a tool-heavy
+        turn. Only the entry that actually changed is re-rendered; the cache is
+        dropped by the two mutators (_add_tool_group_call /
+        _mark_tool_group_result), so it cannot go stale.
+        """
         if self._tool_group is None or self._tool_group_body is None:
             return
         body = Text()
         for i, entry in enumerate(self._tool_group_entries[-100:]):
             if i:
                 body.append("\n")
-            body.append_text(self._render_tool_line(entry))
+            line = entry.get("_line")
+            if line is None:
+                line = self._render_tool_line(entry)
+                entry["_line"] = line
+            body.append_text(line)
         try:
             self._tool_group_body.query_one("#tool-group-list", Static).update(body)
         except Exception:
@@ -2338,6 +2351,7 @@ class NovaApp(App):
         entry["mark"] = "✗" if is_error else "✓"
         entry["error"] = is_error
         entry["detail"] = self._oneline(detail)
+        entry["_line"] = None  # fields changed → drop the cached render
         self._refresh_tool_group()
         # Surface failures: pop the group open so the error isn't hidden.
         if is_error and self._tool_group is not None:

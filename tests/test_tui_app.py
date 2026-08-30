@@ -2395,6 +2395,61 @@ def test_tui_prune_keeps_up_during_a_burst():
     asyncio.run(_drive_prune_keeps_up_during_a_burst())
 
 
+async def _drive_tool_group_line_cache():
+    """A cached tool line must still refresh when its result arrives.
+
+    _refresh_tool_group runs on every tool call AND every tool result, and
+    re-rendered all ~100 lines each time. The lines are now cached per entry,
+    so the risk is the opposite failure: a stale line that never updates.
+    """
+    import novacode_cli.ui_events as ev
+    from textual.widgets import Static as _Static
+
+    from novacode_cli.tui.app import NovaApp
+    from novacode_cli.ui.ui_elements import TokenTracker
+
+    app = NovaApp(
+        agent=_FakeAgent(), assistant_id="nova-agent", session_state=_SS(),
+        backend=None, token_tracker=TokenTracker(), image_tracker=None,
+        model_name="m",
+    )
+    async with app.run_test(size=(120, 40)) as pilot:
+        for _ in range(3):
+            await pilot.pause()
+
+        await app._render(ev.ToolCall(
+            name="read_file", display_str="read a.py", icon="*",
+            is_main_agent=True, args={}, call_id="c1"))
+        for _ in range(2):
+            await pilot.pause()
+        lst = app._tool_group_body.query_one("#tool-group-list", _Static)
+        assert "⏳" in str(lst.render()), "running line should show the hourglass"
+
+        await app._render(ev.ToolResult(
+            preview="42 lines", is_error=False, full_output="x", call_id="c1"))
+        for _ in range(2):
+            await pilot.pause()
+        txt = str(lst.render())
+        assert "✓" in txt, "result did not replace the running mark"
+        assert "⏳" not in txt, "stale cached line — hourglass survived the result"
+        assert "42 lines" in txt, "result detail missing"
+
+        await app._render(ev.ToolCall(
+            name="shell", display_str="bad cmd", icon="*",
+            is_main_agent=True, args={}, call_id="c2"))
+        await app._render(ev.ToolResult(
+            preview="boom", is_error=True, full_output="x", call_id="c2"))
+        for _ in range(2):
+            await pilot.pause()
+        assert "✗" in str(lst.render()), "error mark missing"
+
+
+def test_tui_tool_group_line_cache():
+    if not _HAS_TEXTUAL:
+        return
+    asyncio.run(_drive_tool_group_line_cache())
+
+
 def test_tui_native_todos():
     if not _HAS_TEXTUAL:
         return
