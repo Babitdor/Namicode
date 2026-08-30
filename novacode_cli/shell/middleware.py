@@ -1327,6 +1327,11 @@ class ShellMiddleware(AgentMiddleware[AgentState, Any]):
 
         reg = _jobs.get_registry()
         job = reg.add(command, self._tool_name, prog)
+        # The AGENT started this (background=True, or a command detected as
+        # long-running), so its result is part of work in progress: the monitor
+        # reports completion back into the conversation instead of leaving a
+        # note that waits for the user to type. See BackgroundJob.agent_launched.
+        job.agent_launched = True
         asyncio.run_coroutine_threadsafe(
             self._bg_run(command, prog, job.id), _jobs.get_background_loop()
         )

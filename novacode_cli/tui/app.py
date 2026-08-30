@@ -3816,14 +3816,24 @@ class NovaApp(App):
                 )
             except Exception:  # noqa: BLE001
                 pass
-            # A Ctrl+B-detached task (the agent was mid-work) auto-resumes the
-            # agent with the result when it finishes naturally — so it "continues
-            # from there" without the user having to prompt. A user-terminated
-            # task, or one that finishes while the agent is busy, just leaves a
-            # note for the next turn.
+            # Async monitor: a task the agent is waiting on reports back into the
+            # conversation as soon as it finishes, instead of leaving a note that
+            # sits until the user happens to type again.
+            #
+            #   resume_on_done   — Ctrl+B detached: the agent was mid-work.
+            #   agent_launched   — the agent ran it with background=True.
+            #
+            # Both are work the agent started and cares about the result of. A
+            # task the USER launched or restarted (a dev server, say) is expected
+            # to keep running and only leaves a note. Either way this requires an
+            # idle agent: resuming mid-turn would interleave two prompts on the
+            # same thread.
+            watched = getattr(job, "resume_on_done", False) or getattr(
+                job, "agent_launched", False
+            )
             resume = (
                 event in ("completed", "failed")
-                and getattr(job, "resume_on_done", False)
+                and watched
                 and not self._turn_active
             )
             if resume:
@@ -3840,12 +3850,20 @@ class NovaApp(App):
         """Auto-resume the agent after a Ctrl+B-detached background task finishes,
         feeding it the result so it continues its work from where it left off."""
         tail = "\n".join(job.output.splitlines()[-40:]) or "(no output)"
+        # The Ctrl+B path patches the original tool call as "cancelled", which is
+        # misleading on its own — say so only when that actually happened, so an
+        # agent-backgrounded task isn't told about a note it never saw.
+        detached_note = (
+            "If you saw a 'tool call was cancelled' note for that command "
+            "earlier, it referred only to the foreground wait being detached; "
+            "the command itself ran to completion.\n\n"
+            if getattr(job, "resume_on_done", False)
+            else ""
+        )
         prompt = (
-            f"[Background task finished] The command you launched and moved to the "
+            f"[Background task finished] The command you launched in the "
             f"background — `{job.command}` ({job.task_id}) — has now finished with "
-            f"exit code {job.exit_code}. If you saw a 'tool call was cancelled' note "
-            f"for that command earlier, it referred only to the foreground wait being "
-            f"detached; the command itself ran to completion.\n\n"
+            f"exit code {job.exit_code}. {detached_note}"
             f"Output (last lines):\n{tail}\n\n"
             f"Continue with what you were doing, taking this result into account."
         )

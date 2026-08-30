@@ -95,6 +95,12 @@ def request_detach() -> bool:
 
 _LOG_MAXLEN = 1000  # bounded live-log buffer (~1000 chunks of <=1KB → ~1MB max)
 
+# Maximum number of completed (non-running) jobs retained in the registry.
+# Completed jobs are kept so ``/jobs`` can list and restart recent ones, but an
+# unbounded dict leaks memory across a long session. Oldest completed jobs are
+# evicted when a new job is added.
+_MAX_COMPLETED_JOBS = 50
+
 # event ∈ {started, output, completed, failed, terminated, cleared}; job may be
 # None for "cleared".
 Observer = Callable[[str, "BackgroundJob | None"], None]
@@ -125,6 +131,14 @@ class BackgroundJob:
     """True for Ctrl+B-detached jobs: the agent was mid-task, so when this
     finishes the TUI auto-resumes the agent with the result (vs. just notifying
     for tasks the user explicitly launched/restarted)."""
+    agent_launched: bool = False
+    """True when the AGENT started this job (``background=True`` on shell/bash/
+    execute), as opposed to the user launching or restarting it.
+
+    Such a job is part of work the agent is actively doing, so it should not sit
+    silently until the user happens to type again — the monitor watches these
+    and reports the result back into the conversation. A user-launched dev
+    server, by contrast, is expected to just keep running."""
     logs: deque = field(default_factory=lambda: deque(maxlen=_LOG_MAXLEN), repr=False)
     kill: threading.Event = field(default_factory=threading.Event, repr=False)
     _done: threading.Event = field(default_factory=threading.Event, repr=False)
@@ -169,8 +183,23 @@ class JobRegistry:
                 prog=list(prog) if prog else None,
             )
             self._jobs[job_id] = job
+            self._trim_completed_locked()
         self._emit("started", job)
         return job
+
+    def _trim_completed_locked(self) -> None:
+        """Drop the oldest completed jobs so ``_jobs`` stays bounded.
+
+        Completed jobs are kept so ``/jobs`` can list and restart recent ones,
+        but an unbounded dict leaks memory across a long session. Called under
+        ``self._lock`` on each new job; running jobs are never evicted.
+        """
+        completed = [jid for jid, j in self._jobs.items() if j.status != "running"]
+        if len(completed) <= _MAX_COMPLETED_JOBS:
+            return
+        # Evict oldest first (job ids increase monotonically).
+        for jid in sorted(completed)[: len(completed) - _MAX_COMPLETED_JOBS]:
+            del self._jobs[jid]
 
     def append_log(self, job_id: int, text: str) -> None:
         job = self.get(job_id)
