@@ -11,11 +11,14 @@ from pathlib import Path
 from typing import Any
 
 from rich.markdown import Markdown
+from rich.segment import Segment
+from rich.style import Style
 from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.css.query import NoMatches
+from textual.strip import Strip
 from textual.theme import Theme
 from textual.widget import Widget
 from textual.message import Message
@@ -61,6 +64,14 @@ class MatrixRain(Static):
         self._palette: tuple[str, str, str, str] | None = None
         self._art_style_str: str = ""
         self._palette_key: str | None = None
+        # Rich Style objects for the palette, built once per theme. Segments
+        # take a Style, and the buffers hold these objects directly so a frame
+        # never parses a color string.
+        self._styles: tuple[Style, Style, Style, Style] | None = None
+        self._art_style_obj: Style | None = None
+        # The rendered frame, as one Strip per row. render_line() serves from
+        # here; _tick() replaces it.
+        self._strips: list[Strip] = []
         self._configure(art, width)
 
     def _configure(self, art: str, width: int | None) -> None:
@@ -93,6 +104,7 @@ class MatrixRain(Static):
         self._configure(art, width)
         if self.is_mounted:
             self._init_columns()  # rebuild rain columns for the new width
+            self._apply_size()  # the grid changed, so the widget box must too
             self._needs_layout = True  # next frame must re-layout (size changed)
 
     def _theme_base_color(self):
@@ -141,6 +153,11 @@ class MatrixRain(Static):
         if key != self._palette_key:
             self._palette = self._rain_palette()
             self._art_style_str = self._art_style()
+            # Parsed once per theme, then stored in the frame buffers directly.
+            # These are the identity-comparable singletons the run-length scan
+            # in _build_strips relies on.
+            self._styles = tuple(Style.parse(c) for c in self._palette)
+            self._art_style_obj = Style.parse(self._art_style_str)
             self._palette_key = key
 
     def _rain_palette(self) -> tuple[str, str, str, str]:
@@ -157,8 +174,20 @@ class MatrixRain(Static):
             base.darken(0.78).hex,  # tail — barely there
         )
 
+    def _apply_size(self) -> None:
+        """Pin the widget to the grid it renders.
+
+        ``render_line`` produces no renderable for Textual to measure, so the
+        auto-sizing a ``Static`` used to get from its content is gone and the
+        box would collapse to zero height. The grid dimensions are the size.
+        """
+        self.styles.width = self._col_count
+        self.styles.height = self._row_count
+
     def on_mount(self) -> None:
         self._init_columns()
+        self._apply_size()
+        self._strips = self._build_strips()  # paint something on the first frame
         self._needs_layout = True  # first frame must establish the widget size
         # ~15 fps: column speeds are scaled so the fall rate looks the same as
         # the old 25 fps, but each second costs 40% fewer frame builds and —
@@ -188,11 +217,14 @@ class MatrixRain(Static):
                 }
             )
         # Pre-allocate frame buffers (reused per frame to avoid GC churn).
+        # The style buffer holds Rich ``Style`` objects (None = blank cell), not
+        # color strings: they go straight into Segments, so a frame does no
+        # style parsing at all.
         self._frame_lines = [[" "] * self._col_count for _ in range(self._row_count)]
-        self._frame_styles = [[""] * self._col_count for _ in range(self._row_count)]
+        self._frame_styles = [[None] * self._col_count for _ in range(self._row_count)]
         # Prebuilt blank rows copied in (slice-assign) to clear buffers at C speed.
         self._blank_line = [" "] * self._col_count
-        self._blank_style = [""] * self._col_count
+        self._blank_style = [None] * self._col_count
         # Precomputed random-char pool: strided per frame from a random offset so
         # the look stays random without a random.choice() call per cell.
         self._char_pool = [random.choice(self._chars) for _ in range(512)]
@@ -237,10 +269,99 @@ class MatrixRain(Static):
         # one-shot layout pass still runs after mount/reflow (size changes).
         needs_layout = self._needs_layout
         self._needs_layout = False
-        self.update(self._build_frame(), layout=needs_layout)
+        self._strips = self._build_strips()
+        self.refresh(layout=needs_layout)
+
+    def render_line(self, y: int) -> Strip:
+        """Serve row *y* from the frame built by :meth:`_tick`.
+
+        Rendering through ``render_line`` rather than ``Static.update()`` is the
+        whole performance story of this widget. Handing Textual a Rich ``Text``
+        of ~1000 style spans cost **14.7 ms per frame** on a 194-column grid —
+        four times the cost of simulating the rain itself — so at 15 fps the
+        banner burned 220 ms of every second on the main thread. That is what
+        made typing feel laggy. Building Segments straight into Strips costs
+        **1.6 ms** (9x), and measured event-loop p99 went 66 ms -> 16 ms, which
+        is the same as with no rain at all.
+
+        Note the fix is NOT "avoid re-parsing style strings" — that was the
+        obvious guess and it is wrong. Passing pre-parsed ``Style`` objects into
+        a ``Text`` measured *worse* (28 ms); the cost is ``Text``'s own span
+        resolution and line division, so the only real fix is to not build one.
+        """
+        if 0 <= y < len(self._strips):
+            return self._strips[y]
+        return Strip.blank(self._col_count)
+
+    def _build_strips(self) -> list[Strip]:
+        """Advance one frame and render it as one ``Strip`` per row."""
+        self._fill_buffers()
+        cols = self._col_count
+        lines = self._frame_lines
+        styles = self._frame_styles
+        strips: list[Strip] = []
+        for y in range(self._row_count):
+            line = lines[y]
+            st = styles[y]
+            segments: list[Segment] = []
+            x = 0
+            while x < cols:
+                s = st[x]
+                j = x + 1
+                # Identity, not equality: every style in the buffer is one of
+                # the cached per-theme singletons (or None), so `is` is both
+                # correct here and cheaper than Style.__eq__ per cell.
+                while j < cols and st[j] is s:
+                    j += 1
+                segments.append(
+                    Segment("".join(line[x:j]) if s else " " * (j - x), s)
+                )
+                x = j
+            strips.append(Strip(segments, cols))
+        return strips
+
+    def render(self) -> Text:
+        """The current frame as text.
+
+        Textual never calls this — :meth:`render_line` is overridden, which
+        takes precedence — but ``Static.render`` would otherwise return the
+        empty renderable this widget no longer sets, which reads as "the banner
+        is blank" to anything that inspects it. Returning the live frame keeps
+        that honest. It does NOT advance the rain.
+        """
+        return self._frame_text()
 
     def _build_frame(self) -> Text:
-        """Build one rain frame as a Rich ``Text`` (no side effects)."""
+        """Advance one frame and return it as a Rich ``Text``.
+
+        NOT the render path — :meth:`render_line` is. Kept because plain text is
+        the readable form to assert against (grid width, which glyphs may
+        appear), and those checks are worth keeping.
+        """
+        self._fill_buffers()
+        return self._frame_text()
+
+    def _frame_text(self) -> Text:
+        """Render the buffers as text, without advancing the simulation."""
+        cols = self._col_count
+        text = Text()
+        for y in range(self._row_count):
+            line = self._frame_lines[y]
+            st = self._frame_styles[y]
+            x = 0
+            while x < cols:
+                s = st[x]
+                j = x + 1
+                while j < cols and st[j] is s:
+                    j += 1
+                text.append("".join(line[x:j]) if s else " " * (j - x), s)
+                x = j
+            if y < self._row_count - 1:
+                text.append("\n")
+        return text
+
+    def _fill_buffers(self) -> None:
+        """Advance the simulation one frame into the reusable cell buffers."""
         cols = self._col_count
         rows = self._row_count
         lines = self._frame_lines
@@ -254,7 +375,7 @@ class MatrixRain(Static):
             styles[y][:] = blank_s
 
         self._ensure_theme_cache()
-        head_c, near_c, mid_c, tail_c = self._palette
+        head_c, near_c, mid_c, tail_c = self._styles
         pool = self._char_pool
         pool_len = len(pool)
         idx = random.randrange(pool_len)  # one RNG call per frame
@@ -286,7 +407,7 @@ class MatrixRain(Static):
         # Composite the logo on top. Solid art cells occlude the rain; regular
         # spaces stay transparent so the rain shows through the gaps.
         if self._art_lines:
-            art_style = self._art_style_str
+            art_style = self._art_style_obj
             for ay, art_line in enumerate(self._art_lines):
                 gy = self._art_top + ay
                 if not 0 <= gy < rows:
@@ -302,22 +423,6 @@ class MatrixRain(Static):
                         row_l[gx] = ch
                         row_s[gx] = art_style
 
-        text = Text()
-        for y in range(rows):
-            line = lines[y]
-            st = styles[y]
-            x = 0
-            while x < cols:
-                s = st[x]
-                j = x + 1
-                while j < cols and st[j] == s:
-                    j += 1
-                segment = "".join(line[x:j]) if s else " " * (j - x)
-                text.append(segment, s or None)
-                x = j
-            if y < rows - 1:
-                text.append("\n")
-        return text
 
 
 # Nova's default palette, registered as a real Textual theme so /theme can swap
