@@ -11,6 +11,7 @@ PROVIDER_KEY_ENV: dict[str, str] = {
     "google": "GOOGLE_API_KEY",
     "openrouter": "OPENROUTER_API_KEY",
     "opencode": "OPENCODE_API_KEY",
+    "nvidia": "NVIDIA_API_KEY",
 }
 
 
@@ -115,6 +116,41 @@ def build_chat_model(provider: str, model_name: str) -> BaseChatModel:
                 openai_kwargs.setdefault("api_key", "not-needed")
 
         return ChatOpenAI(model=model_name, max_retries=5, **openai_kwargs)
+
+    if provider == "nvidia":
+        # NVIDIA NIM (build.nvidia.com). Its own client rather than ChatOpenAI:
+        # ChatNVIDIA handles NIM's model-listing and payload quirks, and takes
+        # NIM-specific options (chat_template_kwargs) that ChatOpenAI drops.
+        from langchain_nvidia_ai_endpoints import ChatNVIDIA
+
+        # Keyring-or-env, never a literal: same resolution as every other
+        # provider here, so a key stored in the system keychain still reaches
+        # the client on a fresh session (os.environ alone is empty there).
+        nvidia_key = settings.nvidia_api_key or os.environ.get("NVIDIA_API_KEY")
+
+        nvidia_kwargs: dict = {}
+        if nvidia_key:
+            nvidia_kwargs["api_key"] = nvidia_key
+        # A self-hosted NIM container speaks the same API on a different host.
+        nvidia_base = os.environ.get("NVIDIA_BASE_URL")
+        if nvidia_base:
+            nvidia_kwargs["base_url"] = nvidia_base
+
+        # Reasoning models on NIM gate their chain-of-thought behind a
+        # per-request template flag. Nova surfaces reasoning as its own event
+        # stream, so follow the session's /effort setting: off -> no thinking.
+        if effort == "off":
+            nvidia_kwargs["chat_template_kwargs"] = {"thinking": False}
+        elif effort:
+            nvidia_kwargs["chat_template_kwargs"] = {"thinking": True}
+
+        return ChatNVIDIA(
+            model=model_name,
+            temperature=nova_config.get("temperature", 1.0),
+            top_p=nova_config.get("top_p", 0.95),
+            max_tokens=nova_config.get("max_tokens", 16384),
+            **nvidia_kwargs,
+        )
 
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
@@ -244,6 +280,13 @@ def create_model() -> BaseChatModel:
             "OPENCODE_MODEL",
             "glm-5.3",
             "OpenCode Go",
+        ),
+        (
+            settings.has_nvidia,
+            "nvidia",
+            "NVIDIA_MODEL",
+            "deepseek-ai/deepseek-v4-pro-0813",
+            "NVIDIA NIM",
         ),
     ]
     for available, provider, model_env, default_model, label in _ENV_PRIORITY:

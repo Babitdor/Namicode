@@ -778,6 +778,7 @@ class Settings:
     google_api_key: str | None
     openrouter_api_key: str | None
     opencode_api_key: str | None
+    nvidia_api_key: str | None
     tavily_api_key: str | None
     langsmith_api_key: str | None
 
@@ -836,6 +837,9 @@ class Settings:
             opencode_key = secret_manager.get_secret(
                 "opencode_api_key"
             ) or os.environ.get("OPENCODE_API_KEY")
+            nvidia_key = secret_manager.get_secret(
+                "nvidia_api_key"
+            ) or os.environ.get("NVIDIA_API_KEY")
             tavily_key = secret_manager.get_secret("tavily_api_key") or os.environ.get(
                 "TAVILY_API_KEY"
             )
@@ -845,6 +849,7 @@ class Settings:
             google_key = os.environ.get("GOOGLE_API_KEY")
             openrouter_key = os.environ.get("OPENROUTER_API_KEY")
             opencode_key = os.environ.get("OPENCODE_API_KEY")
+            nvidia_key = os.environ.get("NVIDIA_API_KEY")
             tavily_key = os.environ.get("TAVILY_API_KEY")
 
         langsmith_key = os.environ.get("LANGSMITH_API_KEY")
@@ -866,6 +871,7 @@ class Settings:
             google_api_key=google_key,
             openrouter_api_key=openrouter_key,
             opencode_api_key=opencode_key,
+            nvidia_api_key=nvidia_key,
             tavily_api_key=tavily_key,
             langsmith_api_key=langsmith_key,
             ollama_host=ollama_host,
@@ -899,6 +905,11 @@ class Settings:
     def has_opencode(self) -> bool:
         """Check if OpenCode Go API key is configured."""
         return self.opencode_api_key is not None
+
+    @property
+    def has_nvidia(self) -> bool:
+        """Check if an NVIDIA NIM API key is configured."""
+        return self.nvidia_api_key is not None
 
     @property
     def has_tavily(self) -> bool:

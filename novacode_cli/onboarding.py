@@ -38,6 +38,7 @@ API_KEY_NAMES = {
     "google": "google_api_key",
     "openrouter": "openrouter_api_key",
     "opencode": "opencode_api_key",
+    "nvidia": "nvidia_api_key",
     "groq": "groq_api_key",
 }
 
@@ -343,6 +344,7 @@ class OnboardingWizard:
         "4": {"name": "google", "display": "Google (Gemini)"},
         "5": {"name": "openrouter", "display": "OpenRouter"},
         "6": {"name": "opencode", "display": "OpenCode Go"},
+        "7": {"name": "nvidia", "display": "NVIDIA NIM"},
     }
 
     def __init__(self) -> None:

@@ -29,7 +29,7 @@ class _RecordingNovaConfig:
     def get_model_config(self):
         return type(self).model_config
 
-    def set_model_config(self, provider, model):
+    def set_model_config(self, provider, model, base_url=None):
         type(self).saved = (provider, model)
 
     def get(self, key, default=None):

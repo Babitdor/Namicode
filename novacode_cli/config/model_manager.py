@@ -21,7 +21,9 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 OPENCODE_BASE_URL = "https://opencode.ai/zen/go/v1"
 
 # Type for supported providers
-ProviderType = Literal["openai", "anthropic", "ollama", "google", "openrouter", "opencode"]
+ProviderType = Literal[
+    "openai", "anthropic", "ollama", "google", "openrouter", "opencode", "nvidia"
+]
 
 
 # Model provider presets
@@ -136,6 +138,22 @@ MODEL_PRESETS: dict[str, dict[str, Any]] = {
             "ox-alpha-free",
         ],
     },
+    "nvidia": {
+        "name": "NVIDIA NIM",
+        "description": "NVIDIA-hosted models (DeepSeek, Nemotron, Llama) via build.nvidia.com",
+        "default_model": "deepseek-ai/deepseek-v4-pro-0813",
+        "env_var": "NVIDIA_MODEL",
+        "api_key_var": "NVIDIA_API_KEY",
+        "requires_api_key": True,
+        "models": [
+            "deepseek-ai/deepseek-v4-pro-0813",
+            "deepseek-ai/deepseek-v4-flash-0731",
+            "nvidia/nemotron-3-super-120b-a12b",
+            "nvidia/llama-3.1-nemotron-70b-instruct",
+            "openai/gpt-oss-120b",
+            "mistralai/codestral-22b-instruct-v0.1",
+        ],
+    },
 }
 
 
@@ -239,6 +257,9 @@ class ModelManager:
         if self.settings.has_opencode:
             model = os.environ.get("OPENCODE_MODEL", "glm-5.3")
             return ("OpenCode Go", model)
+        if self.settings.has_nvidia:
+            model = os.environ.get("NVIDIA_MODEL", "deepseek-ai/deepseek-v4-pro-0813")
+            return ("NVIDIA NIM", model)
         # Default to Ollama (always available, no API key needed)
         model = os.environ.get("OLLAMA_MODEL", "qwen3-coder:480b-cloud")
         return ("Ollama", model)
