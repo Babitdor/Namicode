@@ -44,6 +44,12 @@ if TYPE_CHECKING:
 
 FileOpStatus = Literal["pending", "success", "error"]
 
+# Maximum number of completed file-operation records retained per session.
+# The completed list is write-only (no display consumer reads it), but each
+# record can hold full file contents, so an unbounded list leaks memory across
+# a long session. Older records are trimmed and their heavy fields dropped.
+_MAX_COMPLETED_RECORDS = 200
+
 
 @dataclass
 class ApprovalPreview:
@@ -645,6 +651,19 @@ class FileOpTracker:
     def _finalize(self, record: FileOperationRecord) -> None:
         self.completed.append(record)
         self.active.pop(record.tool_call_id, None)
+        # Bound the completed list: it is write-only (no display consumer reads
+        # it), but each record can hold full file contents (before_content,
+        # after_content, read_output). Keeping every record for a long session
+        # compounds memory. Retain only the most recent records and drop the
+        # heavy content fields from the ones we evict.
+        if len(self.completed) > _MAX_COMPLETED_RECORDS:
+            evicted = self.completed[: -_MAX_COMPLETED_RECORDS]
+            for old in evicted:
+                old.before_content = None
+                old.after_content = None
+                old.read_output = None
+                old.diff = None
+            del self.completed[: -_MAX_COMPLETED_RECORDS]
 
 
 # ============================================================================

@@ -30,6 +30,12 @@ class ProcessStatus(Enum):
     FAILED = "failed"
 
 
+# Maximum number of captured output lines retained per managed process. The
+# buffer is only read via ``ProcessInfo.output`` (used for short-lived test/dev
+# runs); an unbounded list leaks memory for long-running servers.
+_MAX_OUTPUT_LINES = 5000
+
+
 @dataclass
 class ProcessInfo:
     """Information about a managed process.
@@ -74,6 +80,16 @@ class ProcessInfo:
     def output(self) -> str:
         """Get the captured output."""
         return "\n".join(self._output_lines)
+
+    def _append_output(self, line: str) -> None:
+        """Append a captured output line, bounding the buffer.
+
+        The buffer is only read via ``output`` (used for short-lived test/dev
+        runs); an unbounded list leaks memory for long-running servers.
+        """
+        self._output_lines.append(line)
+        if len(self._output_lines) > _MAX_OUTPUT_LINES:
+            del self._output_lines[: len(self._output_lines) - _MAX_OUTPUT_LINES]
 
 
 class ProcessManager:
@@ -258,6 +274,19 @@ class ProcessManager:
         if info.name:
             self._name_to_pid[info.name] = info.pid
 
+    def _remove_process(self, pid: int) -> None:
+        """Drop a process from the registries once it has terminated.
+
+        Completed processes are never read back (all consumers use
+        ``list_processes(alive_only=True)``), so keeping them in ``_processes``
+        leaks memory across a long session. Best-effort and lock-free, matching
+        ``register_process``.
+        """
+        info = self._processes.pop(pid, None)
+        if info is not None and info.name and self._name_to_pid.get(info.name) == pid:
+            # Only clear the name mapping if it still points at this pid.
+            self._name_to_pid.pop(info.name, None)
+
     async def _stream_output(
         self,
         process: asyncio.subprocess.Process,
@@ -273,7 +302,7 @@ class ProcessManager:
                 if not line:
                     break
                 decoded = line.decode("utf-8", errors="replace").rstrip("\n\r")
-                info._output_lines.append(decoded)
+                info._append_output(decoded)
                 try:
                     callback(decoded)
                 except Exception:
@@ -282,6 +311,10 @@ class ProcessManager:
             raise
         except Exception:
             pass  # Process may have terminated
+        finally:
+            # The process has exited (EOF) or streaming was cancelled; drop it
+            # from the registries so completed processes don't accumulate.
+            self._remove_process(info.pid)
 
     async def stop_process(
         self,
@@ -308,6 +341,7 @@ class ProcessManager:
             if info._process is None or not info.is_alive:
                 # Already stopped
                 info.status = ProcessStatus.STOPPED
+                self._remove_process(pid)
                 return True
 
             try:
@@ -344,6 +378,9 @@ class ProcessManager:
                         info._process.stdin.close()
                 except Exception:
                     pass
+                # Drop the terminated process from the registries so completed
+                # processes don't accumulate.
+                self._remove_process(pid)
 
             return True
 

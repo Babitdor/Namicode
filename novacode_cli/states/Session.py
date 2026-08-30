@@ -337,6 +337,12 @@ class SessionState:
 
     @_seen_message_ids.setter
     def _seen_message_ids(self, value: set) -> None:
+        from novacode_cli.states.slices.remote_bridge import _BoundedSet
+
+        # Wrap plain sets so the size bound survives reassignment (callers pass
+        # ``set()`` at session init).
+        if not isinstance(value, _BoundedSet):
+            value = _BoundedSet(value)
         self._remote_bridge._seen_message_ids = value
 
     @property
