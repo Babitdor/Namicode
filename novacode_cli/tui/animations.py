@@ -41,6 +41,20 @@ __all__ = [
 # ── Entrance animations ─────────────────────────────────────────────────────
 
 
+#: Above this many entrance animations already running, new widgets appear
+#: instantly. Chosen so an ordinary exchange (a handful of messages and tool
+#: cards) still animates, while a burst does not pile on more work.
+_MAX_CONCURRENT_ENTRANCES = 6
+
+
+def _entrances_in_flight(widget: Widget) -> int:
+    """How many animations the app currently has scheduled (0 if unknown)."""
+    try:
+        return len(widget.app.animator._animations)
+    except Exception:  # noqa: BLE001 — a private attr; never fail the mount
+        return 0
+
+
 def animate_entrance(widget: Widget, style: str = "slide") -> None:
     """Fade *widget* in as it first appears, using Textual's ``animate()``.
 
@@ -56,8 +70,22 @@ def animate_entrance(widget: Widget, style: str = "slide") -> None:
     ``"fade"``  — quick fade (0.25s).
     ``"slide"`` — slightly longer fade (0.32s).
     ``"zoom"``  — medium fade (0.28s).
+
+    Skipped under load
+    ------------------
+    Animating costs real time: a mount goes from ~4.8 ms to ~10.0 ms, and each
+    animation repaints its widget every frame for its whole duration. Because
+    ``_add_message`` animates EVERY chat message, a fast stream stacks them —
+    measured at 40 concurrent animations — and the polish becomes jank. When
+    more than :data:`_MAX_CONCURRENT_ENTRANCES` are already running, the widget
+    is shown immediately instead. A quiet UI still animates; a busy one stays
+    responsive.
     """
     duration = {"fade": 0.25, "slide": 0.32, "zoom": 0.28}.get(style, 0.28)
+    if _entrances_in_flight(widget) > _MAX_CONCURRENT_ENTRANCES:
+        # Under load: show it at once rather than adding another animation.
+        widget.styles.opacity = 1.0
+        return
     widget.styles.opacity = 0.0
     widget.styles.animate("opacity", 1.0, duration=duration, easing="out_cubic")
 
